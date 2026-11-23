@@ -1,0 +1,483 @@
+use std::time::Instant;
+
+use anyhow::{ensure, Context, Result};
+use lyracore_test_support::{core_root, ReducerConnection, Standalone};
+use serde_json::json;
+use wire_client::compare::Difference;
+use wire_client::decode::{decode, Field, Packet};
+use wire_client::rolls::PUBLIC_SEEDS;
+use wire_client::scenario::{FixtureVerb, Scenario};
+
+use super::queued_strike_spec::{self as spec, Counts};
+use super::transport::{prepare_character, Delivery};
+
+const CMSG_CAST_SPELL: u32 = 0x12e;
+// Each 100 ms melee tick swings the 50 ms fixture axe once.
+const TICKS_PER_SWING: u32 = 2;
+
+struct Character {
+    connection: ReducerConnection,
+    guid: u64,
+    target: u64,
+    delivery: Delivery,
+    counts: Counts,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum Sample {
+    Complete { counts: Counts },
+    Blocked { counts: Counts, reason: String },
+}
+
+impl Sample {
+    fn counts(&self) -> &Counts {
+        match self {
+            Self::Complete { counts } | Self::Blocked { counts, .. } => counts,
+        }
+    }
+}
+
+struct Preparation<'a> {
+    ready: &'a std::sync::Barrier,
+    arrived: bool,
+}
+
+impl Drop for Preparation<'_> {
+    fn drop(&mut self) {
+        if !self.arrived {
+            self.ready.wait();
+        }
+    }
+}
+
+fn cast_request(target: u64) -> Vec<u8> {
+    let mut body = spec::SPELL_ID.to_le_bytes().to_vec();
+    body.extend(0x0002u16.to_le_bytes());
+    let guid = target.to_le_bytes();
+    body.push(
+        guid.iter()
+            .enumerate()
+            .filter(|(_, byte)| **byte != 0)
+            .fold(0u8, |mask, (index, _)| mask | 1 << index),
+    );
+    body.extend(guid.iter().filter(|byte| **byte != 0));
+    body
+}
+
+fn queue_strike(character: &mut Character) -> std::result::Result<(), String> {
+    character
+        .connection
+        .call(
+            "native_world_receive",
+            json!([CMSG_CAST_SPELL, cast_request(character.target)]),
+        )
+        .map(|_| ())
+}
+
+fn own_packets(
+    character: &mut Character,
+    rows: &[Box<serde_json::value::RawValue>],
+) -> Result<Vec<Packet>> {
+    character
+        .delivery
+        .route_rows(rows.to_vec())?
+        .into_iter()
+        .filter(|packet| matches!(packet.opcode, 0x132 | 0x14a | 0x250))
+        .map(|packet| decode(packet.opcode, &packet.body))
+        .collect()
+}
+
+fn queued_spells(shard: &Standalone, shard_name: &str, characters: &[Character]) -> Vec<String> {
+    let rows = shard.query_database_rows(
+        shard_name,
+        "SELECT guid,next_swing_spell FROM game_world_entity",
+    );
+    characters
+        .iter()
+        .map(|character| {
+            rows.iter()
+                .find(|row| row["guid"] == character.guid.to_string())
+                .map_or_else(String::new, |row| row["next_swing_spell"].clone())
+        })
+        .collect()
+}
+
+// Unretained readiness: each Character's queued strike must replace its next white swing.
+fn ready_strikes(
+    shard: &Standalone,
+    shard_name: &str,
+    receiver: &mut ReducerConnection,
+    characters: &mut [Character],
+) -> Result<()> {
+    for character in characters.iter_mut() {
+        character
+            .connection
+            .call(
+                "native_world_receive",
+                json!([0x141u32, character.target.to_le_bytes().to_vec()]),
+            )
+            .map_err(anyhow::Error::msg)?;
+    }
+    receiver
+        .call("debug_advance_roll_batch", json!([TICKS_PER_SWING]))
+        .map_err(anyhow::Error::msg)?;
+    let rows = receiver.drain_packets();
+    for character in characters.iter_mut() {
+        own_packets(character, &rows)?;
+    }
+    for _ in 0..2 {
+        for character in characters.iter_mut() {
+            queue_strike(character).map_err(anyhow::Error::msg)?;
+        }
+        ensure!(
+            queued_spells(shard, shard_name, characters)
+                .iter()
+                .all(|spell| *spell == spec::SPELL_ID.to_string()),
+            "Heroic Strike was not queued"
+        );
+        receiver
+            .call("debug_advance_roll_batch", json!([TICKS_PER_SWING]))
+            .map_err(anyhow::Error::msg)?;
+        let rows = receiver.drain_packets();
+        for character in characters.iter_mut() {
+            let guid = Field::Guid(character.guid);
+            let packets = own_packets(character, &rows)?;
+            ensure!(
+                packets.iter().any(|packet| packet.opcode == 0x132
+                    && packet.fields.get("caster") == Some(&guid)
+                    && packet.fields.get("spell") == Some(&Field::Unsigned(spec::SPELL_ID.into())))
+                    && !packets.iter().any(|packet| packet.opcode == 0x14a
+                        && packet.fields.get("attacker") == Some(&guid)
+                        && packet.fields.get("spell") == Some(&Field::Unsigned(0))),
+                "the swing did not fire the queued strike: {packets:?}"
+            );
+        }
+        ensure!(
+            queued_spells(shard, shard_name, characters)
+                .iter()
+                .all(|spell| spell == "0"),
+            "the fired strike stayed queued"
+        );
+    }
+    Ok(())
+}
+
+fn prepare(
+    shard: &Standalone,
+    shard_name: &str,
+    scenario: &Scenario,
+    seed: u64,
+    level_index: usize,
+    part: usize,
+) -> Result<(ReducerConnection, Vec<Character>)> {
+    shard.assert_call_database(shard_name, "claim_operator", &[]);
+    shard.assert_call_database(shard_name, "install_guid_range", &["0"]);
+    shard.assert_call_database(
+        shard_name,
+        "debug_start_virtual_clock",
+        &["1800000000000000"],
+    );
+    shard.insert_row_database(
+        shard_name,
+        "game_creature_template",
+        &[
+            ("entry", &38),
+            ("name", &"Queued strike target"),
+            ("display_id", &1),
+            ("level", &60),
+            ("health", &1000000000),
+            ("faction_template", &7),
+            ("creature_type", &7),
+            ("scale", &1),
+            ("base_attack_time_ms", &2000),
+            ("max_level", &60),
+            ("max_level_health", &1000000000),
+        ],
+    );
+    let FixtureVerb::Character { at, .. } = &scenario.fixtures[0] else {
+        anyhow::bail!("queued strike Character fixture")
+    };
+    let mut participants = Vec::new();
+    for (index, name) in super::rolls::NAMES
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| index / 8 == level_index && index % 8 / 4 == part)
+    {
+        let mut at = at.clone();
+        at.y -= index as f32 * 200.0;
+        let fixture = FixtureVerb::Character {
+            name: (*name).into(),
+            race: "human".into(),
+            class: "warrior".into(),
+            level: 60,
+            at,
+        };
+        let guid = prepare_character(shard, shard_name, &format!("STRIKE{index}"), &fixture)?;
+        shard.assert_call_database(
+            shard_name,
+            "debug_spawn_at_feet",
+            &[&guid.to_string(), "38", "2"],
+        );
+        let target = shard
+            .query_database_rows(
+                shard_name,
+                "SELECT guid FROM game_world_entity WHERE entry = 38",
+            )
+            .iter()
+            .map(|row| row["guid"].parse::<u64>())
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .max()
+            .context("queued strike target")?;
+        participants.push((index, guid, target));
+    }
+    let mut receiver =
+        shard.connect_shard_reducers(shard_name, &["SELECT * FROM game_native_packet"]);
+    let mut characters = Vec::new();
+    for (index, guid, target) in participants {
+        let mut connection = shard.connect_shard_reducers(shard_name, &[]);
+        connection
+            .call("native_world_open", json!([42]))
+            .map_err(anyhow::Error::msg)?;
+        connection
+            .call("debug_native_enter_world", json!([guid]))
+            .map_err(anyhow::Error::msg)?;
+        shard.assert_call_database(
+            shard_name,
+            "debug_prepare_queued_strike_character",
+            &[
+                &guid.to_string(),
+                &target.to_string(),
+                &spec::TARGET_LEVELS[level_index].to_string(),
+                &seed.to_string(),
+                &(index as u64).to_string(),
+            ],
+        );
+        characters.push(Character {
+            delivery: Delivery::new(connection.connection_id()),
+            connection,
+            guid,
+            target,
+            counts: Counts::default(),
+        });
+    }
+    receiver
+        .call("debug_advance_roll_batch", json!([1]))
+        .map_err(anyhow::Error::msg)?;
+    let opening = receiver.drain_packets();
+    for character in &mut characters {
+        character.delivery.route_rows(opening.clone())?;
+    }
+    ready_strikes(shard, shard_name, &mut receiver, &mut characters)?;
+    verify_context(shard, shard_name, &characters, level_index)?;
+    Ok((receiver, characters))
+}
+
+fn verify_context(
+    shard: &Standalone,
+    shard_name: &str,
+    characters: &[Character],
+    level_index: usize,
+) -> Result<()> {
+    let items = shard.query_database_rows(
+        shard_name,
+        "SELECT owner_guid,entry,slot FROM game_item_instance",
+    );
+    ensure!(
+        items.len() == characters.len()
+            && characters.iter().all(|character| items.iter().any(|item| {
+                item["owner_guid"] == character.guid.to_string()
+                    && item["entry"] == "37"
+                    && item["slot"] == "15"
+            })),
+        "each queued strike Character must hold only its main-hand axe: {items:?}"
+    );
+    let participants: Vec<_> = characters
+        .iter()
+        .map(|character| (character.guid, character.target))
+        .collect();
+    super::rolls::verify_participants(
+        shard,
+        shard_name,
+        &participants,
+        spec::TARGET_LEVELS[level_index],
+        &[44, 95, 162],
+    )
+}
+
+fn collect(
+    shard: &Standalone,
+    shard_name: &str,
+    scenario: &Scenario,
+    seed: u64,
+    level_index: usize,
+    part: usize,
+    ready: &std::sync::Barrier,
+) -> Result<Sample> {
+    let mut preparation = Preparation {
+        ready,
+        arrived: false,
+    };
+    let setup = Instant::now();
+    let (mut receiver, mut characters) =
+        prepare(shard, shard_name, scenario, seed, level_index, part)?;
+    println!(
+        "queued strike {shard_name}: setup {:.3}s",
+        setup.elapsed().as_secs_f64()
+    );
+    preparation.arrived = true;
+    ready.wait();
+    let warm = Instant::now();
+    let total = |characters: &[Character]| {
+        let mut counts = Counts::default();
+        for character in characters {
+            counts.add(&character.counts);
+        }
+        counts
+    };
+    for trial in 1..=spec::SAMPLES_PER_LEVEL / 8 {
+        for character in &mut characters {
+            if let Err(refusal) = queue_strike(character) {
+                return Ok(Sample::Blocked {
+                    counts: total(&characters),
+                    reason: format!("trial {trial}: Heroic Strike was refused: {refusal}"),
+                });
+            }
+        }
+        receiver
+            .call("debug_advance_roll_batch", json!([TICKS_PER_SWING]))
+            .map_err(anyhow::Error::msg)?;
+        let rows = receiver.drain_packets();
+        for character in &mut characters {
+            let packets = own_packets(character, &rows)?;
+            if let Err(gap) = character
+                .counts
+                .observe(&packets, character.guid, character.target)
+            {
+                let reason = format!(
+                    "trial {trial} for Character {}: {gap:#}; packets {packets:?}",
+                    character.guid
+                );
+                println!("queued strike {shard_name}: blocked: {reason}");
+                return Ok(Sample::Blocked {
+                    counts: total(&characters),
+                    reason,
+                });
+            }
+        }
+        if trial % 1250 == 0 {
+            println!(
+                "queued strike {shard_name}: {trial} strikes each; {:.3}s warm",
+                warm.elapsed().as_secs_f64()
+            );
+        }
+    }
+    verify_context(shard, shard_name, &characters, level_index)?;
+    let counts = total(&characters);
+    println!(
+        "queued strike {shard_name}: seed {seed}; warm {:.3}s; counts {}",
+        warm.elapsed().as_secs_f64(),
+        serde_json::to_string(&counts)?
+    );
+    Ok(Sample::Complete { counts })
+}
+
+fn measure(scenario: &Scenario, seed: u64, prefix: &str) -> Result<[Sample; 2]> {
+    let mut shard = Standalone::start_persistent(prefix);
+    let names = super::rolls::fresh_shards(&mut shard, "strike", 4);
+    let ready = std::sync::Barrier::new(4);
+    let parts = std::thread::scope(|scope| -> Result<Vec<Sample>> {
+        let mut jobs = Vec::new();
+        for level in 0..2 {
+            for part in 0..2 {
+                let shard = &shard;
+                let name = &names[level * 2 + part];
+                let ready = &ready;
+                jobs.push(
+                    scope.spawn(move || collect(shard, name, scenario, seed, level, part, ready)),
+                );
+            }
+        }
+        jobs.into_iter()
+            .map(|job| {
+                job.join()
+                    .map_err(|_| anyhow::anyhow!("queued strike collector panicked"))?
+            })
+            .collect()
+    })?;
+    Ok(std::array::from_fn(|level| {
+        let pair = &parts[level * 2..level * 2 + 2];
+        let mut counts = pair[0].counts().clone();
+        counts.add(pair[1].counts());
+        let blockers: Vec<_> = pair
+            .iter()
+            .filter_map(|sample| match sample {
+                Sample::Blocked { reason, .. } => Some(reason.as_str()),
+                Sample::Complete { .. } => None,
+            })
+            .collect();
+        if blockers.is_empty() {
+            Sample::Complete { counts }
+        } else {
+            Sample::Blocked {
+                counts,
+                reason: blockers.join("; "),
+            }
+        }
+    }))
+}
+
+fn compare_samples(samples: &[Sample; 2], slot: &str) -> Result<Vec<Difference>> {
+    let mut differences = Vec::new();
+    for (level, sample) in samples.iter().enumerate() {
+        match sample {
+            Sample::Complete { counts } => differences.extend(spec::compare(counts, level, slot)?),
+            Sample::Blocked { counts, reason } => {
+                differences.push(spec::blocked(counts, level, slot, reason));
+            }
+        }
+    }
+    Ok(differences)
+}
+
+/// Collects both public seeds; their rule signatures join `white_melee_outcomes`.
+pub(super) fn public_seeds(scenario: &Scenario) -> Result<Vec<Difference>> {
+    let mut measurements = Vec::new();
+    for seed in PUBLIC_SEEDS {
+        measurements.push(measure(scenario, seed, "queued-strike-public")?);
+    }
+    let report = core_root().join(".lyracore/conformance/queued-strike-rates.json");
+    std::fs::create_dir_all(report.parent().context("queued strike report parent")?)?;
+    std::fs::write(&report, serde_json::to_vec_pretty(&measurements)?)?;
+    let complete = measurements
+        .iter()
+        .flatten()
+        .all(|sample| matches!(sample, Sample::Complete { .. }));
+    if complete && std::env::var_os("LYRACORE_ROLL_REPEATABILITY").is_some() {
+        ensure!(
+            measure(scenario, PUBLIC_SEEDS[0], "queued-strike-repeat")? == measurements[0],
+            "same seed changed delivered queued strike counts"
+        );
+    }
+    if complete {
+        ensure!(
+            measurements[0] != measurements[1],
+            "different seed did not change delivered queued strike counts"
+        );
+    }
+    let mut differences = Vec::new();
+    for (slot, samples) in measurements.iter().enumerate() {
+        differences.extend(compare_samples(samples, &format!("public_{}", slot + 1))?);
+    }
+    Ok(differences)
+}
+
+pub(super) fn merge_seed(scenario: &Scenario, seed: u64) -> Result<Vec<Difference>> {
+    let samples = measure(scenario, seed, "queued-strike-merge")?;
+    println!(
+        "queued strike merge {seed:#018x}: {}",
+        serde_json::to_string(&samples)?
+    );
+    compare_samples(&samples, "merge")
+}

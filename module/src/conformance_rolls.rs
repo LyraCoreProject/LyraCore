@@ -237,6 +237,92 @@ mod fixture {
         stream: u64,
     ) -> Result<(), String> {
         crate::helpers::require_operator(ctx)?;
+        prepare_white_melee(ctx, character_guid, target_guid, target_level, seed, stream)
+    }
+
+    /// The white melee context plus Heroic Strike rank 1 and the axe it requires; ADR 0007.
+    #[reducer]
+    pub fn debug_prepare_queued_strike_character(
+        ctx: &ReducerContext,
+        character_guid: u64,
+        target_guid: u64,
+        target_level: u32,
+        seed: u64,
+        stream: u64,
+    ) -> Result<(), String> {
+        crate::helpers::require_operator(ctx)?;
+        prepare_white_melee(ctx, character_guid, target_guid, target_level, seed, stream)?;
+        arm_heroic_strike(ctx, character_guid)
+    }
+
+    // Item 37 and spell 78 translate pinned database rows; ADR 0007 explains delay and durability.
+    fn arm_heroic_strike(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+        use crate::{game_item_template, game_spell, game_spell_effect};
+
+        let mut axe = crate::ItemTemplate::blank(37, "Fixture axe 37");
+        axe.class = 2;
+        axe.subclass = 0;
+        axe.display_id = 14029;
+        axe.quality = 1;
+        axe.inventory_type = 21;
+        axe.item_level = 2;
+        axe.required_level = 1;
+        axe.max_stack = 1;
+        axe.damage_min = 1.0;
+        axe.damage_max = 3.0;
+        axe.delay_ms = 50;
+        axe.sheath = 3;
+        ctx.db.game_item_template().entry().delete(37);
+        ctx.db.game_item_template().insert(axe);
+        crate::debug::debug_equip_weapon(ctx, character_guid, 37)?;
+        crate::skill::debug_set_skill(ctx, character_guid, 44, 300)?;
+
+        let mut spell = crate::Spell::blank(78, "Fixture spell 78");
+        spell.power_type = 1;
+        spell.cost = 150;
+        spell.gcd_ms = 0;
+        spell.gcd_category = 0;
+        spell.range_yd = 5;
+        spell.school_mask = 1;
+        spell.attributes = 327700;
+        spell.attributes_ex_3 = 1024;
+        spell.spell_level = 1;
+        spell.is_negative = true;
+        spell.cast_flags = crate::spell::CAST_FLAG_WEAPON_PROCS;
+        spell.family_name = 4;
+        spell.family_flags = 64;
+        spell.proc_chance = 101;
+        spell.custom_flags = lyracore_shared::spell_custom::FACE_TARGET;
+        spell.visual_id = 39;
+        spell.equipped_item_class = 2;
+        spell.equipped_item_subclass_mask = 173555;
+        spell.damage_class = 2;
+        ctx.db.game_spell().spell_id().delete(78);
+        ctx.db.game_spell().insert(spell);
+        let effects = ctx.db.game_spell_effect();
+        for effect in effects.by_spell().filter(&78u32).collect::<Vec<_>>() {
+            effects.id().delete(effect.id);
+        }
+        let mut effect = crate::SpellEffect::blank(78, 0);
+        effect.kind = crate::spell::E_NEXT_SWING;
+        effect.base_points = 11;
+        effect.die_sides = 1;
+        effect.target = crate::spell::T_TARGET_ENEMY;
+        effect.bonus_coefficient = 1.0;
+        effects.insert(effect);
+        let learner = crate::helpers::live_entity(ctx, character_guid)?;
+        crate::spell::learn_spell(ctx, character_guid, learner.owner_identity, 78);
+        crate::debug::debug_set_power(ctx, character_guid, 1_000_000_000)
+    }
+
+    fn prepare_white_melee(
+        ctx: &ReducerContext,
+        character_guid: u64,
+        target_guid: u64,
+        target_level: u32,
+        seed: u64,
+        stream: u64,
+    ) -> Result<(), String> {
         if !matches!(target_level, 60 | 63) || !crate::time::is_virtual(ctx) {
             return Err("white melee needs a virtual clock and target level 60 or 63".into());
         }
