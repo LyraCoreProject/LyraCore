@@ -63,19 +63,16 @@ impl Shard {
 
     // Each SQL statement commits separately; a failed sequence requires an idempotent rerun.
     pub(crate) fn run_sql_statements(&self, stmts: &[String], label: &str) -> Result<()> {
-        let columns = if stmts.iter().any(|sql| sql.contains("INSERT INTO ")) {
-            self.published_columns()?
-        } else {
-            BTreeMap::new()
-        };
-        let stmts = in_published_order(stmts, &columns)
+        let stmts = in_published_order(stmts, &self.published_columns()?)
             .with_context(|| format!("{label}: no import statements applied"))?;
         for (n, s) in stmts.iter().enumerate() {
             eprintln!(
                 "{label} sql [{}/{}]: {}…",
                 n + 1,
                 stmts.len(),
-                &s[..s.len().min(60)]
+                s.char_indices()
+                    .nth(60)
+                    .map_or(s.as_str(), |(at, _)| &s[..at])
             );
             let out = spacetime()
                 .args(["sql", "-s", &self.server, &self.db, s])

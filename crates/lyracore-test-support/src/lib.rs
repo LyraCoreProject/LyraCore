@@ -502,15 +502,12 @@ impl Standalone {
         self.assert_sql_database(&self.database, query);
     }
 
-    /// Fills migration defaults and puts each named INSERT in the published column order first.
+    /// Writes each named INSERT with every published column in published order first.
     pub fn assert_sql_database(&self, database: &str, query: &str) {
-        let query = if query.contains("INSERT INTO ") {
-            let schema = self.fixture_schema(database);
-            lyracore_shared::import_sql::in_table_order(query, |table| schema.columns(table))
-                .unwrap_or_else(|error| panic!("{error}: {query}"))
-        } else {
-            query.to_owned()
-        };
+        let query = lyracore_shared::import_sql::in_table_order(query, |table| {
+            self.fixture_schema(database).columns(table)
+        })
+        .unwrap_or_else(|error| panic!("{error}: {query}"));
         self.assert_ok(&self.sql_database(database, &query));
     }
 

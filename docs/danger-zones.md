@@ -21,13 +21,14 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
    - SpacetimeDB SQL INSERT needs every column, and it matches values to columns by position, not
      by the names it lists. It never checks those names. The importer and `Standalone::assert_sql`
      read the published columns with `spacetime describe` and pass each statement through
-     `lyracore_shared::import_sql::in_table_order`. That fills defaults, puts the named columns in
-     published order and refuses a name the table lacks. Any other SQL writer must name columns in
-     table order. Durable tests write fixture rows with `Standalone::insert_row`, which reads the
-     published columns and their declared defaults, so a new column needs nothing there. When an
-     existing importer or native check INSERT can omit the new column, add its default to
-     `crates/lyracore-shared/src/import_sql_defaults.txt`. The importer, the native check and the
-     `conformance/support` worlds fill it from there.
+     `lyracore_shared::import_sql::in_table_order`. That writes every published column in published
+     order. It takes each value from the statement or else from `import_sql_defaults.txt`, and
+     refuses a name the table lacks or a column with neither, before any statement of the batch
+     runs. Any other SQL writer must name columns in table order. Durable tests write fixture rows
+     with `Standalone::insert_row`, which reads the published columns and their declared defaults,
+     so a new column needs nothing there. When an existing importer or native check INSERT can omit
+     the new column, add its default to `crates/lyracore-shared/src/import_sql_defaults.txt`. The
+     importer, the native check and the `conformance/support` worlds fill it from there.
    - Change native reducer arguments and their Host calls together. The Host and Module also share
      the BSATN layouts of `game_native_cipher` and `game_native_packet`. Update
      `native-host/src/feed.rs` with `module/src/native/mod.rs`, then run the native protocol check.
@@ -874,8 +875,8 @@ that omits it inserts zero.
   `COUNT`. To load a `Timestamp` column, go through a reducer that stamps `ctx.timestamp`.
 - **`spacetime sql` INSERT fills columns by table position.** The values go to the table's columns
   in declaration order, whatever order the named list gives, and nothing reports the mismatch. Name
-  columns in table order. The Native Host's `host.sql` reorders a named INSERT to the published
-  order, and `import_sql_defaults.txt` lists each table's END-appended defaults in table order.
+  columns in table order. The Native Host's `host.sql`, the importer and `Standalone::assert_sql`
+  put a named INSERT in the published order; see §1 item 2.
 - **`spacetime sql` prints whole floats without a decimal point.** A regex that reads a coordinate
   back needs `-?[0-9]+(\.[0-9]+)?`, or a Character parked at exactly `x=-8890.0` fails every
   "did it arrive" poll.

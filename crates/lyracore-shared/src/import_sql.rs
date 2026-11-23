@@ -1,23 +1,30 @@
 //! SpacetimeDB SQL INSERT needs every column, and assigns values by column position, not by name.
 
-/// Fills defaults and orders each named INSERT's columns as published; see docs/danger-zones.md §1.
+/// Writes each named INSERT with every published column in published order; see
+/// docs/danger-zones.md §1 item 2. Errs when an INSERT is unreadable, names a table or column the
+/// Module lacks or a column twice, has a row of the wrong length, or leaves a published column with
+/// no value and no default.
 pub fn in_table_order(
     sql: &str,
     published_columns: impl Fn(&str) -> Option<Vec<String>>,
 ) -> Result<String, String> {
-    let sql = insert_defaults(sql);
-    let statements = statements(&sql)
+    let statements = statements(sql)
         .into_iter()
         .map(|statement| ordered(statement, &published_columns))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(statements.join(";"))
 }
 
+enum Cell<'a> {
+    Named(usize),
+    Default(&'a str),
+}
+
 fn ordered(
     statement: &str,
     published_columns: &impl Fn(&str) -> Option<Vec<String>>,
 ) -> Result<String, String> {
-    let Some(insert) = NamedInsert::parse(statement) else {
+    let Some(insert) = NamedInsert::parse(statement)? else {
         return Ok(statement.to_owned());
     };
     let table = insert.table;
@@ -31,30 +38,43 @@ fn ordered(
             return Err(format!("{table}.{name} is named twice"));
         }
     }
-    let positions: Vec<usize> = published
+    let cells = published
         .iter()
-        .filter_map(|column| insert.columns.iter().position(|name| name == column))
-        .collect();
+        .map(
+            |column| match insert.columns.iter().position(|name| name == column) {
+                Some(at) => Ok(Cell::Named(at)),
+                None => migration_defaults(table)
+                    .find(|(name, _)| *name == column.as_str())
+                    .map(|(_, value)| Cell::Default(value))
+                    .ok_or_else(|| format!("{table}.{column} has no value and no default")),
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
     let rows = value_rows(insert.values)
         .ok_or_else(|| format!("{table}: malformed VALUES"))?
         .iter()
         .map(|row| {
-            if row.len() != positions.len() {
+            if row.len() != insert.columns.len() {
                 return Err(format!(
                     "{table}: {} values for {} columns",
                     row.len(),
-                    positions.len()
+                    insert.columns.len()
                 ));
             }
-            let values: Vec<&str> = positions.iter().map(|&at| row[at]).collect();
+            let values: Vec<&str> = cells
+                .iter()
+                .map(|cell| match cell {
+                    Cell::Named(at) => row[*at],
+                    Cell::Default(value) => *value,
+                })
+                .collect();
             Ok(format!("({})", values.join(",")))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let columns: Vec<&str> = positions.iter().map(|&at| insert.columns[at]).collect();
     Ok(format!(
         "{}INSERT INTO {table} ({}) VALUES {}",
         insert.indent,
-        columns.join(","),
+        published.join(","),
         rows.join(",")
     ))
 }
@@ -67,22 +87,54 @@ struct NamedInsert<'a> {
 }
 
 impl<'a> NamedInsert<'a> {
-    fn parse(statement: &'a str) -> Option<Self> {
-        let trimmed = statement.trim_start();
-        let rest = trimmed.strip_prefix("INSERT INTO ")?;
-        let (table, rest) = rest.split_once('(')?;
-        let table = table.trim();
-        if table.is_empty() || !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return None;
+    /// `None` for a statement that is not an INSERT, or one that names no columns.
+    fn parse(statement: &'a str) -> Result<Option<Self>, String> {
+        let Some(rest) = keyword(statement, "INSERT") else {
+            return Ok(None);
+        };
+        let unreadable = || {
+            let start: String = statement.trim().chars().take(80).collect();
+            format!("cannot read the INSERT `{start}`")
+        };
+        let rest = keyword(rest, "INTO").ok_or_else(unreadable)?.trim_start();
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let (table, rest) = rest.split_at(end);
+        if table.is_empty() {
+            return Err(unreadable());
         }
-        let (columns, rest) = rest.split_once(')')?;
-        Some(Self {
-            indent: &statement[..statement.len() - trimmed.len()],
+        if keyword(rest, "VALUES").is_some() {
+            return Ok(None);
+        }
+        let rest = rest.trim_start().strip_prefix('(').ok_or_else(unreadable)?;
+        let (columns, rest) = rest.split_once(')').ok_or_else(unreadable)?;
+        Ok(Some(Self {
+            indent: &statement[..statement.len() - statement.trim_start().len()],
             table,
             columns: columns.split(',').map(str::trim).collect(),
-            values: rest.trim_start().strip_prefix("VALUES")?,
-        })
+            values: keyword(rest, "VALUES").ok_or_else(unreadable)?,
+        }))
     }
+}
+
+fn keyword<'a>(text: &'a str, word: &str) -> Option<&'a str> {
+    let text = text.trim_start();
+    let rest = text.get(word.len()..)?;
+    let continues = rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    (text[..word.len()].eq_ignore_ascii_case(word) && !continues).then_some(rest)
+}
+
+fn migration_defaults(table: &str) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
+    include_str!("import_sql_defaults.txt")
+        .lines()
+        .filter_map(move |line| {
+            let mut fields = line.split_whitespace();
+            let source_table = fields.next()?;
+            let column = fields.next()?;
+            let value = fields.next()?;
+            (source_table == table).then_some((column, value))
+        })
 }
 
 fn value_rows(text: &str) -> Option<Vec<Vec<&str>>> {
@@ -170,16 +222,7 @@ fn append_statement(output: &mut String, sql: &str) {
         return;
     };
     let table = rest[..open].trim();
-    let defaults: Vec<_> = include_str!("import_sql_defaults.txt")
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let source_table = fields.next()?;
-            let column = fields.next()?;
-            let value = fields.next()?;
-            (source_table == table).then_some((column, value))
-        })
-        .collect();
+    let defaults: Vec<_> = migration_defaults(table).collect();
     let Some(close) = rest.find(')') else {
         output.push_str(sql);
         return;
@@ -264,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_defaults_take_their_published_position() {
+    fn unnamed_published_columns_take_their_default_and_unpublished_defaults_are_ignored() {
         let sql = "INSERT INTO game_quest_template (entry,required_skill) VALUES (1,129)";
         assert_eq!(
             in_table_order(sql, published).unwrap(),
@@ -279,6 +322,15 @@ mod tests {
         assert_eq!(
             in_table_order(sql, published).unwrap(),
             "DELETE FROM game_area WHERE id > 0;\n INSERT INTO game_area (id,name) VALUES (3,'O''Brien, (east);');SELECT ';' FROM game_area"
+        );
+    }
+
+    #[test]
+    fn positional_inserts_pass_and_keywords_match_in_any_case() {
+        let sql = "INSERT INTO game_area VALUES (1,'a');insert\n into game_area\n(name, id)\nvalues ('b',2)";
+        assert_eq!(
+            in_table_order(sql, published).unwrap(),
+            "INSERT INTO game_area VALUES (1,'a');INSERT INTO game_area (id,name) VALUES (2,'b')"
         );
     }
 
@@ -300,6 +352,14 @@ mod tests {
             (
                 "INSERT INTO game_missing (id) VALUES (1)",
                 "the published Module has no table `game_missing`",
+            ),
+            (
+                "INSERT INTO game_area (id) VALUES (1)",
+                "game_area.name has no value and no default",
+            ),
+            (
+                "INSERT game_area (id) VALUES (1)",
+                "cannot read the INSERT `INSERT game_area (id) VALUES (1)`",
             ),
         ] {
             assert_eq!(in_table_order(sql, published).unwrap_err(), error);
