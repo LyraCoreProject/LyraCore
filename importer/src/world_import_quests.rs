@@ -352,19 +352,6 @@ fn findings(
                 target < 0 && count != 0 && !goobers.contains(&target.unsigned_abs()),
             );
         }
-        add("quests.explicit-zero-xp", row.number::<u32>("RewXP")? == 0);
-        add(
-            "quests.money-requirement",
-            row.number::<i64>("RewOrReqMoney")? < 0,
-        );
-        add(
-            "quests.extra-reputation-rewards",
-            (3..=5)
-                .map(|slot| row.number::<u32>(&format!("RewRepFaction{slot}")))
-                .collect::<Result<Vec<_>>>()?
-                .iter()
-                .any(|value| *value != 0),
-        );
         let cast = row.number::<u32>("RewSpellCast")?;
         let cast = if cast != 0 {
             cast

@@ -25,6 +25,7 @@ const SMSG_ITEM_PUSH_RESULT: u16 = 0x166;
 const SMSG_LOG_XPGAIN: u16 = 0x1D0;
 const SMSG_QUESTGIVER_QUEST_COMPLETE: u16 = 0x191;
 const SMSG_QUESTGIVER_QUEST_FAILED: u16 = 0x192;
+const SMSG_QUESTGIVER_QUEST_INVALID: u16 = 0x18F;
 const SMSG_SET_FACTION_STANDING: u16 = 0x124;
 const SMSG_UPDATE_OBJECT: u16 = 0xA9;
 const PLAYER_XP: u16 = 716;
@@ -32,6 +33,9 @@ const PLAYER_NEXT_LEVEL_XP: u16 = 717;
 const FACTION: u32 = 72;
 const INVENTORY_FULL_REASON: u32 = 4;
 const DUPLICATE_ITEM_REASON: u32 = 17;
+const NOT_ENOUGH_MONEY_REASON: u32 = 22;
+const QUEST_COST: u32 = 500;
+const QUEST_XP: u32 = 110;
 const BACKPACK_SLOTS: u32 = 16;
 
 fn stage(name: &str) -> (Standalone, ReducerConnection, u64, u64) {
@@ -79,7 +83,7 @@ fn seed_quest(shard: &Standalone, quest: u32, required_item: u32, giver_ends_it:
             ("entry", &quest),
             ("quest_level", &2),
             ("title", &"Turn-in quest"),
-            ("reward_xp", &110),
+            ("reward_xp", &QUEST_XP),
             ("zone_or_sort", &12),
             ("repeatable", &false),
         ],
@@ -607,4 +611,150 @@ fn a_level_up_turn_in_sends_the_next_level_threshold_with_the_xp() {
         .collect();
     assert!(fields.contains_key(&PLAYER_XP), "{fields:?}");
     assert!(fields.contains_key(&PLAYER_NEXT_LEVEL_XP), "{fields:?}");
+}
+
+fn money(shard: &Standalone, guid: u64) -> u32 {
+    shard.query_rows(&format!(
+        "SELECT money FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["money"]
+        .parse()
+        .unwrap()
+}
+
+fn xp(shard: &Standalone, guid: u64) -> u32 {
+    shard.query_rows(&format!(
+        "SELECT xp FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["xp"]
+        .parse()
+        .unwrap()
+}
+
+fn choose_reward(connection: &mut ReducerConnection, giver: u64) -> Vec<(u16, Vec<u8>)> {
+    quest_request(
+        connection,
+        CMSG_QUESTGIVER_CHOOSE_REWARD,
+        giver,
+        QUEST,
+        Some(0),
+    )
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_quest_cost_refuses_the_turn_in_without_the_money_and_takes_it_with() {
+    let (shard, mut connection, guid, giver) = stage("quest-turn-in-cost");
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET required_money = {QUEST_COST} WHERE entry = {QUEST}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET money = {} WHERE guid = {guid}",
+        QUEST_COST - 1
+    ));
+    grant_quest(&shard, guid, QUEST);
+    let xp_before = xp(&shard, guid);
+
+    let refused = choose_reward(&mut connection, giver);
+
+    assert_eq!(
+        opcodes(&refused),
+        [SMSG_QUESTGIVER_QUEST_INVALID, SMSG_QUESTGIVER_OFFER_REWARD],
+        "the notice comes before the re-offer"
+    );
+    assert_eq!(word(&refused[0].1, 0), NOT_ENOUGH_MONEY_REASON);
+    assert_eq!(money(&shard, guid), QUEST_COST - 1);
+    assert_eq!(xp(&shard, guid), xp_before);
+    let rewarded = shard.query_rows(&format!(
+        "SELECT rewarded FROM game_character_quest WHERE quest_entry = {QUEST}"
+    ));
+    assert_eq!(rewarded[0]["rewarded"], "false");
+
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET money = {} WHERE guid = {guid}",
+        QUEST_COST + 40
+    ));
+    let accepted = choose_reward(&mut connection, giver);
+
+    assert!(opcodes(&accepted).contains(&SMSG_QUESTGIVER_QUEST_COMPLETE));
+    assert_eq!(money(&shard, guid), 40);
+    let rewarded = shard.query_rows(&format!(
+        "SELECT rewarded FROM game_character_quest WHERE quest_entry = {QUEST}"
+    ));
+    assert_eq!(rewarded[0]["rewarded"], "true");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_quest_with_explicit_zero_xp_grants_none_and_a_quest_with_xp_grants_it() {
+    let (shard, mut connection, guid, giver) = stage("quest-turn-in-zero-xp");
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET reward_xp = 0 WHERE entry = {QUEST}"
+    ));
+    grant_quest(&shard, guid, QUEST);
+    grant_quest(&shard, guid, OBJECTIVE_QUEST);
+    shard.assert_sql(&format!(
+        "DELETE FROM game_quest_objective WHERE quest_entry = {OBJECTIVE_QUEST}"
+    ));
+
+    let xp_before = xp(&shard, guid);
+
+    let zero = choose_reward(&mut connection, giver);
+
+    assert!(opcodes(&zero).contains(&SMSG_QUESTGIVER_QUEST_COMPLETE));
+    assert!(!opcodes(&zero).contains(&SMSG_LOG_XPGAIN));
+    assert_eq!(xp(&shard, guid), xp_before);
+
+    let normal = quest_request(
+        &mut connection,
+        CMSG_QUESTGIVER_CHOOSE_REWARD,
+        giver,
+        OBJECTIVE_QUEST,
+        Some(0),
+    );
+
+    assert!(opcodes(&normal).contains(&SMSG_LOG_XPGAIN));
+    assert_eq!(xp(&shard, guid), xp_before + QUEST_XP);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_quest_with_five_reputation_rewards_grants_all_five() {
+    const FACTIONS: [(u32, i32); 5] = [
+        (9101, 250),
+        (9102, 100),
+        (9103, 75),
+        (9104, -50),
+        (9105, 25),
+    ];
+    let (shard, mut connection, guid, giver) = stage("quest-turn-in-five-reputations");
+    for (slot, (faction, value)) in FACTIONS.iter().enumerate() {
+        shard.insert_row(
+            "game_faction",
+            &[
+                ("faction_id", faction),
+                ("reputation_index", &(30 + slot as i32)),
+            ],
+        );
+        shard.assert_sql(&format!(
+            "UPDATE game_quest_template SET rew_rep_faction_{n} = {faction}, rew_rep_value_{n} = {value} WHERE entry = {QUEST}",
+            n = slot + 1
+        ));
+    }
+    grant_quest(&shard, guid, QUEST);
+
+    choose_reward(&mut connection, giver);
+
+    let mut granted: Vec<(u32, i32)> = shard
+        .query_rows(&format!(
+            "SELECT faction_id, standing FROM game_player_reputation WHERE character_guid = {guid} AND faction_id > 9100"
+        ))
+        .iter()
+        .map(|row| {
+            (
+                row["faction_id"].parse().unwrap(),
+                row["standing"].parse().unwrap(),
+            )
+        })
+        .collect();
+    granted.sort_unstable();
+    assert_eq!(granted, FACTIONS);
 }

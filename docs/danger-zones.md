@@ -755,6 +755,16 @@ to rewarded.
 it and imports with no rows. An older destination refuses the new manifest, so update both Shards
 before moving active World Sessions.
 
+### Quest reward migration
+
+`game_quest_template` gains `required_money` and `rew_rep_faction_3`, `rew_rep_value_3` through
+`rew_rep_faction_5`, `rew_rep_value_5`, end-appended with default 0. Reimport the `quests` family
+straight after the publish. Until then no quest has a money cost or a third to fifth reputation
+reward, so each such quest turns in as before. A turn-in now grants exactly `reward_xp`: a quest
+whose `reward_xp` is 0 grants none, where it used to grant a level-based amount. A Package Delta
+that relied on that fallback must set `reward_xp`. Package Deltas written before the change omit
+the new columns and still apply.
+
 ### Repair cost migration
 
 `game_durability_cost` and `game_durability_quality` are new, private tables from

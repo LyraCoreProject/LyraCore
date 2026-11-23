@@ -445,6 +445,13 @@ fn blank_quest(entry: u32) -> QuestTemplate {
         required_min_rep_value: 0,
         required_max_rep_faction: 0,
         required_max_rep_value: 0,
+        required_money: 0,
+        rew_rep_faction_3: 0,
+        rew_rep_value_3: 0,
+        rew_rep_faction_4: 0,
+        rew_rep_value_4: 0,
+        rew_rep_faction_5: 0,
+        rew_rep_value_5: 0,
     }
 }
 
@@ -480,6 +487,13 @@ fn apply_quest_field(
         "required_min_rep_value" => quest.required_min_rep_value = as_i32(field, value)?,
         "required_max_rep_faction" => quest.required_max_rep_faction = as_u32(field, value)?,
         "required_max_rep_value" => quest.required_max_rep_value = as_i32(field, value)?,
+        "required_money" => quest.required_money = as_u32(field, value)?,
+        "rew_rep_faction_3" => quest.rew_rep_faction_3 = as_u32(field, value)?,
+        "rew_rep_value_3" => quest.rew_rep_value_3 = as_i32(field, value)?,
+        "rew_rep_faction_4" => quest.rew_rep_faction_4 = as_u32(field, value)?,
+        "rew_rep_value_4" => quest.rew_rep_value_4 = as_i32(field, value)?,
+        "rew_rep_faction_5" => quest.rew_rep_faction_5 = as_u32(field, value)?,
+        "rew_rep_value_5" => quest.rew_rep_value_5 = as_i32(field, value)?,
         other => {
             return Err(format!(
                 "`game_quest_template` has no claimable column `{other}`"

@@ -33,7 +33,8 @@ pub struct QuestDetailView {
     pub objectives_text: String,
     pub offer_reward_text: String,
     pub request_items_text: String,
-    pub money_reward: u32,
+    /// Signed: a quest that costs money carries the negated cost.
+    pub money_reward: i32,
     pub reward_xp: u32,
     pub next_quest_id: u32,
     pub max_level_money_reward: u32,
@@ -301,7 +302,7 @@ pub fn build_offer_reward(giver_guid: u64, d: &QuestDetailView) -> SMSG_QUESTGIV
             .collect(),
         choice_item_rewards: reward_items_with_icon(&d.choice_rewards),
         item_rewards: reward_items_with_icon(&d.rewards),
-        money_reward: Gold::new(d.money_reward),
+        money_reward: Gold::new(d.money_reward as u32),
         // The wire carries the quest flags where gtker names the first reward spell.
         reward_spell: d.flags,
         reward_spell_cast: 0,
@@ -326,7 +327,7 @@ pub fn build_request_items(
             d.emotes.incomplete
         },
         auto_finish: close_on_cancel,
-        required_money: Gold::new(0),
+        required_money: Gold::new((-i64::from(d.money_reward)).max(0) as u32),
         required_items: reward_items_with_icon(&d.required_items),
         unknown1: 0x02,
         completable: if completable {
@@ -355,7 +356,7 @@ pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
     u32le(&mut body, 0);
     u32le(&mut body, 0);
     u32le(&mut body, d.next_quest_id);
-    u32le(&mut body, d.money_reward);
+    u32le(&mut body, d.money_reward as u32);
     u32le(&mut body, d.max_level_money_reward);
     u32le(&mut body, 0);
     u32le(&mut body, 0);
@@ -405,7 +406,7 @@ pub fn build_quest_complete(d: &QuestDetailView) -> SMSG_QUESTGIVER_QUEST_COMPLE
         quest_id: d.quest_id,
         unknown: 0x03,
         experience_reward: d.reward_xp,
-        money_reward: Gold::new(d.money_reward),
+        money_reward: Gold::new(d.money_reward as u32),
         item_rewards: reward_items(&d.rewards),
     }
 }
@@ -878,6 +879,30 @@ mod tests {
         assert_eq!(complete.required_items.len(), 1);
         assert_eq!(complete.required_items[0].item, 900);
         assert_eq!(complete.required_items[0].item_display_id, 77);
+    }
+
+    #[test]
+    fn a_quest_cost_is_the_required_money_and_a_reward_requires_none() {
+        let cost = QuestDetailView {
+            money_reward: -250,
+            ..detail_view()
+        };
+        assert_eq!(
+            build_request_items(100, &cost, true, false).required_money,
+            Gold::new(250)
+        );
+        assert_eq!(
+            build_offer_reward(100, &cost).money_reward,
+            Gold::new(0u32.wrapping_sub(250))
+        );
+        let reward = QuestDetailView {
+            money_reward: 40,
+            ..detail_view()
+        };
+        assert_eq!(
+            build_request_items(100, &reward, true, false).required_money,
+            Gold::new(0)
+        );
     }
 }
 

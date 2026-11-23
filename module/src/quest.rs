@@ -158,6 +158,20 @@ pub struct QuestTemplate {
     pub required_max_rep_faction: u32,
     #[default(0)]
     pub required_max_rep_value: i32,
+    #[default(0)]
+    pub required_money: u32,
+    #[default(0)]
+    pub rew_rep_faction_3: u32,
+    #[default(0)]
+    pub rew_rep_value_3: i32,
+    #[default(0)]
+    pub rew_rep_faction_4: u32,
+    #[default(0)]
+    pub rew_rep_value_4: i32,
+    #[default(0)]
+    pub rew_rep_faction_5: u32,
+    #[default(0)]
+    pub rew_rep_value_5: i32,
 }
 
 #[table(accessor = game_quest_flags)]
@@ -1256,6 +1270,12 @@ pub(crate) fn request_turn_in_quest(
         .entry()
         .find(quest_entry)
         .ok_or_else(|| format!("no such quest {quest_entry}"))?;
+    if player.money < tmpl.required_money {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::NotEnoughMoney,
+            "you don't have enough money for that quest",
+        ));
+    }
 
     let reward_spell = ctx
         .db
@@ -1301,13 +1321,11 @@ pub(crate) fn request_turn_in_quest(
     if let Some(reward) = pick_choice_reward(&choices, reward_index, quest_entry)? {
         rewards.insert(0, reward);
     }
-    player.money = player.money.saturating_add(tmpl.reward_money);
-    let base_xp = lyracore_shared::quest::base_reward_xp(
-        tmpl.reward_xp,
-        tmpl.reward_money_max_level,
-        tmpl.quest_level,
-    );
-    let payout = quest_payout(player.level, crate::xp::rated_xp(ctx, base_xp));
+    player.money = player
+        .money
+        .saturating_sub(tmpl.required_money)
+        .saturating_add(tmpl.reward_money);
+    let payout = quest_payout(player.level, crate::xp::rated_xp(ctx, tmpl.reward_xp));
     player.money = player.money.saturating_add(payout.money);
     // Packages can catch a Refusal; resolve every item Gate before the infallible quest effects.
     crate::items::exchange_items(
@@ -1317,19 +1335,8 @@ pub(crate) fn request_turn_in_quest(
         &rewards,
         crate::items::ItemPush::QUEST_REWARD,
     )?;
-    crate::reputation::grant_reputation(
-        ctx,
-        player_guid,
-        tmpl.rew_rep_faction_1,
-        tmpl.rew_rep_value_1,
-    );
-    crate::reputation::grant_reputation(
-        ctx,
-        player_guid,
-        tmpl.rew_rep_faction_2,
-        tmpl.rew_rep_value_2,
-    );
-    if let Some(xp) = payout.xp {
+    grant_reputation_rewards(ctx, player_guid, &tmpl);
+    if let Some(xp) = payout.xp.filter(|&xp| xp > 0) {
         crate::xp::XpEvent::send(
             ctx,
             player_guid,
@@ -1363,6 +1370,18 @@ pub(crate) fn request_turn_in_quest(
         },
     );
     Ok(())
+}
+
+fn grant_reputation_rewards(ctx: &ReducerContext, character_guid: u64, tmpl: &QuestTemplate) {
+    for (faction, value) in [
+        (tmpl.rew_rep_faction_1, tmpl.rew_rep_value_1),
+        (tmpl.rew_rep_faction_2, tmpl.rew_rep_value_2),
+        (tmpl.rew_rep_faction_3, tmpl.rew_rep_value_3),
+        (tmpl.rew_rep_faction_4, tmpl.rew_rep_value_4),
+        (tmpl.rew_rep_faction_5, tmpl.rew_rep_value_5),
+    ] {
+        crate::reputation::grant_reputation(ctx, character_guid, faction, value);
+    }
 }
 
 fn credit_objective(

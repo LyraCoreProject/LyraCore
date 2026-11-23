@@ -17,8 +17,15 @@ game_quest_template required_max_rep_faction 0
 game_quest_template required_max_rep_value 0
 game_quest_template required_min_rep_faction 0
 game_quest_template required_min_rep_value 0
+game_quest_template required_money 0
 game_quest_template required_skill 0
 game_quest_template required_skill_value 0
+game_quest_template rew_rep_faction_3 0
+game_quest_template rew_rep_faction_4 0
+game_quest_template rew_rep_faction_5 0
+game_quest_template rew_rep_value_3 0
+game_quest_template rew_rep_value_4 0
+game_quest_template rew_rep_value_5 0
 game_spell form_mask 0
 game_spell form_exclude 0
 game_spell attributes_ex_2 0

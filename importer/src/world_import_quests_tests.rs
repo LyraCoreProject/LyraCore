@@ -59,6 +59,13 @@ fn quest<'a>(
         ("RequiredMinRepValue", N(3000)),
         ("RequiredMaxRepFaction", N(76)),
         ("RequiredMaxRepValue", N(-3000)),
+        ("RewOrReqMoney", N(-250)),
+        ("RewRepFaction3", N(21)),
+        ("RewRepValue3", N(10)),
+        ("RewRepFaction4", N(47)),
+        ("RewRepValue4", N(-5)),
+        ("RewRepFaction5", N(69)),
+        ("RewRepValue5", N(75)),
     ] {
         row.iter_mut().find(|(key, _)| *key == name).unwrap().1 = value;
     }
@@ -66,7 +73,7 @@ fn quest<'a>(
 }
 
 fn source() -> WorldSource {
-    let mut names = "entry patch ZoneOrSort MinLevel QuestLevel Type RequiredClasses RequiredRaces LimitTime QuestFlags SpecialFlags PrevQuestId NextQuestInChain SrcItemId SrcItemCount RewRepFaction1 RewRepValue1 RewRepFaction2 RewRepValue2 RewOrReqMoney RewSpell RewSpellCast RewMoneyMaxLevel RewMailTemplateId RewMailDelaySecs RewMailMoney RewXP IncompleteEmote CompleteEmote NextQuestId ExclusiveGroup MaxLevel BreadcrumbForQuestId RequiredSkill RequiredSkillValue RequiredMinRepFaction RequiredMinRepValue RequiredMaxRepFaction RequiredMaxRepValue".split_whitespace().map(str::to_string).collect::<Vec<_>>();
+    let mut names = "entry patch ZoneOrSort MinLevel QuestLevel Type RequiredClasses RequiredRaces LimitTime QuestFlags SpecialFlags PrevQuestId NextQuestInChain SrcItemId SrcItemCount RewRepFaction1 RewRepValue1 RewRepFaction2 RewRepValue2 RewOrReqMoney RewSpell RewSpellCast RewMoneyMaxLevel RewMailTemplateId RewMailDelaySecs RewMailMoney RewXP IncompleteEmote CompleteEmote NextQuestId ExclusiveGroup MaxLevel BreadcrumbForQuestId RequiredSkill RequiredSkillValue RequiredMinRepFaction RequiredMinRepValue RequiredMaxRepFaction RequiredMaxRepValue RewRepFaction3 RewRepValue3 RewRepFaction4 RewRepValue4 RewRepFaction5 RewRepValue5".split_whitespace().map(str::to_string).collect::<Vec<_>>();
     for slot in 1..=4 {
         for prefix in [
             "ReqCreatureOrGOId",
@@ -256,7 +263,7 @@ fn named_quests_select_revisions_relations_mail_money_xp_flags_and_learn_spells(
     .unwrap();
     assert_eq!(quests.entries, HashSet::from([100]));
     assert!(quests.templates[0].starts_with("(100,5,8,'Snow 雪',0,123,"));
-    assert!(quests.templates[0].ends_with(",185,50,72,3000,76,-3000)"));
+    assert!(quests.templates[0].ends_with(",185,50,72,3000,76,-3000,250,21,10,47,-5,69,75)"));
     assert_eq!(quests.texts, ["(100,'','','NULL','')"]);
     let mut statements = Vec::new();
     push_quest_statements(&mut statements, &quests, &[]);

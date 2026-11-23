@@ -18,11 +18,6 @@ pub(super) fn quest_detail_view(
 ) -> Option<lyracore_protocol::codec::QuestDetailView> {
     use lyracore_protocol::codec::QuestDetailView;
     let tmpl = ctx.db.game_quest_template().entry().find(quest_id)?;
-    let reward_xp = lyracore_shared::quest::base_reward_xp(
-        tmpl.reward_xp,
-        tmpl.reward_money_max_level,
-        tmpl.quest_level,
-    );
     let text = ctx.db.game_quest_text().quest_entry().find(quest_id);
     let details = text.as_ref().map(|t| t.details.clone()).unwrap_or_default();
     let offer_reward_text = text
@@ -61,8 +56,8 @@ pub(super) fn quest_detail_view(
         objectives_text: synthesized_objectives(ctx, quest_id, imported_objectives),
         offer_reward_text,
         request_items_text,
-        money_reward: tmpl.reward_money,
-        reward_xp,
+        money_reward: lyracore_shared::quest::offered_money(tmpl.reward_money, tmpl.required_money),
+        reward_xp: tmpl.reward_xp,
         next_quest_id: tmpl.next_quest_id,
         max_level_money_reward: tmpl.reward_money_max_level,
         flags: ctx
@@ -450,7 +445,7 @@ fn request_reward_screen(
     Ok(vec![offer_reward(giver, &detail)?])
 }
 
-// Storage refusals send the quest-failed notice; only a quest this giver ends is re-offered.
+// Storage and money refusals send their notice; only a quest this giver ends is re-offered.
 fn refused_turn_in_screen(
     ctx: &ReducerContext,
     giver: u64,
@@ -473,18 +468,23 @@ fn refused_turn_in_screen(
     let Some(detail) = quest_detail_view(ctx, quest).filter(|_| alive && ends_quest) else {
         return Ok(Vec::new());
     };
-    let reason = match refusal.kind {
-        ActionRefusalKind::InventoryFull => Some(Reason::QuestFailedInventoryFull),
-        ActionRefusalKind::DuplicateItem => Some(Reason::QuestFailedDuplicateItem),
-        _ => None,
+    let failed = |reason| {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_FAILED(codec::build_questgiver_quest_failed(
+            quest, reason,
+        ))
     };
-    let notice = reason
-        .map(|reason| {
-            packet(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_FAILED(
-                codec::build_questgiver_quest_failed(quest, reason),
+    let notice = match refusal.kind {
+        ActionRefusalKind::InventoryFull => Some(failed(Reason::QuestFailedInventoryFull)),
+        ActionRefusalKind::DuplicateItem => Some(failed(Reason::QuestFailedDuplicateItem)),
+        ActionRefusalKind::NotEnoughMoney => {
+            Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_INVALID(
+                codec::build_questgiver_quest_invalid(Reason::QuestFailedNotEnoughMoney),
             ))
-        })
-        .transpose()?;
+        }
+        _ => None,
+    }
+    .map(packet)
+    .transpose()?;
     Ok(notice
         .into_iter()
         .chain([offer_reward(giver, &detail)?])

@@ -241,6 +241,7 @@ pub enum ActionRefusalKind {
     ProfileLimit,
     TransferPending,
     DuplicateItem,
+    NotEnoughMoney,
 }
 
 impl ActionRefusal {

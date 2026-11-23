@@ -3,7 +3,7 @@ id = "quest_reward"
 system = "quests"
 scope = "Turning in a completed quest grants the selected reward together with its other rewards and completes the quest."
 requests = ["0x0189", "0x018E"]
-replies = ["0x017E", "0x018D", "0x0166", "0x0124", "0x01D0", "0x0191", "0x0192"]
+replies = ["0x017E", "0x018D", "0x0166", "0x0124", "0x01D0", "0x018F", "0x0191", "0x0192"]
 dependencies = []
 required_rungs = ["durable_module", "tier1", "conformance_audit", "real_client"]
 scenarios = ["quest_reward"]
@@ -56,6 +56,31 @@ rung = "durable_module"
 path = "module/tests/conformance/quest_turn_in.rs"
 function = "a_level_up_turn_in_sends_the_next_level_threshold_with_the_xp"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "a_quest_cost_refuses_the_turn_in_without_the_money_and_takes_it_with"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "a_quest_with_explicit_zero_xp_grants_none_and_a_quest_with_xp_grants_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "a_quest_with_five_reputation_rewards_grants_all_five"
+rung = "durable_module"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "a_quest_cost_is_offered_as_negative_money"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/quest.rs"
+function = "a_quest_cost_is_the_required_money_and_a_reward_requires_none"
+rung = "codec"
 
 [[deliberate_deviations]]
 id = "absent_choice_slot"

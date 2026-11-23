@@ -1,23 +1,10 @@
 use crate::race_class::{mask_admits, ZeroMask};
 
-// Placeholder XP curve for templates without an explicit reward.
-fn xp_reward(quest_level: u32) -> u32 {
-    quest_level.saturating_mul(45).saturating_add(40)
-}
-
 // Placeholder conversion of six copper per XP at the level cap.
 const MAX_LEVEL_XP_TO_COPPER: u32 = 6;
 
 pub fn max_level_money_reward(xp: u32) -> u32 {
     xp.saturating_mul(MAX_LEVEL_XP_TO_COPPER)
-}
-
-// Vanilla XP is ceil(RewMoneyMaxLevel / 0.6).
-fn quest_xp(reward_money_max_level: u32) -> u32 {
-    if reward_money_max_level == 0 {
-        return 0;
-    }
-    (((reward_money_max_level as u64) * 5).div_ceil(3)) as u32
 }
 
 // game_group_event kind 9 is retired; quest sharing uses 10 and 11.
@@ -89,22 +76,10 @@ mod tests {
     }
 
     #[test]
-    fn xp_reward_is_monotonic_and_nonzero() {
-        assert_eq!(xp_reward(1), 85);
-        assert_eq!(xp_reward(2), 130);
-        assert_eq!(xp_reward(5), 265);
-        assert!(xp_reward(10) > xp_reward(5));
-        assert!(xp_reward(u32::MAX) > 0);
-    }
-
-    #[test]
-    fn quest_xp_is_authentic_and_exact() {
-        assert_eq!(quest_xp(102), 170);
-        assert_eq!(quest_xp(150), 250);
-        assert_eq!(quest_xp(270), 450);
-        assert_eq!(quest_xp(0), 0);
-        assert_eq!(quest_xp(3), 5);
-        assert!(quest_xp(u32::MAX) > 0);
+    fn a_quest_cost_is_offered_as_negative_money() {
+        assert_eq!(offered_money(150, 0), 150);
+        assert_eq!(offered_money(0, 250), -250);
+        assert_eq!(offered_money(0, 0), 0);
     }
 
     #[test]
@@ -457,14 +432,9 @@ impl AcceptanceRefusal {
 
 pub const QUEST_LOG_FULL_TEXT: &str = "quest log is full";
 
-pub fn base_reward_xp(explicit_xp: u32, reward_money_max_level: u32, quest_level: u32) -> u32 {
-    if explicit_xp > 0 {
-        explicit_xp
-    } else if reward_money_max_level > 0 {
-        quest_xp(reward_money_max_level)
-    } else {
-        xp_reward(quest_level)
-    }
+/// The signed `RewOrReqMoney` wire value: a quest cost shows as a negative reward.
+pub fn offered_money(reward_money: u32, required_money: u32) -> i32 {
+    reward_money.wrapping_sub(required_money) as i32
 }
 
 #[cfg(test)]
@@ -1047,12 +1017,5 @@ mod rule_tests {
             ),
             StartSighting::Hidden
         );
-    }
-
-    #[test]
-    fn reward_priority_is_explicit_then_imported_then_placeholder() {
-        assert_eq!(base_reward_xp(123, 270, 10), 123);
-        assert_eq!(base_reward_xp(0, 270, 10), 450);
-        assert_eq!(base_reward_xp(0, 0, 10), 490);
     }
 }
