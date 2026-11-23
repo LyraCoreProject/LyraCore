@@ -679,6 +679,10 @@ pub struct RangedImpactSchedule {
     pub is_crit: bool,
     #[default(0)]
     pub school: u8,
+    #[default(0u32)]
+    pub resisted: u32,
+    #[default(0u32)]
+    pub blocked: u32,
 }
 
 pub(crate) enum AttackRefusal {

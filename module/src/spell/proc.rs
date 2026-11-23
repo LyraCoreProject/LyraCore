@@ -388,7 +388,7 @@ pub(crate) fn run_immune_proc_pass(
 
 const DAMAGE_CLASS_MELEE: u8 = 2;
 
-const DAMAGE_CLASS_RANGED: u8 = 3;
+pub(crate) const DAMAGE_CLASS_RANGED: u8 = 3;
 
 /// vmangos rolls a PPM proc with the attack type of the hit, and a ranged spell's is RANGED.
 fn proc_attack(source: HitSource, damage_class: Option<u8>) -> HitSource {

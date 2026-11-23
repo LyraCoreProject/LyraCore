@@ -83,6 +83,8 @@ pub fn debug_stage_ranged_lethal_damage_floor_fixture(
             ranged_spell_id: 75,
             is_crit: false,
             school: 0,
+            resisted: 0,
+            blocked: 0,
         });
     Ok(())
 }
