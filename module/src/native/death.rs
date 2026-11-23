@@ -5,9 +5,9 @@ use lyracore_protocol::{
         SMSG_SPIRIT_HEALER_CONFIRM, SMSG_UPDATE_OBJECT,
     },
 };
-use spacetimedb::{ConnectionId, ReducerContext, Table};
+use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, Unhandled};
+use super::Unhandled;
 use crate::{game_corpse, Corpse};
 use crate::{game_resurrect_request, game_self_resurrect_option, ResurrectRequest};
 
@@ -112,39 +112,6 @@ pub(crate) fn corpse_created(ctx: &ReducerContext, corpse: &Corpse) {
     let (opcode, body) =
         codec::build_corpse_reclaim_delay_raw(std::time::Duration::from_micros(remaining));
     super::send_raw_to_character(ctx, corpse.owner_guid, opcode, body);
-}
-
-pub(crate) fn corpse_changed(ctx: &ReducerContext, corpse: &Corpse) {
-    if ctx.db.game_native_player().count() == 0 {
-        return;
-    }
-    if corpse.is_bones {
-        corpse_removed(ctx, corpse.owner_guid);
-    }
-    let packet = super::bounded(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-        codec::build_corpse_flags_values(corpse.guid, corpse.is_bones),
-    )));
-    super::visibility::broadcast_aoi(
-        ctx,
-        super::NativeAoi {
-            layer: crate::aoi::CORPSE,
-            entity_guid: corpse.guid,
-            exclude_connection: None,
-        },
-        packet.opcode,
-        packet.body,
-    );
-}
-
-pub(crate) fn corpse_removed(ctx: &ReducerContext, owner: u64) {
-    super::send_to_character(
-        ctx,
-        owner,
-        ServerOpcodeMessage::MSG_CORPSE_QUERY(Box::new(
-            lyracore_protocol::messages::vanilla::MSG_CORPSE_QUERY_Server::NotFound,
-        )),
-        super::EncodeFailure::Disconnect,
-    );
 }
 
 pub(crate) fn resurrect_offered(ctx: &ReducerContext, offer: &ResurrectRequest) {

@@ -210,13 +210,14 @@ establish every gameplay path or real-client presentation. The
 
 These are the rules each handler applies that its code does not make obvious at a glance.
 
-**Corpses.** Corpse AOI uses map, Instance and cell indexes. Bodies and bones keep the same AOI
-Grant until visibility ends or the bones are removed. A resurrectable Corpse turns to bones when its
-owner is revived or after 3 days, and bones last 60 minutes. Reclaim selects the Actor's own Corpse
-and checks distance, map, Instance, ghost state and the remaining delay. Resurrection offers and
-self-resurrection fields go only to the owner. The spirit-healer handler checks the selected NPC and
-interaction range. See the [Corpse migration](./danger-zones.md#corpse-aoi-migration) before you
-publish to a Shard with existing rows.
+**Corpses.** Corpse AOI uses map, Instance and cell indexes. A resurrectable Corpse turns to bones
+when its owner is revived or after 3 days, and bones last 60 minutes. As in vmangos
+`Map::RemoveCorpses`, the change revokes every Grant of the body and grants the bones afresh under
+the same GUID, so each viewer in range gets a DESTROY, then a CREATE with corpse flags `0x05`.
+Reclaim selects the Actor's own Corpse and checks distance, map, Instance, ghost state and the
+remaining delay. Resurrection offers and self-resurrection fields go only to the owner. The
+spirit-healer handler checks the selected NPC and interaction range. See the [Corpse
+migration](./danger-zones.md#corpse-aoi-migration) before you publish to a Shard with existing rows.
 
 **Environment.** Weather delivery uses the Module's terrain-derived zone and an index of native
 connections in that zone. Entry sends the current weather; later changes reach only that zone.

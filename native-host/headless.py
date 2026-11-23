@@ -268,7 +268,7 @@ def values(packets, guid, create=False):
         if create and body[offset] in (1, 2):  # TYPEID_ITEM or TYPEID_CONTAINER.
             assert body[offset + 1] == 0x10  # ALL, followed by its u32.
             offset += 2 + 4
-        elif create and body[offset] == 5:  # TYPEID_GAMEOBJECT.
+        elif create and body[offset] in (5, 7):  # TYPEID_GAMEOBJECT or TYPEID_CORPSE.
             assert body[offset + 1] == 0x50  # HAS_POSITION and ALL.
             offset += 2 + 16 + 4
         elif create:

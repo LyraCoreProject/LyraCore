@@ -57,8 +57,8 @@ pub fn build_corpse_create_object(corpse: &CorpseView) -> SMSG_UPDATE_OBJECT {
         .set_corpse_facing(corpse.orientation)
         .set_corpse_bytes_1(b1a, b1b, b1c, b1d)
         .set_corpse_bytes_2(b2a, b2b, b2c, b2d)
-        // CORPSE_FLAG_BONE is 0x01; an ordinary body carries 0x04.
-        .set_corpse_flags(if corpse.is_bones { 0x01 } else { 0x04 })
+        // CORPSE_FLAG_UNK2 0x04 marks every corpse; bones add CORPSE_FLAG_BONES 0x01.
+        .set_corpse_flags(if corpse.is_bones { 0x05 } else { 0x04 })
         .finalize();
     let update_flag = MovementBlock_UpdateFlag::empty()
         .set_all(MovementBlock_UpdateFlag_All { unknown1: 1 })
@@ -96,23 +96,9 @@ pub fn build_corpse_reclaim_delay_raw(delay: std::time::Duration) -> (u16, Vec<u
     (0x0269, millis.to_le_bytes().to_vec())
 }
 
-pub fn build_corpse_flags_values(guid: u64, is_bones: bool) -> SMSG_UPDATE_OBJECT {
-    let mut mask = UpdateCorpse::builder().finalize();
-    mask.dirty_reset();
-    mask.set_corpse_flags(if is_bones { 0x01 } else { 0x04 });
-    SMSG_UPDATE_OBJECT {
-        has_transport: 0,
-        objects: vec![Object::Values {
-            guid1: Guid::new(guid),
-            mask1: UpdateMask::Corpse(mask),
-        }],
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
     use wow_world_messages::vanilla::{
         MSG_CORPSE_QUERY_Server, Object, ObjectType, ServerMessage, UpdateMask,
     };
@@ -123,18 +109,6 @@ mod tests {
             build_corpse_reclaim_delay_raw(std::time::Duration::from_secs(30)),
             (0x0269, vec![0x30, 0x75, 0, 0])
         );
-    }
-
-    #[test]
-    fn bones_update_contains_only_the_corpse_flags_descriptor() {
-        let message =
-            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(build_corpse_flags_values(7, true)));
-        let packet = crate::world::encode(&message).unwrap();
-        let mut expected = vec![1, 0, 0, 0, 0, 0, 1, 7, 2];
-        expected.extend_from_slice(&0u32.to_le_bytes());
-        expected.extend_from_slice(&(1u32 << 3).to_le_bytes());
-        expected.extend_from_slice(&1u32.to_le_bytes());
-        assert_eq!(packet.body, expected);
     }
 
     #[test]
@@ -212,8 +186,8 @@ mod tests {
             } => {
                 assert_eq!(
                     m.corpse_flags(),
-                    Some(0x01),
-                    "decayed bones must carry CORPSE_FLAG_BONE (0x01)"
+                    Some(0x05),
+                    "vmangos Map::RemoveCorpses gives bones CORPSE_FLAG_UNK2 | CORPSE_FLAG_BONES"
                 );
             }
             other => panic!("expected a Corpse CreateObject2, got {other:?}"),
