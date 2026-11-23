@@ -1970,6 +1970,54 @@
           "field_path": [
             "outcomes"
           ]
+        },
+        {
+          "rule": "weapon_strike_sample",
+          "checkpoint": "weapon_strike_level_60_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "casts"
+          },
+          "opcode": 306,
+          "field_path": [
+            "outcomes"
+          ]
+        },
+        {
+          "rule": "weapon_strike_sample",
+          "checkpoint": "weapon_strike_level_60_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "casts"
+          },
+          "opcode": 306,
+          "field_path": [
+            "outcomes"
+          ]
+        },
+        {
+          "rule": "weapon_strike_sample",
+          "checkpoint": "weapon_strike_level_63_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "casts"
+          },
+          "opcode": 306,
+          "field_path": [
+            "outcomes"
+          ]
+        },
+        {
+          "rule": "weapon_strike_sample",
+          "checkpoint": "weapon_strike_level_63_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "casts"
+          },
+          "opcode": 306,
+          "field_path": [
+            "outcomes"
+          ]
         }
       ],
       "data": []

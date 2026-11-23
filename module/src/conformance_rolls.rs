@@ -271,12 +271,37 @@ mod fixture {
     ) -> Result<(), String> {
         crate::helpers::require_operator(ctx)?;
         prepare_white_melee(ctx, character_guid, target_guid, target_level, seed, stream)?;
+        equip_fixture_axe(ctx, character_guid)?;
         arm_heroic_strike(ctx, character_guid)
     }
 
-    // Item 37 and spell 78 translate pinned database rows; ADR 0007 explains delay and durability.
-    fn arm_heroic_strike(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-        use crate::{game_item_template, game_spell, game_spell_effect};
+    /// White melee plus the axe and Mortal Strike rank 1 on the caster stream; ADR 0007.
+    #[reducer]
+    pub fn debug_prepare_weapon_strike_character(
+        ctx: &ReducerContext,
+        character_guid: u64,
+        target_guid: u64,
+        target_level: u32,
+        seed: u64,
+        stream: u64,
+    ) -> Result<(), String> {
+        crate::helpers::require_operator(ctx)?;
+        prepare_white_melee(ctx, character_guid, target_guid, target_level, seed, stream)?;
+        equip_fixture_axe(ctx, character_guid)?;
+        arm_mortal_strike(ctx, character_guid)?;
+        let table = ctx.db.game_conformance_spell_random();
+        table.character_guid().delete(character_guid);
+        table.insert(SpellRandom {
+            character_guid,
+            target_guid,
+            state: seed ^ stream.wrapping_mul(0xd1b54a32d192ed03),
+        });
+        Ok(())
+    }
+
+    // Item 37 translates a pinned database row; ADR 0007 explains delay and durability.
+    fn equip_fixture_axe(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+        use crate::game_item_template;
 
         let mut axe = crate::ItemTemplate::blank(37, "Fixture axe 37");
         axe.class = 2;
@@ -294,7 +319,12 @@ mod fixture {
         ctx.db.game_item_template().entry().delete(37);
         ctx.db.game_item_template().insert(axe);
         crate::debug::debug_equip_weapon(ctx, character_guid, 37)?;
-        crate::skill::debug_set_skill(ctx, character_guid, 44, 300)?;
+        crate::skill::debug_set_skill(ctx, character_guid, 44, 300)
+    }
+
+    // Spell 78 translates a pinned database row.
+    fn arm_heroic_strike(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+        use crate::{game_spell, game_spell_effect};
 
         let mut spell = crate::Spell::blank(78, "Fixture spell 78");
         spell.power_type = 1;
@@ -331,6 +361,62 @@ mod fixture {
         effects.insert(effect);
         let learner = crate::helpers::live_entity(ctx, character_guid)?;
         crate::spell::learn_spell(ctx, character_guid, learner.owner_identity, 78);
+        crate::debug::debug_set_power(ctx, character_guid, 1_000_000_000)
+    }
+
+    // Spell 12294 translates a pinned database row; ADR 0007 explains the dropped cooldowns.
+    fn arm_mortal_strike(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+        use crate::{game_spell, game_spell_effect};
+        use lyracore_shared::spell::taxonomy::{A_INERT, CAST_FLAG_REFUSES_SELF_CAST, P_RAW};
+
+        let mut spell = crate::Spell::blank(12294, "Fixture spell 12294");
+        spell.power_type = 1;
+        spell.cost = 300;
+        spell.gcd_ms = 0;
+        spell.gcd_category = 0;
+        spell.category = 971;
+        spell.range_yd = 5;
+        spell.duration_ms = 10_000;
+        spell.max_duration_ms = 10_000;
+        spell.duration_index = 1;
+        spell.school_mask = 1;
+        spell.attributes = 327696;
+        spell.attributes_ex_3 = 1024;
+        spell.spell_level = 40;
+        spell.is_negative = true;
+        spell.cast_flags = crate::spell::CAST_FLAG_WEAPON_PROCS | CAST_FLAG_REFUSES_SELF_CAST;
+        spell.family_name = 4;
+        spell.family_flags = 33554432;
+        spell.custom_flags = lyracore_shared::spell_custom::FACE_TARGET;
+        spell.visual_id = 39;
+        spell.equipped_item_class = 2;
+        spell.equipped_item_subclass_mask = 173555;
+        spell.damage_class = 2;
+        ctx.db.game_spell().spell_id().delete(12294);
+        ctx.db.game_spell().insert(spell);
+        let effects = ctx.db.game_spell_effect();
+        for effect in effects.by_spell().filter(&12294u32).collect::<Vec<_>>() {
+            effects.id().delete(effect.id);
+        }
+        let mut healing = crate::SpellEffect::blank(12294, 0);
+        healing.kind = A_INERT;
+        healing.base_points = -50;
+        healing.die_sides = 1;
+        healing.target = crate::spell::T_TARGET_ENEMY;
+        healing.bonus_coefficient = 0.0;
+        effects.insert(healing);
+        let mut strike = crate::SpellEffect::blank(12294, 1);
+        strike.kind = crate::spell::E_WEAPON_STRIKE;
+        strike.base_points = 85;
+        strike.die_sides = 1;
+        strike.target = crate::spell::T_TARGET_ENEMY;
+        strike.p0 = 100;
+        strike.p0_kind = P_RAW;
+        strike.p1 = 1;
+        strike.bonus_coefficient = 1.0;
+        effects.insert(strike);
+        let learner = crate::helpers::live_entity(ctx, character_guid)?;
+        crate::spell::learn_spell(ctx, character_guid, learner.owner_identity, 12294);
         crate::debug::debug_set_power(ctx, character_guid, 1_000_000_000)
     }
 

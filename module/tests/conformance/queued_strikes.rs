@@ -11,7 +11,7 @@ use wire_client::scenario::{FixtureVerb, Scenario};
 use super::queued_strike_spec::{self as spec, Counts};
 use super::transport::{prepare_character, Delivery};
 
-const CMSG_CAST_SPELL: u32 = 0x12e;
+pub(super) const CMSG_CAST_SPELL: u32 = 0x12e;
 // Each 100 ms melee tick swings the 50 ms fixture axe once.
 const TICKS_PER_SWING: u32 = 2;
 
@@ -38,9 +38,9 @@ impl Sample {
     }
 }
 
-struct Preparation<'a> {
-    ready: &'a std::sync::Barrier,
-    arrived: bool,
+pub(super) struct Preparation<'a> {
+    pub(super) ready: &'a std::sync::Barrier,
+    pub(super) arrived: bool,
 }
 
 impl Drop for Preparation<'_> {
@@ -51,8 +51,8 @@ impl Drop for Preparation<'_> {
     }
 }
 
-fn cast_request(target: u64) -> Vec<u8> {
-    let mut body = spec::SPELL_ID.to_le_bytes().to_vec();
+pub(super) fn cast_request(spell: u32, target: u64) -> Vec<u8> {
+    let mut body = spell.to_le_bytes().to_vec();
     body.extend(0x0002u16.to_le_bytes());
     let guid = target.to_le_bytes();
     body.push(
@@ -70,7 +70,10 @@ fn queue_strike(character: &mut Character) -> std::result::Result<(), String> {
         .connection
         .call(
             "native_world_receive",
-            json!([CMSG_CAST_SPELL, cast_request(character.target)]),
+            json!([
+                CMSG_CAST_SPELL,
+                cast_request(spec::SPELL_ID, character.target)
+            ]),
         )
         .map(|_| ())
 }
@@ -303,6 +306,7 @@ fn verify_context(
         &participants,
         spec::TARGET_LEVELS[level_index],
         &[44, 95, 162],
+        None,
     )
 }
 

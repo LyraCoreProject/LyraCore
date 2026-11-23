@@ -54,6 +54,10 @@ mod tier1;
 mod transaction_world;
 #[path = "conformance/transport.rs"]
 mod transport;
+#[path = "../../conformance/support/weapon_strike_rolls.rs"]
+mod weapon_strike_spec;
+#[path = "conformance/weapon_strikes.rs"]
+mod weapon_strikes;
 
 fn fixture(name: &str) -> (Standalone, u64, String) {
     fixture_in(Standalone::start(name))

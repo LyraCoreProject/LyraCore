@@ -40,7 +40,13 @@ symbol = "combat_event"
 evidence = "Source reading at d9173eca: Spell.cpp Spell::SendMeleeAttackingStateUpdate and its two calls in Spell::DoAllEffectOnTarget; Unit.cpp CalculateAbsorbResistBlock. LyraCore: combat_event skips the packet when spell_swing is set; lyracore-protocol codec/combat.rs writes blocked 0; native/spell.rs damage_log skips a zero-damage row; combat/folds.rs turns a blocked Glancing into Block. ADR 0007 derives the queued strike's rates; module/tests/conformance/queued_strikes.rs collects them."
 
 [[known_gaps]]
-description = "Other white melee contexts retain the legacy Character dodge formula, Character parry and block eligibility, creature crushing chance, weapon-skill bonuses and offhand weapon-skill selection. Controlled units, cast weapon Spells, ranged swings and target-side hit/crit auras need separate conformance."
+description = "An avoided instant cast reaches its caster as an SMSG_SPELL_GO that lists the target as hit, plus SMSG_SPELLLOGMISS (#1186). vmangos sends the caster and observers one GO with the avoided target in the miss list and no SMSG_SPELLLOGMISS for a miss, dodge or parry. Tier 1 cannot classify an avoided Mortal Strike, so white_melee_outcomes holds weapon_strike_sample at both levels for both public seeds and the cast Weapon Strike's rates stay unmeasured. After #1186 the block category still fails: a cast Weapon Strike is never partially blocked (spells/spell_cast_kinds.toml, hit_roll), and the damage log always reports blocked 0 (#1177)."
+path = "module/src/native/cast.rs"
+symbol = "receive"
+evidence = "Source reading at d9173eca: Spell.cpp Spell::SendSpellGo and Spell::WriteSpellGoTargets; SMSG_SPELLLOGMISS reports immune and evade in Spell::DoSpellHitOnUnit and a resisted damage shield in Unit.cpp, never a miss, dodge or parry. LyraCore: native/cast.rs receive sends the instant-cast prelude GO with build_spell_go(target); native/spell.rs cast_event_messages sends the resolved GO to Peers and SMSG_SPELLLOGMISS to the source. ADR 0007 derives the cast Weapon Strike's rates; module/tests/conformance/weapon_strikes.rs collects them."
+
+[[known_gaps]]
+description = "Other white melee contexts retain the legacy Character dodge formula, Character parry and block eligibility, creature crushing chance, weapon-skill bonuses and offhand weapon-skill selection. Controlled units, ranged Weapon Strikes, ranged swings and target-side hit/crit auras need separate conformance."
 path = "module/src/combat/attack_table.rs"
 symbol = "attack_table_for"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp"

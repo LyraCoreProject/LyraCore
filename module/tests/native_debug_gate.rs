@@ -75,6 +75,7 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
         "debug_advance_roll_batch",
         "debug_prepare_spell_roll_character",
         "debug_prepare_queued_strike_character",
+        "debug_prepare_weapon_strike_character",
     ] {
         assert!(!reducers
             .iter()
