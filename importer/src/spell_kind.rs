@@ -29,6 +29,7 @@ pub fn instant_effect_to_kind(effect_id: i32) -> u8 {
         54 => E_ENCHANT_ITEM_TEMPORARY,
         50 => E_SUMMON_OBJECT,
         85 => E_SUMMON_PLAYER,
+        100 => E_INEBRIATE,
         _ => E_SCRIPTED,
     }
 }

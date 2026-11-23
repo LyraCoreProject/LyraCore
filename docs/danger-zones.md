@@ -240,6 +240,19 @@ Deltas may claim the column; one that omits it keeps the default. The Operator C
 carry it, so a created template has no school immunity and an update keeps the template's mask.
 Direct SQL INSERTs may omit it; shared import SQL defaults fill older inserts.
 
+### Drunk value migration
+
+`game_character` gains the END-appended column `drunk_value` with default 0, so every Character
+starts sober. The private `game_drunk_sobering` table is new and starts empty. Spell effect 100 now
+imports as `E_INEBRIATE` (code 0x2C); older spell rows keep it as `E_SCRIPTED`, so alcohol makes
+no one drunk until a reimport of the `spell` family. No repair is needed.
+
+`game_character` crosses in the Transfer blob. A Character row from an older source ends before
+`drunk_value` and arrives sober. An older destination refuses the longer row, so update both Shards
+before moving active World Sessions. `game_drunk_sobering` is a Character-owned table that is not
+transported. A blob from an older source lacks it and imports with no rows; login on the
+destination starts a new timer.
+
 ### DynamicObject AOI migration
 
 The native runtime adds a map, Instance and `cell` index to `game_dynamic_object`. Its new `cell`

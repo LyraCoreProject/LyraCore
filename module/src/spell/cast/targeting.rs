@@ -810,6 +810,14 @@ pub(crate) fn apply_effect(
             enchant_item_temporarily(ctx, e, caster_guid, item_target, points);
             EffectHit::none()
         }
+        // vmangos selects no unit for an Inebriate effect without an implicit target.
+        EffectKind::Inebriate if e.target == lyracore_shared::spell::taxonomy::T_SCRIPTED => {
+            EffectHit::none()
+        }
+        EffectKind::Inebriate => {
+            crate::drunk::inebriate(ctx, target_guid, points);
+            EffectHit::none()
+        }
         EffectKind::EnchantItem
         | EffectKind::Disenchant
         | EffectKind::Fish

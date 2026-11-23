@@ -522,6 +522,10 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<Update> {
         let m = codec::build_bank_bag_slots_values(new.guid, new.player_bytes_2);
         out.push(values(m));
     }
+    if is_player && old.player_bytes_3 != new.player_bytes_3 {
+        let m = codec::build_player_bytes_3_values(new.guid, new.player_bytes_3);
+        out.push(values(m));
+    }
     if is_player && old.level != new.level {
         let m = codec::build_level_values(new.guid, new.level);
         out.push(values(m));
@@ -723,5 +727,29 @@ mod tests {
         assert_eq!(guid1.guid(), 5);
         assert_eq!(fields.player_bytes_2(), Some((0, 0xee, 1, 2)));
         assert_eq!(fields.player_field_coinage(), None);
+    }
+
+    #[test]
+    fn a_drunk_value_change_updates_player_bytes_3_alone() {
+        let mut old = crate::helpers::tests::entity(5, 0, 0, 0, 0);
+        old.type_mask = lyracore_shared::constants::type_mask::PLAYER_BIT;
+        old.player_bytes_3 = 1;
+        let mut new = crate::helpers::tests::entity(5, 0, 0, 0, 0);
+        new.type_mask = old.type_mask;
+        new.player_bytes_3 = 0x3201;
+
+        let messages = updates(&old, &new);
+        let [Update::Shared(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update))] = messages.as_slice()
+        else {
+            panic!("the drunk value must update PLAYER_BYTES_3: {messages:?}");
+        };
+        let [Object::Values {
+            mask1: UpdateMask::Player(fields),
+            ..
+        }] = update.objects.as_slice()
+        else {
+            panic!("expected Character VALUES: {update:?}");
+        };
+        assert_eq!(fields.player_bytes_3(), Some((0x01, 0x32, 0, 0)));
     }
 }

@@ -157,6 +157,7 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
         return;
     }
     crate::fatigue::tick_fatigue(ctx);
+    crate::drunk::tick_sobering(ctx);
     let now = crate::time::now(ctx);
     let now_micros = now.to_micros_since_unix_epoch();
     let states = ctx.db.game_breath_state();

@@ -56,11 +56,11 @@ use lyracore_shared::spell::taxonomy::{
     COMBAT_RANGED_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER_PCT, COMBAT_SPELL_CRIT, COMBAT_THREAT,
     E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM,
     E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET,
-    E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING,
-    E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT,
-    E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE,
-    E_SUMMON_OBJECT, E_SUMMON_PET, E_SUMMON_PLAYER, E_TAME_CREATURE, E_TAUNT, E_TRIGGER,
-    E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT,
+    E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INEBRIATE, E_INTERRUPT, E_JUDGEMENT,
+    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME,
+    E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS,
+    E_SUMMON_HOSTILE, E_SUMMON_OBJECT, E_SUMMON_PET, E_SUMMON_PLAYER, E_TAME_CREATURE, E_TAUNT,
+    E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT,
     P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY,
     P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SKILL_LINE,
     P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
@@ -1700,6 +1700,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_SUMMON_GUARDIANS => "E_SUMMON_GUARDIANS",
         E_ADD_EXTRA_ATTACKS => "E_ADD_EXTRA_ATTACKS",
         E_ENCHANT_ITEM_TEMPORARY => "E_ENCHANT_ITEM_TEMPORARY",
+        E_INEBRIATE => "E_INEBRIATE",
         E_SUMMON_HOSTILE => "E_SUMMON_HOSTILE",
         E_DISTRACT => "E_DISTRACT",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
@@ -2297,6 +2298,28 @@ mod tests {
         tables.spells = crate::vmangos_spell::read(&source).unwrap().0;
         let (rows, _, _) = derive_spell_rows(&tables, &[], &[]).unwrap();
         rows.effects.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn a_drink_inebriates_its_drinker() {
+        // vmangos Weak Alcohol 11007, the spell of Thunder Ale 2686 and Bottle of Pinot Noir 2723.
+        let effect = temporary_enchantment_effect("UPDATE spell_template SET effect1=100, effectApplyAuraName1=0, effectBasePoints1=4, effectBaseDice1=1, effectDieSides1=1, effectMiscValue1=0, effectImplicitTargetA1=1, effectImplicitTargetB1=0, targets=0, spellFamilyName=0, effect2=0 WHERE build=5875");
+        assert_eq!(
+            (
+                effect.kind,
+                effect.base_points,
+                effect.die_sides,
+                effect.target
+            ),
+            (E_INEBRIATE, 5, 1, T_SELF)
+        );
+    }
+
+    #[test]
+    fn an_inebriate_effect_without_an_implicit_target_names_no_unit() {
+        // vmangos Barleybrew Scalder 8553 effect 3 has targets 0 and 0, so vmangos picks no unit.
+        let effect = temporary_enchantment_effect("UPDATE spell_template SET effect1=100, effectApplyAuraName1=0, effectBasePoints1=19, effectBaseDice1=1, effectDieSides1=1, effectMiscValue1=0, effectImplicitTargetA1=0, effectImplicitTargetB1=0, targets=0, spellFamilyName=0, effect2=0 WHERE build=5875");
+        assert_eq!((effect.kind, effect.target), (E_INEBRIATE, T_SCRIPTED));
     }
 
     #[test]
@@ -4406,6 +4429,7 @@ mod tests {
         assert_eq!(instant_effect_to_kind(115), E_SCRIPTED);
         assert_eq!(instant_effect_to_kind(19), E_ADD_EXTRA_ATTACKS);
         assert_eq!(instant_effect_to_kind(54), E_ENCHANT_ITEM_TEMPORARY);
+        assert_eq!(instant_effect_to_kind(100), E_INEBRIATE);
         assert_eq!(instant_effect_to_kind(112), E_SCRIPTED);
     }
 

@@ -50,7 +50,7 @@ pub(crate) fn build_player_entity(
                 character.level,
             ) == packing::REST_STATE_RESTED,
         ),
-        player_bytes_3: character.gender as u32,
+        player_bytes_3: crate::drunk::player_bytes_3(character.gender, character.drunk_value),
         player_flags: if character.resting {
             lyracore_shared::constants::player_flags::RESTING
         } else {

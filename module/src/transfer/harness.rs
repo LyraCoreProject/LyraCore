@@ -504,6 +504,7 @@ fn fixture_character(guid: u64, name: &str) -> crate::character::Character {
         bank_bag_slots: 3,
         watched_faction_index: -1,
         rest_state: lyracore_shared::packing::REST_STATE_RESTED,
+        drunk_value: 12_800,
     }
 }
 
@@ -666,11 +667,12 @@ fn watched_faction_selection_and_clear_cross_with_the_character() {
 fn escrow_from_before_the_watched_column_imports_with_no_selection() {
     let src = FakeDb::populated(GUID);
     let mut blob = export(&src, GUID, XFER, DEST);
-    blob.character_row.truncate(blob.character_row.len() - 5);
+    blob.character_row.truncate(blob.character_row.len() - 7);
     let mut dst = FakeDb::new();
     apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
     assert_eq!(dst.with_char(GUID, |c| c.watched_faction_index), -1);
     assert_eq!(dst.with_char(GUID, |c| c.rest_state), 0);
+    assert_eq!(dst.with_char(GUID, |c| c.drunk_value), 0);
     assert_eq!(dst.with_char(GUID, |c| c.bank_bag_slots), 3);
     assert_eq!(dst.with_char(GUID, |c| c.money), 987_654);
     assert!(dst.has_in_row(XFER));
@@ -680,17 +682,43 @@ fn escrow_from_before_the_watched_column_imports_with_no_selection() {
 fn escrow_from_before_the_rest_state_column_imports_with_zero_state() {
     let src = FakeDb::populated(GUID);
     let mut blob = export(&src, GUID, XFER, DEST);
-    blob.character_row.truncate(blob.character_row.len() - 1);
+    blob.character_row.truncate(blob.character_row.len() - 3);
     let mut dst = FakeDb::new();
     apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
     assert_eq!(dst.with_char(GUID, |c| c.rest_state), 0);
+    assert_eq!(dst.with_char(GUID, |c| c.watched_faction_index), -1);
+    assert_eq!(dst.with_char(GUID, |c| c.drunk_value), 0);
+    assert!(dst.has_in_row(XFER));
+}
+
+#[test]
+fn escrow_from_before_the_drunk_value_column_imports_sober() {
+    let src = FakeDb::populated(GUID);
+    let mut blob = export(&src, GUID, XFER, DEST);
+    blob.character_row.truncate(blob.character_row.len() - 2);
+    let mut dst = FakeDb::new();
+    apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
+    assert_eq!(dst.with_char(GUID, |c| c.drunk_value), 0);
+    assert_eq!(
+        dst.with_char(GUID, |c| c.rest_state),
+        lyracore_shared::packing::REST_STATE_RESTED
+    );
     assert_eq!(dst.with_char(GUID, |c| c.watched_faction_index), -1);
     assert!(dst.has_in_row(XFER));
 }
 
 #[test]
-fn partial_watched_columns_and_unknown_trailing_columns_refuse_before_import() {
-    for partial_bytes in [2, 3, 4, 6] {
+fn the_drunk_value_crosses_with_the_character() {
+    let src = FakeDb::populated(GUID);
+    let blob = export(&src, GUID, XFER, DEST);
+    let mut dst = FakeDb::new();
+    apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
+    assert_eq!(dst.with_char(GUID, |c| c.drunk_value), 12_800);
+}
+
+#[test]
+fn partial_suffix_columns_and_unknown_trailing_columns_refuse_before_import() {
+    for partial_bytes in [1, 4, 5, 6, 8] {
         let src = FakeDb::populated(GUID);
         let mut blob = export(&src, GUID, XFER, DEST);
         blob.character_row

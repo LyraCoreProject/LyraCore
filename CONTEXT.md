@@ -19,7 +19,7 @@ entry in both files.
 
 **C** [Call for Assistance](#creature-ai) · [Call for Help](#creature-ai) · [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Cast Request](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Migration](#accounts-characters-and-sessions) · [Character Name Reservation](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Combat Profile](#forms) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
-**D** [Data Gap](#conformance) · [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Duel](#pvp) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
+**D** [Data Gap](#conformance) · [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Drunk Value](#accounts-characters-and-sessions) · [Duel](#pvp) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
 **E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Equivalence Rule](#conformance) · [Escrow](#retired-terms) · [Event Binding](#packages) · [Extra Attack](#procs)
 
@@ -282,6 +282,12 @@ A Character whose Package was torn down. It is offline and has no live entity or
 Consent. Its Account and Character rows stay, by maintainer decision: turning a Package off never
 deletes its Characters. A Package enabled again does not adopt them.
 _Avoid_: deleted bot, orphan bot, frozen bot
+
+**Drunk Value**:
+A Character's inebriation from 0 to 65534, always even. A drink's Inebriate effect raises it and it sobers over
+time. The client draws the sober, tipsy, drunk and smashed tiers from it. See
+[Drunk value](docs/schema.md#drunk-value).
+_Avoid_: drunk level, drunkenness, intoxication
 
 **Alpha Test Tools**:
 Account-owned authority for a limited set of alpha testing dot-commands. The Module reads it from
