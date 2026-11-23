@@ -920,7 +920,8 @@ fn login_sequence_caps_the_action_bar_at_120_slots_but_not_the_spellbook() {
 
 #[test]
 fn login_sequence_folds_reputation_by_index_and_ignores_out_of_range_slots() {
-    let reps = [(5, 100, false), (63, -250, true), (64, 999, false)];
+    // FactionFlags: 0x01 visible, 0x02 at war, 0x14 hidden and peace forced.
+    let reps = [(5, 100, 0x14), (63, -250, 0x03), (64, 999, 0x01)];
     let msgs = login_sequence_messages(
         &warrior_entity(),
         &[],
@@ -947,23 +948,18 @@ fn login_sequence_folds_reputation_by_index_and_ignores_out_of_range_slots() {
         factions.factions[63].standing as i32, -250,
         "a negative standing bit-cast through u32"
     );
-    assert!(
-        factions.factions[63].flag.is_at_war(),
-        "slot 63 carries AT_WAR"
-    );
-    assert!(
-        factions.factions[63].flag.is_visible(),
-        "AT_WAR rides with VISIBLE (the pane row must render)"
-    );
-    assert!(
-        !factions.factions[5].flag.is_at_war(),
-        "an at_war=false row leaves the flag byte empty"
+    assert_eq!(factions.factions[63].flag.as_int(), 0x03);
+    assert_eq!(
+        factions.factions[5].flag.as_int(),
+        0x14,
+        "each slot carries its flag byte as given"
     );
     for i in (0..64).filter(|&i| i != 5 && i != 63) {
         assert_eq!(
             factions.factions[i].standing, 0,
             "slot {i} must stay at the default 0 standing"
         );
+        assert_eq!(factions.factions[i].flag.as_int(), 0, "slot {i} flags");
     }
 }
 

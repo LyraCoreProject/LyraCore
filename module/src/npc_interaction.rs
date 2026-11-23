@@ -241,7 +241,7 @@ fn refusal(
     if crate::helpers::dist_sq(actor, npc) > INTERACTION_RANGE_SQ {
         return Some(NpcGate::OutOfRange);
     }
-    if crate::reputation::npc_refuses_interaction(ctx, npc, actor) {
+    if crate::reputation::npc_refuses_service(ctx, npc, actor) {
         return Some(NpcGate::Unfriendly);
     }
     None

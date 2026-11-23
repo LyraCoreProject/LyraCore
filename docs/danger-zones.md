@@ -624,6 +624,26 @@ Offline units holding one of these Auras enter the world in its Form. Players se
 Holy spells are refused in Shadowform and healing spells in Moonkin Form, as their Form Sets say;
 Travel, Aquatic and Moonkin Form and Ghost Wolf refuse mounts and taxis; the Stealth openers work.
 
+### Reputation flag migration
+
+`game_faction` gains `reputation_flags_1` to `reputation_flags_4`, Faction.dbc `ReputationFlags`,
+END-appended with default 0. A Character's default flags come from the same race and class slot as
+its base standing. Until a reimport every default is 0: the login faction list marks no faction
+visible, hidden or peace forced unless the Character has a row for it, and any faction can be set at
+war. Reimport the `dbc` family straight after the publish. Shared import SQL defaults fill older
+inserts.
+
+`game_player_reputation` keeps its layout, so Transfer is unchanged and no repair runs. Login sends
+a stored row as visible unless its faction is hidden or invisible forced, and at war when its row
+says so. A faction at Hostile or Hated, stored or not, is at war, as vmangos `LoadFromDB` does,
+unless it is peace forced and the earned standing is above Hated. A row written before the publish
+of a faction that defaults to at war, at a rank above Hostile, reads as not at war.
+
+From the publish on, war alone no longer makes an NPC refuse service. Vendors, trainers, taxis,
+quest givers, bankers and auctioneers of a reputation faction refuse at Unfriendly or below, and
+otherwise serve the Character, at war or not, as vmangos `CanInteractWithNPC` does. A quest giver
+hides its mark only at Hostile or below.
+
 ### Global cooldown migration
 
 `game_spell.gcd_ms` now comes from the source `startRecoveryTime`. An older import set 1500 for

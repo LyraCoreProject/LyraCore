@@ -73,6 +73,10 @@ pub(super) fn faction(source: &(impl TableRows + ?Sized)) -> Result<(Vec<String>
             ("base_class_mask_2", "base_rep_class_mask2", Unsigned),
             ("base_class_mask_3", "base_rep_class_mask3", Unsigned),
             ("base_class_mask_4", "base_rep_class_mask4", Unsigned),
+            ("reputation_flags_1", "reputation_flags1", Unsigned),
+            ("reputation_flags_2", "reputation_flags2", Unsigned),
+            ("reputation_flags_3", "reputation_flags3", Unsigned),
+            ("reputation_flags_4", "reputation_flags4", Unsigned),
         ],
     )
 }
@@ -304,7 +308,7 @@ mod tests {
 
     fn fixture() -> WorldSource {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
-        connection.execute_batch("CREATE TABLE map_template (entry INTEGER, patch INTEGER, player_limit INTEGER, reset_delay INTEGER, ghost_entrance_map INTEGER, script_name TEXT, PRIMARY KEY(entry,patch)); INSERT INTO map_template VALUES (1,10,10,7,0,'instance_example'); CREATE TABLE faction (id INTEGER, build INTEGER,reputation_list_id INTEGER,base_rep_value1 INTEGER,base_rep_value2 INTEGER,base_rep_value3 INTEGER,base_rep_value4 INTEGER,base_rep_race_mask1 INTEGER,base_rep_race_mask2 INTEGER,base_rep_race_mask3 INTEGER,base_rep_race_mask4 INTEGER,base_rep_class_mask1 INTEGER,base_rep_class_mask2 INTEGER,base_rep_class_mask3 INTEGER,base_rep_class_mask4 INTEGER,PRIMARY KEY(id,build)); INSERT INTO faction VALUES (1,5875,-1,-100,2000,-42000,0,178,40,77,0,479,1024,0,0),(1,6000,5,999,0,0,0,0,0,0,0,0,0,0,0);
+        connection.execute_batch("CREATE TABLE map_template (entry INTEGER, patch INTEGER, player_limit INTEGER, reset_delay INTEGER, ghost_entrance_map INTEGER, script_name TEXT, PRIMARY KEY(entry,patch)); INSERT INTO map_template VALUES (1,10,10,7,0,'instance_example'); CREATE TABLE faction (id INTEGER, build INTEGER,reputation_list_id INTEGER,base_rep_value1 INTEGER,base_rep_value2 INTEGER,base_rep_value3 INTEGER,base_rep_value4 INTEGER,base_rep_race_mask1 INTEGER,base_rep_race_mask2 INTEGER,base_rep_race_mask3 INTEGER,base_rep_race_mask4 INTEGER,base_rep_class_mask1 INTEGER,base_rep_class_mask2 INTEGER,base_rep_class_mask3 INTEGER,base_rep_class_mask4 INTEGER,reputation_flags1 INTEGER,reputation_flags2 INTEGER,reputation_flags3 INTEGER,reputation_flags4 INTEGER,PRIMARY KEY(id,build)); INSERT INTO faction VALUES (1,5875,-1,-100,2000,-42000,0,178,40,77,0,479,1024,0,0,16,20,2,0),(1,6000,5,999,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
             CREATE TABLE faction_template (id INTEGER, build INTEGER, faction_id INTEGER,faction_flags INTEGER,our_mask INTEGER,friendly_mask INTEGER,hostile_mask INTEGER,enemy_faction1 INTEGER,enemy_faction2 INTEGER,enemy_faction3 INTEGER,enemy_faction4 INTEGER,friend_faction1 INTEGER,friend_faction2 INTEGER,friend_faction3 INTEGER,friend_faction4 INTEGER,PRIMARY KEY(id,build)); INSERT INTO faction_template VALUES(1,5875,1,13,2,3,4,5,6,7,8,9,10,11,12);
             CREATE TABLE area_template (entry INTEGER,map_id INTEGER,zone_id INTEGER,explore_flag INTEGER,flags INTEGER,area_level INTEGER,team INTEGER,name TEXT); INSERT INTO area_template VALUES (1,0,2,3,4,-1,6,'O''Brien');
             CREATE TABLE areatrigger_template (id INTEGER,build INTEGER,map_id INTEGER,x REAL,y REAL,z REAL,radius REAL,box_x REAL,box_y REAL,box_z REAL,box_orientation REAL,cooldown INTEGER,condition_id INTEGER,script_id INTEGER,script_name TEXT,PRIMARY KEY(id,build)); INSERT INTO areatrigger_template VALUES (1,5875,0,1,2,3,4,5,6,7,8,9,10,11,'example');
@@ -319,7 +323,7 @@ mod tests {
         for (sql, expected) in [
             (
                 faction(&source).unwrap(),
-                "(1,-1,-100,2000,-42000,0,178,40,77,0,479,1024,0,0)",
+                "(1,-1,-100,2000,-42000,0,178,40,77,0,479,1024,0,0,16,20,2,0)",
             ),
             (
                 faction_template(&source).unwrap(),

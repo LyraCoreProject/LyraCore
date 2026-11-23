@@ -763,7 +763,7 @@ pub fn realm_datetime(secs_since_unix_epoch: u64) -> DateTime {
 pub fn login_sequence_messages(
     entity: &EntityView,
     learned: &[u32],
-    reputations: &[(i32, i32, bool)],
+    reputations: &[(i32, i32, u8)],
     player_actions: &[(u8, u32, u8)],
     entry: WorldEntry,
     unix_seconds: u64,
@@ -846,12 +846,10 @@ pub fn login_sequence_messages(
                         standing: 0,
                     })
                     .collect();
-                for &(index, standing, at_war) in reputations {
+                for &(index, standing, flags) in reputations {
                     if let Some(slot) = usize::try_from(index).ok().and_then(|i| slots.get_mut(i)) {
                         slot.standing = standing as u32;
-                        if at_war {
-                            slot.flag = FactionFlag::new_visible().set_at_war();
-                        }
+                        slot.flag = FactionFlag::new(flags);
                     }
                 }
                 slots

@@ -306,35 +306,6 @@ pub(super) fn evaluations(
         .collect()
 }
 
-const REP_HOSTILE: u8 = 1;
-
-// vmangos Unit::IsHostileTo: Hostile or Hated. At war only caps the rank at Neutral.
-fn reaction_is_hostile(reputation_standing: Option<i32>, template_hostile: bool) -> bool {
-    reputation_standing.map_or(template_hostile, |standing| {
-        crate::reputation::reputation_rank(standing) <= REP_HOSTILE
-    })
-}
-
-// vmangos GetFactionReactionTo: a reputation faction's rank replaces the template rule.
-fn giver_is_hostile(
-    ctx: &ReducerContext,
-    npc: &crate::WorldEntity,
-    actor: &crate::WorldEntity,
-) -> bool {
-    use crate::game_faction_template;
-    let templates = ctx.db.game_faction_template();
-    let (Some(npc_template), Some(actor_template)) = (
-        templates.id().find(npc.faction_template),
-        templates.id().find(actor.faction_template),
-    ) else {
-        return false;
-    };
-    reaction_is_hostile(
-        crate::reputation::reputation(ctx, actor.guid, npc_template.faction),
-        crate::faction::compute_hostile(&npc_template, &actor_template),
-    )
-}
-
 // vmangos shows no mark over a creature whose reaction to the Character is hostile.
 fn giver_status(
     ctx: &ReducerContext,
@@ -349,7 +320,7 @@ fn giver_status(
             .guid()
             .find(giver)
             .zip(ctx.db.game_world_entity().guid().find(guid))
-            .is_some_and(|(npc, actor)| giver_is_hostile(ctx, &npc, &actor));
+            .is_some_and(|(npc, actor)| crate::reputation::npc_is_hostile(ctx, &npc, &actor));
     if hostile {
         lyracore_protocol::messages::vanilla::QuestGiverStatus::None
     } else {
@@ -553,9 +524,7 @@ pub(super) fn receive(
                     .game_world_entity()
                     .guid()
                     .find(giver)
-                    .is_some_and(|npc| {
-                        crate::reputation::npc_refuses_interaction(ctx, &npc, &actor)
-                    })
+                    .is_some_and(|npc| crate::reputation::npc_refuses_service(ctx, &npc, &actor))
             };
             if refused {
                 return Ok(());
@@ -853,23 +822,4 @@ pub(super) fn collects(ctx: &ReducerContext, guid: u64, entry: u32) -> bool {
                         && objective.target_entry == entry
                 })
         })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::reaction_is_hostile;
-
-    #[test]
-    fn only_a_hostile_or_hated_reputation_rank_hides_the_mark() {
-        assert!(reaction_is_hostile(Some(-3001), false));
-        assert!(reaction_is_hostile(Some(-42000), false));
-        assert!(!reaction_is_hostile(Some(-3000), true), "Unfriendly");
-        assert!(!reaction_is_hostile(Some(0), true));
-    }
-
-    #[test]
-    fn without_a_reputation_faction_the_template_decides() {
-        assert!(reaction_is_hostile(None, true));
-        assert!(!reaction_is_hostile(None, false));
-    }
 }

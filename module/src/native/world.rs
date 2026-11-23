@@ -6,7 +6,6 @@ use crate::action_bar::game_player_action;
 use crate::aoi::game_aoi_grant;
 use crate::character::CharacterDeparture;
 use crate::game_world_entity;
-use crate::reputation::game_player_reputation;
 use crate::skill::game_player_skill;
 use crate::spell::spellbook::game_player_spell;
 
@@ -110,16 +109,7 @@ pub(super) fn enter_character(
         .filter(guid)
         .map(|skill| skill.view(ctx))
         .collect::<Vec<_>>();
-    let reputations = ctx
-        .db
-        .game_player_reputation()
-        .by_character()
-        .filter(guid)
-        .map(|rep| {
-            let earned = crate::reputation::earned_standing(ctx, &rep);
-            (rep.reputation_index, earned, rep.at_war)
-        })
-        .collect::<Vec<_>>();
+    let reputations = crate::reputation::initial_factions(ctx, guid);
     let actions = ctx
         .db
         .game_player_action()

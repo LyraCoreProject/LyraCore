@@ -1,6 +1,6 @@
-// Base standing on the wire and in reactions against vmangos d9173eca ReputationMgr and
-// Unit::GetFactionReactionTo.
-use super::buy_in_slot::{buy, delivered, inventory, money, stage};
+// Base standing, default flags and NPC service against vmangos d9173eca ReputationMgr,
+// Unit::GetFactionReactionTo and Player::CanInteractWithNPC.
+use super::buy_in_slot::{buy, delivered, inventory, money, request, stage};
 use super::{enter, fixture};
 use lyracore_package_delta::fixture_ids::FIXTURE_JERKY;
 use lyracore_test_support::Standalone;
@@ -17,6 +17,14 @@ const SMSG_BUY_FAILED: u16 = 0x1a5;
 // A refused buy into a slot reports every vendor refusal as too far, from vendor guid 0.
 const DISTANCE_TOO_FAR: u8 = 5;
 const CMSG_PING: u32 = 0x1dc;
+const CMSG_SET_FACTION_ATWAR: u32 = 0x125;
+// vmangos ReputationMgr.h FactionFlags.
+const VISIBLE: u32 = 0x01;
+const AT_WAR: u32 = 0x02;
+const HIDDEN: u32 = 0x04;
+const INVISIBLE_FORCED: u32 = 0x08;
+const PEACE_FORCED: u32 = 0x10;
+const ORC_RACE_MASK: u32 = 2;
 
 fn set_race(shard: &Standalone, guid: u64, race: u8) {
     shard.assert_sql(&format!(
@@ -109,4 +117,122 @@ fn login_and_the_delete_reset_send_the_standing_less_the_base() {
         .unwrap();
     assert!(delivered(&mut connection).contains(&(SMSG_SET_FACTION_STANDING, reset)));
     assert!(shard.query_rows(&stored).is_empty());
+}
+
+fn insert_faction(shard: &Standalone, faction_id: u32, reputation_index: i32, flags: [u32; 2]) {
+    // Slot 1 admits only Orcs, so a Human Character takes slot 2's flags.
+    shard.insert_row(
+        "game_faction",
+        &[
+            ("faction_id", &faction_id),
+            ("reputation_index", &reputation_index),
+            ("base_standing", &0),
+            ("base_race_mask_1", &ORC_RACE_MASK),
+            ("reputation_flags_1", &flags[0]),
+            ("reputation_flags_2", &flags[1]),
+        ],
+    );
+}
+
+fn grant_reputation(shard: &Standalone, guid: u64, faction_id: u32, amount: i32) {
+    shard.assert_call(
+        "debug_grant_reputation",
+        &[
+            &guid.to_string(),
+            &faction_id.to_string(),
+            &amount.to_string(),
+        ],
+    );
+}
+
+fn set_at_war(connection: &mut lyracore_test_support::ReducerConnection, index: u32) {
+    let mut body = index.to_le_bytes().to_vec();
+    body.push(1);
+    request(connection, CMSG_SET_FACTION_ATWAR, body);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn login_sends_each_faction_the_default_flags_of_the_characters_slot() {
+    let (shard, guid, _) = fixture("reputation-default-flags");
+    set_race(&shard, guid, 1);
+    insert_faction(&shard, 5_120_801, 50, [AT_WAR | INVISIBLE_FORCED, VISIBLE]);
+    insert_faction(&shard, 5_120_802, 51, [0, HIDDEN | PEACE_FORCED]);
+    insert_faction(&shard, 5_120_803, 52, [0, HIDDEN]);
+    insert_faction(&shard, 5_120_804, 53, [0, AT_WAR]);
+    grant_reputation(&shard, guid, 5_120_803, 500);
+    grant_reputation(&shard, guid, 5_120_804, 500);
+
+    let mut connection = enter(&shard, guid);
+    let login = delivered(&mut connection);
+    let (_, factions) = login
+        .iter()
+        .find(|(opcode, _)| *opcode == SMSG_INITIALIZE_FACTIONS)
+        .expect("login sends the faction list");
+    // u32 count, then per slot a u8 flag and a u32 standing.
+    let flags = |index: usize| u32::from(factions[4 + index * 5]);
+    assert_eq!(flags(50), VISIBLE);
+    assert_eq!(flags(51), HIDDEN | PEACE_FORCED);
+    assert_eq!(flags(52), HIDDEN, "a gain leaves a hidden faction hidden");
+    assert_eq!(
+        flags(53),
+        VISIBLE | AT_WAR,
+        "a gain shows a faction and keeps its default war"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_peace_forced_faction_cannot_be_set_at_war() {
+    let (shard, mut connection, guid, _) = stage("reputation-peace-forced");
+    set_race(&shard, guid, 1);
+    insert_faction(&shard, 5_120_811, 54, [0, VISIBLE | PEACE_FORCED]);
+    insert_faction(&shard, 5_120_812, 55, [0, VISIBLE]);
+
+    set_at_war(&mut connection, 54);
+    set_at_war(&mut connection, 55);
+
+    let at_war = shard.query_rows(&format!(
+        "SELECT faction_id FROM game_player_reputation WHERE character_guid = {guid} AND at_war = true"
+    ));
+    assert_eq!(at_war.len(), 1, "{at_war:?}");
+    assert_eq!(at_war[0]["faction_id"], "5120812");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_neutral_vendor_at_war_serves_and_an_unfriendly_one_refuses() {
+    const VENDOR_FACTION: u32 = 5_120_821;
+    const VENDOR_TEMPLATE: u32 = 5_120_821;
+    let (shard, mut connection, guid, vendor) = stage("reputation-vendor-unfriendly");
+    set_race(&shard, guid, 1);
+    insert_faction(&shard, VENDOR_FACTION, 56, [0, VISIBLE]);
+    shard.insert_row(
+        "game_faction_template",
+        &[("id", &VENDOR_TEMPLATE), ("faction", &VENDOR_FACTION)],
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET faction_template = {VENDOR_TEMPLATE} WHERE guid = {vendor}"
+    ));
+    set_at_war(&mut connection, 56);
+    let stored = format!(
+        "SELECT standing, at_war FROM game_player_reputation WHERE character_guid = {guid}"
+    );
+    let row = &shard.query_rows(&stored)[0];
+    assert_eq!(
+        (row["standing"].as_str(), row["at_war"].as_str()),
+        ("0", "true")
+    );
+
+    buy(&mut connection, vendor, FIXTURE_JERKY, guid, 30, 1);
+    assert_eq!(inventory(&shard, guid)[0]["slot"], "30");
+    assert_eq!(money(&shard, guid), "49990");
+
+    grant_reputation(&shard, guid, VENDOR_FACTION, -1);
+    let packets = buy(&mut connection, vendor, FIXTURE_JERKY, guid, 31, 1);
+    assert_eq!(packets.len(), 1);
+    assert_eq!(packets[0].0, SMSG_BUY_FAILED);
+    assert_eq!(*packets[0].1.last().unwrap(), DISTANCE_TOO_FAR);
+    assert_eq!(inventory(&shard, guid).len(), 1);
+    assert_eq!(money(&shard, guid), "49990");
 }
