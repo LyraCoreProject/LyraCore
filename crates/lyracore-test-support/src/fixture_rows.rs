@@ -66,6 +66,11 @@ impl FixtureSchema {
         Self { tables }
     }
 
+    pub(crate) fn columns(&self, table: &str) -> Option<Vec<String>> {
+        let columns = self.tables.get(table)?;
+        Some(columns.iter().map(|column| column.name.clone()).collect())
+    }
+
     pub(crate) fn insert(&self, table: &str, rows: &[&[Field]]) -> String {
         let columns = self
             .tables

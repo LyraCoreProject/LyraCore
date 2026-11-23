@@ -1,8 +1,137 @@
-//! SQL INSERT needs explicit values even for columns with migration defaults.
+//! SpacetimeDB SQL INSERT needs every column, and assigns values by column position, not by name.
 
-#[must_use]
-pub fn insert_defaults(sql: &str) -> String {
-    let mut output = String::with_capacity(sql.len());
+/// Fills defaults and orders each named INSERT's columns as published; see docs/danger-zones.md §1.
+pub fn in_table_order(
+    sql: &str,
+    published_columns: impl Fn(&str) -> Option<Vec<String>>,
+) -> Result<String, String> {
+    let sql = insert_defaults(sql);
+    let statements = statements(&sql)
+        .into_iter()
+        .map(|statement| ordered(statement, &published_columns))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(statements.join(";"))
+}
+
+fn ordered(
+    statement: &str,
+    published_columns: &impl Fn(&str) -> Option<Vec<String>>,
+) -> Result<String, String> {
+    let Some(insert) = NamedInsert::parse(statement) else {
+        return Ok(statement.to_owned());
+    };
+    let table = insert.table;
+    let published = published_columns(table)
+        .ok_or_else(|| format!("the published Module has no table `{table}`"))?;
+    for (at, name) in insert.columns.iter().enumerate() {
+        if !published.iter().any(|column| column == name) {
+            return Err(format!("{table} has no column `{name}`"));
+        }
+        if insert.columns[..at].contains(name) {
+            return Err(format!("{table}.{name} is named twice"));
+        }
+    }
+    let positions: Vec<usize> = published
+        .iter()
+        .filter_map(|column| insert.columns.iter().position(|name| name == column))
+        .collect();
+    let rows = value_rows(insert.values)
+        .ok_or_else(|| format!("{table}: malformed VALUES"))?
+        .iter()
+        .map(|row| {
+            if row.len() != positions.len() {
+                return Err(format!(
+                    "{table}: {} values for {} columns",
+                    row.len(),
+                    positions.len()
+                ));
+            }
+            let values: Vec<&str> = positions.iter().map(|&at| row[at]).collect();
+            Ok(format!("({})", values.join(",")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let columns: Vec<&str> = positions.iter().map(|&at| insert.columns[at]).collect();
+    Ok(format!(
+        "{}INSERT INTO {table} ({}) VALUES {}",
+        insert.indent,
+        columns.join(","),
+        rows.join(",")
+    ))
+}
+
+struct NamedInsert<'a> {
+    indent: &'a str,
+    table: &'a str,
+    columns: Vec<&'a str>,
+    values: &'a str,
+}
+
+impl<'a> NamedInsert<'a> {
+    fn parse(statement: &'a str) -> Option<Self> {
+        let trimmed = statement.trim_start();
+        let rest = trimmed.strip_prefix("INSERT INTO ")?;
+        let (table, rest) = rest.split_once('(')?;
+        let table = table.trim();
+        if table.is_empty() || !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        let (columns, rest) = rest.split_once(')')?;
+        Some(Self {
+            indent: &statement[..statement.len() - trimmed.len()],
+            table,
+            columns: columns.split(',').map(str::trim).collect(),
+            values: rest.trim_start().strip_prefix("VALUES")?,
+        })
+    }
+}
+
+fn value_rows(text: &str) -> Option<Vec<Vec<&str>>> {
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
+    let mut depth = 0u32;
+    let mut quoted = false;
+    let mut start = 0;
+    for (at, c) in text.char_indices() {
+        if c == '\'' {
+            if depth == 0 {
+                return None;
+            }
+            quoted = !quoted;
+            continue;
+        }
+        if quoted {
+            continue;
+        }
+        match c {
+            '(' | '[' => {
+                if depth == 0 && c == '[' {
+                    return None;
+                }
+                depth += 1;
+                if depth == 1 {
+                    start = at + 1;
+                }
+            }
+            ')' | ']' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    row.push(text[start..at].trim());
+                    rows.push(std::mem::take(&mut row));
+                }
+            }
+            ',' if depth == 1 => {
+                row.push(text[start..at].trim());
+                start = at + 1;
+            }
+            _ if depth == 0 && c != ',' && !c.is_whitespace() => return None,
+            _ => {}
+        }
+    }
+    (depth == 0 && !quoted && !rows.is_empty()).then_some(rows)
+}
+
+fn statements(sql: &str) -> Vec<&str> {
+    let mut statements = Vec::new();
     let mut quoted = false;
     let mut start = 0;
     for (at, c) in sql.char_indices() {
@@ -10,12 +139,23 @@ pub fn insert_defaults(sql: &str) -> String {
             quoted = !quoted;
         }
         if c == ';' && !quoted {
-            append_statement(&mut output, &sql[start..at]);
-            output.push(';');
+            statements.push(&sql[start..at]);
             start = at + 1;
         }
     }
-    append_statement(&mut output, &sql[start..]);
+    statements.push(&sql[start..]);
+    statements
+}
+
+#[must_use]
+pub fn insert_defaults(sql: &str) -> String {
+    let mut output = String::with_capacity(sql.len());
+    for (index, statement) in statements(sql).into_iter().enumerate() {
+        if index > 0 {
+            output.push(';');
+        }
+        append_statement(&mut output, statement);
+    }
     output
 }
 
@@ -87,6 +227,84 @@ fn append_statement(output: &mut String, sql: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn published(table: &str) -> Option<Vec<String>> {
+        let columns: &[&str] = match table {
+            "game_faction" => &[
+                "faction_id",
+                "reputation_index",
+                "base_standing",
+                "base_standing_2",
+                "base_race_mask_1",
+            ],
+            "game_quest_template" => &[
+                "entry",
+                "required_skill",
+                "required_skill_value",
+                "required_min_rep_faction",
+                "required_min_rep_value",
+                "required_max_rep_faction",
+                "required_max_rep_value",
+            ],
+            "game_area" => &["id", "name"],
+            _ => return None,
+        };
+        Some(columns.iter().map(|&column| column.to_owned()).collect())
+    }
+
+    #[test]
+    fn named_columns_and_every_row_take_the_published_order() {
+        let sql = "INSERT INTO game_faction (faction_id,reputation_index,base_standing,base_race_mask_1,base_standing_2) \
+                   VALUES (5090901,62,-42000,2,1000),(7, 1 ,0,8,-5)";
+        assert_eq!(
+            in_table_order(sql, published).unwrap(),
+            "INSERT INTO game_faction (faction_id,reputation_index,base_standing,base_standing_2,base_race_mask_1) \
+             VALUES (5090901,62,-42000,1000,2),(7,1,0,-5,8)"
+        );
+    }
+
+    #[test]
+    fn migration_defaults_take_their_published_position() {
+        let sql = "INSERT INTO game_quest_template (entry,required_skill) VALUES (1,129)";
+        assert_eq!(
+            in_table_order(sql, published).unwrap(),
+            "INSERT INTO game_quest_template (entry,required_skill,required_skill_value,required_min_rep_faction,required_min_rep_value,required_max_rep_faction,required_max_rep_value) \
+             VALUES (1,129,0,0,0,0,0)"
+        );
+    }
+
+    #[test]
+    fn quoted_values_and_other_statements_survive() {
+        let sql = "DELETE FROM game_area WHERE id > 0;\n INSERT INTO game_area (name,id) VALUES ('O''Brien, (east);',3);SELECT ';' FROM game_area";
+        assert_eq!(
+            in_table_order(sql, published).unwrap(),
+            "DELETE FROM game_area WHERE id > 0;\n INSERT INTO game_area (id,name) VALUES (3,'O''Brien, (east);');SELECT ';' FROM game_area"
+        );
+    }
+
+    #[test]
+    fn an_insert_the_published_module_cannot_hold_is_refused() {
+        for (sql, error) in [
+            (
+                "INSERT INTO game_area (id,nmae) VALUES (1,'a')",
+                "game_area has no column `nmae`",
+            ),
+            (
+                "INSERT INTO game_area (id,id) VALUES (1,2)",
+                "game_area.id is named twice",
+            ),
+            (
+                "INSERT INTO game_area (id,name) VALUES (1,'a'),(2,'b',3)",
+                "game_area: 3 values for 2 columns",
+            ),
+            (
+                "INSERT INTO game_missing (id) VALUES (1)",
+                "the published Module has no table `game_missing`",
+            ),
+        ] {
+            assert_eq!(in_table_order(sql, published).unwrap_err(), error);
+        }
+    }
 
     #[test]
     fn every_row_of_a_batch_gets_the_defaults_and_quoted_delimiters_survive() {

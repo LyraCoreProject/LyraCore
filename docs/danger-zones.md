@@ -19,9 +19,13 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
    - A new column goes at the END of the struct with a `#[default(...)]`. That is an additive
      auto-migrate. A column anywhere else makes the publish abort.
    - SpacetimeDB SQL INSERT needs every column, and it matches values to columns by position, not
-     by the names it lists. Durable tests write fixture rows with `Standalone::insert_row`, which
-     reads the published columns and their declared defaults, so a new column needs nothing there.
-     When an existing importer or native check INSERT can omit the new column, add its default to
+     by the names it lists. It never checks those names. The importer and `Standalone::assert_sql`
+     read the published columns with `spacetime describe` and pass each statement through
+     `lyracore_shared::import_sql::in_table_order`. That fills defaults, puts the named columns in
+     published order and refuses a name the table lacks. Any other SQL writer must name columns in
+     table order. Durable tests write fixture rows with `Standalone::insert_row`, which reads the
+     published columns and their declared defaults, so a new column needs nothing there. When an
+     existing importer or native check INSERT can omit the new column, add its default to
      `crates/lyracore-shared/src/import_sql_defaults.txt`. The importer, the native check and the
      `conformance/support` worlds fill it from there.
    - Change native reducer arguments and their Host calls together. The Host and Module also share

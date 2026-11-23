@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use serde_json::Value;
 
 #[derive(Clone)]
 pub(crate) struct Shard {
@@ -61,13 +63,13 @@ impl Shard {
 
     // Each SQL statement commits separately; a failed sequence requires an idempotent rerun.
     pub(crate) fn run_sql_statements(&self, stmts: &[String], label: &str) -> Result<()> {
-        let stmts: Vec<_> = stmts
-            .iter()
-            .map(|sql| lyracore_shared::import_sql::insert_defaults(sql))
-            .collect();
-        for statement in &stmts {
-            validate_insert_arity(statement)?;
-        }
+        let columns = if stmts.iter().any(|sql| sql.contains("INSERT INTO ")) {
+            self.published_columns()?
+        } else {
+            BTreeMap::new()
+        };
+        let stmts = in_published_order(stmts, &columns)
+            .with_context(|| format!("{label}: no import statements applied"))?;
         for (n, s) in stmts.iter().enumerate() {
             eprintln!(
                 "{label} sql [{}/{}]: {}…",
@@ -88,6 +90,20 @@ impl Shard {
             }
         }
         Ok(())
+    }
+
+    fn published_columns(&self) -> Result<BTreeMap<String, Vec<String>>> {
+        let out = spacetime()
+            .args(["describe", "-s", &self.server, "--json", &self.db])
+            .output()
+            .context("run spacetime describe")?;
+        if !out.status.success() {
+            bail!(
+                "spacetime describe failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        table_columns(&serde_json::from_slice(&out.stdout).context("read the Module definition")?)
     }
 
     pub(crate) fn query_json(&self, label: &str, query: &str) -> Result<String> {
@@ -113,48 +129,56 @@ impl Shard {
     }
 }
 
-fn validate_insert_arity(sql: &str) -> Result<()> {
-    let Some(insert) = sql.trim_start().strip_prefix("INSERT INTO ") else {
-        return Ok(());
+fn in_published_order(
+    stmts: &[String],
+    columns: &BTreeMap<String, Vec<String>>,
+) -> Result<Vec<String>> {
+    stmts
+        .iter()
+        .map(|sql| {
+            lyracore_shared::import_sql::in_table_order(sql, |table| columns.get(table).cloned())
+                .map_err(anyhow::Error::msg)
+        })
+        .collect()
+}
+
+// `spacetime describe --json` returns a V10 Module definition: sections keyed by kind.
+fn table_columns(definition: &Value) -> Result<BTreeMap<String, Vec<String>>> {
+    let section = |kind: &str| {
+        definition["sections"]
+            .as_array()
+            .and_then(|sections| sections.iter().find_map(|section| section.get(kind)))
+            .with_context(|| format!("the Module definition has no {kind} section"))
     };
-    let Some((columns, values)) = insert.split_once(" VALUES ") else {
-        return Ok(());
-    };
-    let Some((table, columns)) = columns.split_once('(') else {
-        return Ok(());
-    };
-    let expected = columns.split(',').count();
-    let mut quoted = false;
-    let mut depth = 0u32;
-    let mut actual = 1;
-    for c in values.chars() {
-        if c == '\'' {
-            quoted = !quoted;
-        }
-        if quoted {
-            continue;
-        }
-        match c {
-            '(' | '[' => {
-                depth += 1;
-                if depth == 1 {
-                    actual = 1;
-                }
-            }
-            ')' | ']' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 && actual != expected {
-                    bail!(
-                        "{}: {actual} values for {expected} columns; no import statements applied",
-                        table.trim()
-                    );
-                }
-            }
-            ',' if depth == 1 => actual += 1,
-            _ => {}
-        }
-    }
-    Ok(())
+    let types = section("Typespace")?["types"]
+        .as_array()
+        .context("the Module definition has no types")?;
+    section("Tables")?
+        .as_array()
+        .context("the Module definition tables are not a list")?
+        .iter()
+        .map(|table| {
+            let name = table["source_name"]
+                .as_str()
+                .context("a table has no name")?;
+            let row = table["product_type_ref"]
+                .as_u64()
+                .and_then(|at| types.get(usize::try_from(at).ok()?))
+                .with_context(|| format!("{name} has no row type"))?;
+            let columns = row["Product"]["elements"]
+                .as_array()
+                .with_context(|| format!("{name} rows are not a product"))?
+                .iter()
+                .map(|element| {
+                    element["name"]["some"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .with_context(|| format!("{name} has an unnamed column"))
+                })
+                .collect::<Result<_>>()?;
+            Ok((name.to_owned(), columns))
+        })
+        .collect()
 }
 
 fn spacetime() -> Command {
@@ -168,29 +192,51 @@ fn spacetime() -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn malformed_insert_is_refused_before_running_import_statements() {
-        let shard = Shard {
-            server: "unused".into(),
-            db: "unused".into(),
-        };
-        let result = shard.run_sql_statements(
+    fn one_malformed_insert_refuses_the_whole_batch() {
+        let columns = BTreeMap::from([(
+            "game_area".to_owned(),
+            vec!["id".to_owned(), "name".to_owned()],
+        )]);
+        let result = in_published_order(
             &[
-                "DELETE FROM game_spell_effect".into(),
-                "INSERT INTO game_spell_effect (id,kind) VALUES (1,2,3)".into(),
+                "DELETE FROM game_area".into(),
+                "INSERT INTO game_area (id,name) VALUES (1,'a',3)".into(),
             ],
-            "spell",
+            &columns,
         );
-        assert!(result.unwrap_err().to_string().contains("values for"));
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "game_area: 3 values for 2 columns"
+        );
     }
 
     #[test]
-    fn insert_arity_preserves_quoted_commas_and_nested_values() {
-        validate_insert_arity(
-            "INSERT INTO t (id,name,flags) VALUES (1,'a, ''b);',[1,2]),(2,'c',3)",
-        )
-        .unwrap();
-        assert!(validate_insert_arity("INSERT INTO t (id,name) VALUES (1,'a'),(2,'b',3)").is_err());
+    fn table_columns_keep_the_published_row_order() {
+        let column = |name: &str| json!({"name": {"some": name}, "algebraic_type": {"U32": []}});
+        let definition = json!({"sections": [
+            {"Typespace": {"types": [
+                {"Product": {"elements": [column("id")]}},
+                {"Product": {"elements": [
+                    column("faction_id"),
+                    column("base_standing"),
+                    column("base_race_mask_1"),
+                ]}},
+            ]}},
+            {"Tables": [{"source_name": "game_faction", "product_type_ref": 1}]},
+        ]});
+        assert_eq!(
+            table_columns(&definition).unwrap(),
+            BTreeMap::from([(
+                "game_faction".to_owned(),
+                vec![
+                    "faction_id".to_owned(),
+                    "base_standing".to_owned(),
+                    "base_race_mask_1".to_owned(),
+                ],
+            )])
+        );
     }
 }
