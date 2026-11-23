@@ -314,7 +314,7 @@ fn a_damaging_fall_rolls_wear_twice_and_a_harmless_or_lethal_landing_rolls_none(
     assert_eq!(durability(&standalone, HEAD_SLOT), HEAD_DURABILITY);
     assert_eq!(
         wear_stream_state(&standalone),
-        SEED_PICKING_MAIN_HAND.wrapping_add(3 * WEAR_STATE_STEP),
+        SEED_PICKING_MAIN_HAND.wrapping_add(WEAR_STATE_STEP.wrapping_mul(3)),
         "the picking roll draws twice and the second, failing roll once"
     );
 
