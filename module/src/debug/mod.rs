@@ -534,6 +534,21 @@ pub fn debug_use_gameobject(
 }
 
 #[reducer]
+pub fn debug_accept_summon(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    summoner_guid: u64,
+) -> Result<(), String> {
+    crate::summoning_ritual::accept(ctx, character_guid, summoner_guid)
+}
+
+#[reducer]
+pub fn debug_cancel_cast(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+    let caster = crate::helpers::live_entity(ctx, character_guid)?;
+    Ok(crate::spell::do_cancel_cast(ctx, caster)?)
+}
+
+#[reducer]
 pub fn debug_use_gameobject_entry(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -1506,6 +1521,7 @@ pub fn debug_disarm_instance_tick(ctx: &ReducerContext, instance_id: u64) -> Res
 // SpacetimeDB 2.14 refuses SQL writes to scheduled tables, so durable tests stop schedules here.
 #[reducer]
 pub fn debug_clear_schedule(ctx: &ReducerContext, table: String) -> Result<(), String> {
+    use crate::summoning_ritual::game_summoning_ritual_schedule;
     use crate::{
         game_aura_schedule, game_duel_schedule, game_event_reaper_schedule,
         game_gateway_lease_reaper_schedule, game_melee_schedule, game_motion_publish_schedule,
@@ -1524,6 +1540,7 @@ pub fn debug_clear_schedule(ctx: &ReducerContext, table: String) -> Result<(), S
         "game_gateway_lease_reaper_schedule" => clear(ctx.db.game_gateway_lease_reaper_schedule()),
         "game_melee_schedule" => clear(ctx.db.game_melee_schedule()),
         "game_motion_publish_schedule" => clear(ctx.db.game_motion_publish_schedule()),
+        "game_summoning_ritual_schedule" => clear(ctx.db.game_summoning_ritual_schedule()),
         _ => return Err(format!("{table} is not a clearable schedule")),
     }
     Ok(())

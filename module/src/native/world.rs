@@ -467,6 +467,7 @@ pub(super) fn receive(
         .or_else(|unhandled| {
             unhandled.offer(|message| super::death::receive(ctx, id, guid, message))
         })
+        .or_else(|unhandled| unhandled.offer(|message| super::summon::receive(ctx, guid, message)))
         .or_else(|unhandled| {
             unhandled.offer(|message| super::gossip::receive(ctx, id, guid, message))
         })

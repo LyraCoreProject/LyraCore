@@ -269,6 +269,15 @@ spent charges, as they refuse an opened item, until their rows can carry the cha
 and imports with no rows; an older Shard has spent no charges. An older destination refuses the new
 manifest, so update both Shards before moving active World Sessions.
 
+### Summoning ritual migration
+
+The imported `game_gameobject_ritual` table and the private `game_summoning_ritual`,
+`game_summoning_ritual_participant`, `game_summoning_ritual_schedule` and `game_summon_offer` tables
+are new and start empty. `CastRefusalReason` gains the append-only code 33. Spell.dbc effects 50
+and 85 import as the new `E_SUMMON_OBJECT` and `E_SUMMON_PLAYER` kinds; older spell rows keep them
+as `E_SCRIPTED`. Ritual of Summoning places no portal until you reimport both the `spell` family and
+the `gameobjects` family, which fills `game_gameobject_ritual`. No repair is needed.
+
 ### Combo finisher migration
 
 `game_spell.max_duration_ms` and `game_spell_effect.points_per_combo` default to zero, and older

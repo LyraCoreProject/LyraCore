@@ -326,15 +326,8 @@ fn active_pair(duel: &Duel, attacker_guid: u64, target_guid: u64) -> bool {
 }
 
 fn duel_flag_guid(initiator_guid: u64, duel_id: u64) -> Option<u64> {
-    // Shard-local Duel ids need the realm-wide GUID slot to make their arbiters unique.
-    let range_size = crate::auth::GUID_RANGE_SIZE;
-    if duel_id >= range_size {
-        return None;
-    }
-    let shard_slot = initiator_guid / range_size;
-    let payload = shard_slot.checked_mul(range_size)?.checked_add(duel_id)?;
-    use crate::gameobject::{gameobject_guid, DUEL_FLAG_BAND};
-    (payload < DUEL_FLAG_BAND).then_some(gameobject_guid(DUEL_FLAG_BAND | payload))
+    use crate::gameobject::{banded_object_guid, DUEL_FLAG_BAND};
+    banded_object_guid(DUEL_FLAG_BAND, initiator_guid, duel_id)
 }
 
 fn push_event(

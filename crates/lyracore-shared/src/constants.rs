@@ -65,6 +65,7 @@ pub mod go_type {
     pub const GOOBER: u8 = 10;
     pub const ELEVATOR: u8 = 11;
     pub const MO_TRANSPORT: u8 = 15;
+    pub const SUMMONING_RITUAL: u8 = 18;
     // Meeting Stones send CMSG_MEETINGSTONE_JOIN, not CMSG_GAMEOBJ_USE.
     pub const MEETINGSTONE: u8 = 23;
     // Source type 25 is FISHINGHOLE; import drops it before using GATHER.

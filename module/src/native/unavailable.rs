@@ -151,7 +151,6 @@ pub(super) fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<V
             unavailable("Equipment visibility preferences")
         }
         ClientOpcodeMessage::CMSG_FAR_SIGHT(_) => unavailable("Remote camera requests"),
-        ClientOpcodeMessage::CMSG_SUMMON_RESPONSE(_) => unavailable("Summon confirmations"),
         ClientOpcodeMessage::CMSG_QUEST_CONFIRM_ACCEPT(_) => {
             unavailable("Quest sharing confirmations")
         }

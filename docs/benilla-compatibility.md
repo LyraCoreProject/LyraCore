@@ -198,7 +198,7 @@ A Refusal or an empty reply does not establish a working gameplay feature.
 | Tutorial resets and action-bar display preferences | One unavailable notice per feature per World Session |
 | Tutorial mark-seen requests | No reply; login already reports every tutorial seen |
 | Ammunition, skill unlearning, equipment visibility and honor queries | Specific System Messages |
-| Summon acceptance, remote cameras, LFG preferences and quest-share confirmations | Specific System Messages |
+| Remote cameras, LFG preferences and quest-share confirmations | Specific System Messages |
 | Raid lockout queries | An empty lockout list; instance bindings end with their Instance |
 
 `module/src/native/taxi.rs` flies taxi chains. An express request stays silent when a leg has no

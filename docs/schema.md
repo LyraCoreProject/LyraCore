@@ -188,7 +188,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | Item, trade and mail | `items/tables.rs`, `items/buyback.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_reward.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
 | Auction house | `auction.rs` |
 | Creature (template, spawn, AI, pet, trainer) | `creatures/*`, `trainer.rs`, `gossip.rs` |
-| GameObject | `gameobject.rs`, `go_model.rs`, `go_collider.rs` |
+| GameObject and Summoning Ritual | `gameobject.rs`, `go_model.rs`, `go_collider.rs`, `summoning_ritual.rs` |
 | Loot | `loot/*` |
 | Group, Meeting Stones and Guild | `group.rs`, `meeting_stone/mod.rs`, `guild/*` |
 | Instance and encounter | `instance.rs`, `encounter.rs` |
@@ -828,6 +828,14 @@ Item has spent, by `item_guid` with its `owner_guid`. No row means the Item hold
 charges. Only an Item that cannot stack keeps a row, as vmangos stores charges only on such an
 Item. It is private and Character-owned; deleting the Item deletes it.
 
+`game_gameobject_ritual` (`module/src/gameobject.rs`) holds a type-18 template's vmangos
+summoning-ritual data: the participants it needs, the spell its owner then casts, the channel spell
+of the other participants, and whether it persists and needs grouped participants. The
+`gameobjects` dump family loads it. `module/src/summoning_ritual.rs` keeps the live state in private
+tables: `game_summoning_ritual` (one placed object, its owner, the owner's selected summon target
+and its phase), `game_summoning_ritual_participant` (one channel per Character),
+`game_summoning_ritual_schedule` and `game_summon_offer` (one pending Summon Offer per target).
+
 `game_aura` carries the frozen profile: `proc_flags`, `proc_chance`, `proc_ppm`, `proc_ex`,
 `proc_school_mask`, `proc_family_name`, `proc_family_flags`, `proc_charges`, `proc_icd_ms`,
 `proc_ready_micros`. `spell::proc::freeze_profile` folds header and overlay together once, at
@@ -990,6 +998,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_auction_expiry` | `expire_auction` | one-shot at listing expiry | `auction.rs` |
 | `game_instance_removal` | `expire_instance_removal` | one-shot 60 s after an Instance Removal starts | `instance.rs` |
 | `game_mail_timer` | `fire_mail_timer` | one-shot at a Mail's delivery, then at its expiry | `mail_timer.rs` |
+| `game_summoning_ritual_schedule` | `advance_summoning_ritual` | one-shot at a Summoning Ritual's spell completion, else at its channel's end | `summoning_ritual.rs` |
 | `game_creature_ai_summon_expiry` | `expire_eventai_summon` | one-shot at summon lifetime end | `creatures/eventai/mobility.rs` |
 | `game_creature_ai_forced_despawn` | `fire_eventai_forced_despawn` | one-shot at the authored despawn time | `creatures/eventai/mobility.rs` |
 | `game_creature_ai_relay_continuation` | `resume_relay_run` | one-shot at the authored relay delay | `creatures/eventai/relay.rs` |

@@ -15,32 +15,37 @@ fn gameobject_source() -> WorldSource {
         ("data2", "INTEGER"),
         ("data3", "INTEGER"),
         ("data5", "INTEGER"),
+        ("data6", "INTEGER"),
         ("size", "REAL"),
         ("script_name", "TEXT"),
         ("mingold", "INTEGER"),
         ("maxgold", "INTEGER"),
     ];
     let template = |entry, patch, kind, name: &str| {
+        let ritual = kind == 18;
         [
             ("entry", N(entry)),
             ("patch", N(patch)),
             ("type", N(kind)),
             ("displayId", N(1)),
             ("name", Text(name.into())),
-            ("data0", N(0)),
+            ("data0", N(if ritual { 3 } else { 0 })),
             (
                 "data1",
                 N(if entry == 5090042 {
                     5090042
                 } else if kind == 10 {
                     -1
+                } else if ritual {
+                    7720
                 } else {
                     0
                 }),
             ),
-            ("data2", N(0)),
+            ("data2", N(if ritual { 698 } else { 0 })),
             ("data3", N(0)),
             ("data5", N(0)),
+            ("data6", N(i64::from(ritual))),
             ("size", N(1)),
             ("script_name", Text(String::new())),
             ("mingold", N(if entry == 5090042 { 40 } else { 0 })),
@@ -119,6 +124,7 @@ fn gameobject_source() -> WorldSource {
                 &template(1731, 10, 3, "Copper node"),
                 &template(5090042, 10, 3, "Fixture mug"),
                 &template(5090043, 10, 10, "Fixture goober"),
+                &template(36727, 0, 18, "Summoning Portal"),
             ],
         },
         FixtureTable {
@@ -175,6 +181,15 @@ fn vmangos_gameobjects_select_versions_and_ranges_skip_disabled_and_translate_st
     assert!(sql.contains("(5090043,10,1,'Fixture goober',0,0,0,0,0,0,1,0,0)"));
     assert!(sql.contains("(1731,25,1,'Copper node',2770,1,186,300,100,0,1,0,0)"));
     assert!(sql.contains("(5090042,3,1,'Fixture mug',0,5090042,0,0,0,0,1,40,40)"));
+}
+
+#[test]
+fn a_summoning_ritual_template_imports_its_participants_spells_and_grouping() {
+    let sql = gameobject_plan(&gameobject_source()).stmts.join(";");
+    assert!(sql.contains("(36727,18,1,'Summoning Portal',0,0,0,0,0,0,1,0,0)"));
+    assert!(sql.contains(
+        "INSERT INTO game_gameobject_ritual (entry,required_participants,spell_id,anim_spell_id,persistent,casters_grouped) VALUES (36727,3,7720,698,false,true)"
+    ));
 }
 
 #[test]

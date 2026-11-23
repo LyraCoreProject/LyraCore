@@ -778,7 +778,11 @@ pub(crate) fn apply_effect(
         EffectKind::CreateItem | EffectKind::Pickpocket => {
             apply_inventory_effect(ctx, e, caster_guid, target_guid, points)
         }
-        EffectKind::Resurrect | EffectKind::SummonPet | EffectKind::TameCreature => {
+        EffectKind::Resurrect
+        | EffectKind::SummonPet
+        | EffectKind::TameCreature
+        | EffectKind::SummonObject
+        | EffectKind::SummonPlayer => {
             apply_character_effect(ctx, e, caster_guid, target_guid, points)
         }
         EffectKind::SetStance => EffectHit::none(),
@@ -1472,6 +1476,14 @@ fn apply_character_effect(
             if let Err(error) = crate::creatures::tame_creature(ctx, caster_guid, target_guid) {
                 log::info!("tame completion for caster {caster_guid} and target {target_guid} failed: {error}");
             }
+            EffectHit::none()
+        }
+        E_SUMMON_OBJECT => {
+            crate::summoning_ritual::place(ctx, caster_guid, e.spell_id, e.p0.max(0) as u32);
+            EffectHit::none()
+        }
+        E_SUMMON_PLAYER => {
+            crate::summoning_ritual::summon_to_caster(ctx, caster_guid, target_guid);
             EffectHit::none()
         }
         _ => EffectHit::none(),

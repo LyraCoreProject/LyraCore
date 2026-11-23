@@ -54,6 +54,18 @@ pub struct GameObjectTrap {
     pub cooldown_secs: u32,
 }
 
+// A type-18 template's vmangos summoningRitual data: data0, data1, data2, data3 and data6.
+#[table(accessor = game_gameobject_ritual)]
+pub struct GameObjectRitual {
+    #[primary_key]
+    pub entry: u32,
+    pub required_participants: u32,
+    pub spell_id: u32,
+    pub anim_spell_id: u32,
+    pub persistent: bool,
+    pub casters_grouped: bool,
+}
+
 #[table(
     accessor = game_gameobject_trap_cooldown,
     index(accessor = by_instance, btree(columns = [instance_id]))
@@ -261,12 +273,26 @@ pub const POOL_TAG: u64 = 1 << 47;
 pub(crate) const GO_COPY_BAND: u64 = 1 << 46;
 // Bit 45 reserves Duel flags below the Instance copies.
 pub(crate) const DUEL_FLAG_BAND: u64 = 1 << 45;
+// Bit 44 reserves Summoning Ritual objects below the Duel flags.
+pub(crate) const RITUAL_BAND: u64 = 1 << 44;
 
 pub(crate) fn gameobject_guid(low: u64) -> u64 {
     lyracore_shared::guid::compose(lyracore_shared::guid::GAMEOBJECT, low)
 }
 
 pub(crate) use lyracore_shared::guid::is_gameobject as is_gameobject_guid;
+
+/// The guid of a Shard-local object `local_id` in `band`; `None` once the band is exhausted.
+pub(crate) fn banded_object_guid(band: u64, character_guid: u64, local_id: u64) -> Option<u64> {
+    // Shard-local ids need the realm-wide GUID slot of their Character to stay unique.
+    let range_size = crate::auth::GUID_RANGE_SIZE;
+    if local_id >= range_size {
+        return None;
+    }
+    let shard_slot = character_guid / range_size;
+    let payload = shard_slot.checked_mul(range_size)?.checked_add(local_id)?;
+    (payload < band).then_some(gameobject_guid(band | payload))
+}
 
 /// Replaces the template's standalone spawn at its packed guid; keeps an existing template row.
 #[cfg(feature = "debug_reducers")]
@@ -751,6 +777,7 @@ fn use_resolved_gameobject(
             go.state = toggle_state(go.state);
             go.update(ctx);
         }
+        go_type::SUMMONING_RITUAL => crate::summoning_ritual::assist(ctx, caster_guid, go)?,
         _ => {}
     }
     crate::hooks::fire_on_go_used(

@@ -534,10 +534,11 @@ pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
     let broke_channel = !removed.is_empty();
     shed_auras(ctx, removed);
     let broke_cast = interrupt_cast(ctx, caster_guid);
+    let left_ritual = crate::summoning_ritual::leave(ctx, caster_guid);
     if broke_channel {
         log::info!("channel broken: caster {caster_guid}'s channel cancelled");
     }
-    broke_channel || broke_cast
+    broke_channel || broke_cast || left_ritual
 }
 
 pub(crate) fn interrupt_cast_and_lock(

@@ -58,6 +58,7 @@ pub(crate) mod reputation;
 mod rollback;
 mod social;
 pub(crate) mod spell;
+pub(crate) mod summon;
 pub(crate) mod taxi;
 pub(crate) mod teleport;
 pub(crate) mod trade;

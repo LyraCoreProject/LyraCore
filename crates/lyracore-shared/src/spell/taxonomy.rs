@@ -120,6 +120,10 @@ effect_kinds! {
     E_ADD_EXTRA_ATTACKS => AddExtraAttacks = 0x28,
     // Effect points are the duration in seconds; p0 is the enchantment id.
     E_ENCHANT_ITEM_TEMPORARY => EnchantItemTemporary = 0x29,
+    // p0 is the GameObject entry the caster places and owns, as Spell.dbc effect 50 names it.
+    E_SUMMON_OBJECT => SummonObject = 0x2A,
+    // Offers the target a teleport to the caster, or to the Summoning Ritual that cast it.
+    E_SUMMON_PLAYER => SummonPlayer = 0x2B,
 }
 
 pub const KIND_AURA_BIT: u8 = 0x80;
@@ -253,6 +257,8 @@ mod tests {
         assert_eq!(E_SUMMON_GUARDIANS, 0x27);
         assert_eq!(E_ADD_EXTRA_ATTACKS, 0x28);
         assert_eq!(E_ENCHANT_ITEM_TEMPORARY, 0x29);
+        assert_eq!(E_SUMMON_OBJECT, 0x2A);
+        assert_eq!(E_SUMMON_PLAYER, 0x2B);
         assert_eq!(A_PERIODIC_DAMAGE, 0x90);
         assert_eq!(A_PERIODIC_HEAL, 0x91);
         assert_eq!(A_ABSORB, 0xA2);

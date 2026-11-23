@@ -231,6 +231,7 @@ pub(crate) mod got {
     pub const DATA2: &str = "data2";
     pub const DATA3: &str = "data3";
     pub const DATA5: &str = "data5";
+    pub const DATA6: &str = "data6";
     pub const MIN_GOLD: &str = "mingold";
     pub const MAX_GOLD: &str = "maxgold";
 }

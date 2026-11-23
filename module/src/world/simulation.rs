@@ -5,6 +5,8 @@ use super::{game_entity_motion, game_world_entity, WorldEntity};
 impl WorldEntity {
     pub(crate) fn delete(ctx: &ReducerContext, guid: impl std::borrow::Borrow<u64>) -> bool {
         let guid = *guid.borrow();
+        // Before the row goes, so an interrupted ritual cast is addressed at its caster.
+        crate::summoning_ritual::character_left(ctx, guid);
         let removed = ctx.db.game_world_entity().guid().delete(guid);
         crate::motion::drop_pending(ctx, guid);
         ctx.db.game_entity_motion().guid().delete(guid);
