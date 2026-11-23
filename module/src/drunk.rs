@@ -50,7 +50,7 @@ pub(crate) fn sobered_offline(drunk_value: u16, last_logout_micros: u64, now_mic
     (u64::from(drunk_value) * remaining / OFFLINE_SOBERING_MICROS) as u16
 }
 
-/// vmangos `Spell::EffectInebriate`: each effect point adds 256, capped at the u16 maximum.
+/// vmangos `Spell::EffectInebriate`: each effect point adds 256, up to 65534.
 pub(crate) fn inebriate(ctx: &ReducerContext, target_guid: u64, points: i32) {
     let Some(mut entity) = ctx
         .db
@@ -90,7 +90,10 @@ pub(crate) fn tick_sobering(ctx: &ReducerContext) {
     for mut timer in timers.iter().collect::<Vec<_>>() {
         let guid = timer.character_guid;
         let Some(mut entity) = ctx.db.game_world_entity().guid().find(guid) else {
-            timers.character_guid().delete(guid);
+            // A cross-map WorldPort removes the entity until the client acks; keep the timer.
+            if !crate::helpers::character_by_guid(ctx, guid).is_some_and(|c| c.online) {
+                timers.character_guid().delete(guid);
+            }
             continue;
         };
         let value = u32::from(drunk_value(&entity));
@@ -110,8 +113,7 @@ pub(crate) fn tick_sobering(ctx: &ReducerContext) {
         if sobered == 0 {
             timers.character_guid().delete(guid);
         } else {
-            timer.next_step_at =
-                timer.next_step_at + TimeDuration::from_micros(steps * SOBERING_INTERVAL_MICROS);
+            timer.next_step_at += TimeDuration::from_micros(steps * SOBERING_INTERVAL_MICROS);
             timers.character_guid().update(timer);
         }
     }

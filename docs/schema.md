@@ -539,14 +539,16 @@ WorldPort keeps the existing state, so hysteresis lasts through map changes in o
 #### Drunk value
 
 A Character's live Drunk Value is bits 1 to 15 of `player_bytes_3` on its `game_world_entity` row;
-bit 0 is its gender. A change reaches every viewer as a `PLAYER_BYTES_3` VALUES update, and the
-1.12 client draws the drunk tier, the screen blur and the "You feel tipsy" lines from it.
+bit 0 is its gender, so the value is even and at most 65534, as vmangos saves it. A change reaches
+every viewer as a `PLAYER_BYTES_3` VALUES update, and the 1.12 client draws the drunk tier, the
+screen blur and the "You feel tipsy" lines from it.
 `game_character.drunk_value` keeps the value while the Character is offline.
 
-An `E_INEBRIATE` effect adds 256 per effect point, up to 65535, as vmangos `Spell::EffectInebriate`
+An `E_INEBRIATE` effect adds 256 per effect point, up to 65534, as vmangos `Spell::EffectInebriate`
 does. It affects only Characters. `game_drunk_sobering` holds one timer for each drunk Character in
 the world. The breath tick reads it every second and takes 256 every 10 seconds, as vmangos
-`Player::HandleSobering` does. Another drink keeps the running timer. Death sets the value to zero.
+`Player::HandleSobering` does. A cross-map WorldPort keeps the timer while the entity is away; a
+logout or login drops it. Another drink keeps the running timer. Death sets the value to zero.
 A login, but not a WorldPort, scales the stored value down in a straight line to zero over the 15
 minutes since logout, as vmangos `Player::LoadFromDB` does; with no logout time it keeps the value.
 

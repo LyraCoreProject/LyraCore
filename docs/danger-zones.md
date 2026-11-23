@@ -249,7 +249,8 @@ no one drunk until a reimport of the `spell` family. No repair is needed.
 
 `game_character` crosses in the Transfer blob. A Character row from an older source ends before
 `drunk_value` and arrives sober. An older destination refuses the longer row, so update both Shards
-before moving active World Sessions. `game_drunk_sobering` is not transported; login on the
+before moving active World Sessions. `game_drunk_sobering` is a Character-owned table that is not
+transported. A blob from an older source lacks it and imports with no rows; login on the
 destination starts a new timer.
 
 ### DynamicObject AOI migration

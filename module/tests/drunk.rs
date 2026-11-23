@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use lyracore_package_delta::fixture_ids::FIXTURE_JERKY;
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage;
-use lyracore_shared::spell::taxonomy::{E_INEBRIATE, T_SELF};
+use lyracore_shared::spell::taxonomy::{E_INEBRIATE, T_SCRIPTED, T_SELF};
 use serde_json::json;
 use support::{number, Standalone};
 
@@ -36,7 +36,7 @@ fn a_drink_makes_the_character_drunk_and_player_bytes_3_carries_it() {
     assert_eq!(
         player_bytes_3(&shard),
         DRUNK,
-        "gender 0 and drunk value 12800"
+        "gender 0 and drunk value 12800; the untargeted effect adds nothing"
     );
     let expected =
         lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
@@ -114,6 +114,18 @@ fn stage(name: &str) -> Standalone {
             ("kind", &E_INEBRIATE),
             ("base_points", &ALE_POINTS),
             ("target", &T_SELF),
+        ],
+    );
+    // Like Barleybrew Scalder 8553 effect 3: no implicit target, so vmangos inebriates no unit.
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(ALE, 1)),
+            ("spell_id", &ALE),
+            ("effect_index", &1u8),
+            ("kind", &E_INEBRIATE),
+            ("base_points", &ALE_POINTS),
+            ("target", &T_SCRIPTED),
         ],
     );
     shard.assert_sql(&format!(

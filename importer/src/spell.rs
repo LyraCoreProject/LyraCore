@@ -2301,6 +2301,28 @@ mod tests {
     }
 
     #[test]
+    fn a_drink_inebriates_its_drinker() {
+        // vmangos Weak Alcohol 11007, the spell of Thunder Ale 2686 and Bottle of Pinot Noir 2723.
+        let effect = temporary_enchantment_effect("UPDATE spell_template SET effect1=100, effectApplyAuraName1=0, effectBasePoints1=4, effectBaseDice1=1, effectDieSides1=1, effectMiscValue1=0, effectImplicitTargetA1=1, effectImplicitTargetB1=0, targets=0, spellFamilyName=0, effect2=0 WHERE build=5875");
+        assert_eq!(
+            (
+                effect.kind,
+                effect.base_points,
+                effect.die_sides,
+                effect.target
+            ),
+            (E_INEBRIATE, 5, 1, T_SELF)
+        );
+    }
+
+    #[test]
+    fn an_inebriate_effect_without_an_implicit_target_names_no_unit() {
+        // vmangos Barleybrew Scalder 8553 effect 3 has targets 0 and 0, so vmangos picks no unit.
+        let effect = temporary_enchantment_effect("UPDATE spell_template SET effect1=100, effectApplyAuraName1=0, effectBasePoints1=19, effectBaseDice1=1, effectDieSides1=1, effectMiscValue1=0, effectImplicitTargetA1=0, effectImplicitTargetB1=0, targets=0, spellFamilyName=0, effect2=0 WHERE build=5875");
+        assert_eq!((effect.kind, effect.target), (E_INEBRIATE, T_SCRIPTED));
+    }
+
+    #[test]
     fn a_temporary_enchantment_carries_its_enchantment_and_duration_in_seconds() {
         // Rockbiter Weapon 8017: enchantment 29 for 1799 + 1 seconds.
         let effect = temporary_enchantment_effect("UPDATE spell_template SET effect1=54, effectApplyAuraName1=0, effectBasePoints1=1799, effectBaseDice1=1, effectDieSides1=1, effectMiscValue1=29, effectImplicitTargetA1=0, effectImplicitTargetB1=0, spellFamilyName=11, effect2=0 WHERE build=5875");

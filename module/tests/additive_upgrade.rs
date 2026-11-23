@@ -273,6 +273,7 @@ fn character(shard: &Standalone) -> Row {
 fn upgraded_character(shard: &Standalone) -> Row {
     let mut row = character(shard);
     assert_eq!(row.remove("rest_state").as_deref(), Some("0"));
+    assert_eq!(row.remove("drunk_value").as_deref(), Some("0"));
     row
 }
 

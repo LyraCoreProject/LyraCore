@@ -284,7 +284,7 @@ deletes its Characters. A Package enabled again does not adopt them.
 _Avoid_: deleted bot, orphan bot, frozen bot
 
 **Drunk Value**:
-A Character's inebriation from 0 to 65535. A drink's Inebriate effect raises it and it sobers over
+A Character's inebriation from 0 to 65534, always even. A drink's Inebriate effect raises it and it sobers over
 time. The client draws the sober, tipsy, drunk and smashed tiers from it. See
 [Drunk value](docs/schema.md#drunk-value).
 _Avoid_: drunk level, drunkenness, intoxication
