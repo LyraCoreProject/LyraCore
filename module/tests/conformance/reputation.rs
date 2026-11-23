@@ -4,6 +4,7 @@ use super::buy_in_slot::{buy, delivered, inventory, money, stage};
 use super::{enter, fixture};
 use lyracore_package_delta::fixture_ids::FIXTURE_JERKY;
 use lyracore_test_support::Standalone;
+use serde_json::json;
 
 const STORMWIND: u32 = 72;
 const STORMWIND_TEMPLATE: u32 = 5_119_072;
@@ -13,7 +14,9 @@ const SEEDED_CHARACTER: u64 = 1;
 const SMSG_INITIALIZE_FACTIONS: u16 = 0x122;
 const SMSG_SET_FACTION_STANDING: u16 = 0x124;
 const SMSG_BUY_FAILED: u16 = 0x1a5;
-const CANT_FIND_ITEM: u8 = 0;
+// A refused buy into a slot reports every vendor refusal as too far, from vendor guid 0.
+const DISTANCE_TOO_FAR: u8 = 5;
+const CMSG_PING: u32 = 0x1dc;
 
 fn set_race(shard: &Standalone, guid: u64, race: u8) {
     shard.assert_sql(&format!(
@@ -51,7 +54,8 @@ fn a_stormwind_vendor_refuses_a_horde_character_with_no_stored_standing() {
     let packets = buy(&mut connection, vendor, FIXTURE_JERKY, guid, 30, 1);
     assert_eq!(packets.len(), 1);
     assert_eq!(packets[0].0, SMSG_BUY_FAILED);
-    assert_eq!(*packets[0].1.last().unwrap(), CANT_FIND_ITEM);
+    assert_eq!(&packets[0].1[..8], &[0; 8]);
+    assert_eq!(*packets[0].1.last().unwrap(), DISTANCE_TOO_FAR);
     assert!(inventory(&shard, guid).is_empty());
     assert_eq!(money(&shard, guid), "50000");
 
@@ -99,6 +103,10 @@ fn login_and_the_delete_reset_send_the_standing_less_the_base() {
     let mut reset = 1u32.to_le_bytes().to_vec();
     reset.extend((FIXTURE_REPUTATION_INDEX as u32).to_le_bytes());
     reset.extend(0i32.to_le_bytes());
+    // The CLI call's packets reach this connection before the reply to its own next call.
+    connection
+        .call("native_world_receive", json!([CMSG_PING, vec![0u8; 8]]))
+        .unwrap();
     assert!(delivered(&mut connection).contains(&(SMSG_SET_FACTION_STANDING, reset)));
     assert!(shard.query_rows(&stored).is_empty());
 }
