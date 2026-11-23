@@ -52,16 +52,18 @@ fn offer_requiring(
     );
 }
 
-fn wrapper(shard: &Standalone, wrapper: u32, target: u32) {
+fn wrapper(shard: &Standalone, wrapper: u32, trigger: u32) {
     let id = packed_spell_effect_id(wrapper, 0);
     let kind = lyracore_shared::spell::taxonomy::E_SCRIPTED;
+    let target = lyracore_shared::spell::taxonomy::T_SCRIPTED;
     shard.insert_row(
         "game_spell_effect",
         &[
             ("id", &id),
             ("spell_id", &wrapper),
             ("kind", &kind),
-            ("trigger_spell", &target),
+            ("target", &target),
+            ("trigger_spell", &trigger),
         ],
     );
 }

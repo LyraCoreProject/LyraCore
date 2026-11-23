@@ -1068,7 +1068,8 @@ fn push_spell_effect_rows(
             Some(next) if kind == A_SHAPESHIFT => next,
             _ => s.effect_trigger_spell[i],
         };
-        if lyracore_shared::trainer::learn_target_trigger(kind, trigger_spell).is_some() {
+        let learn_kind = lyracore_shared::trainer::learn_kind(kind, target);
+        if lyracore_shared::trainer::learn_target_trigger(learn_kind, trigger_spell).is_some() {
             wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
         }
         let effect_mechanic = s.effect_mechanic[i] as u8;

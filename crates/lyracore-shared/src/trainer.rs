@@ -112,6 +112,16 @@ pub struct LearnEffect {
     pub trigger_spell: u32,
 }
 
+// vmangos trainers offer the trigger spell of effect 0 for a grimoire or pet spell wrapper.
+pub fn learn_kind(kind: u8, target: u8) -> u8 {
+    use crate::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED, T_CASTER_PET};
+    if kind == E_SCRIPTED && target == T_CASTER_PET {
+        E_LEARN_SPELL
+    } else {
+        kind
+    }
+}
+
 // Stances and forms carry a trigger spell too, so only a learn effect names a learn target.
 pub fn learn_target_trigger(kind: u8, trigger_spell: u32) -> Option<u32> {
     (trigger_spell != 0 && kind == crate::spell::taxonomy::E_LEARN_SPELL).then_some(trigger_spell)
@@ -216,6 +226,21 @@ mod rule_tests {
         A_FLAG, A_MOD_STAT, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SHAPESHIFT,
         A_STEALTH, E_DAMAGE, E_LEARN_SPELL, E_SCRIPTED, E_SET_STANCE, E_TRIGGER,
     };
+
+    #[test]
+    fn a_pet_learn_effect_names_its_trigger_spell_as_learn_target_but_other_scripted_effects_do_not(
+    ) {
+        use crate::spell::taxonomy::{T_CASTER_PET, T_SCRIPTED};
+        // vmangos spell 23100 Dash teaches 23099 to the pet.
+        assert_eq!(
+            learn_target_trigger(learn_kind(E_SCRIPTED, T_CASTER_PET), 23099),
+            Some(23099)
+        );
+        assert_eq!(
+            learn_target_trigger(learn_kind(E_SCRIPTED, T_SCRIPTED), 23099),
+            None
+        );
+    }
 
     #[test]
     fn wrapper_resolution_orders_eligible_effects_by_index_then_id() {

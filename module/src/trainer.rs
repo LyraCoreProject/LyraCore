@@ -159,13 +159,13 @@ pub(crate) fn trainer_buy_check(
     Ok(())
 }
 
-// Trainers read E_SCRIPTED as a learn effect, as before E_LEARN_SPELL, unless it teaches the pet.
+// Rows imported before E_LEARN_SPELL keep a learn effect as E_SCRIPTED with target T_SCRIPTED.
 fn learn_kind(kind: u8, target: u8) -> u8 {
-    use lyracore_shared::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED, T_CASTER_PET};
-    if kind == E_SCRIPTED && target != T_CASTER_PET {
+    use lyracore_shared::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED, T_SCRIPTED};
+    if kind == E_SCRIPTED && target == T_SCRIPTED {
         E_LEARN_SPELL
     } else {
-        kind
+        lyracore_shared::trainer::learn_kind(kind, target)
     }
 }
 
@@ -591,13 +591,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_effect_aimed_at_the_caster_pet_is_not_a_learn_effect() {
+    fn trainers_read_an_old_format_or_pet_learn_effect_but_no_other_scripted_effect_as_learn() {
         use lyracore_shared::spell::taxonomy::{
-            E_LEARN_SPELL, E_SCRIPTED, T_CASTER_PET, T_SCRIPTED,
+            E_LEARN_SPELL, E_SCRIPTED, T_CASTER_PET, T_SCRIPTED, T_SELF, T_TARGET_ANY,
         };
-        assert_eq!(learn_kind(E_SCRIPTED, T_CASTER_PET), E_SCRIPTED);
         assert_eq!(learn_kind(E_SCRIPTED, T_SCRIPTED), E_LEARN_SPELL);
-        assert_eq!(learn_kind(E_LEARN_SPELL, T_CASTER_PET), E_LEARN_SPELL);
+        assert_eq!(learn_kind(E_SCRIPTED, T_CASTER_PET), E_LEARN_SPELL);
+        assert_eq!(learn_kind(E_SCRIPTED, T_SELF), E_SCRIPTED);
+        assert_eq!(learn_kind(E_SCRIPTED, T_TARGET_ANY), E_SCRIPTED);
+        assert_eq!(learn_kind(E_LEARN_SPELL, T_SELF), E_LEARN_SPELL);
     }
 
     #[test]
