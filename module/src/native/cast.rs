@@ -77,6 +77,8 @@ pub(super) fn cast_result(reason: CastRefusalReason) -> u8 {
         R::TargetDueling => code::TARGET_DUELING,
         R::NoChargesRemain => code::NO_CHARGES_REMAIN,
         R::TargetNotInInstance => code::TARGET_NOT_IN_INSTANCE,
+        // vmangos Spell::CheckItems: the 1.12 client shows nothing for SPELL_FAILED_REAGENTS.
+        R::MissingReagent => code::ITEM_NOT_READY,
     }
 }
 
@@ -395,6 +397,7 @@ mod tests {
             (R::TargetDueling, 0x68),
             (R::NoChargesRemain, 0x44),
             (R::TargetNotInInstance, 0x7F),
+            (R::MissingReagent, 0x28),
         ] {
             assert_eq!(cast_result(reason), code, "{reason:?}");
         }

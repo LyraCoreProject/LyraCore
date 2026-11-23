@@ -99,6 +99,7 @@ cast_refusal_reasons! {
     TargetDueling = 31,
     NoChargesRemain = 32,
     TargetNotInInstance = 33,
+    MissingReagent = 34,
 }
 
 impl CastRefusalReason {
