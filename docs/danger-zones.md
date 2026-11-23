@@ -847,6 +847,10 @@ that omits it inserts zero.
 - **`spacetime sql` (2.5):** no `ORDER BY`, no `IN` or subqueries, no `Timestamp` or `Identity`
   literal. A range filter on a single column can wrongly return 0 rows; use a histogram or
   `COUNT`. To load a `Timestamp` column, go through a reducer that stamps `ctx.timestamp`.
+- **`spacetime sql` INSERT fills columns by table position.** The values go to the table's columns
+  in declaration order, whatever order the named list gives, and nothing reports the mismatch. Name
+  columns in table order. The Native Host's `host.sql` reorders a named INSERT to the published
+  order, and `import_sql_defaults.txt` lists each table's END-appended defaults in table order.
 - **`spacetime sql` prints whole floats without a decimal point.** A regex that reads a coordinate
   back needs `-?[0-9]+(\.[0-9]+)?`, or a Character parked at exactly `x=-8890.0` fails every
   "did it arrive" poll.

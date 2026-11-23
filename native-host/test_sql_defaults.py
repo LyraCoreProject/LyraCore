@@ -1,6 +1,6 @@
 import unittest
 
-from sql_defaults import insert_defaults
+from sql_defaults import in_table_order, insert_defaults
 
 
 class SpellDefaultsTest(unittest.TestCase):
@@ -24,3 +24,22 @@ class SpellDefaultsTest(unittest.TestCase):
         query = "INSERT INTO game_creature_ai_broadcast_text (id,male_text) VALUES (1,'Greeting');INSERT INTO game_creature_display (id,display_id) VALUES (2,100)"
         expected = "INSERT INTO game_creature_ai_broadcast_text (id,male_text,sound_id) VALUES (1,'Greeting',0);INSERT INTO game_creature_display (id,display_id,gender,bounding_radius) VALUES (2,100,0,0.389)"
         self.assertEqual(insert_defaults(query), expected)
+
+
+class TableOrderTest(unittest.TestCase):
+    ORDER = {'game_faction': ['faction_id', 'base_standing', 'base_standing_2', 'base_race_mask_1']}
+
+    def order(self, query):
+        return in_table_order(query, self.ORDER.__getitem__)
+
+    def test_named_columns_and_every_row_follow_the_table_order(self):
+        query = "INSERT INTO game_faction (faction_id,base_race_mask_1,base_standing_2,base_standing) VALUES (1,2,1000,-42000),(3,'a,(b)',0,7)"
+        self.assertEqual(self.order(query), "INSERT INTO game_faction (faction_id,base_standing,base_standing_2,base_race_mask_1) VALUES (1,-42000,1000,2),(3,7,0,'a,(b)')")
+
+    def test_ordered_unknown_and_unrelated_statements_are_unchanged(self):
+        for query in [
+            "INSERT INTO game_faction (faction_id,base_standing) VALUES (1,2)",
+            "INSERT INTO game_faction (faction_id,other) VALUES (1,2)",
+            "SELECT * FROM game_faction",
+        ]:
+            self.assertEqual(self.order(query), query)

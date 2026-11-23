@@ -1,5 +1,5 @@
 from collections import namedtuple
-from sql_defaults import insert_defaults
+from sql_defaults import in_table_order, insert_defaults
 
 import json
 import os
@@ -202,9 +202,14 @@ class Host:
             json.dumps(list(args)).encode(), 'POST', authenticated=operator)
 
     def sql(self, query, database=None):
-        query = insert_defaults(query)
-        return json.loads(self.request(f'/v1/database/{database or self.database}/sql', query.encode(), 'POST',
-            'text/plain'))
+        database = database or self.database
+        query = in_table_order(insert_defaults(query), lambda table: self.columns(table, database))
+        return json.loads(self.request(f'/v1/database/{database}/sql', query.encode(), 'POST', 'text/plain'))
+
+    def columns(self, table, database):
+        result = json.loads(self.request(f'/v1/database/{database}/sql', f'SELECT * FROM {table} LIMIT 1'.encode(),
+            'POST', 'text/plain'))
+        return [column['name']['some'] for column in result[0]['schema']['elements']]
 
     def rows(self, query, database=None):
         return self.sql(query, database)[0]['rows']
