@@ -3,62 +3,44 @@
 use std::collections::BTreeMap;
 
 use anyhow::{ensure, Context, Result};
-use wire_client::compare::{Difference, DifferenceClass};
 use wire_client::decode::{Field, Packet};
-use wire_client::scenario::Stream;
-use wire_client::trace::RecordedField;
+
+use super::strike_rolls::{self, StrikeContext, BLOCK_DRAWS};
 
 pub const SPELL_ID: u32 = 12294;
-pub const SAMPLES_PER_LEVEL: u32 = 50_000;
-pub const TARGET_LEVELS: [u32; 2] = [60, 63];
-pub const DISTRIBUTION_RULE: &str = "weapon_strike_distribution";
-pub const SAMPLE_RULE: &str = "weapon_strike_sample";
 pub const SPELL_GO: u16 = 0x0132;
 pub const SPELL_LOG_MISS: u16 = 0x024b;
 const DAMAGE_LOG: u16 = 0x0250;
-/// The first five are exclusive table outcomes; a partial block overlaps the landed two.
-pub const CATEGORIES: [&str; 6] = ["miss", "dodge", "parry", "crit", "hit", "block"];
 const CRIT: usize = 3;
-const BLOCK: usize = 5;
-const FAMILY_ALPHA: f64 = 1e-6;
-const TESTS_PER_SUBMISSION: u32 = 6 * 2 * 3;
-// `roll_chance_f(5.0)` accepts 214748365 of the 2^32 uniform draws.
-const BLOCK_DRAWS: u64 = 214_748_365;
+pub type Counts = strike_rolls::Counts<6>;
 
-/// Exact probabilities as (numerator, denominator), by target level then category.
-pub const EXPECTED: [[(u64, u64); 6]; 2] = [
-    [
-        (500, 10_000),
-        (500, 10_000),
-        (500, 10_000),
-        (500, 10_000),
-        (8000, 10_000),
-        (8500 * BLOCK_DRAWS, 10_000 << 32),
+/// The first five are exclusive table outcomes; a partial block overlaps the landed two.
+pub const CONTEXT: StrikeContext<6> = StrikeContext {
+    name: "weapon_strike",
+    stream: "casts",
+    opcode: SPELL_GO,
+    categories: ["miss", "dodge", "parry", "crit", "hit", "block"],
+    expected: [
+        [
+            (500, 10_000),
+            (500, 10_000),
+            (500, 10_000),
+            (500, 10_000),
+            (8000, 10_000),
+            (8500 * BLOCK_DRAWS, 10_000 << 32),
+        ],
+        [
+            (800, 10_000),
+            (650, 10_000),
+            (1400, 10_000),
+            (200, 10_000),
+            (6950, 10_000),
+            (7150 * BLOCK_DRAWS, 10_000 << 32),
+        ],
     ],
-    [
-        (800, 10_000),
-        (650, 10_000),
-        (1400, 10_000),
-        (200, 10_000),
-        (6950, 10_000),
-        (7150 * BLOCK_DRAWS, 10_000 << 32),
-    ],
-];
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
-pub struct Counts(pub [u32; 6]);
+};
 
 impl Counts {
-    pub fn trials(&self) -> u32 {
-        self.0[..BLOCK].iter().sum()
-    }
-
-    pub fn add(&mut self, other: &Self) {
-        for (total, count) in self.0.iter_mut().zip(other.0) {
-            *total += count;
-        }
-    }
-
     /// Counts one cast from the Character's own packets; an error is a gap blocking the sample.
     pub fn observe(&mut self, packets: &[Packet], caster: u64, target: u64) -> Result<()> {
         let own = |packet: &&Packet, opcode: u16| {
@@ -125,8 +107,7 @@ impl Counts {
                 && packet.fields.get("spell") == Some(&Field::Unsigned(SPELL_ID.into()))),
             "vmangos sends no SMSG_ATTACKERSTATEUPDATE for a spell that is not a queued strike"
         );
-        self.0[category] += 1;
-        self.0[BLOCK] += u32::from(blocked);
+        self.record(category, blocked);
         Ok(())
     }
 }
@@ -164,116 +145,10 @@ fn number(packet: &Packet, name: &str) -> Result<u64> {
     }
 }
 
-fn checkpoint(level_index: usize, slot: &str) -> String {
-    format!("weapon_strike_level_{}_{slot}", TARGET_LEVELS[level_index])
-}
-
-fn difference(checkpoint: String, field_path: Vec<String>) -> Difference {
-    Difference {
-        classification: DifferenceClass::Rule,
-        character: None,
-        checkpoint,
-        stream: Some(Stream::Broadcast("casts".into())),
-        packet_index: None,
-        field_path,
-        opcode: Some(SPELL_GO),
-        deviations: vec![],
-        rule: String::new(),
-        reason: String::new(),
-        expected: None,
-        actual: None,
-    }
-}
-
-fn expected_count(level_index: usize, category: usize) -> u64 {
-    let (numerator, denominator) = EXPECTED[level_index][category];
-    (u128::from(numerator) * u128::from(SAMPLES_PER_LEVEL) / u128::from(denominator)) as u64
-}
-
-/// Exact equal-tail binomial tests; this context reserves its own 1e-6 family over 36 tests.
-pub fn compare(counts: &Counts, level_index: usize, slot: &str) -> Result<Vec<Difference>> {
-    ensure!(
-        level_index < 2 && counts.trials() == SAMPLES_PER_LEVEL,
-        "incomplete weapon strike sample"
-    );
-    let alpha = FAMILY_ALPHA / f64::from(TESTS_PER_SUBMISSION);
-    let mut differences = Vec::new();
-    for (category, name) in CATEGORIES.iter().enumerate() {
-        let (numerator, denominator) = EXPECTED[level_index][category];
-        let actual = counts.0[category];
-        let p = wire_client::rolls::binomial_p_ratio_upper(
-            SAMPLES_PER_LEVEL,
-            actual,
-            numerator,
-            denominator,
-        )?;
-        if p <= alpha {
-            differences.push(Difference {
-                rule: DISTRIBUTION_RULE.into(),
-                reason: format!("{actual}/{SAMPLES_PER_LEVEL}, expected {numerator}/{denominator}; equal-tail binomial p upper={p:.12e}; Bonferroni alpha={alpha:.12e}"),
-                expected: Some(RecordedField::Unsigned(expected_count(level_index, category))),
-                actual: Some(RecordedField::Unsigned(actual.into())),
-                ..difference(
-                    checkpoint(level_index, slot),
-                    vec!["outcomes".into(), (*name).into()],
-                )
-            });
-        }
-    }
-    Ok(differences)
-}
-
-/// The one signature a level and seed emit when a delivery gap stops its sample.
-pub fn blocked(counts: &Counts, level_index: usize, slot: &str, reason: &str) -> Difference {
-    Difference {
-        rule: SAMPLE_RULE.into(),
-        reason: format!("full weapon strike sample is blocked; rates are unmeasured: {reason}"),
-        expected: Some(RecordedField::Unsigned(SAMPLES_PER_LEVEL.into())),
-        actual: Some(RecordedField::Unsigned(counts.trials().into())),
-        ..difference(checkpoint(level_index, slot), vec!["outcomes".into()])
-    }
-}
-
-/// Whether the scoreboard should accept a Tier 1 difference as a weapon strike measurement.
-pub fn accepts(difference: &Difference) -> bool {
-    let shape = difference.classification == DifferenceClass::Rule
-        && difference.character.is_none()
-        && difference.stream == Some(Stream::Broadcast("casts".into()))
-        && difference.opcode == Some(SPELL_GO)
-        && difference.packet_index.is_none();
-    let Some(level_index) = (0..2).find(|level| {
-        ["public_1", "public_2", "merge"]
-            .iter()
-            .any(|slot| difference.checkpoint == checkpoint(*level, slot))
-    }) else {
-        return false;
-    };
-    let count = |field: &Option<RecordedField>| match field {
-        Some(RecordedField::Unsigned(count)) => Some(*count),
-        _ => None,
-    };
-    if !shape || difference.field_path.first().map(String::as_str) != Some("outcomes") {
-        return false;
-    }
-    if difference.rule == SAMPLE_RULE {
-        return difference.field_path.len() == 1
-            && count(&difference.expected) == Some(SAMPLES_PER_LEVEL.into())
-            && count(&difference.actual).is_some_and(|n| n < SAMPLES_PER_LEVEL.into());
-    }
-    let category = difference
-        .field_path
-        .get(1)
-        .and_then(|name| CATEGORIES.iter().position(|category| category == name));
-    difference.rule == DISTRIBUTION_RULE
-        && difference.field_path.len() == 2
-        && category.is_some_and(|category| {
-            count(&difference.expected) == Some(expected_count(level_index, category))
-        })
-        && count(&difference.actual).is_some_and(|n| n <= SAMPLES_PER_LEVEL.into())
-}
-
 #[cfg(test)]
 mod tests {
+    use wire_client::trace::RecordedField;
+
     use super::*;
 
     const CASTER: u64 = 7;
@@ -320,10 +195,13 @@ mod tests {
 
     #[test]
     fn the_derived_table_sums_to_one_and_block_overlaps_it() {
-        for probabilities in EXPECTED {
-            let table: u64 = probabilities[..BLOCK].iter().map(|(n, _)| n).sum();
+        for probabilities in CONTEXT.expected {
+            let table: u64 = probabilities[..CONTEXT.block()]
+                .iter()
+                .map(|(n, _)| n)
+                .sum();
             assert_eq!(table, 10_000);
-            let (block, denominator) = probabilities[BLOCK];
+            let (block, denominator) = probabilities[CONTEXT.block()];
             assert!(block < denominator && denominator <= 1 << 53);
         }
     }
@@ -334,7 +212,7 @@ mod tests {
         counts.observe(&[go(false, Some(3))], CASTER, TARGET)?;
         counts.observe(&[go(true, None), log(2, 0)], CASTER, TARGET)?;
         counts.observe(&[go(true, None), log(0, 31)], CASTER, TARGET)?;
-        assert_eq!(counts, Counts([0, 1, 0, 1, 1, 1]));
+        assert_eq!(counts, Counts::new([0, 1, 0, 1, 1, 1]));
         assert_eq!(counts.trials(), 3);
         Ok(())
     }
@@ -360,25 +238,25 @@ mod tests {
             .observe(&[go(false, Some(4)), log(0, 0)], CASTER, TARGET)
             .is_err());
         assert!(counts.observe(&[log(0, 0)], CASTER, TARGET).is_err());
-        let difference = blocked(&counts, 1, "public_2", "listed as hit");
-        assert!(accepts(&difference));
+        let difference = CONTEXT.blocked(&counts, 1, "public_2", "listed as hit");
+        assert!(CONTEXT.accepts(&difference));
         assert_eq!(difference.checkpoint, "weapon_strike_level_63_public_2");
         Ok(())
     }
 
     #[test]
     fn the_scoreboard_accepts_only_derived_distribution_signatures() -> Result<()> {
-        let mut counts = Counts([0, 0, 0, 0, SAMPLES_PER_LEVEL, 0]);
-        let differences = compare(&counts, 0, "merge")?;
-        assert!(differences.iter().all(accepts));
+        let mut counts = Counts::new([0, 0, 0, 0, strike_rolls::SAMPLES_PER_LEVEL, 0]);
+        let differences = CONTEXT.compare(&counts, 0, "merge")?;
+        assert!(differences.iter().all(|d| CONTEXT.accepts(d)));
         assert!(differences
             .iter()
             .any(|d| d.field_path == ["outcomes", "block"]));
         let mut forged = differences[0].clone();
         forged.expected = Some(RecordedField::Unsigned(1));
-        assert!(!accepts(&forged));
+        assert!(!CONTEXT.accepts(&forged));
         counts.0[4] -= 1;
-        assert!(compare(&counts, 0, "merge").is_err());
+        assert!(CONTEXT.compare(&counts, 0, "merge").is_err());
         Ok(())
     }
 }

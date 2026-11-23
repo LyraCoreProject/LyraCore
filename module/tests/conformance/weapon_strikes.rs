@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use anyhow::{ensure, Context, Result};
-use lyracore_test_support::{core_root, ReducerConnection, Standalone};
+use lyracore_test_support::{ReducerConnection, Standalone};
 use serde_json::json;
 use wire_client::compare::Difference;
 use wire_client::decode::{decode, Field, Packet};
@@ -9,7 +9,8 @@ use wire_client::rolls::PUBLIC_SEEDS;
 use wire_client::scenario::{FixtureVerb, Scenario};
 
 use super::properties::Packet as RoutedPacket;
-use super::queued_strikes::{cast_request, Preparation, CMSG_CAST_SPELL};
+use super::strike_collector::{cast_request, Measurement, Preparation, Sample, CMSG_CAST_SPELL};
+use super::strike_rolls::{SAMPLES_PER_LEVEL, TARGET_LEVELS};
 use super::transport::{prepare_character, Delivery};
 use super::weapon_strike_spec::{self as spec, Counts};
 
@@ -19,21 +20,6 @@ struct Character {
     target: u64,
     delivery: Delivery,
     counts: Counts,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-enum Sample {
-    Complete { counts: Counts },
-    Blocked { counts: Counts, reason: String },
-}
-
-impl Sample {
-    fn counts(&self) -> &Counts {
-        match self {
-            Self::Complete { counts } | Self::Blocked { counts, .. } => counts,
-        }
-    }
 }
 
 fn cast(character: &mut Character) -> std::result::Result<(), String> {
@@ -180,7 +166,7 @@ fn prepare(
             &[
                 &guid.to_string(),
                 &target.to_string(),
-                &spec::TARGET_LEVELS[level_index].to_string(),
+                &TARGET_LEVELS[level_index].to_string(),
                 &seed.to_string(),
                 &(index as u64).to_string(),
             ],
@@ -229,7 +215,7 @@ fn verify_context(
         shard,
         shard_name,
         &participants,
-        spec::TARGET_LEVELS[level_index],
+        TARGET_LEVELS[level_index],
         &[44, 95, 162],
         Some(spec::SPELL_ID),
     )
@@ -243,7 +229,7 @@ fn collect(
     level_index: usize,
     part: usize,
     ready: &std::sync::Barrier,
-) -> Result<Sample> {
+) -> Result<Sample<6>> {
     let mut preparation = Preparation {
         ready,
         arrived: false,
@@ -265,7 +251,7 @@ fn collect(
         }
         counts
     };
-    for trial in 1..=spec::SAMPLES_PER_LEVEL / 8 {
+    for trial in 1..=SAMPLES_PER_LEVEL / 8 {
         for character in &mut characters {
             if let Err(refusal) = cast(character) {
                 return Ok(Sample::Blocked {
@@ -309,103 +295,18 @@ fn collect(
     Ok(Sample::Complete { counts })
 }
 
-fn measure(scenario: &Scenario, seed: u64, prefix: &str) -> Result<[Sample; 2]> {
-    let mut shard = Standalone::start_persistent(prefix);
-    let names = super::rolls::fresh_shards(&mut shard, "weapon", 4);
-    let ready = std::sync::Barrier::new(4);
-    let parts = std::thread::scope(|scope| -> Result<Vec<Sample>> {
-        let mut jobs = Vec::new();
-        for level in 0..2 {
-            for part in 0..2 {
-                let shard = &shard;
-                let name = &names[level * 2 + part];
-                let ready = &ready;
-                jobs.push(
-                    scope.spawn(move || collect(shard, name, scenario, seed, level, part, ready)),
-                );
-            }
-        }
-        jobs.into_iter()
-            .map(|job| {
-                job.join()
-                    .map_err(|_| anyhow::anyhow!("weapon strike collector panicked"))?
-            })
-            .collect()
-    })?;
-    Ok(std::array::from_fn(|level| {
-        let pair = &parts[level * 2..level * 2 + 2];
-        let mut counts = pair[0].counts().clone();
-        counts.add(pair[1].counts());
-        let blockers: Vec<_> = pair
-            .iter()
-            .filter_map(|sample| match sample {
-                Sample::Blocked { reason, .. } => Some(reason.as_str()),
-                Sample::Complete { .. } => None,
-            })
-            .collect();
-        if blockers.is_empty() {
-            Sample::Complete { counts }
-        } else {
-            Sample::Blocked {
-                counts,
-                reason: blockers.join("; "),
-            }
-        }
-    }))
-}
+const MEASUREMENT: Measurement<6> = Measurement {
+    context: &spec::CONTEXT,
+    shards: "weapon",
+    collect,
+};
 
-fn compare_samples(samples: &[Sample; 2], slot: &str) -> Result<Vec<Difference>> {
-    let mut differences = Vec::new();
-    for (level, sample) in samples.iter().enumerate() {
-        match sample {
-            Sample::Complete { counts } => differences.extend(spec::compare(counts, level, slot)?),
-            Sample::Blocked { counts, reason } => {
-                differences.push(spec::blocked(counts, level, slot, reason));
-            }
-        }
-    }
-    Ok(differences)
-}
-
-/// Collects both public seeds; their rule signatures join `white_melee_outcomes`.
 pub(super) fn public_seeds(scenario: &Scenario) -> Result<Vec<Difference>> {
-    let mut measurements = Vec::new();
-    for seed in PUBLIC_SEEDS {
-        measurements.push(measure(scenario, seed, "weapon-strike-public")?);
-    }
-    let report = core_root().join(".lyracore/conformance/weapon-strike-rates.json");
-    std::fs::create_dir_all(report.parent().context("weapon strike report parent")?)?;
-    std::fs::write(&report, serde_json::to_vec_pretty(&measurements)?)?;
-    let complete = measurements
-        .iter()
-        .flatten()
-        .all(|sample| matches!(sample, Sample::Complete { .. }));
-    if complete && std::env::var_os("LYRACORE_ROLL_REPEATABILITY").is_some() {
-        ensure!(
-            measure(scenario, PUBLIC_SEEDS[0], "weapon-strike-repeat")? == measurements[0],
-            "same seed changed delivered weapon strike counts"
-        );
-    }
-    if complete {
-        ensure!(
-            measurements[0] != measurements[1],
-            "different seed did not change delivered weapon strike counts"
-        );
-    }
-    let mut differences = Vec::new();
-    for (slot, samples) in measurements.iter().enumerate() {
-        differences.extend(compare_samples(samples, &format!("public_{}", slot + 1))?);
-    }
-    Ok(differences)
+    MEASUREMENT.public_seeds(scenario)
 }
 
 pub(super) fn merge_seed(scenario: &Scenario, seed: u64) -> Result<Vec<Difference>> {
-    let samples = measure(scenario, seed, "weapon-strike-merge")?;
-    println!(
-        "weapon strike merge {seed:#018x}: {}",
-        serde_json::to_string(&samples)?
-    );
-    compare_samples(&samples, "merge")
+    MEASUREMENT.merge_seed(scenario, seed)
 }
 
 const CERTAIN_HIT: u32 = 5_098_601;

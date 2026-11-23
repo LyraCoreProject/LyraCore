@@ -31,6 +31,9 @@ pub use report::*;
 #[path = "../../support/queued_strike_rolls.rs"]
 mod queued_strike_rolls;
 #[allow(dead_code)]
+#[path = "../../support/strike_rolls.rs"]
+mod strike_rolls;
+#[allow(dead_code)]
 #[path = "../../support/weapon_strike_rolls.rs"]
 mod weapon_strike_rolls;
 
@@ -41,7 +44,8 @@ fn roll_difference(scenario: &wire_client::scenario::Scenario, difference: &Diff
     }
     // The queued and cast weapon strikes share white melee's pinned context and Golden Trace.
     if scenario.id == "white_melee_outcomes"
-        && (queued_strike_rolls::accepts(difference) || weapon_strike_rolls::accepts(difference))
+        && (queued_strike_rolls::CONTEXT.accepts(difference)
+            || weapon_strike_rolls::CONTEXT.accepts(difference))
     {
         return true;
     }
