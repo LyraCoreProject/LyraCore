@@ -3,10 +3,6 @@ mod support;
 use support::{actor, Standalone};
 
 const SOLO: u64 = 1;
-const PARTY_LEADER: u64 = 2;
-const PARTY_MEMBER: u64 = 3;
-const RAID_LEADER: u64 = 4;
-const RAID_MEMBER: u64 = 5;
 
 const RAID_MAP: u32 = 409;
 const DUNGEON_MAP: u32 = 36;
@@ -57,35 +53,30 @@ fn only_a_raid_member_enters_a_raid_map_through_its_area_trigger() {
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
-    for (name, guid) in [
-        ("PartyLeader", PARTY_LEADER),
-        ("PartyMember", PARTY_MEMBER),
-        ("RaidLeader", RAID_LEADER),
-        ("RaidMember", RAID_MEMBER),
-    ] {
-        shard.assert_call(
-            "create_character",
-            &[
-                "1",
-                &format!("\"{name}\""),
-                "1",
-                "1",
-                "0",
-                "0",
-                "0",
-                "0",
-                "0",
-                "0",
-            ],
-        );
-        assert_eq!(
+    let [party_leader, party_member, raid_leader, raid_member] =
+        ["PartyLeader", "PartyMember", "RaidLeader", "RaidMember"].map(|name| {
+            shard.assert_call(
+                "create_character",
+                &[
+                    "1",
+                    &format!("\"{name}\""),
+                    "1",
+                    "1",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                ],
+            );
             shard.query_rows(&format!(
                 "SELECT guid FROM game_character WHERE name = '{name}'"
-            ))[0]["guid"],
-            guid.to_string()
-        );
-    }
-    for guid in [SOLO, PARTY_LEADER, PARTY_MEMBER, RAID_LEADER, RAID_MEMBER] {
+            ))[0]["guid"]
+                .parse::<u64>()
+                .unwrap()
+        });
+    for guid in [SOLO, party_leader, party_member, raid_leader, raid_member] {
         shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
     }
     for (map, map_type) in [(RAID_MAP, 2), (DUNGEON_MAP, 1)] {
@@ -124,11 +115,11 @@ fn only_a_raid_member_enters_a_raid_map_through_its_area_trigger() {
             ],
         );
     }
-    join(&shard, PARTY_LEADER, PARTY_MEMBER);
-    join(&shard, RAID_LEADER, RAID_MEMBER);
-    group_op(&shard, RAID_CONVERT, RAID_LEADER, 0);
+    join(&shard, party_leader, party_member);
+    join(&shard, raid_leader, raid_member);
+    group_op(&shard, RAID_CONVERT, raid_leader, 0);
 
-    for refused in [SOLO, PARTY_LEADER, PARTY_MEMBER] {
+    for refused in [SOLO, party_leader, party_member] {
         enter(&shard, refused, TO_RAID);
         assert_eq!(
             map_of(&shard, refused),
@@ -143,8 +134,8 @@ fn only_a_raid_member_enters_a_raid_map_through_its_area_trigger() {
         "a refused entry leases no Instance"
     );
 
-    enter(&shard, RAID_MEMBER, TO_RAID);
-    assert_eq!(map_of(&shard, RAID_MEMBER), RAID_MAP.to_string());
+    enter(&shard, raid_member, TO_RAID);
+    assert_eq!(map_of(&shard, raid_member), RAID_MAP.to_string());
     assert_eq!(
         shard
             .query_rows("SELECT instance_id FROM game_instance")
