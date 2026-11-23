@@ -186,6 +186,30 @@ path = "module/src/spell/cast/resolve.rs"
 symbol = "launch_cast"
 evidence = "Source reading, not measured. At d9173eca, Spell.cpp:3816-3822 Spell::handle_immediate sends SMSG_SPELL_GO before the effects unless the spell has SPELL_EFFECT_INSTAKILL or SPELL_EFFECT_SPAWN, and then sends it after them (Spell.cpp:3875-3876)."
 
+[[known_gaps]]
+description = "A Triggered Cast never reads an item target, so a triggered spell aimed at another player's trade-slot item is not refused when its caster lacks the reagents."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "reagents_are_paid_elsewhere"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp:7069-7076 Spell::IgnoreItemRequirements returns false for a triggered spell whose item target is not the caster's; every Triggered Cast request carries no item_target, and no shipped spell is known to reach it."
+
+[[known_gaps]]
+description = "A periodic trigger that is not channeled casts from the Aura's applier, so its reagents come from the applier's bags. vmangos casts it from the wearer."
+path = "module/src/spell/scheduler.rs"
+symbol = "tick_auras"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp:1509 Aura::TriggerSpell sets triggerCaster to the Aura's target and changes it only for a channeled spell; tick_auras queues every A_PERIODIC_TRIGGER tick with the Aura's caster_guid."
+
+[[known_gaps]]
+description = "A Triggered Cast refused for missing reagents sends its caster no cast-failed message. vmangos sends SPELL_FAILED_ITEM_NOT_READY."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "take_triggered_reagents"
+evidence = "Source reading, not measured. At d9173eca, Spell::CheckItems returns SPELL_FAILED_ITEM_NOT_READY and Spell::SendCastResult reports it to a player caster; cast_triggered_with_origin returns the refusal to its caller, which logs it."
+
+[[known_gaps]]
+description = "Furor's form-entry spell and Combustion's crit buff are Triggered Casts with no triggering spell, so they never carry reagents. vmangos gives each its Aura's spell as the triggering spell. No 1.12 spell data differs today."
+path = "module/src/spell/proc.rs"
+symbol = "dummy_proc"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp:2552 and :2558 cast 17099 and 17057 with the Furor Aura as triggeredByAura, and src/scripts/spells/spell_mage.cpp:167 casts the Combustion crit buff with triggeredByAura; form::cast_entry_chance_spell and dummy_proc use cast_triggered."
+
 [[tests]]
 path = "module/tests/aura_charges.rs"
 function = "flurry_spends_a_charge_on_each_of_three_swings_hit_or_miss"
@@ -529,4 +553,19 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/damage_shield.rs"
 function = "a_creature_whose_template_is_immune_to_the_shields_school_takes_no_shield_damage"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_reagents.rs"
+function = "a_periodic_trigger_whose_source_has_no_reagent_needs_the_reagents_of_its_spell"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_reagents.rs"
+function = "a_periodic_trigger_whose_source_has_a_first_reagent_takes_none_of_its_own"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_proc_refused_for_a_missing_reagent_still_spends_a_charge_and_starts_its_cooldown"
 rung = "durable_module"
