@@ -13,8 +13,8 @@ use crate::{game_spell, game_spell_effect, game_world_entity, SpellCastEvent, Wo
 
 // vmangos MAX_PLAYER_SUMMON_DELAY.
 pub(crate) const SUMMON_OFFER_MICROS: i64 = 120_000_000;
-// vmangos GetClosePoint beside the ritual object: two default object radii plus CONTACT_DISTANCE.
-const LANDING_DISTANCE_YD: f32 = 0.388_888_9 * 2.0 + 0.5;
+// vmangos GetClosePoint: object radius plus target radius, both DEFAULT_WORLD_OBJECT_SIZE here.
+const LANDING_DISTANCE_YD: f32 = 0.388_888_9 * 2.0;
 // Module GameObject states are the inverse of the client's READY and ACTIVE states.
 const PORTAL_READY: u8 = 0;
 const PORTAL_ACTIVE: u8 = 1;
@@ -115,13 +115,21 @@ fn same_group(ctx: &ReducerContext, a: u64, b: u64) -> bool {
     }
 }
 
+fn summons_player(ctx: &ReducerContext, spell_id: u32) -> bool {
+    ctx.db
+        .game_spell_effect()
+        .by_spell()
+        .filter(spell_id)
+        .any(|effect| effect.kind == E_SUMMON_PLAYER)
+}
+
 fn spell_duration_micros(ctx: &ReducerContext, spell_id: u32) -> Option<i64> {
     let duration_ms = ctx.db.game_spell().spell_id().find(spell_id)?.duration_ms;
     // DBC duration -1 imports as u32::MAX; it and 0 leave the channel to end some other way.
     (duration_ms != u32::MAX && duration_ms != 0).then_some(i64::from(duration_ms) * 1_000)
 }
 
-/// Places the object of an `E_SUMMON_OBJECT` effect; only Summoning Ritual objects have a cast path.
+/// Places an `E_SUMMON_OBJECT` object; only a ritual that summons a player has a cast path.
 pub(crate) fn place(ctx: &ReducerContext, caster_guid: u64, spell_id: u32, entry: u32) {
     let is_ritual = ctx
         .db
@@ -129,12 +137,15 @@ pub(crate) fn place(ctx: &ReducerContext, caster_guid: u64, spell_id: u32, entry
         .entry()
         .find(entry)
         .is_some_and(|template| template.type_id == go_type::SUMMONING_RITUAL);
+    let summons = ctx
+        .db
+        .game_gameobject_ritual()
+        .entry()
+        .find(entry)
+        .is_some_and(|data| summons_player(ctx, data.spell_id));
     let caster = ctx.db.game_world_entity().guid().find(caster_guid);
-    let (true, Some(_), Some(caster)) = (
-        is_ritual,
-        ctx.db.game_gameobject_ritual().entry().find(entry),
-        caster.filter(WorldEntity::is_player),
-    ) else {
+    let (true, true, Some(caster)) = (is_ritual, summons, caster.filter(WorldEntity::is_player))
+    else {
         log::info!("spell {spell_id} places GameObject {entry}, which has no cast path (no-op)");
         return;
     };
@@ -266,6 +277,18 @@ pub(crate) fn assist(
     }
     portal.state = PORTAL_ACTIVE;
     portal.update(ctx);
+    let Some(owner) = ctx.db.game_world_entity().guid().find(ritual.owner_guid) else {
+        return Ok(());
+    };
+    // vmangos Spell::prepare refuses the ritual spell before its cast bar starts.
+    if let Err(reason) = summon_refusal(ctx, &owner, ritual.summon_target_guid) {
+        crate::native::summon::cast_refused(ctx, owner.guid, data.spell_id, reason);
+        ctx.db.game_summoning_ritual().id().update(SummoningRitual {
+            phase: RitualPhase::Spent,
+            ..ritual
+        });
+        return Ok(());
+    }
     let cast_ms = ctx
         .db
         .game_spell()
@@ -282,12 +305,7 @@ pub(crate) fn assist(
         SpellCastEvent {
             target_guid: ritual.summon_target_guid,
             cast_time_ms: cast_ms,
-            ..SpellCastEvent::signal(
-                ctx,
-                ritual.owner_guid,
-                data.spell_id,
-                SpellCastEventKind::Start,
-            )
+            ..SpellCastEvent::signal_at(ctx, &owner, data.spell_id, SpellCastEventKind::Start)
         },
     );
     Ok(())
@@ -312,19 +330,15 @@ pub(crate) fn leave(ctx: &ReducerContext, character_guid: u64) -> bool {
     {
         return true;
     }
-    if summoning {
+    let owner = ctx.db.game_world_entity().guid().find(ritual.owner_guid);
+    if let (true, Some(owner)) = (summoning, owner) {
         let spell_id = data.as_ref().map_or(0, |data| data.spell_id);
         SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 is_interrupted: true,
                 failure_reason: CastRefusalReason::Interrupted.failure_code(),
-                ..SpellCastEvent::signal(
-                    ctx,
-                    ritual.owner_guid,
-                    spell_id,
-                    SpellCastEventKind::Interrupt,
-                )
+                ..SpellCastEvent::signal_at(ctx, &owner, spell_id, SpellCastEventKind::Interrupt)
             },
         );
     }
@@ -388,7 +402,12 @@ pub fn advance_summoning_ritual(ctx: &ReducerContext, row: SummoningRitualSchedu
 /// The ritual spell completes, as vmangos `Spell::cast` and `GameObject::FinishRitual`.
 fn finish(ctx: &ReducerContext, ritual: SummoningRitual, data: &GameObjectRitual) {
     let entities = ctx.db.game_world_entity();
-    let Some(owner) = entities.guid().find(ritual.owner_guid) else {
+    let portal = ctx.db.game_gameobject().guid().find(ritual.go_guid);
+    let (Some(owner), Some(portal), true) = (
+        entities.guid().find(ritual.owner_guid),
+        portal,
+        summons_player(ctx, data.spell_id),
+    ) else {
         end(ctx, ritual);
         return;
     };
@@ -421,26 +440,9 @@ fn finish(ctx: &ReducerContext, ritual: SummoningRitual, data: &GameObjectRitual
             ..SpellCastEvent::signal_at(ctx, &owner, data.spell_id, SpellCastEventKind::Go)
         },
     );
-    let summons = ctx
-        .db
-        .game_spell_effect()
-        .by_spell()
-        .filter(data.spell_id)
-        .any(|effect| effect.kind == E_SUMMON_PLAYER);
-    match ctx.db.game_gameobject().guid().find(ritual.go_guid) {
-        Some(portal) if summons => {
-            offer(
-                ctx,
-                &owner,
-                ritual.summon_target_guid,
-                landing_beside(portal.x, portal.y, portal.z, portal.orientation),
-            );
-        }
-        _ => log::info!(
-            "Summoning Ritual spell {} summons no player (no-op)",
-            data.spell_id
-        ),
-    }
+    let beside = landing_beside(portal.x, portal.y, portal.orientation);
+    let landing = on_floor(ctx, beside, portal.map_id, portal.instance_id, portal.z);
+    offer(ctx, &owner, ritual.summon_target_guid, landing);
     if let Some(spell) = ctx.db.game_spell().spell_id().find(ritual.spell_id) {
         crate::spell::start_spell_cooldown(ctx, owner.guid, spell.spell_id, spell.cooldown_ms);
     }
@@ -455,20 +457,36 @@ fn finish(ctx: &ReducerContext, ritual: SummoningRitual, data: &GameObjectRitual
     }
 }
 
-fn landing_beside(x: f32, y: f32, z: f32, orientation: f32) -> (f32, f32, f32) {
+fn landing_beside(x: f32, y: f32, orientation: f32) -> (f32, f32) {
     (
         x + LANDING_DISTANCE_YD * orientation.cos(),
         y + LANDING_DISTANCE_YD * orientation.sin(),
-        z,
+    )
+}
+
+fn on_floor(
+    ctx: &ReducerContext,
+    (x, y): (f32, f32),
+    map_id: u32,
+    instance_id: u64,
+    z: f32,
+) -> (f32, f32, f32) {
+    (
+        x,
+        y,
+        crate::terrain::snap_z(ctx, map_id, instance_id, x, y, z),
     )
 }
 
 /// vmangos `Spell::CheckCast` for SPELL_EFFECT_SUMMON_PLAYER.
-fn summon_refusal(
+pub(crate) fn summon_refusal(
     ctx: &ReducerContext,
     summoner: &WorldEntity,
     target_guid: u64,
 ) -> Result<(), CastRefusalReason> {
+    if !summoner.is_player() {
+        return Err(CastRefusalReason::BadTargets);
+    }
     let target = ctx
         .db
         .game_world_entity()
@@ -496,7 +514,8 @@ pub(crate) fn summon_to_caster(ctx: &ReducerContext, caster_guid: u64, target_gu
         log::info!("summon of {target_guid} by {caster_guid} refused: {reason:?}");
         return;
     }
-    let landing = landing_beside(caster.x, caster.y, caster.z, caster.orientation);
+    let beside = landing_beside(caster.x, caster.y, caster.orientation);
+    let landing = on_floor(ctx, beside, caster.map_id, caster.instance_id, caster.z);
     offer(ctx, &caster, target_guid, landing);
 }
 
@@ -533,9 +552,10 @@ pub(crate) fn accept(
         .find(target_guid)
         .filter(|offer| offer.summoner_guid == summoner_guid)
         .ok_or("no Summon Offer from that Character")?;
+    // vmangos SummonIfPossible ignores a lapsed offer; deleting it must not roll back.
     if offer.expires_at < crate::time::now(ctx) {
         offers.target_guid().delete(target_guid);
-        return Err("the Summon Offer lapsed".into());
+        return Ok(());
     }
     let target = crate::helpers::live_entity(ctx, target_guid)?;
     if target.dead || target.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0 {
@@ -567,10 +587,9 @@ mod tests {
 
     #[test]
     fn a_summoned_character_lands_beside_the_object_along_its_facing() {
-        let (x, y, z) = landing_beside(10.0, 20.0, 30.0, 0.0);
-        assert!((x - 11.277_778).abs() < 1e-4);
-        assert_eq!((y, z), (20.0, 30.0));
-        let (x, y, _) = landing_beside(10.0, 20.0, 30.0, std::f32::consts::FRAC_PI_2);
-        assert!((x - 10.0).abs() < 1e-4 && (y - 21.277_778).abs() < 1e-4);
+        let (x, y) = landing_beside(10.0, 20.0, 0.0);
+        assert!((x - 10.777_778).abs() < 1e-4 && (y - 20.0).abs() < 1e-4);
+        let (x, y) = landing_beside(10.0, 20.0, std::f32::consts::FRAC_PI_2);
+        assert!((x - 10.0).abs() < 1e-4 && (y - 20.777_778).abs() < 1e-4);
     }
 }

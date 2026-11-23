@@ -11,6 +11,7 @@ deliberate_deviations = []
 prerequisites = []
 tests = [
     { path = "module/tests/summoning_ritual.rs", function = "two_participants_complete_the_ritual_and_the_accepted_target_lands_at_the_portal", rung = "durable_module" },
+    { path = "module/tests/summoning_ritual.rs", function = "the_warlock_cancelling_during_the_ritual_cast_removes_the_portal_and_offers_nothing", rung = "durable_module" },
 ]
 
 [vmangos]

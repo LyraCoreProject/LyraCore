@@ -1437,7 +1437,6 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         | E_ENCHANT_ITEM_TEMPORARY
         | E_SUMMON_OBJECT => T_SELF,
         E_DUEL => T_TARGET_ANY,
-        E_SUMMON_PLAYER => T_TARGET_ALLY,
         _ => target,
     };
     let overrides = header.overrides;

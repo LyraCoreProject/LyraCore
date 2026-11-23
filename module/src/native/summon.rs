@@ -8,6 +8,7 @@ use lyracore_protocol::{
 use spacetimedb::ReducerContext;
 
 use super::Unhandled;
+use crate::spell::CastRefusalReason;
 use crate::summoning_ritual::{SummonOffer, SUMMON_OFFER_MICROS};
 
 pub(super) fn receive(
@@ -53,6 +54,20 @@ pub(crate) fn channel_ended(ctx: &ReducerContext, guid: u64) {
         guid,
         ServerOpcodeMessage::MSG_CHANNEL_UPDATE(MSG_CHANNEL_UPDATE_Server { time: 0 }),
         super::EncodeFailure::Panic,
+    );
+}
+
+pub(crate) fn cast_refused(
+    ctx: &ReducerContext,
+    guid: u64,
+    spell_id: u32,
+    reason: CastRefusalReason,
+) {
+    super::send_raw_to_character(
+        ctx,
+        guid,
+        codec::SMSG_CAST_RESULT_OPCODE,
+        codec::build_cast_result_failed(spell_id, super::cast::cast_result(reason)),
     );
 }
 

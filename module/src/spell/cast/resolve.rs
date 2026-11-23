@@ -1164,11 +1164,12 @@ enum CastGate {
     CasterControl,
     Tame,
     Guardian,
+    SummonTarget,
     EffectData,
 }
 
 /// vmangos `Spell::CheckCast` order, cut down to the Gates LyraCore has.
-const CHECK_CAST_ORDER: [CastGate; 33] = [
+const CHECK_CAST_ORDER: [CastGate; 34] = [
     CastGate::SpellReady,
     CastGate::CasterAlive,
     CastGate::CasterLevel,
@@ -1201,6 +1202,7 @@ const CHECK_CAST_ORDER: [CastGate; 33] = [
     CastGate::CasterControl,
     CastGate::Tame,
     CastGate::Guardian,
+    CastGate::SummonTarget,
     CastGate::EffectData,
 ];
 
@@ -1482,12 +1484,36 @@ impl GateCheck<'_> {
                 .iter()
                 .filter(|effect| effect.kind == E_SUMMON_GUARDIANS)
                 .try_for_each(|effect| crate::creatures::guardian::check(ctx, caster, effect)),
+            CastGate::SummonTarget => self.check_summon_target(),
             CastGate::EffectData => check_effect_data(ctx, spell),
         }
     }
 
     fn range_leeway_yd(&self) -> f32 {
         range_leeway_yd(self.run.is_strict(), self.caster.is_player())
+    }
+
+    fn check_summon_target(&self) -> Result<(), CastGateRefusal> {
+        let target_guid = self.request.target_guid;
+        if !self
+            .spell
+            .effects
+            .iter()
+            .any(|effect| effect.kind == crate::spell::E_SUMMON_PLAYER)
+        {
+            return Ok(());
+        }
+        crate::summoning_ritual::summon_refusal(self.ctx, self.caster, target_guid).map_err(
+            |reason| {
+                CastGateRefusal::other(
+                    reason,
+                    format!(
+                        "spell {} cannot summon {target_guid}",
+                        self.request.spell_id
+                    ),
+                )
+            },
+        )
     }
 
     fn check_caster_alive(&self) -> Result<(), CastGateRefusal> {
@@ -2456,7 +2482,7 @@ mod gate_order_tests {
         assert_before(
             START,
             G::CasterControl,
-            &[G::Tame, G::Guardian, G::EffectData],
+            &[G::Tame, G::Guardian, G::SummonTarget, G::EffectData],
         );
     }
 

@@ -543,6 +543,12 @@ pub fn debug_accept_summon(
 }
 
 #[reducer]
+pub fn debug_cancel_cast(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+    let caster = crate::helpers::live_entity(ctx, character_guid)?;
+    Ok(crate::spell::do_cancel_cast(ctx, caster)?)
+}
+
+#[reducer]
 pub fn debug_use_gameobject_entry(
     ctx: &ReducerContext,
     character_guid: u64,

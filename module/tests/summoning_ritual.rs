@@ -26,9 +26,10 @@ const REQUIRED_PARTICIPANTS: u32 = 3;
 const RITUAL_DURATION_MS: u32 = 600_000;
 const RITUAL_EFFECT_CAST_MS: u32 = 5_000;
 const ALTAR: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
-const SPELL_CAST_EVENT_INTERRUPT: &str = "3";
-// CastRefusalReason::BadTargets.
-const BAD_TARGETS: &str = "23";
+// The ritual spell's cast time, with a margin for the scheduler.
+const PAST_THE_RITUAL_CAST: std::time::Duration = std::time::Duration::from_secs(7);
+// Module state 1 is the client's GO_STATE_ACTIVE.
+const PORTAL_ACTIVE: u8 = 1;
 
 fn start(name: &str) -> Standalone {
     let mut realm = Standalone::start(name);
@@ -144,7 +145,7 @@ fn stage_ritual(realm: &Standalone) {
 fn portal(realm: &Standalone) -> Option<Row> {
     realm
         .query_rows(&format!(
-            "SELECT guid, x, y, z FROM game_gameobject WHERE template_entry = {SUMMONING_PORTAL}"
+            "SELECT guid, state, x, y, z FROM game_gameobject WHERE template_entry = {SUMMONING_PORTAL}"
         ))
         .into_iter()
         .next()
@@ -239,7 +240,7 @@ fn two_participants_complete_the_ritual_and_the_accepted_target_lands_at_the_por
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_target_outside_the_warlocks_group_is_refused_and_offered_nothing() {
+fn a_target_outside_the_warlocks_group_is_refused_before_the_ritual_spell_starts() {
     let realm = start("summoning-ritual-ungrouped-target");
     stage_group(&realm, WARLOCK, &[PARTICIPANT_A, PARTICIPANT_B]);
     let casts = realm.subscribe(&[&format!(
@@ -248,27 +249,55 @@ fn a_target_outside_the_warlocks_group_is_refused_and_offered_nothing() {
     let portal_guid = open_ritual(&realm);
 
     assist(&realm, &portal_guid);
+    std::thread::sleep(PAST_THE_RITUAL_CAST);
 
-    let refused = |rows: Vec<Row>| {
-        rows.into_iter().any(|row| {
-            row["spell_id"] == RITUAL_OF_SUMMONING_EFFECT.to_string()
-                && row["kind"] == SPELL_CAST_EVENT_INTERRUPT
-                && row["failure_reason"] == BAD_TARGETS
-        })
-    };
     assert!(
-        poll_until(POLL_TIMEOUT, || refused(event_rows(
-            &casts,
-            "game_spell_cast_event_live"
-        ))),
-        "the ritual spell is refused with BAD_TARGETS for a target outside the group"
+        event_rows(&casts, "game_spell_cast_event_live")
+            .iter()
+            .all(|row| row["spell_id"] != RITUAL_OF_SUMMONING_EFFECT.to_string()),
+        "a refused ritual spell starts no cast bar and never completes"
     );
     assert!(
         summon_offers(&realm).is_empty(),
         "a refused ritual offers no summon"
     );
+    assert_eq!(
+        portal(&realm).map(|portal| portal["state"].clone()),
+        Some(PORTAL_ACTIVE.to_string()),
+        "as in vmangos, the spent portal stays active while the Warlock channels"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_warlock_cancelling_during_the_ritual_cast_removes_the_portal_and_offers_nothing() {
+    let realm = start("summoning-ritual-cancelled");
+    stage_group(&realm, WARLOCK, &[PARTICIPANT_A, PARTICIPANT_B, TARGET]);
+    let portal_guid = open_ritual(&realm);
+    let before = position(&entity(&realm, TARGET));
+
+    assist(&realm, &portal_guid);
+    realm.assert_call("debug_cancel_cast", &[&WARLOCK.to_string()]);
+
     assert!(
-        portal(&realm).is_some(),
-        "as in vmangos, the spent portal stays while the Warlock channels"
+        portal(&realm).is_none(),
+        "a cancelled ritual removes its portal"
+    );
+    std::thread::sleep(PAST_THE_RITUAL_CAST);
+    assert!(
+        summon_offers(&realm).is_empty(),
+        "a cancelled ritual offers no summon"
+    );
+    let refused = realm.call(
+        "debug_accept_summon",
+        &[&TARGET.to_string(), &WARLOCK.to_string()],
+    );
+    assert!(
+        !refused.status.success(),
+        "a summon response without an offer is refused"
+    );
+    assert!(
+        distance(position(&entity(&realm, TARGET)), before) < 0.01,
+        "a summon response without an offer leaves the target in place"
     );
 }
