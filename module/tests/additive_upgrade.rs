@@ -16,6 +16,12 @@ const LEGACY_NOTIFICATIONS: &[&str] = &[
     "game_emote_event",
 ];
 
+// Columns END-appended after the upgrade baseline; every other published column must stay intact.
+const APPENDED_NOTIFICATION_COLUMNS: &[(&str, &[&str])] = &[(
+    "game_spell_cast_event",
+    &["blocked_amount", "strike_swing_report"],
+)];
+
 fn assert_saved_taxi_flight_upgrade(baseline: &[u8]) {
     let mut shard = Standalone::start("taxi-resume-schema-upgrade");
     shard.publish_module_bytes(baseline);
@@ -172,7 +178,7 @@ fn populated_old_module_upgrades_without_clearing() {
     let new_schema = shard.describe();
     for name in LEGACY_NOTIFICATIONS {
         assert_eq!(
-            table_schema(&new_schema, name),
+            without_appended_columns(table_schema(&new_schema, name), name),
             table_schema(&old_schema, name),
             "the published schema of {name} must stay intact"
         );
@@ -289,6 +295,24 @@ fn table<'a>(schema: &'a Value, name: &str) -> &'a Value {
         .iter()
         .find(|table| table["source_name"] == name)
         .unwrap_or_else(|| panic!("missing table {name}"))
+}
+
+fn without_appended_columns(mut definition: Value, name: &str) -> Value {
+    let appended = APPENDED_NOTIFICATION_COLUMNS
+        .iter()
+        .find(|(table, _)| *table == name)
+        .map_or(&[][..], |(_, columns)| *columns);
+    let columns = definition["row_type"]["Product"]["elements"]
+        .as_array_mut()
+        .expect("table columns");
+    for column in appended.iter().rev() {
+        let last = columns.pop().expect("an appended column");
+        assert_eq!(
+            last["name"]["some"], *column,
+            "{name} must append {column} at the end"
+        );
+    }
+    definition
 }
 
 fn table_schema(schema: &Value, name: &str) -> Value {
