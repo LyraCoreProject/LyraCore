@@ -27,6 +27,7 @@ const MENDING_TOUCH: u32 = 5_091_405;
 const IGNORE_CONTACT: u32 = 5_091_406;
 const DUEL: u64 = 5_091_407;
 const ABSORB_SHIELD: u32 = 5_091_408;
+const RAGE_BURST: u32 = 5_091_409;
 const HUMAN: &str = "1";
 const ORC: &str = "2";
 const CMSG_TOGGLE_PVP: u32 = 0x253;
@@ -51,7 +52,7 @@ fn an_unflagged_enemy_character_is_outside_an_area_spell_until_it_flags() {
         shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
     }
     hostile_factions(&shard, mage, rival);
-    area_spell(&shard);
+    area_spell(&shard, ARCANE_BURST, 0);
     let mage_flags = flags(&shard, mage).0;
     let rival_flags = flags(&shard, rival).0;
     let rival_health = health(&shard, rival);
@@ -94,6 +95,35 @@ fn an_unflagged_enemy_character_is_outside_an_area_spell_until_it_flags() {
     assert!(
         timer(&shard, rival).is_some(),
         "harm from a flagged Character refreshes the victim's flag"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_spell_with_a_cost_on_a_flagged_enemy_flags_its_caster() {
+    let (shard, account) = realm("pvp-cost-spell");
+    let warrior = character(&shard, &account, "Warrior", HUMAN);
+    let rival = character(&shard, &account, "Rival", HUMAN);
+    for guid in [warrior, rival] {
+        shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
+    }
+    hostile_factions(&shard, warrior, rival);
+    area_spell(&shard, RAGE_BURST, 100);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags = {} WHERE guid = {rival}",
+        flags(&shard, rival).0 | unit_flags::PVP
+    ));
+    shard.assert_call("debug_set_power", &[&warrior.to_string(), "1000"]);
+
+    shard.assert_call(
+        "debug_force_cast",
+        &[&warrior.to_string(), &RAGE_BURST.to_string()],
+    );
+    assert!(power(&shard, warrior) <= 900, "the cast spends its rage");
+    assert_ne!(
+        flags(&shard, warrior).0 & unit_flags::PVP,
+        0,
+        "vmangos DoAllEffectOnTarget flags the caster after it takes the cost"
     );
 }
 
@@ -493,24 +523,28 @@ fn hostile_factions(shard: &Standalone, alliance: u64, horde: u64) {
     }
 }
 
-fn area_spell(shard: &Standalone) {
+/// An enemy-area damage spell; a nonzero cost is in rage, power type 1.
+fn area_spell(shard: &Standalone, spell: u32, rage_cost: u32) {
+    let power_type = u8::from(rage_cost > 0);
     shard.insert_row(
         "game_spell",
         &[
-            ("spell_id", &ARCANE_BURST),
+            ("spell_id", &spell),
             ("name", &"PvP area burst fixture"),
             ("school_mask", &64),
             ("is_negative", &true),
             ("gcd_ms", &0),
             ("cooldown_ms", &0),
             ("spell_level", &1),
+            ("power_type", &power_type),
+            ("cost", &rage_cost),
         ],
     );
     shard.insert_row(
         "game_spell_effect",
         &[
-            ("id", &packed_spell_effect_id(ARCANE_BURST, 0)),
-            ("spell_id", &ARCANE_BURST),
+            ("id", &packed_spell_effect_id(spell, 0)),
+            ("spell_id", &spell),
             ("kind", &E_DAMAGE),
             ("base_points", &5),
             ("target", &T_AREA_ENEMY),
@@ -691,6 +725,15 @@ fn flags(shard: &Standalone, guid: u64) -> (u32, u32) {
         "SELECT unit_flags, player_flags FROM game_world_entity WHERE guid = {guid}"
     ))[0];
     (number(row, "unit_flags"), number(row, "player_flags"))
+}
+
+fn power(shard: &Standalone, guid: u64) -> u32 {
+    number(
+        &shard.query_rows(&format!(
+            "SELECT power FROM game_world_entity WHERE guid = {guid}"
+        ))[0],
+        "power",
+    )
 }
 
 fn health(shard: &Standalone, guid: u64) -> u32 {

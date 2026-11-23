@@ -164,6 +164,10 @@ fn resolve_loaded_cast(
         .is_some_and(|craft| craft.used_up_item.is_some());
     // The GO precedes the cost, dismount and effect packets, so the client releases its cast slot.
     let launched = launch_cast(ctx, spell, request, CastOrigin::Direct(phase));
+    // Charge the live row, so the cost write keeps whatever the target pass wrote.
+    if let Ok(live) = crate::helpers::live_entity(ctx, caster_guid) {
+        caster = live;
+    }
 
     // Flush the cost before effects so self-heals read the charged caster row.
     if caster.is_player() && hdr.cost > 0 && !request.is_item_cast() && !queues_next_swing(effects)
@@ -593,9 +597,7 @@ fn engage_refusing_unit(ctx: &ReducerContext, caster_guid: u64, unit_guid: u64) 
     }
 }
 
-/// Each target's admission, immunity and hit roll for one cast. vmangos `Spell::AddUnitTarget`
-/// settles them before any effect runs, so the GO can name every outcome. A target rolls once
-/// for the whole spell (CONTEXT.md "Cast Miss"); the caster never rolls.
+/// Each target's immunity and hit roll, settled before any effect runs (vmangos `AddUnitTarget`).
 struct CastTargets<'a> {
     ctx: &'a ReducerContext,
     spell: &'a LoadedSpell,
@@ -604,8 +606,13 @@ struct CastTargets<'a> {
     origin: CastOrigin,
     table: HitTable,
     rolls_hit: bool,
+    // vmangos rolls the main hand per target, landed or avoided; LyraCore skips Chance on Hit.
     rolls_weapon: bool,
+    // One hit roll per target for the whole spell (CONTEXT.md "Cast Miss"); never the caster.
     rolls: std::collections::HashMap<u64, AttackOutcome>,
+    // Rolled targets in roll order, and those whose reacts and procs already ran.
+    rolled: Vec<u64>,
+    answered: std::collections::HashSet<u64>,
     immunity: ImmuneRefusals,
     // Keyed by effect index and target; `None` when the target is immune to the whole spell.
     admitted: std::collections::HashMap<(u8, u64), Option<(AttackOutcome, bool)>>,
@@ -642,10 +649,11 @@ impl<'a> CastTargets<'a> {
             origin,
             table,
             rolls_hit,
-            // vmangos rolls the main hand per target, landed or avoided; not for a Chance on Hit cast.
             rolls_weapon: hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0
                 && !matches!(origin, CastOrigin::ChanceOnHit),
             rolls: std::collections::HashMap::new(),
+            rolled: Vec::new(),
+            answered: std::collections::HashSet::new(),
             immunity: ImmuneRefusals::default(),
             admitted: std::collections::HashMap::new(),
             weapon_targets: Vec::new(),
@@ -679,10 +687,6 @@ impl<'a> CastTargets<'a> {
         }
         let (ctx, caster_guid, spell) = (self.ctx, self.caster_guid, self.spell);
         let hdr = &spell.header;
-        // Before the hit roll, so a miss counts; vmangos skips a cast an aura triggers.
-        if t != caster_guid && !matches!(self.origin, CastOrigin::AuraTriggered) {
-            crate::pvp::spell_targeted(ctx, caster_guid, t, e);
-        }
         if self.rolls_weapon && t != caster_guid {
             remember_hit_target(&mut self.weapon_targets, &mut self.seen_weapon_targets, t);
         }
@@ -693,12 +697,11 @@ impl<'a> CastTargets<'a> {
             None
         } else {
             let roll = if self.rolls_hit && t != caster_guid {
-                let (level, table, triggered) =
-                    (self.level, self.table, self.origin.is_triggered());
-                *self
-                    .rolls
-                    .entry(t)
-                    .or_insert_with(|| hit_roll(ctx, caster_guid, level, t, table, hdr, triggered))
+                let (level, table) = (self.level, self.table);
+                *self.rolls.entry(t).or_insert_with(|| {
+                    self.rolled.push(t);
+                    hit_roll(ctx, caster_guid, level, t, table, hdr)
+                })
             } else {
                 AttackOutcome::Normal
             };
@@ -708,6 +711,28 @@ impl<'a> CastTargets<'a> {
         };
         self.admitted.insert((e.effect_index, t), admission);
         admission
+    }
+
+    /// Runs the target's weapon-roll reacts and procs once, after the GO and the cost.
+    fn answer(&mut self, t: u64) {
+        let HitTable::Weapon { ranged } = self.table else {
+            return;
+        };
+        let Some(&roll) = self.rolls.get(&t) else {
+            return;
+        };
+        if self.answered.insert(t) {
+            let triggered = self.origin.is_triggered();
+            let hdr = &self.spell.header;
+            answer_weapon_roll(self.ctx, self.caster_guid, t, roll, ranged, hdr, triggered);
+        }
+    }
+
+    /// Answers the rolled targets that no effect reached after the target pass.
+    fn answer_rest(&mut self) {
+        for t in self.rolled.clone() {
+            self.answer(t);
+        }
     }
 
     fn roll(&self, t: u64) -> AttackOutcome {
@@ -727,7 +752,7 @@ impl<'a> CastTargets<'a> {
     }
 }
 
-/// A cast whose targets are settled and whose GO went out.
+/// A cast whose targets are settled; its GO went out unless it queues a strike.
 struct Launched<'a> {
     targets: CastTargets<'a>,
     row: SpellCastEvent,
@@ -809,9 +834,14 @@ fn run_spell_effects(
             if !targets.may_reach(t) {
                 continue;
             }
+            // After the GO and cost, so a miss counts; vmangos skips a cast an aura triggers.
+            if t != caster_guid && !matches!(origin, CastOrigin::AuraTriggered) {
+                crate::pvp::spell_targeted(ctx, caster_guid, t, e);
+            }
             let Some((roll, immune)) = targets.admit(e, t) else {
                 continue;
             };
+            targets.answer(t);
             if roll.is_avoided() {
                 continue;
             }
@@ -867,6 +897,7 @@ fn run_spell_effects(
             }
         }
     }
+    targets.answer_rest();
     answer_whole_refusals(ctx, &targets.immunity, caster_guid, origin, spell);
     // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
     if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0
@@ -1051,7 +1082,6 @@ fn hit_roll(
     target_guid: u64,
     table: HitTable,
     spell: &Spell,
-    triggered: bool,
 ) -> AttackOutcome {
     let HitTable::Weapon { ranged } = table else {
         return if super::targeting::spell_misses(ctx, level, target_guid, spell) {
@@ -1078,25 +1108,41 @@ fn hit_roll(
                 attack_type,
                 Some(crate::combat::DeliveredSpell::cast(spell)),
             );
-            arm_avoidance_reacts(ctx, caster_guid, target_guid, roll);
-            if !triggered {
-                let source = if ranged {
-                    crate::combat::HitSource::Ranged
-                } else {
-                    crate::combat::HitSource::MeleeSpell
-                };
-                crate::spell::proc::run_unlanded_proc_pass(
-                    ctx,
-                    caster_guid,
-                    target_guid,
-                    &crate::combat::Hit::spell(source, spell.spell_id, false),
-                    roll,
-                    (0, 0),
-                );
-            }
             roll
         }
         _ => AttackOutcome::Normal,
+    }
+}
+
+/// The reacts and unlanded procs a weapon roll arms, as vmangos `Spell::DoAllEffectOnTarget`.
+fn answer_weapon_roll(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    target_guid: u64,
+    roll: AttackOutcome,
+    ranged: bool,
+    spell: &Spell,
+    triggered: bool,
+) {
+    let entities = ctx.db.game_world_entity();
+    if entities.guid().find(caster_guid).is_none() || entities.guid().find(target_guid).is_none() {
+        return;
+    }
+    arm_avoidance_reacts(ctx, caster_guid, target_guid, roll);
+    if !triggered {
+        let source = if ranged {
+            crate::combat::HitSource::Ranged
+        } else {
+            crate::combat::HitSource::MeleeSpell
+        };
+        crate::spell::proc::run_unlanded_proc_pass(
+            ctx,
+            caster_guid,
+            target_guid,
+            &crate::combat::Hit::spell(source, spell.spell_id, false),
+            roll,
+            (0, 0),
+        );
     }
 }
 

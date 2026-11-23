@@ -495,6 +495,14 @@ fn observe(character: &mut Character, routed: &[RoutedPacket]) -> Result<()> {
         .with_context(|| format!("Character {}: {packets:?}", character.guid))
 }
 
+fn own_go(packet: &RoutedPacket, caster: u64) -> bool {
+    packet.opcode == spec::SPELL_GO
+        && decode(packet.opcode, &packet.body).is_ok_and(|go| {
+            go.fields.get("caster") == Some(&Field::Guid(caster))
+                && go.fields.get("spell") == Some(&Field::Unsigned(spec::SPELL_ID.into()))
+        })
+}
+
 /// Whether the packet is an SMSG_UPDATE_OBJECT that holds one values block for `guid`.
 fn values_update_of(packet: &RoutedPacket, guid: u64) -> bool {
     // Block count u32 and no transport, then UPDATETYPE_VALUES and the packed guid.
@@ -544,6 +552,18 @@ fn a_cast_weapon_strike_reaches_its_caster_as_one_go_that_names_its_outcome() ->
         force(&shard, &shard_name, character.guid, caster_aura);
         force(&shard, &shard_name, character.target, target_aura);
     }
+    let forced = advance_and_drain(&mut receiver)?;
+    for character in &mut characters {
+        character.delivery.route_rows(forced.clone())?;
+    }
+    let overpower = |guid: u64| -> Result<u64> {
+        let rows = shard.query_database_rows(
+            &shard_name,
+            &format!("SELECT overpower_until_ms FROM game_world_entity WHERE guid = {guid}"),
+        );
+        Ok(rows.first().context("dodging Character")?["overpower_until_ms"].parse()?)
+    };
+    let overpower_before = overpower(characters[0].guid)?;
 
     let packets = cast_round(&mut receiver, &mut characters, &[0, 1, 3])?;
     for index in [0, 1, 3] {
@@ -554,13 +574,17 @@ fn a_cast_weapon_strike_reaches_its_caster_as_one_go_that_names_its_outcome() ->
         "a certain dodge"
     );
     ensure!(
+        overpower(characters[0].guid)? > overpower_before,
+        "a dodged Weapon Strike that costs rage still arms Overpower"
+    );
+    ensure!(
         characters[1].counts.0 == [0, 0, 1, 0, 0, 0],
         "a certain parry"
     );
     ensure!(characters[3].counts.trials() == 1 && characters[3].counts.0[..3] == [0, 0, 0]);
     let landed = &packets[3];
     let position = |found: &dyn Fn(&RoutedPacket) -> bool| landed.iter().position(found);
-    let go = position(&|packet| packet.opcode == spec::SPELL_GO);
+    let go = position(&|packet| own_go(packet, characters[3].guid));
     let log = position(&|packet| packet.opcode == 0x0250);
     let debuff = position(&|packet| values_update_of(packet, characters[3].target));
     // The GO precedes the effects' packets, or the client keeps its cast slot busy.

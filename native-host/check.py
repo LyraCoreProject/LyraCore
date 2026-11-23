@@ -14,7 +14,7 @@ import traceback
 import admission
 from eventai_speech import check_eventai_speech
 from headless import (AUTH_CHALLENGE, Logon, cast, creates, destroys, item_pointer, packed_guid, read_exact,
-                      spell_go_misses, spell_id, teleport_ack, values)
+                      spell_go_misses, spell_go_parts, spell_id, teleport_ack, values)
 from host import MODULE, TRANSFER_SECONDS, Host
 from operator_items import check_operator_items
 from operator_spells import check_operator_spells
@@ -4692,14 +4692,6 @@ def check_auras(host):
     client.collect()
 
 
-def spell_go_shape(body):
-    """Returns an SMSG_SPELL_GO's hit count, miss count and SpellCastTargets bytes."""
-    for _ in range(2):
-        body = body[1 + body[0].bit_count():]
-    offset = 7 + body[6] * 8
-    return body[6], body[offset], body[offset + 1 + body[offset] * 9:]
-
-
 def check_ground_cast_go(host):
     client, peer = native_and_peer(host, at=(0, 0, 0, 0))
     area, ground = 5090641, 5090642
@@ -4728,13 +4720,13 @@ def check_ground_cast_go(host):
     # A persistent area hits the ground: its GO lists no unit and keeps the caster's target block.
     peer.send(0x12e, cast(area))
     for connection in (peer, client):
-        assert [spell_go_shape(body) for body in gos(connection, area, [])] == [(0, 0, b'\0\0')]
+        assert [spell_go_parts(body) for body in gos(connection, area, [])] == [([], [], b'\0\0')]
     # vmangos writes a timed ground cast's destination into its completion GO.
     point = (10.0, 6.0, 0.0)
     peer.send(0x12e, struct.pack('<IHfff', ground, 0x40, *point))
-    named = (0, 0, struct.pack('<Hfff', 0x40, *point))
+    named = ([], [], struct.pack('<Hfff', 0x40, *point))
     for connection in (peer, client):
-        assert [spell_go_shape(body) for body in gos(connection, ground, [])] == [named]
+        assert [spell_go_parts(body) for body in gos(connection, ground, [])] == [named]
     peer.collect()
     client.collect()
 

@@ -237,12 +237,18 @@ def spell_id(body):
     return struct.unpack_from('<I', body)[0]
 
 
-def spell_go_misses(body):
+def spell_go_parts(body):
+    """Splits an SMSG_SPELL_GO body into its hit guids, its (guid, reason) misses and its target bytes."""
     for _ in range(2):
         body = body[1 + body[0].bit_count():]
+    hits = [struct.unpack_from('<Q', body, 7 + index * 8)[0] for index in range(body[6])]
     offset = 7 + body[6] * 8
-    return [struct.unpack_from('<QB', body, offset + 1 + index * 9)
-            for index in range(body[offset])]
+    misses = [struct.unpack_from('<QB', body, offset + 1 + index * 9) for index in range(body[offset])]
+    return hits, misses, body[offset + 1 + len(misses) * 9:]
+
+
+def spell_go_misses(body):
+    return spell_go_parts(body)[1]
 
 
 def creates(packets):

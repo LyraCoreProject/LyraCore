@@ -872,7 +872,7 @@ pub struct SpellCastEvent {
     pub is_proc_log: bool,
     #[default(0u8)]
     pub swing_hit_info: u8,
-    // The caster's own cast handler already sent it START and CAST_RESULT.
+    // From the caster's CMSG_CAST_SPELL; its handler sends an instant cast's START and CAST_RESULT.
     #[default(false)]
     pub client_initiated: bool,
     // SpacetimeDB encodes an untyped zero as u32; u64 defaults must be typed.
