@@ -7,7 +7,7 @@ use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timest
 use crate::{
     game_corpse, game_creature_move_schedule, game_creature_spawn, game_creature_template,
     game_creature_waypoint, game_encounter_spawn, game_gameobject, game_gameobject_template,
-    game_group, game_group_member, game_world_entity,
+    game_group, game_group_member, game_map, game_world_entity,
 };
 
 pub(crate) use lyracore_shared::instance::is_dungeon_map;
@@ -348,6 +348,34 @@ pub(crate) fn instance_removal_due(
         && instance_party != 0
         && own_group != Some(instance_party)
         && gm_level == 0
+}
+
+const MAP_TYPE_RAID: u32 = 2;
+
+fn raid_refuses(inside: bool, in_raid: bool, gm_level: u8) -> bool {
+    !inside && !in_raid && gm_level == 0
+}
+
+pub(crate) fn raid_entry_refused(ctx: &ReducerContext, character_guid: u64, map_id: u32) -> bool {
+    if !ctx
+        .db
+        .game_map()
+        .id()
+        .find(map_id)
+        .is_some_and(|map| map.map_type == MAP_TYPE_RAID)
+    {
+        return false;
+    }
+    let inside = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(character_guid)
+        .is_some_and(|entity| entity.map_id == map_id);
+    let gm_level = crate::helpers::character_by_guid(ctx, character_guid).map_or(0, |character| {
+        crate::auth::gm_level(ctx, character.account_id)
+    });
+    raid_refuses(inside, crate::group::in_raid(ctx, character_guid), gm_level)
 }
 
 fn binding_is_local(ctx: &ReducerContext, map: u32, world: Option<spacetimedb::Identity>) -> bool {
@@ -1298,6 +1326,14 @@ mod tests {
             "an instance of an open-world map is not a dungeon"
         );
         assert!(!instance_removal_due(36, 7, 42, None, 1), "a GM");
+    }
+
+    #[test]
+    fn only_a_raid_member_or_a_gm_enters_a_raid_map() {
+        assert!(raid_refuses(false, false, 0), "solo or party");
+        assert!(!raid_refuses(false, true, 0), "raid member");
+        assert!(!raid_refuses(false, false, 1), "a GM");
+        assert!(!raid_refuses(true, false, 0), "already inside");
     }
 
     #[test]

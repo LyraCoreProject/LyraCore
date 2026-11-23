@@ -25,6 +25,11 @@ pub(crate) fn removal_changed(ctx: &ReducerContext, guid: u64, row: Option<&Inst
     super::send_raw_to_character(ctx, guid, opcode, body);
 }
 
+pub(crate) fn raid_group_required(ctx: &ReducerContext, guid: u64) {
+    let (opcode, body) = codec::build_raid_group_required();
+    super::send_raw_to_character(ctx, guid, opcode, body);
+}
+
 pub(super) fn replay(ctx: &ReducerContext, guid: u64) {
     let row = ctx.db.game_instance_removal().character_guid().find(guid);
     removal_changed(ctx, guid, row.as_ref());

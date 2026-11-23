@@ -613,6 +613,12 @@ pub(crate) fn teleport_gate(
             "Character transaction is settling",
         ));
     }
+    if crate::instance::raid_entry_refused(ctx, player_guid, map_id) {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::Prerequisite,
+            "a Raid is required to enter this map",
+        ));
+    }
     Ok(destination)
 }
 
