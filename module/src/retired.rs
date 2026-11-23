@@ -252,3 +252,10 @@ pub struct SpellCooldown {
     pub caster_guid: u64,
     pub ready_at: Timestamp,
 }
+
+#[table(accessor = game_quest_reward_spell)]
+pub struct QuestRewardSpell {
+    #[primary_key]
+    pub quest_entry: u32,
+    pub spell_id: u32,
+}

@@ -112,9 +112,9 @@ pub struct LearnEffect {
     pub trigger_spell: u32,
 }
 
-// The importer turns LEARN_SPELL into E_SCRIPTED. Stances and forms carry a trigger spell too.
+// Stances and forms carry a trigger spell too, so only a learn effect names a learn target.
 pub fn learn_target_trigger(kind: u8, trigger_spell: u32) -> Option<u32> {
-    (trigger_spell != 0 && kind == crate::spell::taxonomy::E_SCRIPTED).then_some(trigger_spell)
+    (trigger_spell != 0 && kind == crate::spell::taxonomy::E_LEARN_SPELL).then_some(trigger_spell)
 }
 
 pub fn resolve_learn_target(spell_id: u32, effects: impl IntoIterator<Item = LearnEffect>) -> u32 {
@@ -214,7 +214,7 @@ mod rule_tests {
     use super::*;
     use crate::spell::taxonomy::{
         A_FLAG, A_MOD_STAT, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SHAPESHIFT,
-        A_STEALTH, E_DAMAGE, E_SCRIPTED, E_SET_STANCE, E_TRIGGER,
+        A_STEALTH, E_DAMAGE, E_LEARN_SPELL, E_SCRIPTED, E_SET_STANCE, E_TRIGGER,
     };
 
     #[test]
@@ -223,19 +223,19 @@ mod rule_tests {
             LearnEffect {
                 index: 2,
                 id: 1,
-                kind: E_SCRIPTED,
+                kind: E_LEARN_SPELL,
                 trigger_spell: 100,
             },
             LearnEffect {
                 index: 1,
                 id: 8,
-                kind: E_SCRIPTED,
+                kind: E_LEARN_SPELL,
                 trigger_spell: 200,
             },
             LearnEffect {
                 index: 1,
                 id: 7,
-                kind: E_SCRIPTED,
+                kind: E_LEARN_SPELL,
                 trigger_spell: 300,
             },
         ];
@@ -298,11 +298,22 @@ mod rule_tests {
         let learn = |trigger_spell| LearnEffect {
             index: 0,
             id: 1,
-            kind: E_SCRIPTED,
+            kind: E_LEARN_SPELL,
             trigger_spell,
         };
         assert_eq!(resolve_learn_target(1873, [learn(639)]), 639);
         assert_eq!(resolve_learn_target(1873, [learn(0)]), 1873);
+    }
+
+    #[test]
+    fn a_scripted_effect_with_a_trigger_spell_is_not_a_learn_effect() {
+        let scripted = LearnEffect {
+            index: 0,
+            id: 1,
+            kind: E_SCRIPTED,
+            trigger_spell: 639,
+        };
+        assert_eq!(resolve_learn_target(1873, [scripted]), 1873);
     }
 
     #[test]

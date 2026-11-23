@@ -127,18 +127,6 @@ fn source() -> WorldSource {
             ("patch_max", N(last)),
         ]
     };
-    let spell = |build, target| {
-        [
-            ("entry", N(500)),
-            ("build", N(build)),
-            ("effect1", N(36)),
-            ("effect2", N(0)),
-            ("effect3", N(0)),
-            ("effectTriggerSpell1", N(target)),
-            ("effectTriggerSpell2", N(0)),
-            ("effectTriggerSpell3", N(0)),
-        ]
-    };
     let loot_columns = &[
         ("entry", "INTEGER"),
         ("item", "INTEGER"),
@@ -205,21 +193,6 @@ fn source() -> WorldSource {
             rows: &[],
         },
         FixtureTable {
-            name: "spell_template",
-            columns: &[
-                ("entry", "INTEGER"),
-                ("build", "INTEGER"),
-                ("effect1", "INTEGER"),
-                ("effect2", "INTEGER"),
-                ("effect3", "INTEGER"),
-                ("effectTriggerSpell1", "INTEGER"),
-                ("effectTriggerSpell2", "INTEGER"),
-                ("effectTriggerSpell3", "INTEGER"),
-            ],
-            key: &["entry", "build"],
-            rows: &[&spell(5860, 599), &spell(5875, 600), &spell(6000, 601)],
-        },
-        FixtureTable {
             name: "areatrigger_involvedrelation",
             columns: &[("id", "INTEGER"), ("quest", "INTEGER")],
             key: &["id"],
@@ -250,7 +223,7 @@ fn source() -> WorldSource {
 }
 
 #[test]
-fn named_quests_select_revisions_relations_mail_money_xp_flags_and_learn_spells() {
+fn named_quests_select_revisions_relations_mail_money_xp_flags_and_reward_spells() {
     let source = source();
     let quests = build_quests(
         &source,
@@ -263,7 +236,7 @@ fn named_quests_select_revisions_relations_mail_money_xp_flags_and_learn_spells(
     .unwrap();
     assert_eq!(quests.entries, HashSet::from([100]));
     assert!(quests.templates[0].starts_with("(100,5,8,'Snow 雪',0,123,"));
-    assert!(quests.templates[0].ends_with(",185,50,72,3000,76,-3000,250,21,10,47,-5,69,75)"));
+    assert!(quests.templates[0].ends_with(",185,50,72,3000,76,-3000,250,21,10,47,-5,69,75,0,500)"));
     assert_eq!(quests.texts, ["(100,'','','NULL','')"]);
     let mut statements = Vec::new();
     push_quest_statements(&mut statements, &quests, &[]);
@@ -275,7 +248,6 @@ fn named_quests_select_revisions_relations_mail_money_xp_flags_and_learn_spells(
         statement.contains("game_quest_emote") && statement.contains("(100,6,1,2,5,0,0,500,0,0,0)")
     }));
     assert_eq!(quests.reward_mail, ["(100,5,12,0,34)"]);
-    assert_eq!(quests.reward_spells, ["(100,600)"]);
     assert_eq!(
         quests.objectives,
         [
@@ -440,10 +412,6 @@ fn invalid_reward_numbers_cannot_silently_remove_a_spell_or_item() {
         (
             "UPDATE quest_template SET RewItemCount1 = -1",
             "RewItemCount1",
-        ),
-        (
-            "UPDATE spell_template SET effectTriggerSpell1 = -1 WHERE entry = 500",
-            "effectTriggerSpell1",
         ),
     ] {
         let source = source();

@@ -937,6 +937,8 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             rew_rep_value_4: 0,
             rew_rep_faction_5: 0,
             rew_rep_value_5: 0,
+            reward_spell: 0,
+            reward_spell_cast: 0,
         });
         ctx.db.game_quest_text().insert(crate::QuestText {
             quest_entry: SCENARIO_QUEST,

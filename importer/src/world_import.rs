@@ -597,7 +597,6 @@ struct QuestEtl {
     objectives: Vec<String>,
     cast_objectives: Vec<String>,
     reward_items: Vec<String>,
-    reward_spells: Vec<String>,
     reward_choices: Vec<String>,
     relations: Vec<String>,
     go_relations: Vec<String>,
@@ -735,8 +734,6 @@ fn build_quests(
     let mut objective_rows: Vec<String> = Vec::new();
     let mut cast_objective_rows: Vec<String> = Vec::new();
     let mut reward_item_rows: Vec<String> = Vec::new();
-    let mut reward_spell_rows = Vec::new();
-    let reward_learn_spells = vmangos_quests::learn_spells(dump)?;
     let mut reward_choice_rows: Vec<String> = Vec::new();
 
     let mut valid_quests: HashSet<u64> = HashSet::new();
@@ -772,16 +769,6 @@ fn build_quests(
             reward_mail_template_ids.insert(mail_template as u64);
             reward_mail_quests.insert(entry);
         }
-        let reward_cast: u32 = row.number(qt::REW_SPELL_CAST)?;
-        let reward_cast = if reward_cast != 0 {
-            reward_cast
-        } else {
-            row.number(qt::REW_SPELL)?
-        };
-        if let Some(learned) = reward_learn_spells.get(&reward_cast) {
-            reward_spell_rows.push(format!("({entry},{learned})"));
-        }
-
         let reward_xp = row.number::<u32>("RewXP")?;
         let min_level: u32 = row.number(qt::MIN_LEVEL)?;
         let quest_level: i64 = row.number(qt::QUEST_LEVEL)?;
@@ -828,13 +815,15 @@ fn build_quests(
         let min_rep_value: i32 = row.number(qt::REQUIRED_MIN_REP_VALUE)?;
         let max_rep_faction: u32 = row.number(qt::REQUIRED_MAX_REP_FACTION)?;
         let max_rep_value: i32 = row.number(qt::REQUIRED_MAX_REP_VALUE)?;
+        let reward_spell: u32 = row.number(qt::REW_SPELL)?;
+        let reward_spell_cast: u32 = row.number(qt::REW_SPELL_CAST)?;
         let exclusive_group: i32 = row.number(qt::EXCLUSIVE_GROUP)?;
         let max_level: u32 = row.number(qt::MAX_LEVEL)?;
         if exclusive_group != 0 || max_level != 0 {
             availability_rows.push(format!("({entry},{exclusive_group},{max_level})"));
         }
         quest_rows.push(format!(
-            "({entry},{min_level},{ql},{title},{money},{reward_xp},{prev},{req_races},{req_classes},{zone_or_sort},{rf1},{rv1},{rf2},{rv2},{src_item},{src_item_count},{repeatable},{next_quest},{limit_time},{rmm},{quest_type},{required_skill},{required_skill_value},{min_rep_faction},{min_rep_value},{max_rep_faction},{max_rep_value},{required_money},{rf3},{rv3},{rf4},{rv4},{rf5},{rv5})",
+            "({entry},{min_level},{ql},{title},{money},{reward_xp},{prev},{req_races},{req_classes},{zone_or_sort},{rf1},{rv1},{rf2},{rv2},{src_item},{src_item_count},{repeatable},{next_quest},{limit_time},{rmm},{quest_type},{required_skill},{required_skill_value},{min_rep_faction},{min_rep_value},{max_rep_faction},{max_rep_value},{required_money},{rf3},{rv3},{rf4},{rv4},{rf5},{rv5},{reward_spell},{reward_spell_cast})",
             ql = quest_level.max(0),
             title = text(qt::TITLE)?,
             money = money.max(0),
@@ -986,7 +975,6 @@ fn build_quests(
         objectives: objective_rows,
         cast_objectives: cast_objective_rows,
         reward_items: reward_item_rows,
-        reward_spells: reward_spell_rows,
         reward_choices: reward_choice_rows,
         relations: creature_quest_rows,
         go_relations: go_quest_rows,
@@ -2036,13 +2024,6 @@ fn push_quest_statements(stmts: &mut Vec<String>, quests: &QuestEtl, mail_loot_r
     stmts.push("DELETE FROM game_quest_objective WHERE id > 0".into());
     stmts.push("DELETE FROM game_quest_cast_objective WHERE id > 0".into());
     stmts.push("DELETE FROM game_quest_reward_item WHERE id > 0".into());
-    stmts.push("DELETE FROM game_quest_reward_spell WHERE quest_entry > 0".into());
-    push_insert(
-        stmts,
-        "game_quest_reward_spell",
-        "quest_entry,spell_id",
-        &quests.reward_spells,
-    );
     stmts.push("DELETE FROM game_quest_reward_choice WHERE id > 0".into());
     stmts.push("DELETE FROM game_quest_availability WHERE quest_entry > 0".into());
     push_insert(
@@ -2060,7 +2041,7 @@ fn push_quest_statements(stmts: &mut Vec<String>, quests: &QuestEtl, mail_loot_r
     );
     stmts.push("DELETE FROM game_creature_quest WHERE id > 0".into());
     stmts.push("DELETE FROM game_gameobject_quest WHERE id > 0".into());
-    push_insert(stmts, "game_quest_template", "entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level,quest_type,required_skill,required_skill_value,required_min_rep_faction,required_min_rep_value,required_max_rep_faction,required_max_rep_value,required_money,rew_rep_faction_3,rew_rep_value_3,rew_rep_faction_4,rew_rep_value_4,rew_rep_faction_5,rew_rep_value_5", &quests.templates);
+    push_insert(stmts, "game_quest_template", "entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level,quest_type,required_skill,required_skill_value,required_min_rep_faction,required_min_rep_value,required_max_rep_faction,required_max_rep_value,required_money,rew_rep_faction_3,rew_rep_value_3,rew_rep_faction_4,rew_rep_value_4,rew_rep_faction_5,rew_rep_value_5,reward_spell,reward_spell_cast", &quests.templates);
     push_insert(
         stmts,
         "game_quest_text",

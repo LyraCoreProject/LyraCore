@@ -66,6 +66,8 @@ pub(super) fn quest_detail_view(
             .find(quest_id)
             .map(|quest| quest.flags)
             .unwrap_or(0),
+        reward_spell: tmpl.reward_spell,
+        src_item: tmpl.src_item,
         rewards: quest_rewards(ctx, quest_id),
         choice_rewards: quest_choice_rewards(ctx, quest_id),
         required_items: required_items(ctx, &raw_objs),

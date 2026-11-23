@@ -142,12 +142,6 @@ symbol = "plan"
 evidence = "Compatibility Manifest quests.reputation-spillover-mask; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
-description = "quests.reward-cast full-world 202, alliance-single 72: Only a single-effect learn wrapper produces a reward spell."
-path = "importer/src/world_import_quests.rs"
-symbol = "plan"
-evidence = "Compatibility Manifest quests.reward-cast; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
 description = "quests.start-script full-world 103, alliance-single 39: The Module does not dispatch acceptance scripts."
 path = "importer/src/world_import_quests.rs"
 symbol = "plan"

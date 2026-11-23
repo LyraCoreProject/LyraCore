@@ -126,6 +126,8 @@ effect_kinds! {
     E_SUMMON_PLAYER => SummonPlayer = 0x2B,
     // Effect points times 256 add to the target Character's drunk value.
     E_INEBRIATE => Inebriate = 0x2C,
+    // The target Character learns `trigger_spell` and the spells it teaches in turn.
+    E_LEARN_SPELL => LearnSpell = 0x2D,
 }
 
 pub const KIND_AURA_BIT: u8 = 0x80;
@@ -262,6 +264,7 @@ mod tests {
         assert_eq!(E_SUMMON_OBJECT, 0x2A);
         assert_eq!(E_SUMMON_PLAYER, 0x2B);
         assert_eq!(E_INEBRIATE, 0x2C);
+        assert_eq!(E_LEARN_SPELL, 0x2D);
         assert_eq!(A_PERIODIC_DAMAGE, 0x90);
         assert_eq!(A_PERIODIC_HEAL, 0x91);
         assert_eq!(A_ABSORB, 0xA2);

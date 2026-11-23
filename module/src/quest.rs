@@ -191,6 +191,11 @@ pub struct QuestTemplate {
     pub rew_rep_faction_5: u32,
     #[default(0)]
     pub rew_rep_value_5: i32,
+    /// `RewSpell`: shown in the quest windows; cast at turn-in when `reward_spell_cast` is 0.
+    #[default(0)]
+    pub reward_spell: u32,
+    #[default(0)]
+    pub reward_spell_cast: u32,
 }
 
 #[table(accessor = game_quest_flags)]
@@ -292,13 +297,6 @@ pub struct QuestRewardItem {
     pub quest_entry: u32,
     pub item_entry: u32,
     pub count: u32,
-}
-
-#[table(accessor = game_quest_reward_spell)]
-pub struct QuestRewardSpell {
-    #[primary_key]
-    pub quest_entry: u32,
-    pub spell_id: u32,
 }
 
 #[table(accessor = game_quest_reward_choice, public, index(accessor = by_quest, btree(columns = [quest_entry])))]
@@ -1309,25 +1307,6 @@ pub(crate) fn request_turn_in_quest(
         .find(quest_entry)
         .ok_or_else(|| format!("no such quest {quest_entry}"))?;
 
-    let reward_spell = ctx
-        .db
-        .game_quest_reward_spell()
-        .quest_entry()
-        .find(quest_entry);
-    if let Some(reward) = &reward_spell {
-        use crate::game_spell;
-        if ctx
-            .db
-            .game_spell()
-            .spell_id()
-            .find(reward.spell_id)
-            .is_none()
-        {
-            return Err(format!("quest reward spell {} is missing", reward.spell_id).into());
-        }
-    }
-    let owner_identity = player.owner_identity;
-
     let collect: Vec<(u32, u32)> = ctx
         .db
         .game_quest_objective()
@@ -1386,10 +1365,6 @@ pub(crate) fn request_turn_in_quest(
     }
     player.update(ctx);
 
-    if let Some(reward) = reward_spell {
-        crate::spell::learn_spell(ctx, player_guid, owner_identity, reward.spell_id);
-    }
-
     // Keep rewarded repeatable rows because later quests read them as prerequisite evidence.
     cq.rewarded = true;
     cq.update(ctx);
@@ -1401,6 +1376,7 @@ pub(crate) fn request_turn_in_quest(
             quest_entry,
         },
     );
+    cast_reward_spell(ctx, &tmpl, player_guid, giver_guid, &giver);
     Ok(())
 }
 
@@ -1413,6 +1389,53 @@ fn grant_reputation_rewards(ctx: &ReducerContext, character_guid: u64, tmpl: &Qu
         (tmpl.rew_rep_faction_5, tmpl.rew_rep_value_5),
     ] {
         crate::reputation::grant_reputation(ctx, character_guid, faction, value);
+    }
+}
+
+/// A creature ender casts a learn, create-item or `T_TARGET_ALLY` spell; docs/schema.md has why.
+fn cast_reward_spell(
+    ctx: &ReducerContext,
+    tmpl: &QuestTemplate,
+    character_guid: u64,
+    ender_guid: u64,
+    ender: &GiverKind,
+) {
+    use crate::game_spell_effect;
+    use crate::spell::{E_CREATE_ITEM, E_LEARN_SPELL, T_TARGET_ALLY};
+    let spell_id = if tmpl.reward_spell_cast != 0 {
+        tmpl.reward_spell_cast
+    } else {
+        tmpl.reward_spell
+    };
+    if spell_id == 0 {
+        return;
+    }
+    let ender_casts = matches!(ender, GiverKind::Creature(_))
+        && ctx
+            .db
+            .game_spell_effect()
+            .by_spell()
+            .filter(&spell_id)
+            .any(|e| matches!(e.kind, E_LEARN_SPELL | E_CREATE_ITEM) || e.target == T_TARGET_ALLY);
+    let caster_guid = if ender_casts {
+        ender_guid
+    } else {
+        character_guid
+    };
+    let Some(caster) = ctx.db.game_world_entity().guid().find(caster_guid) else {
+        return;
+    };
+    if let Err(reason) = crate::spell::cast_triggered(
+        ctx,
+        caster_guid,
+        spell_id,
+        caster.level as u8,
+        character_guid,
+    ) {
+        spacetimedb::log::info!(
+            "quest {} reward spell {spell_id} from {caster_guid} refused: {reason}",
+            tmpl.entry
+        );
     }
 }
 

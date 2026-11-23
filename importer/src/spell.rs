@@ -57,14 +57,14 @@ use lyracore_shared::spell::taxonomy::{
     E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM,
     E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET,
     E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INEBRIATE, E_INTERRUPT, E_JUDGEMENT,
-    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME,
-    E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS,
-    E_SUMMON_HOSTILE, E_SUMMON_OBJECT, E_SUMMON_PET, E_SUMMON_PLAYER, E_TAME_CREATURE, E_TAUNT,
-    E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT,
-    P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY,
-    P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SKILL_LINE,
-    P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
-    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
+    E_LEARN_SPELL, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN,
+    E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE,
+    E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_OBJECT, E_SUMMON_PET, E_SUMMON_PLAYER,
+    E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN,
+    P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
+    P_FORM, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW,
+    P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
+    SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
     T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
@@ -447,6 +447,8 @@ fn resolve_target(target: i32, is_negative: bool) -> u8 {
         _ => T_SCRIPTED,
     }
 }
+
+const TARGET_UNIT_CASTER_PET: i32 = 5;
 
 const LOCATION_TARGET_CODES: [i32; 19] = [
     9, 10, 17, 18, 22, 32, 39, 41, 42, 43, 44, 46, 47, 48, 49, 50, 53, 55, 63,
@@ -1313,6 +1315,9 @@ fn resolve_effect_kind(
             E_SUMMON_GUARDIANS
         } else if effect_id == 5 && (s.implicit_target_a[i] == 9 || s.implicit_target_b[i] == 9) {
             E_RECALL_HOME
+        } else if effect_id == 36 && s.implicit_target_a[i] == TARGET_UNIT_CASTER_PET {
+            // vmangos teaches a grimoire's spell to the caster's pet, which LyraCore cannot do.
+            E_SCRIPTED
         } else {
             instant_effect_to_kind(effect_id)
         };
@@ -1701,6 +1706,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_ADD_EXTRA_ATTACKS => "E_ADD_EXTRA_ATTACKS",
         E_ENCHANT_ITEM_TEMPORARY => "E_ENCHANT_ITEM_TEMPORARY",
         E_INEBRIATE => "E_INEBRIATE",
+        E_LEARN_SPELL => "E_LEARN_SPELL",
         E_SUMMON_HOSTILE => "E_SUMMON_HOSTILE",
         E_DISTRACT => "E_DISTRACT",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
@@ -2298,6 +2304,19 @@ mod tests {
         tables.spells = crate::vmangos_spell::read(&source).unwrap().0;
         let (rows, _, _) = derive_spell_rows(&tables, &[], &[]).unwrap();
         rows.effects.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn a_learn_effect_teaches_its_target_but_a_grimoire_effect_stays_inert() {
+        // vmangos spell 28285 of Tome of Polymorph: Pig 4142 teaches 28272 to its user.
+        let tome = temporary_enchantment_effect("UPDATE spell_template SET effect1=36, effectApplyAuraName1=0, effectTriggerSpell1=28272, effectImplicitTargetA1=0, effectImplicitTargetB1=0, targets=0, spellFamilyName=0, effect2=0 WHERE build=5875");
+        assert_eq!(
+            (tome.kind, tome.target, tome.trigger_spell),
+            (E_LEARN_SPELL, T_TARGET_ALLY, 28272)
+        );
+        // vmangos spell 20270 of Grimoire of Firebolt (Rank 2) 16302 teaches 7799 to the pet.
+        let grimoire = temporary_enchantment_effect("UPDATE spell_template SET effect1=36, effectApplyAuraName1=0, effectTriggerSpell1=7799, effectImplicitTargetA1=5, effectImplicitTargetB1=0, targets=0, spellFamilyName=0, effect2=0 WHERE build=5875");
+        assert_eq!(grimoire.kind, E_SCRIPTED);
     }
 
     #[test]
@@ -4416,7 +4435,7 @@ mod tests {
         assert_eq!(instant_effect_to_kind(62), E_POWER_BURN);
         assert_eq!(instant_effect_to_kind(33), E_OPEN_LOCK);
         assert_eq!(instant_effect_to_kind(59), E_OPEN_LOCK);
-        assert_eq!(instant_effect_to_kind(36), E_SCRIPTED);
+        assert_eq!(instant_effect_to_kind(36), E_LEARN_SPELL);
     }
 
     #[test]

@@ -9,10 +9,14 @@ const PROOF: [u8; 20] = [
     0, 219, 190, 39, 108, 63, 12, 6, 223, 186, 9, 97, 43, 173, 114, 133, 133, 42, 164, 178,
 ];
 
+fn account_id(shard: &Standalone) -> u64 {
+    shard.query_rows("SELECT id FROM game_account WHERE username = 'CONFORMANCE'")[0]["id"]
+        .parse()
+        .unwrap()
+}
+
 fn session(shard: &Standalone) {
-    let account = shard.query_rows("SELECT id FROM game_account WHERE username = 'CONFORMANCE'")[0]
-        ["id"]
-        .clone();
+    let account = account_id(shard).to_string();
     shard.assert_call(
         "establish_session",
         &[
@@ -69,17 +73,15 @@ fn database_identity(shard: &Standalone) -> String {
     )
 }
 
+/// `account_id` is the source Shard's; each Shard numbers its own Accounts.
 fn receive_handoff(
     shard: &Standalone,
+    account_id: u64,
     guid: u64,
     transfer: &str,
     blob: &str,
 ) -> (ReducerConnection, std::process::Output) {
     use spacetimedb::{Identity, Timestamp};
-    let account_id = shard.query_rows("SELECT id FROM game_account WHERE username = 'CONFORMANCE'")
-        [0]["id"]
-        .parse()
-        .unwrap();
     let identity = Some(Identity::from_hex(format!("{:064x}", 0x1234)).unwrap());
     let account = lyracore_module::Account {
         id: account_id,
@@ -138,12 +140,13 @@ fn receive_handoff(
 
 fn adopt(
     shard: &Standalone,
+    account_id: u64,
     guid: u64,
     transfer: &str,
     blob: &str,
     keep_realm_role: bool,
 ) -> (ReducerConnection, Vec<(u16, Vec<u8>)>) {
-    let (mut connection, result) = receive_handoff(shard, guid, transfer, blob);
+    let (mut connection, result) = receive_handoff(shard, account_id, guid, transfer, blob);
     assert!(
         result.status.success(),
         "{}",
@@ -270,7 +273,14 @@ fn crossing_with_equipment(name: &str, equipment: bool) -> Crossing {
         "finish_transfer",
         &[transfer, r#"{"guid":0,"ownership":null}"#],
     );
-    let (connection, arrival) = adopt(&destination, guid, transfer, &blob, false);
+    let (connection, arrival) = adopt(
+        &destination,
+        account_id(&source),
+        guid,
+        transfer,
+        &blob,
+        false,
+    );
     Crossing {
         source,
         destination,
@@ -679,7 +689,14 @@ fn transported_buyback_text_is_remapped_and_each_reference_is_released_once() {
         source.query_rows("SELECT letters FROM game_item_text WHERE id = 5090001")[0]["letters"],
         "1"
     );
-    let (mut connection, _) = adopt(&destination, guid, "5090082", &blob, false);
+    let (mut connection, _) = adopt(
+        &destination,
+        account_id(&source),
+        guid,
+        "5090082",
+        &blob,
+        false,
+    );
     destination.assert_call(
         "debug_spawn_at_feet",
         &[&guid.to_string(), &SCENARIO_VENDOR_ENTRY.to_string(), "2.0"],
@@ -734,7 +751,8 @@ fn world_port_without_buyback_session_state_refuses_import_atomically() {
     let blob = freeze(&source, guid, 5090083);
     let (destination, _, _) = sessionless("buyback-state-required-target");
     destination.assert_call("debug_delete_character", &[&guid.to_string()]);
-    let (_connection, result) = receive_handoff(&destination, guid, "5090083", &blob);
+    let (_connection, result) =
+        receive_handoff(&destination, account_id(&source), guid, "5090083", &blob);
     assert!(!result.status.success());
     assert!(
         String::from_utf8_lossy(&result.stderr).contains("buyback World Session state"),
@@ -781,7 +799,14 @@ fn handoff_reconciliation_keeps_a_petition_whose_charter_is_in_buyback() {
         "finish_transfer",
         &["5090084", r#"{"guid":0,"ownership":null}"#],
     );
-    let (_connection, _) = adopt(&destination, guid, "5090084", &blob, true);
+    let (_connection, _) = adopt(
+        &destination,
+        account_id(&source),
+        guid,
+        "5090084",
+        &blob,
+        true,
+    );
     let transaction = destination.query_rows(&format!(
         "SELECT operation FROM game_guild_transaction WHERE guid = {guid}"
     ));

@@ -159,8 +159,18 @@ pub(crate) fn trainer_buy_check(
     Ok(())
 }
 
+// Trainers still read E_SCRIPTED with a trigger spell as a learn effect, as before E_LEARN_SPELL.
+fn learn_kind(kind: u8) -> u8 {
+    use lyracore_shared::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED};
+    if kind == E_SCRIPTED {
+        E_LEARN_SPELL
+    } else {
+        kind
+    }
+}
+
 fn learn_target_trigger(effect: &crate::SpellEffect) -> Option<u32> {
-    lyracore_shared::trainer::learn_target_trigger(effect.kind, effect.trigger_spell)
+    lyracore_shared::trainer::learn_target_trigger(learn_kind(effect.kind), effect.trigger_spell)
 }
 
 fn learn_target_from_effects(spell_id: u32, effects: &[crate::SpellEffect]) -> u32 {
@@ -171,7 +181,7 @@ fn learn_target_from_effects(spell_id: u32, effects: &[crate::SpellEffect]) -> u
             .map(|effect| lyracore_shared::trainer::LearnEffect {
                 index: effect.effect_index,
                 id: effect.id,
-                kind: effect.kind,
+                kind: learn_kind(effect.kind),
                 trigger_spell: effect.trigger_spell,
             }),
     )

@@ -14,7 +14,8 @@ use crate::game_world_entity;
 
 use super::inventory::{first_free_backpack_slot, first_free_bag_slot, is_carried_slot};
 use super::rules::{
-    binds_on_grant, equip_slot, meets_required_level, resolve_equip_slot, template_stat, EquipStat,
+    binds_on_grant, equip_slot, meets_required_level, meets_required_reputation,
+    resolve_equip_slot, template_stat, EquipStat,
 };
 use super::tables::{
     game_item_instance, game_item_template, item_in_slot, ItemInstance, ItemTemplate,
@@ -520,11 +521,33 @@ pub(crate) fn apply_item_use_on(
             format!("item {} is not consumable", inst.entry),
         )
     })?;
+    super::inventory::check_user_requirements(ctx, &player, &tmpl).map_err(|result| {
+        use lyracore_protocol::messages::vanilla::InventoryResult;
+        let refusal = match result {
+            InventoryResult::NoRequiredProficiency => ItemRefusal::NoProficiency,
+            InventoryResult::CantEquipSkill => ItemRefusal::RequiredSkill,
+            _ => ItemRefusal::ItemNotUsable,
+        };
+        refuse(refusal, format!("item {} needs another user", inst.entry))
+    })?;
     // The level-specific packet needs a level payload, which ItemRefusal cannot carry.
     if !meets_required_level(player.level, tmpl.required_level) {
         return Err(refuse(
             ItemRefusal::ItemNotUsable,
             format!("requires level {}", tmpl.required_level),
+        ));
+    }
+    if !meets_required_reputation(
+        tmpl.required_reputation_faction,
+        tmpl.required_reputation_rank,
+        crate::reputation::reputation(ctx, player_guid, tmpl.required_reputation_faction),
+    ) {
+        return Err(refuse(
+            ItemRefusal::RequiredReputation,
+            format!(
+                "requires rank {} with faction {}",
+                tmpl.required_reputation_rank, tmpl.required_reputation_faction
+            ),
         ));
     }
     // vmangos WorldSession::HandleUseItemOpcode checks combat after Player::CanUseItem.
