@@ -117,7 +117,7 @@ fn a_timed_spell_whose_reagents_are_gone_at_completion_is_refused_missing_reagen
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_trigger_child_takes_none_of_its_reagents_when_its_parent_has_some() {
+fn a_trigger_child_of_a_parent_with_reagents_takes_none_of_its_own() {
     let shard = stage("reagents-trigger-child-paid");
     triggering_parent(&shard);
     reagent(&shard, PARENT, PARENT_REAGENT, 1);
@@ -133,14 +133,16 @@ fn a_trigger_child_takes_none_of_its_reagents_when_its_parent_has_some() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_trigger_child_of_a_parent_without_reagents_takes_its_own() {
-    let shard = stage("reagents-trigger-child-own");
+fn a_trigger_child_of_a_parent_without_reagents_takes_none_of_its_own_either() {
+    let shard = stage("reagents-trigger-child-free");
     triggering_parent(&shard);
-    grant(&shard, PLAYER, REAGENT, 5);
 
     cast_spell(&shard, PARENT);
-    assert!(health(&shard) > 5000, "the trigger child heals");
-    assert_eq!(stack(&shard, PLAYER, REAGENT), Some(5 - REAGENT_COUNT));
+    assert!(
+        health(&shard) > 5000,
+        "the trigger child heals without reagents"
+    );
+    assert_eq!(stack(&shard, PLAYER, REAGENT), None);
 }
 
 #[test]

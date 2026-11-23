@@ -440,13 +440,12 @@ impl CastReagents {
 /// vmangos `Spell::IgnoreItemRequirements`; CONTEXT.md "Triggered Cast" says whose reagents pay.
 fn reagents_are_paid_elsewhere(ctx: &ReducerContext, origin: CastOrigin) -> bool {
     match origin {
-        CastOrigin::Direct(CastPhase::Trigger) => TriggerLink::parent_spell(ctx.timestamp)
-            .is_some_and(|parent| has_first_reagent(ctx, parent)),
-        CastOrigin::Direct(_) => false,
-        CastOrigin::AuraTriggered { source_spell } => has_first_reagent(ctx, source_spell),
-        CastOrigin::Triggered
+        CastOrigin::Direct(CastPhase::Trigger)
+        | CastOrigin::Triggered
         | CastOrigin::DeadCreatureCallbackTriggered
         | CastOrigin::ChanceOnHit => true,
+        CastOrigin::Direct(_) => false,
+        CastOrigin::AuraTriggered { source_spell } => has_first_reagent(ctx, source_spell),
     }
 }
 
