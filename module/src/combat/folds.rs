@@ -862,13 +862,52 @@ pub(crate) fn ranged_school(ctx: &ReducerContext, guid: u64) -> u8 {
         .map_or(0, |weapon| weapon.damage_school.min(6))
 }
 
+pub(crate) struct RangedRoll {
+    pub(crate) damage: u32,
+    pub(crate) outcome: AttackOutcome,
+    pub(crate) resisted: u32,
+    pub(crate) blocked: u32,
+}
+
+impl RangedRoll {
+    fn avoided(outcome: AttackOutcome) -> Self {
+        Self {
+            damage: 0,
+            outcome,
+            resisted: 0,
+            blocked: 0,
+        }
+    }
+}
+
+// Only a ranged-damage-class spell blocks, not a wand's Shoot; the draw follows the weapon draw.
+fn rolls_ranged_block(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    ranged_spell_id: u32,
+    partial_block_bp: u32,
+) -> bool {
+    partial_block_bp > 0
+        && ctx
+            .db
+            .game_spell()
+            .spell_id()
+            .find(ranged_spell_id)
+            .is_some_and(|spell| spell.damage_class == crate::spell::proc::DAMAGE_CLASS_RANGED)
+        && crate::conformance_rolls::draw(
+            ctx,
+            crate::conformance_rolls::RollStream::Swing(attacker_guid),
+        ) % 10_000
+            < partial_block_bp
+}
+
 pub(crate) fn roll_ranged_swing(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     target: &WorldEntity,
     ranged_spell_id: u32,
     (dmin, dmax): (u32, u32),
-) -> (u32, AttackOutcome) {
+) -> RangedRoll {
     let school = ranged_school(ctx, attacker.guid);
     let spell_school_mask = ctx
         .db
@@ -878,9 +917,9 @@ pub(crate) fn roll_ranged_swing(
         .map_or(SCHOOL_MASK_PHYSICAL, |spell| spell.school_mask);
     // vmangos SpellHitResult: IsImmuneToSpell takes Shoot's school, IsImmuneToDamage the wand's.
     if crate::spell::immune_to_school(ctx, target, spell_school_mask | (1 << school)) {
-        return (0, AttackOutcome::Immune);
+        return RangedRoll::avoided(AttackOutcome::Immune);
     }
-    let (outcome, _) = roll_attack(ctx, attacker, target, AttackType::Ranged, None);
+    let (outcome, table) = roll_attack(ctx, attacker, target, AttackType::Ranged, None);
     let weapon = crate::conformance_rolls::draw(
         ctx,
         crate::conformance_rolls::RollStream::Swing(attacker.guid),
@@ -897,7 +936,7 @@ pub(crate) fn roll_ranged_swing(
         AttackOutcome::Miss
         | AttackOutcome::Dodge
         | AttackOutcome::Parry
-        | AttackOutcome::Immune => return (0, outcome),
+        | AttackOutcome::Immune => return RangedRoll::avoided(outcome),
         AttackOutcome::Crit if school == 0 => base * CRIT_MULT,
         AttackOutcome::Crit => base + base / 2,
         AttackOutcome::Normal
@@ -905,22 +944,47 @@ pub(crate) fn roll_ranged_swing(
         | AttackOutcome::Crushing
         | AttackOutcome::Block => base,
     };
+    let blocks = rolls_ranged_block(ctx, attacker.guid, ranged_spell_id, table.partial_block);
+    let block_value = || defender_block_value(ctx, target);
     if school != 0 {
+        let blocked = if blocks {
+            block_value().min(pre_mit)
+        } else {
+            0
+        };
+        let unblocked = pre_mit - blocked;
         let resisted = crate::spell::apply_resistance(
             ctx,
             target.guid,
             attacker.guid,
             1 << school,
-            pre_mit as i32,
+            unblocked as i32,
             0,
-        );
-        return (resisted.max(0) as u32, outcome);
+        )
+        .max(0) as u32;
+        return RangedRoll {
+            damage: resisted,
+            outcome,
+            resisted: unblocked.saturating_sub(resisted),
+            blocked,
+        };
     }
     let mit_pct = armor_mitigation_pct(
         crate::modifiers::effective_armor(ctx, target),
         attacker.level,
     );
-    (armor_mitigated(pre_mit, mit_pct), outcome)
+    let mitigated = armor_mitigated(pre_mit, mit_pct);
+    let blocked = if blocks {
+        block_value().min(mitigated)
+    } else {
+        0
+    };
+    RangedRoll {
+        damage: mitigated - blocked,
+        outcome,
+        resisted: 0,
+        blocked,
+    }
 }
 
 pub(crate) fn roll_money(ctx: &ReducerContext, min: u32, max: u32) -> u32 {

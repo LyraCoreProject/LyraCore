@@ -291,6 +291,14 @@ no repair or reimport is needed. The Native Host's delivery layouts do not chang
 that subscribes to `game_spell_cast_event_live` needs regenerated bindings to decode the new
 columns.
 
+### Ranged impact report migration
+
+`game_ranged_impact_schedule` gains `resisted` and `blocked`, end-appended with default 0. A shot
+launched before the update lands with both at 0, which means no partial block or resist report.
+The table is transient and nothing stores it, so no repair or reimport is needed. Only a Spell row
+whose `damage_class` is 3 (ranged) rolls an Auto Shot's partial block, so a ranged shot with no imported
+Spell row never blocks.
+
 ### Summoning ritual migration
 
 The imported `game_gameobject_ritual` table and the private `game_summoning_ritual`,

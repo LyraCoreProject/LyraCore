@@ -824,12 +824,12 @@ fn fire_ranged_shot(
     } else {
         (dmin, dmax)
     };
-    let (rolled, hit_info) =
-        roll_ranged_swing(ctx, attacker, target, ranged_spell_id, (rdmin, rdmax));
+    let roll = roll_ranged_swing(ctx, attacker, target, ranged_spell_id, (rdmin, rdmax));
+    let hit_info = roll.outcome;
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    let damage = FrozenDamage::launch(ctx, attacker_guid, target_guid, rolled);
+    let damage = FrozenDamage::launch(ctx, attacker_guid, target_guid, roll.damage);
 
     let speed = if subclass == ws::WAND {
         WAND_PROJECTILE_SPEED
@@ -852,9 +852,13 @@ fn fire_ranged_shot(
         ctx,
         attacker_guid,
         target_guid,
-        damage,
-        ranged_spell_id,
-        hit_info == AttackOutcome::Crit,
+        RangedShot {
+            damage,
+            ranged_spell_id,
+            is_crit: hit_info == AttackOutcome::Crit,
+            resisted: roll.resisted,
+            blocked: roll.blocked,
+        },
         travel_ms,
     );
     if let Some(mut fresh) = melee.attacker_guid().find(attacker_guid) {
@@ -885,23 +889,40 @@ pub(crate) fn launch_ranged_strike(
         ctx,
         attacker.guid,
         target.guid,
-        damage,
-        spell_id,
-        is_crit,
+        RangedShot {
+            damage,
+            ranged_spell_id: spell_id,
+            is_crit,
+            resisted: 0,
+            blocked: 0,
+        },
         travel_ms,
     );
+}
+
+struct RangedShot {
+    damage: FrozenDamage,
+    ranged_spell_id: u32,
+    is_crit: bool,
+    resisted: u32,
+    blocked: u32,
 }
 
 fn schedule_ranged_impact(
     ctx: &ReducerContext,
     attacker_guid: u64,
     target_guid: u64,
-    damage: FrozenDamage,
-    ranged_spell_id: u32,
-    is_crit: bool,
+    shot: RangedShot,
     travel_ms: u32,
 ) {
-    if damage.amount() == 0 {
+    let RangedShot {
+        damage,
+        ranged_spell_id,
+        is_crit,
+        resisted,
+        blocked,
+    } = shot;
+    if damage.amount() == 0 && resisted == 0 && blocked == 0 {
         return;
     }
     let land_at = crate::time::now(ctx)
@@ -926,6 +947,8 @@ fn schedule_ranged_impact(
                     .find(ranged_spell_id)
                     .map_or(0, |spell| crate::spell::school_index(spell.school_mask))
             },
+            resisted,
+            blocked,
         });
 }
 
@@ -941,7 +964,7 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     let Some(target) = entities.guid().find(shot.target_guid) else {
         return;
     };
-    if target.dead || shot.damage == 0 {
+    if target.dead || (shot.damage == 0 && shot.resisted == 0 && shot.blocked == 0) {
         return;
     }
     if !crate::combat::may_harm(ctx, &attacker, &target) {
@@ -965,10 +988,11 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     let hit = if strike {
         Hit::spell(HitSource::Ranged, shot.ranged_spell_id, shot.is_crit)
     } else {
-        Hit::weapon(HitSource::Ranged, false)
+        Hit::weapon(HitSource::Ranged, false).with_block(shot.blocked)
     };
     let outcome = damage.land(ctx, shot.attacker_guid, shot.target_guid, hit);
-    if damage.amount() > 0 && shot.ranged_spell_id != 0 {
+    let reports_damage = damage.amount() > 0 || shot.resisted > 0 || shot.blocked > 0;
+    if reports_damage && shot.ranged_spell_id != 0 {
         crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
@@ -976,6 +1000,8 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
                 damage: damage.amount(),
                 is_crit: shot.is_crit,
                 school: shot.school,
+                resisted: shot.resisted,
+                blocked_amount: shot.blocked,
                 is_proc_log: true,
                 ..SpellCastEvent::signal_at(
                     ctx,

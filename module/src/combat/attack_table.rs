@@ -84,6 +84,8 @@ impl DeliveredSpell {
 
 pub(crate) struct Skills {
     pub(crate) weapon: i32,
+    /// The main-hand skill vmangos rolls a partial block with, whatever the swing's own weapon.
+    pub(crate) block_weapon: i32,
     pub(crate) maximum: i32,
     pub(crate) defense: i32,
     pub(crate) defense_maximum: i32,
@@ -157,10 +159,13 @@ pub(crate) fn attack_table(facts: &AttackFacts) -> AttackTable {
     let melee = facts.attack_type == AttackType::Melee;
     let swing = facts.spell.is_none_or(|spell| spell.next_melee_swing);
     let faced = facts.target_faces_attacker;
-    let can_block = melee && faced && !facts.no_block;
+    let can_roll_block = faced && !facts.no_block;
+    let can_block = melee && can_roll_block;
+    let ranged_swing = !melee && facts.spell.is_none();
 
     let full = skills.weapon - skills.defense;
     let difference = skills.weapon - skills.defense_maximum;
+    let block_difference = skills.block_weapon - skills.defense_maximum;
     let capped = skills.weapon.min(skills.maximum) - skills.defense_maximum;
     let low_level = if !skills.target_is_character && skills.target_level < 10 {
         skills.target_level as f32 / 10.0
@@ -197,7 +202,7 @@ pub(crate) fn attack_table(facts: &AttackFacts) -> AttackTable {
     let glancing =
         (1000 + (skills.defense - skills.weapon.min(skills.maximum)) * 200).clamp(0, 4000) as u32;
     let block = if base.block > 0 {
-        let block = base.block as i32 - difference * avoidance_per_skill;
+        let block = base.block as i32 - block_difference * avoidance_per_skill;
         let block = if skills.target_is_character {
             block
         } else {
@@ -226,7 +231,10 @@ pub(crate) fn attack_table(facts: &AttackFacts) -> AttackTable {
         block: band(can_block && facts.spell.is_none(), block),
         crit: band(!facts.spell.is_some_and(|spell| spell.cannot_crit), crit),
         crushing: band(melee && swing, base.crushing),
-        partial_block: band(can_block && facts.spell.is_some(), block),
+        partial_block: band(
+            (can_block && facts.spell.is_some()) || (ranged_swing && can_roll_block),
+            block,
+        ),
     }
 }
 
@@ -286,6 +294,10 @@ pub(crate) fn attack_table_for(
     attack_table(&AttackFacts {
         skills: Skills {
             weapon: weapon as i32,
+            block_weapon: match attack_type {
+                AttackType::Melee => weapon,
+                AttackType::Ranged => crate::skill::effective_weapon_skill(ctx, attacker),
+            } as i32,
             maximum: crate::skill::skill_cap_for_level(attacker.level) as i32,
             defense: defense_skill(
                 ctx,
@@ -450,6 +462,7 @@ mod tests {
         AttackFacts {
             skills: Skills {
                 weapon,
+                block_weapon: weapon,
                 maximum,
                 defense,
                 defense_maximum: level as i32 * 5,
@@ -608,13 +621,35 @@ mod tests {
     }
 
     #[test]
-    fn a_ranged_attack_rolls_only_miss_and_crit() {
+    fn a_ranged_attack_rolls_only_miss_and_crit_before_its_partial_block() {
         let mut shot = level_63();
         shot.base.crushing = 1500;
         shot.attack_type = AttackType::Ranged;
-        assert_eq!(bands(attack_table(&shot)), [800, 0, 0, 0, 0, 200, 0, 0]);
+        assert_eq!(bands(attack_table(&shot)), [800, 0, 0, 0, 0, 200, 0, 500]);
         shot.spell = Some(CAST);
         assert_eq!(bands(attack_table(&shot)), [800, 0, 0, 0, 0, 200, 0, 0]);
+    }
+
+    #[test]
+    fn a_ranged_swing_blocks_only_a_target_that_faces_it_and_may_block() {
+        let mut shot = level_60();
+        shot.attack_type = AttackType::Ranged;
+        shot.target_faces_attacker = false;
+        assert_eq!(attack_table(&shot).partial_block, 0);
+        shot.target_faces_attacker = true;
+        shot.no_block = true;
+        assert_eq!(attack_table(&shot).partial_block, 0);
+    }
+
+    #[test]
+    fn a_ranged_swings_partial_block_follows_the_main_hand_skill() {
+        let mut shot = level_60();
+        shot.attack_type = AttackType::Ranged;
+        shot.skills.target_is_character = true;
+        shot.skills.weapon = 250;
+        shot.skills.block_weapon = 310;
+        // 500 - (310 - 300) * 4 basis points per skill; the 250 ranged skill is not used.
+        assert_eq!(attack_table(&shot).partial_block, 460);
     }
 
     #[test]
