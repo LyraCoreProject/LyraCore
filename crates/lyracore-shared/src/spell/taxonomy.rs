@@ -190,6 +190,7 @@ pub const T_AREA_ENEMY: u8 = 4;
 pub const T_AREA_ALLY: u8 = 5;
 pub const T_CHAIN_ENEMY: u8 = 6;
 pub const T_SCRIPTED: u8 = 7;
+pub const T_CASTER_PET: u8 = 8;
 pub const COMBAT_ATTACK_POWER: u8 = 0;
 pub const COMBAT_CRIT: u8 = 1;
 pub const COMBAT_HIT: u8 = 2;

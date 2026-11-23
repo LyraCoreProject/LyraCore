@@ -308,6 +308,16 @@ spent charges, as they refuse an opened item, until their rows can carry the cha
 and imports with no rows; an older Shard has spent no charges. An older destination refuses the new
 manifest, so update both Shards before moving active World Sessions.
 
+### Pet learn migration
+
+Spell effect 36 aimed at the caster's pet (implicit target 5: grimoires and the pet spells of Dash,
+Dive and Prowl) imports as `E_SCRIPTED` with target `T_CASTER_PET` (8), a value only the importer
+writes. Trainers read an `E_SCRIPTED` effect with a trigger spell as a learn effect unless its target
+is `T_CASTER_PET`, so after the `spell` reimport a pet spell's wrapper is offered as itself, not as its
+trigger spell. Before the reimport those rows keep target `T_SCRIPTED` and trainers still resolve them
+to the trigger spell. No publish or repair is needed. Hunter pet training stays unbuilt: the wrapper
+teaches the pet nothing.
+
 ### Queued strike report migration
 
 `game_spell_cast_event` and `game_spell_cast_event_live` gain `blocked_amount` and

@@ -159,10 +159,10 @@ pub(crate) fn trainer_buy_check(
     Ok(())
 }
 
-// Trainers still read E_SCRIPTED with a trigger spell as a learn effect, as before E_LEARN_SPELL.
-fn learn_kind(kind: u8) -> u8 {
-    use lyracore_shared::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED};
-    if kind == E_SCRIPTED {
+// Trainers read E_SCRIPTED as a learn effect, as before E_LEARN_SPELL, unless it teaches the pet.
+fn learn_kind(kind: u8, target: u8) -> u8 {
+    use lyracore_shared::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED, T_CASTER_PET};
+    if kind == E_SCRIPTED && target != T_CASTER_PET {
         E_LEARN_SPELL
     } else {
         kind
@@ -170,7 +170,10 @@ fn learn_kind(kind: u8) -> u8 {
 }
 
 fn learn_target_trigger(effect: &crate::SpellEffect) -> Option<u32> {
-    lyracore_shared::trainer::learn_target_trigger(learn_kind(effect.kind), effect.trigger_spell)
+    lyracore_shared::trainer::learn_target_trigger(
+        learn_kind(effect.kind, effect.target),
+        effect.trigger_spell,
+    )
 }
 
 fn learn_target_from_effects(spell_id: u32, effects: &[crate::SpellEffect]) -> u32 {
@@ -181,7 +184,7 @@ fn learn_target_from_effects(spell_id: u32, effects: &[crate::SpellEffect]) -> u
             .map(|effect| lyracore_shared::trainer::LearnEffect {
                 index: effect.effect_index,
                 id: effect.id,
-                kind: learn_kind(effect.kind),
+                kind: learn_kind(effect.kind, effect.target),
                 trigger_spell: effect.trigger_spell,
             }),
     )
@@ -586,6 +589,16 @@ pub(crate) fn apply_trainer_buy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_effect_aimed_at_the_caster_pet_is_not_a_learn_effect() {
+        use lyracore_shared::spell::taxonomy::{
+            E_LEARN_SPELL, E_SCRIPTED, T_CASTER_PET, T_SCRIPTED,
+        };
+        assert_eq!(learn_kind(E_SCRIPTED, T_CASTER_PET), E_SCRIPTED);
+        assert_eq!(learn_kind(E_SCRIPTED, T_SCRIPTED), E_LEARN_SPELL);
+        assert_eq!(learn_kind(E_LEARN_SPELL, T_CASTER_PET), E_LEARN_SPELL);
+    }
 
     #[test]
     fn trainer_buy_check_refuses_each_state_with_its_own_refusal() {
