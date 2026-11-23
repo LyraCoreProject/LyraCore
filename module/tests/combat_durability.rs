@@ -332,6 +332,7 @@ fn give_helm(standalone: &Standalone, slot: u8, durability: u32) {
             ("guid", &HELM_GUID),
             ("entry", &HELM_ENTRY),
             ("owner_guid", &PLAYER),
+            ("owner_identity", &format!("0x{}", "00".repeat(32))),
             ("slot", &slot),
             ("stack_count", &1),
             ("durability", &durability),
