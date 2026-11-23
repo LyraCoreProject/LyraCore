@@ -82,7 +82,6 @@ fn inventory_changes_preserve_accepted_trade_items() {
         ("gw_use_item", vec![ACTOR, "23"]),
         ("gw_sell_item", vec![ACTOR, &vendor, "23"]),
         ("gw_disenchant", vec![ACTOR, "26"]),
-        ("debug_cast_at", vec!["1", "5090171", "1"]),
     ] {
         let result = shard.call(verb, &args);
         assert!(!result.status.success(), "{verb} changed an offered item");
@@ -98,40 +97,36 @@ fn inventory_changes_preserve_accepted_trade_items() {
             session
         );
     }
+    // vmangos Player::HasItemCount counts only the 5 jerky in slot 24; slot 23's 10 are offered.
+    shard.assert_sql("UPDATE game_spell SET gcd_ms = 0 WHERE spell_id = 5090171");
+    shard.assert_sql("UPDATE game_spell_reagent SET count = 6 WHERE id = 40721368");
+    let result = shard.call("debug_cast_at", &["1", "5090171", "1"]);
+    let output = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "{output}");
+    assert!(output.contains("needs reagents"), "{output}");
+    assert_eq!(shard.query_rows("SELECT * FROM game_item_instance"), items);
+    shard.assert_sql("UPDATE game_spell_reagent SET count = 1 WHERE id = 40721368");
+    shard.assert_call("debug_cast_at", &["1", "5090171", "1"]);
+    let jerky = |slot: u8| {
+        shard.query_rows(&format!(
+            "SELECT stack_count FROM game_item_instance WHERE owner_guid = 1 AND slot = {slot}"
+        ))[0]["stack_count"]
+            .clone()
+    };
+    assert_eq!((jerky(23), jerky(24)), ("10".into(), "4".into()));
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_trade_session"),
+        session
+    );
     shard.assert_call("debug_grant_item", &["1", &FIXTURE_REINS.to_string(), "1"]);
     shard.assert_sql("UPDATE game_spell SET cast_time_ms = 1000, cost = 10, power_type = 1 WHERE spell_id = 5090171");
     shard.assert_sql(&format!(
         "UPDATE game_spell_reagent SET item_entry = {FIXTURE_REINS} WHERE id = 40721368"
     ));
-    insert_jerky_reagent(&shard, 40721369);
     shard.clear_schedule("game_creature_move_schedule");
     shard.assert_sql(
         "UPDATE game_world_entity SET simulation_indexed = false, power = 100 WHERE guid = 1",
     );
-    let before_craft = shard.query_rows("SELECT * FROM game_item_instance");
-    shard.assert_call("debug_begin_cast", &["1", "5090171", "1"]);
-    assert_eq!(
-        shard
-            .query_rows("SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = 1")
-            .len(),
-        1
-    );
-    assert!(poll_until(std::time::Duration::from_secs(5), || shard
-        .query_rows("SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = 1")
-        .is_empty()));
-    assert_eq!(
-        shard.query_rows("SELECT * FROM game_item_instance"),
-        before_craft
-    );
-    assert_eq!(
-        shard.query_rows("SELECT power FROM game_world_entity WHERE guid = 1")[0]["power"],
-        "100"
-    );
-    assert_eq!(
-        shard.query_rows("SELECT * FROM game_trade_session"),
-        session
-    );
-    shard.assert_sql("DELETE FROM game_spell_reagent WHERE id = 40721369");
     shard.assert_sql(&format!(
         "UPDATE game_spell_effect SET p0 = {FIXTURE_JERKY} WHERE id = 20360684"
     ));

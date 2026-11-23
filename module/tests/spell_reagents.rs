@@ -3,7 +3,9 @@ mod support;
 use std::io::Cursor;
 
 use lyracore_package_delta::packed_spell_effect_id;
-use lyracore_shared::spell::taxonomy::{E_CREATE_ITEM, E_HEAL, E_TRIGGER, T_SELF};
+use lyracore_shared::spell::taxonomy::{
+    A_PERIODIC_TRIGGER, E_CREATE_ITEM, E_HEAL, E_TRIGGER, T_SELF,
+};
 use lyracore_test_support::ReducerConnection;
 use serde_json::json;
 use support::{
@@ -90,7 +92,7 @@ fn a_timed_spell_whose_reagents_are_gone_at_completion_is_refused_missing_reagen
     let shard = stage("reagents-gone-at-completion");
     shard.clear_schedule("game_event_reaper_schedule");
     mending(&shard, CAST_TIME_MS, 0);
-    grant(&shard, PLAYER, REAGENT, 5);
+    let slot = grant(&shard, PLAYER, REAGENT, 5);
     let casts = subscribe_with_fence(
         &shard,
         &[&format!(
@@ -99,9 +101,7 @@ fn a_timed_spell_whose_reagents_are_gone_at_completion_is_refused_missing_reagen
     );
 
     cast_spell(&shard, MENDING);
-    shard.assert_sql(&format!(
-        "UPDATE game_item_instance SET stack_count = 1 WHERE owner_guid = 1 AND entry = {REAGENT}"
-    ));
+    shard.assert_call("gw_destroy_item", &[&actor(PLAYER), &slot, "4"]);
     shard.assert_call("debug_advance_roll_batch", &["40"]);
     fence_subscription(&shard, &casts);
     let rows = event_rows(&casts, "game_spell_cast_event_live");
@@ -145,6 +145,34 @@ fn a_trigger_child_of_a_parent_without_reagents_takes_its_own() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_periodic_trigger_casts_a_reagent_spell_without_its_reagents() {
+    let shard = stage("reagents-triggered-cast");
+    mending(&shard, 0, 0);
+    spell(&shard, PARENT, 0, 0);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET duration_ms = 10000 WHERE spell_id = {PARENT}"
+    ));
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(PARENT, 0)),
+            ("spell_id", &PARENT),
+            ("effect_index", &0u8),
+            ("kind", &A_PERIODIC_TRIGGER),
+            ("target", &T_SELF),
+            ("period_ms", &1_000u32),
+            ("trigger_spell", &MENDING),
+        ],
+    );
+
+    cast_spell(&shard, PARENT);
+    shard.assert_call("debug_advance_roll_batch", &["40"]);
+    assert!(health(&shard) > 5000, "the Triggered Cast heals");
+    assert_eq!(stack(&shard, PLAYER, REAGENT), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_craft_takes_its_reagents_once() {
     let shard = stage("reagents-craft");
     spell(&shard, CRAFT, 0, 0);
@@ -161,17 +189,21 @@ fn a_craft_takes_its_reagents_once() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn an_item_that_is_its_own_spells_reagent_is_taken_once() {
+fn an_item_used_up_as_its_own_spells_reagent_is_taken_with_the_reagents() {
     let shard = stage("reagents-own-item");
     spell(&shard, MENDING, 0, 0);
     effect(&shard, MENDING, 0, (E_HEAL, 100), 0);
-    reagent(&shard, MENDING, SELF_REAGENT_ITEM, 1);
+    reagent(&shard, MENDING, SELF_REAGENT_ITEM, REAGENT_COUNT);
     item(&shard, SELF_REAGENT_ITEM, "Own reagent fixture", MENDING);
     let slot = grant(&shard, PLAYER, SELF_REAGENT_ITEM, 5);
 
-    shard.assert_call("gw_use_item", &[&actor(PLAYER), &slot]);
+    shard.assert_call("debug_use_item", &[PLAYER, &slot]);
     assert!(health(&shard) > 5000, "the item's spell heals");
-    assert_eq!(stack(&shard, PLAYER, SELF_REAGENT_ITEM), Some(4));
+    // vmangos Spell::TakeReagents takes the count and one more for the used-up cast item.
+    assert_eq!(
+        stack(&shard, PLAYER, SELF_REAGENT_ITEM),
+        Some(5 - REAGENT_COUNT - 1)
+    );
 }
 
 fn stage(name: &str) -> Standalone {

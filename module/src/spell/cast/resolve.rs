@@ -7,7 +7,7 @@ use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
 
-use crate::{game_item_instance, game_item_template};
+use crate::{game_item_instance, game_item_template, game_spell_reagent};
 
 use crate::spell::{
     apply_effect, aura_apply, break_channel, break_stealth, cost_gate_blocks, cost_refusal_reason,
@@ -365,10 +365,15 @@ impl CastReagents {
             items: Vec::new(),
             include_cast_item: false,
         };
-        // vmangos Spell::IgnoreItemRequirements: a parent with reagents pays for its trigger child.
+        // vmangos Spell::IgnoreItemRequirements: a parent with Reagent[0] pays for its trigger child.
         let paid_by_parent = trigger_child
-            && super::depth::TriggerLink::parent_spell(ctx.timestamp)
-                .is_some_and(|parent| !recipe_reagents(ctx, parent).is_empty());
+            && super::depth::TriggerLink::parent_spell(ctx.timestamp).is_some_and(|parent| {
+                ctx.db
+                    .game_spell_reagent()
+                    .by_spell()
+                    .filter(&parent)
+                    .any(|reagent| reagent.id & 7 == 0)
+            });
         if !caster.is_player() || paid_by_parent {
             return reagents;
         }
@@ -380,7 +385,7 @@ impl CastReagents {
         if let Some(item) = cast_item {
             if let Some((_, count)) = reagents.items.iter_mut().find(|(e, _)| *e == item.entry) {
                 reagents.include_cast_item = true;
-                // vmangos counts a used-up cast item once more than a reagent count above one.
+                // vmangos takes one extra when the count is above one and the cast item is used up.
                 if *count > 1
                     && crate::items::cast_item_use_of(ctx, item.guid)
                         == crate::items::CastItemUse::UseUp
@@ -394,16 +399,16 @@ impl CastReagents {
 
     fn take_from(
         &self,
+        ctx: &ReducerContext,
         plan: &mut crate::items::ItemStoragePlan,
     ) -> Result<(), crate::actor::ActionRefusal> {
         self.items
             .iter()
-            .try_for_each(|&(entry, count)| plan.consume(entry, count))
+            .try_for_each(|&(entry, count)| plan.consume_untraded(ctx, entry, count))
     }
 }
 
-/// Takes the cast's reagents before it charges power. A craft returns its plan, so its products
-/// and reagents commit together after the effects.
+/// Commits a spell's reagents now; a craft returns its plan to commit with its products.
 fn take_reagents(
     ctx: &ReducerContext,
     caster: &WorldEntity,
@@ -420,7 +425,7 @@ fn take_reagents(
     if let Some(item_guid) = used_up_item {
         plan.use_up_one(item_guid).map_err(String::from)?;
     }
-    reagents.take_from(&mut plan).map_err(String::from)?;
+    reagents.take_from(ctx, &mut plan).map_err(String::from)?;
     plan.check_trade_offers(ctx).map_err(String::from)?;
     if crafts {
         return Ok(Some(Craft { plan, used_up_item }));
@@ -1298,7 +1303,7 @@ enum CastGate {
 }
 
 /// vmangos `Spell::CheckCast` order, cut down to the Gates LyraCore has.
-const CHECK_CAST_ORDER: [CastGate; 34] = [
+const CHECK_CAST_ORDER: [CastGate; 35] = [
     CastGate::SpellReady,
     CastGate::CasterAlive,
     CastGate::CasterLevel,
@@ -1627,7 +1632,7 @@ impl GateCheck<'_> {
             return Ok(());
         }
         let mut plan = crate::items::ItemStoragePlan::read(ctx, caster.guid, caster.owner_identity);
-        reagents.take_from(&mut plan).map_err(|refusal| {
+        reagents.take_from(ctx, &mut plan).map_err(|refusal| {
             CastGateRefusal::other(
                 CastRefusalReason::MissingReagent,
                 format!(

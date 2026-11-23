@@ -660,7 +660,7 @@ stealth, line of sight, peaceful target, product storage, range, facing, power a
 and caster control. It neither dismounts nor unstealths its caster at cast start and starts no
 global cooldown.
 It still pays its power cost and starts its own cooldown. It carries and takes its own reagents only
-when its parent has none.
+when its parent's first reagent slot is empty.
 _Avoid_: triggered spell, trigger cast
 
 **Trigger Depth**:
