@@ -83,6 +83,14 @@ impl TriggerLink {
     pub(super) fn check(reducer: Timestamp, spell_id: u32) -> Result<(), String> {
         RESOLVING.with_borrow_mut(|resolving| resolving.in_reducer(reducer).admit(spell_id))
     }
+
+    /// The spell whose effects resolve the innermost spell, when that spell is nested.
+    pub(super) fn parent_spell(reducer: Timestamp) -> Option<u32> {
+        RESOLVING.with_borrow_mut(|resolving| {
+            let spell_ids = &resolving.in_reducer(reducer).spell_ids;
+            spell_ids.len().checked_sub(2).map(|index| spell_ids[index])
+        })
+    }
 }
 
 impl Drop for TriggerLink {
@@ -141,5 +149,17 @@ mod tests {
 
         drop(root);
         assert!(TriggerLink::enter(at, 3).is_ok());
+    }
+
+    #[test]
+    fn a_nested_spell_names_the_spell_resolving_it_as_its_parent() {
+        let at = reducer(30);
+        let root = TriggerLink::enter(at, 1).unwrap();
+        assert_eq!(TriggerLink::parent_spell(at), None);
+        let child = TriggerLink::enter(at, 2).unwrap();
+        assert_eq!(TriggerLink::parent_spell(at), Some(1));
+        drop(child);
+        drop(root);
+        assert_eq!(TriggerLink::parent_spell(at), None);
     }
 }

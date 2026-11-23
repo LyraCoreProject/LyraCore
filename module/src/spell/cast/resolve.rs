@@ -7,7 +7,7 @@ use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
 
-use crate::{game_item_instance, game_item_template};
+use crate::{game_item_instance, game_item_template, game_spell_reagent};
 
 use crate::spell::{
     apply_effect, aura_apply, break_channel, break_stealth, cost_gate_blocks, cost_refusal_reason,
@@ -150,27 +150,18 @@ fn resolve_loaded_cast(
 
     check_cast_gates(ctx, &caster, spell, request, GateRun::Resolve(phase))?;
 
+    let reagents = CastReagents::of(ctx, &caster, request, phase == CastPhase::Trigger);
     let cast_item = request
         .cast_item
+        .filter(|_| !reagents.include_cast_item)
         .map(|item_guid| (item_guid, crate::items::cast_item_use_of(ctx, item_guid)));
     let used_up_item = cast_item
         .filter(|(_, item_use)| *item_use == crate::items::CastItemUse::UseUp)
         .map(|(item_guid, _)| item_guid);
-    // Scheduled crafts admit reagents before charging power; all products commit together.
-    let craft = if effects.iter().any(|effect| effect.kind == E_CREATE_ITEM) {
-        let mut plan = crate::items::ItemStoragePlan::read(ctx, caster_guid, caster.owner_identity);
-        if let Some(item_guid) = used_up_item {
-            plan.use_up_one(item_guid).map_err(String::from)?;
-        }
-        for (entry, count) in recipe_reagents(ctx, spell_id) {
-            plan.consume(entry, count).map_err(String::from)?;
-        }
-        plan.check_trade_offers(ctx).map_err(String::from)?;
-        Some(Craft { plan, used_up_item })
-    } else {
-        None
-    };
-    let plan_takes_cast_item = craft.is_some() && used_up_item.is_some();
+    let craft = take_reagents(ctx, &caster, effects, &reagents, used_up_item)?;
+    let plan_takes_cast_item = craft
+        .as_ref()
+        .is_some_and(|craft| craft.used_up_item.is_some());
 
     // Flush the cost before effects so self-heals read the charged caster row.
     if caster.is_player() && hdr.cost > 0 && !request.is_item_cast() && !queues_next_swing(effects)
@@ -353,6 +344,94 @@ fn remember_landed_effect(landed: &mut Vec<(u64, u8)>, guid: u64, effect_index: 
 struct Craft {
     plan: crate::items::ItemStoragePlan,
     used_up_item: Option<u64>,
+}
+
+/// The items a player's cast must carry and gives up, as vmangos `Spell::CheckItems` and
+/// `Spell::TakeReagents` count them.
+struct CastReagents {
+    items: Vec<(u32, u32)>,
+    /// The cast item is one of the reagents, so it goes with them and not on its own.
+    include_cast_item: bool,
+}
+
+impl CastReagents {
+    fn of(
+        ctx: &ReducerContext,
+        caster: &WorldEntity,
+        request: &CastRequest,
+        trigger_child: bool,
+    ) -> Self {
+        let mut reagents = Self {
+            items: Vec::new(),
+            include_cast_item: false,
+        };
+        // vmangos Spell::IgnoreItemRequirements: a parent with Reagent[0] pays for its trigger child.
+        let paid_by_parent = trigger_child
+            && super::depth::TriggerLink::parent_spell(ctx.timestamp).is_some_and(|parent| {
+                ctx.db
+                    .game_spell_reagent()
+                    .by_spell()
+                    .filter(&parent)
+                    .any(|reagent| reagent.id & 7 == 0)
+            });
+        if !caster.is_player() || paid_by_parent {
+            return reagents;
+        }
+        reagents.items = recipe_reagents(ctx, request.spell_id);
+        let cast_item = request
+            .cast_item
+            .filter(|_| !reagents.items.is_empty())
+            .and_then(|item_guid| ctx.db.game_item_instance().guid().find(item_guid));
+        if let Some(item) = cast_item {
+            if let Some((_, count)) = reagents.items.iter_mut().find(|(e, _)| *e == item.entry) {
+                reagents.include_cast_item = true;
+                // vmangos takes one extra when the count is above one and the cast item is used up.
+                if *count > 1
+                    && crate::items::cast_item_use_of(ctx, item.guid)
+                        == crate::items::CastItemUse::UseUp
+                {
+                    *count += 1;
+                }
+            }
+        }
+        reagents
+    }
+
+    fn take_from(
+        &self,
+        ctx: &ReducerContext,
+        plan: &mut crate::items::ItemStoragePlan,
+    ) -> Result<(), crate::actor::ActionRefusal> {
+        self.items
+            .iter()
+            .try_for_each(|&(entry, count)| plan.consume_untraded(ctx, entry, count))
+    }
+}
+
+/// Commits a spell's reagents now; a craft returns its plan to commit with its products.
+fn take_reagents(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    effects: &[SpellEffect],
+    reagents: &CastReagents,
+    used_up_item: Option<u64>,
+) -> Result<Option<Craft>, CastGateRefusal> {
+    let crafts = effects.iter().any(|effect| effect.kind == E_CREATE_ITEM);
+    if !crafts && reagents.items.is_empty() {
+        return Ok(None);
+    }
+    let mut plan = crate::items::ItemStoragePlan::read(ctx, caster.guid, caster.owner_identity);
+    let used_up_item = used_up_item.filter(|_| crafts);
+    if let Some(item_guid) = used_up_item {
+        plan.use_up_one(item_guid).map_err(String::from)?;
+    }
+    reagents.take_from(ctx, &mut plan).map_err(String::from)?;
+    plan.check_trade_offers(ctx).map_err(String::from)?;
+    if crafts {
+        return Ok(Some(Craft { plan, used_up_item }));
+    }
+    plan.commit(ctx).map_err(String::from)?;
+    Ok(None)
 }
 
 fn grant_crafted_item(
@@ -1208,6 +1287,7 @@ enum CastGate {
     Dagger,
     CastItem,
     SpellFocus,
+    Reagents,
     ProductStorage,
     ItemTarget,
     RangedWeapon,
@@ -1223,7 +1303,7 @@ enum CastGate {
 }
 
 /// vmangos `Spell::CheckCast` order, cut down to the Gates LyraCore has.
-const CHECK_CAST_ORDER: [CastGate; 34] = [
+const CHECK_CAST_ORDER: [CastGate; 35] = [
     CastGate::SpellReady,
     CastGate::CasterAlive,
     CastGate::CasterLevel,
@@ -1246,6 +1326,7 @@ const CHECK_CAST_ORDER: [CastGate; 34] = [
     CastGate::Dagger,
     CastGate::CastItem,
     CastGate::SpellFocus,
+    CastGate::Reagents,
     CastGate::ProductStorage,
     CastGate::ItemTarget,
     CastGate::RangedWeapon,
@@ -1479,6 +1560,7 @@ impl GateCheck<'_> {
                     crate::creatures::check_hostile_summon(ctx, caster, hdr, effect).map(|_| ())
                 }),
             CastGate::CastItem => check_cast_item(ctx, caster.guid, request.cast_item),
+            CastGate::Reagents => self.check_reagents(),
             CastGate::ProductStorage => {
                 product_storage(ctx, caster, spell, request.level).map_err(|refusal| {
                     CastGateRefusal {
@@ -1541,6 +1623,26 @@ impl GateCheck<'_> {
             CastGate::SummonTarget => self.check_summon_target(),
             CastGate::EffectData => check_effect_data(ctx, spell),
         }
+    }
+
+    fn check_reagents(&self) -> Result<(), CastGateRefusal> {
+        let (ctx, caster) = (self.ctx, self.caster);
+        let reagents = CastReagents::of(ctx, caster, self.request, self.run.is_trigger_child());
+        if reagents.items.is_empty() {
+            return Ok(());
+        }
+        let mut plan = crate::items::ItemStoragePlan::read(ctx, caster.guid, caster.owner_identity);
+        reagents.take_from(ctx, &mut plan).map_err(|refusal| {
+            CastGateRefusal::other(
+                CastRefusalReason::MissingReagent,
+                format!(
+                    "spell {} needs reagents {:?}: {}",
+                    self.request.spell_id,
+                    reagents.items,
+                    String::from(refusal)
+                ),
+            )
+        })
     }
 
     fn range_leeway_yd(&self) -> f32 {

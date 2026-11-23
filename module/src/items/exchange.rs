@@ -35,12 +35,21 @@ pub(crate) fn exchange_items(
 pub(super) fn consume_item_stacks(
     items: &mut [ItemInstance],
     entry: u32,
+    count: u32,
+) -> Result<(), ActionRefusal> {
+    consume_matching_stacks(items, entry, count, |_| true)
+}
+
+fn consume_matching_stacks(
+    items: &mut [ItemInstance],
+    entry: u32,
     mut count: u32,
+    usable: impl Fn(&ItemInstance) -> bool,
 ) -> Result<(), ActionRefusal> {
     let mut matching: Vec<usize> = items
         .iter()
         .enumerate()
-        .filter(|(_, item)| is_carried_slot(item.slot) && item.entry == entry)
+        .filter(|(_, item)| is_carried_slot(item.slot) && item.entry == entry && usable(item))
         .map(|(index, _)| index)
         .collect();
     let available: u64 = matching
@@ -112,6 +121,20 @@ impl ItemStoragePlan {
 
     pub(crate) fn consume(&mut self, entry: u32, count: u32) -> Result<(), ActionRefusal> {
         consume_item_stacks(&mut self.items, entry, count)
+    }
+
+    /// Consumes like [`Self::consume`] but skips stacks offered in a trade, as vmangos
+    /// `Player::DestroyItemCount` does.
+    pub(crate) fn consume_untraded(
+        &mut self,
+        ctx: &ReducerContext,
+        entry: u32,
+        count: u32,
+    ) -> Result<(), ActionRefusal> {
+        let character_guid = self.character_guid;
+        consume_matching_stacks(&mut self.items, entry, count, |item| {
+            !crate::trade::item_is_offered(ctx, character_guid, item.guid)
+        })
     }
 
     pub(crate) fn use_up_one(&mut self, item_guid: u64) -> Result<(), ActionRefusal> {

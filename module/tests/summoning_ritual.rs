@@ -7,7 +7,7 @@ use lyracore_shared::spell::taxonomy::{
     T_TARGET_ALLY,
 };
 use support::{
-    distance, event_rows, poll_until, position, stage_group, Row, Standalone, POLL_TIMEOUT,
+    distance, event_rows, number, poll_until, position, stage_group, Row, Standalone, POLL_TIMEOUT,
 };
 
 const WARLOCK: u64 = 509_4101;
@@ -20,6 +20,8 @@ const WARRIOR_CLASS: u8 = 1;
 const RITUAL_OF_SUMMONING: u32 = 698;
 const RITUAL_OF_SUMMONING_EFFECT: u32 = 7720;
 const SUMMONING_PORTAL: u32 = 36727;
+// The seeded Soul Shard, `crate::combat::SOUL_SHARD_ENTRY`.
+const SOUL_SHARD: u32 = 6265;
 // vmangos gameobject_template 36727: three Ritual Participants, spell 7720 and anim spell 698.
 const REQUIRED_PARTICIPANTS: u32 = 3;
 // Spell.dbc 698 lasts 600 s; 7720 casts for 5 s.
@@ -300,4 +302,54 @@ fn the_warlock_cancelling_during_the_ritual_cast_removes_the_portal_and_offers_n
         distance(position(&entity(&realm, TARGET)), before) < 0.01,
         "a summon response without an offer leaves the target in place"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_warlock_spends_one_soul_shard_on_the_ritual_and_none_on_its_completion() {
+    let realm = start("summoning-ritual-soul-shard");
+    stage_group(&realm, WARLOCK, &[PARTICIPANT_A, PARTICIPANT_B, TARGET]);
+    // Spell.dbc reagent slot 0 under the importer's `spell_id << 3 | slot` key.
+    for spell_id in [RITUAL_OF_SUMMONING, RITUAL_OF_SUMMONING_EFFECT] {
+        realm.insert_row(
+            "game_spell_reagent",
+            &[
+                ("id", &(u64::from(spell_id) << 3)),
+                ("spell_id", &spell_id),
+                ("item_entry", &SOUL_SHARD),
+                ("count", &1),
+            ],
+        );
+    }
+    realm.assert_call(
+        "debug_grant_item",
+        &[&WARLOCK.to_string(), &SOUL_SHARD.to_string(), "2"],
+    );
+
+    let portal_guid = open_ritual(&realm);
+    assert_eq!(
+        soul_shards(&realm),
+        1,
+        "the Warlock's cast takes its Soul Shard"
+    );
+    assist(&realm, &portal_guid);
+    assert!(
+        poll_until(POLL_TIMEOUT, || !summon_offers(&realm).is_empty()),
+        "the completed ritual offers the target a summon"
+    );
+    assert_eq!(
+        soul_shards(&realm),
+        1,
+        "vmangos GameObject::Use casts the ritual spell triggered, without its reagent"
+    );
+}
+
+fn soul_shards(realm: &Standalone) -> u32 {
+    realm
+        .query_rows(&format!(
+            "SELECT stack_count FROM game_item_instance WHERE owner_guid = {WARLOCK} AND entry = {SOUL_SHARD}"
+        ))
+        .iter()
+        .map(|row| number::<u32>(row, "stack_count"))
+        .sum()
 }

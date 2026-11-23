@@ -123,6 +123,7 @@ pub mod cast_failure {
     pub const INTERRUPTED: u8 = 0x23;
     pub const NO_AMMO: u8 = 0x24;
     pub const ITEM_GONE: u8 = 0x26;
+    pub const ITEM_NOT_READY: u8 = 0x28;
     pub const LEVEL_REQUIREMENT: u8 = 0x29;
     pub const LOW_LEVEL: u8 = 0x2b;
     pub const LINE_OF_SIGHT: u8 = 0x2A;
