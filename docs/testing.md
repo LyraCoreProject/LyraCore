@@ -107,7 +107,9 @@ emote delivery. Other durable runs must skip that test unless the baseline Wasm 
 target once and estimates 20 seconds for a new target. `job_seconds` reserves extra time for the
 steps one job runs alone. The durations come from the runs in `source_runs`, two runs of the two
 `boat-large` jobs, and they move by a minute or more between runs, so refresh them from several
-PR runs; `main` runs on other machines. The `native_conformance` binary takes 250 to 380 seconds there, and one job owns it.
+PR runs; `main` runs on other machines. One job owns `native_conformance`. Its weight is set by hand
+to 1070 seconds: main run 45128465429 measured 676 seconds before the ranged swing contexts added
+about 390.
 
 The job warms the Module compile caches with `gm_level` before the suite. The first publish compiles
 the Module into shared schema and Wasm caches, about 15 to 45 seconds on a default VM, and without

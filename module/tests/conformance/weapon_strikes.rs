@@ -218,6 +218,7 @@ fn verify_context(
         TARGET_LEVELS[level_index],
         &[44, 95, 162],
         Some(spec::SPELL_ID),
+        &super::rolls::MELEE_POSE,
     )
 }
 

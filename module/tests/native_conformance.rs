@@ -34,6 +34,10 @@ mod quest_world;
 mod queued_strike_spec;
 #[path = "conformance/queued_strikes.rs"]
 mod queued_strikes;
+#[path = "../../conformance/support/ranged_swing_rolls.rs"]
+mod ranged_swing_spec;
+#[path = "conformance/ranged_swings.rs"]
+mod ranged_swings;
 #[path = "conformance/repair.rs"]
 mod repair;
 #[path = "conformance/rolls.rs"]
