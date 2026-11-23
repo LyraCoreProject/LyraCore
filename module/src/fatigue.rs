@@ -133,6 +133,7 @@ fn exhaust(ctx: &ReducerContext, mut entity: WorldEntity, ticks: u32) -> bool {
         return true;
     }
     let start_health = entity.health;
+    let mut hits = 0;
     for _ in 0..ticks {
         let nominal = exhaustion_damage(entity.max_health, entity.level, ctx.random::<u32>());
         let (health, lethal) = crate::world::resolve_environmental_damage(nominal, entity.health);
@@ -142,6 +143,7 @@ fn exhaust(ctx: &ReducerContext, mut entity: WorldEntity, ticks: u32) -> bool {
             if remaining_health != start_health {
                 entity.update(ctx);
             }
+            crate::combat::wear_for_environmental_damage(ctx, guid, hits);
             crate::spell::break_stealth(ctx, guid);
             crate::combat::kill_player(ctx, guid, guid);
             crate::breath_relay::exhaustion_damage(ctx, guid, remaining_health);
@@ -150,11 +152,13 @@ fn exhaust(ctx: &ReducerContext, mut entity: WorldEntity, ticks: u32) -> bool {
         entity.health = health;
         if dealt > 0 {
             crate::breath_relay::exhaustion_damage(ctx, guid, dealt);
+            hits += 1;
         }
     }
     if entity.health != start_health {
         entity.update(ctx);
     }
+    crate::combat::wear_for_environmental_damage(ctx, guid, hits);
     crate::spell::break_stealth(ctx, guid);
     false
 }
