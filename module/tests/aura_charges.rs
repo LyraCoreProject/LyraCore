@@ -6,11 +6,11 @@ use lyracore_package_delta::fixture_ids::{
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
-    A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE, A_SPELLMOD_FLAT, CAST_FLAG_CANNOT_CRIT,
-    CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT, COMBAT_ATTACK_POWER, COMBAT_CRIT,
-    COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, E_TRIGGER, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD,
-    P_MECHANIC, P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST,
-    SPEED_MOVE, SPEED_SWING, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE, A_PROC_TRIGGER, A_SPELLMOD_FLAT,
+    CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT, COMBAT_ATTACK_POWER,
+    COMBAT_CRIT, COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, E_TRIGGER, M_FEAR, M_POLY, M_STUN,
+    P_COMBAT_FIELD, P_MECHANIC, P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR,
+    SPEED_CAST, SPEED_MOVE, SPEED_SWING, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
@@ -110,6 +110,10 @@ const RECENTLY_BANDAGED: u32 = 11196;
 const WEAKENED_SOUL: u32 = 6788;
 const LOOP_FIRST: u32 = 5_091_138;
 const LOOP_SECOND: u32 = 5_091_139;
+const REAGENT_PROC_AURA: u32 = 5_091_140;
+const REAGENT_BOLT: u32 = 5_091_141;
+const PROC_REAGENT: u32 = 5_091_142;
+const PROC_ICD_MS: u32 = 100;
 const FROST: u8 = 0x10;
 const SLOW_POINTS: i32 = -50;
 const BLEED_POINTS: i32 = 3;
@@ -175,6 +179,83 @@ fn flurry_spends_a_charge_on_each_of_three_swings_hit_or_miss() {
         charges(&standalone, PLAYER, FLURRY),
         None,
         "the third swing spends the last charge and removes Flurry"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_proc_refused_for_a_missing_reagent_still_spends_a_charge_and_starts_its_cooldown() {
+    let mut standalone = Standalone::start("aura-charges-proc-reagent");
+    let wolf = stage(&mut standalone);
+    bolt(&standalone, REAGENT_BOLT, FIRE, 0);
+    standalone.insert_row(
+        "game_item_template",
+        &[
+            ("entry", &PROC_REAGENT),
+            ("name", &"Proc reagent fixture"),
+            ("max_stack", &20u32),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_reagent",
+        &[
+            ("id", &(u64::from(REAGENT_BOLT) << 3)),
+            ("spell_id", &REAGENT_BOLT),
+            ("item_entry", &PROC_REAGENT),
+            ("count", &1u32),
+        ],
+    );
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: REAGENT_PROC_AURA,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: DEAL_MELEE_SWING,
+            charges: 3,
+        },
+        &[(A_PROC_TRIGGER, 0, 0, P_NONE)],
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET trigger_spell = {REAGENT_BOLT} \
+         WHERE spell_id = {REAGENT_PROC_AURA}"
+    ));
+    standalone.insert_row(
+        "game_spell_proc_event",
+        &[
+            ("spell_id", &REAGENT_PROC_AURA),
+            ("proc_ex", &PROC_EX_TRIGGER_ALWAYS),
+            ("icd_ms", &PROC_ICD_MS),
+        ],
+    );
+    standalone.assert_call("debug_force_cast", &["1", &REAGENT_PROC_AURA.to_string()]);
+    standalone.insert_row(
+        "game_conformance_swing_random",
+        &[("character_guid", &1), ("state", &1)],
+    );
+    standalone.assert_call("debug_engage", &["1", &wolf.to_string()]);
+    assert_eq!(proc_ready_micros(&standalone), 0);
+
+    swing(&standalone);
+    assert_eq!(
+        charges(&standalone, PLAYER, REAGENT_PROC_AURA),
+        Some(2),
+        "vmangos TriggerProccedSpell ignores the refused cast, so the proc spends a charge"
+    );
+    assert_ne!(
+        proc_ready_micros(&standalone),
+        0,
+        "and starts the internal cooldown"
+    );
+    assert_eq!(item_stack(&standalone, PROC_REAGENT), None);
+
+    standalone.assert_call("debug_grant_item", &["1", &PROC_REAGENT.to_string(), "1"]);
+    swing(&standalone);
+    assert_eq!(charges(&standalone, PLAYER, REAGENT_PROC_AURA), Some(1));
+    assert_eq!(
+        item_stack(&standalone, PROC_REAGENT),
+        None,
+        "a Character that carries the reagent has the proc take it"
     );
 }
 
@@ -2060,6 +2141,25 @@ fn aura_column(standalone: &Standalone, carrier: u64, spell_id: u32, column: &st
         ))
         .first()
         .map(|row| row[column].parse().unwrap())
+}
+
+fn proc_ready_micros(standalone: &Standalone) -> i64 {
+    standalone.query_rows(&format!(
+        "SELECT proc_ready_micros FROM game_aura WHERE target_guid = {PLAYER} \
+         AND spell_id = {REAGENT_PROC_AURA}"
+    ))[0]["proc_ready_micros"]
+        .parse()
+        .unwrap()
+}
+
+fn item_stack(standalone: &Standalone, entry: u32) -> Option<u32> {
+    standalone
+        .query_rows(&format!(
+            "SELECT stack_count FROM game_item_instance WHERE owner_guid = {PLAYER} \
+             AND entry = {entry}"
+        ))
+        .first()
+        .map(|row| row["stack_count"].parse().unwrap())
 }
 
 fn charges(standalone: &Standalone, carrier: u64, spell_id: u32) -> Option<u8> {

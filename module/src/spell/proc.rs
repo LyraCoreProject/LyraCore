@@ -778,7 +778,8 @@ fn fire_proc(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) -> bool {
                         "proc: spell {} could not trigger {trigger_spell}: {err}",
                         row.spell_id
                     );
-                    false
+                    // vmangos TriggerProccedSpell ignores the cast result, so a reagent refusal still fires.
+                    err.reason == crate::spell::CastRefusalReason::MissingReagent
                 }
             }
         }

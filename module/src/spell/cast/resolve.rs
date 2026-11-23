@@ -158,7 +158,7 @@ fn resolve_loaded_cast(
     let used_up_item = cast_item
         .filter(|(_, item_use)| *item_use == crate::items::CastItemUse::UseUp)
         .map(|(item_guid, _)| item_guid);
-    let craft = take_reagents(ctx, &caster, effects, &reagents, used_up_item)?;
+    let craft = take_reagents(ctx, &caster, spell_id, effects, &reagents, used_up_item)?;
     let plan_takes_cast_item = craft
         .as_ref()
         .is_some_and(|craft| craft.used_up_item.is_some());
@@ -414,16 +414,19 @@ impl CastReagents {
             return Ok(());
         }
         let mut plan = crate::items::ItemStoragePlan::read(ctx, caster.guid, caster.owner_identity);
-        self.take_from(ctx, &mut plan).map_err(|refusal| {
-            CastGateRefusal::other(
-                CastRefusalReason::MissingReagent,
-                format!(
-                    "spell {spell_id} needs reagents {:?}: {}",
-                    self.items,
-                    String::from(refusal)
-                ),
-            )
-        })
+        self.take_from(ctx, &mut plan)
+            .map_err(|refusal| self.missing(spell_id, refusal))
+    }
+
+    fn missing(&self, spell_id: u32, refusal: crate::actor::ActionRefusal) -> CastGateRefusal {
+        CastGateRefusal::other(
+            CastRefusalReason::MissingReagent,
+            format!(
+                "spell {spell_id} needs reagents {:?}: {}",
+                self.items,
+                String::from(refusal)
+            ),
+        )
     }
 
     fn take_from(
@@ -463,10 +466,9 @@ fn take_triggered_reagents(
     caster: &WorldEntity,
     request: &CastRequest,
     origin: CastOrigin,
-) -> Result<(), String> {
+) -> Result<(), CastGateRefusal> {
     let reagents = CastReagents::of(ctx, caster, request, origin);
-    reagents.check(ctx, caster, request.spell_id)?;
-    take_reagents(ctx, caster, &[], &reagents, None)?;
+    take_reagents(ctx, caster, request.spell_id, &[], &reagents, None)?;
     Ok(())
 }
 
@@ -474,6 +476,7 @@ fn take_triggered_reagents(
 fn take_reagents(
     ctx: &ReducerContext,
     caster: &WorldEntity,
+    spell_id: u32,
     effects: &[SpellEffect],
     reagents: &CastReagents,
     used_up_item: Option<u64>,
@@ -487,7 +490,9 @@ fn take_reagents(
     if let Some(item_guid) = used_up_item {
         plan.use_up_one(item_guid).map_err(String::from)?;
     }
-    reagents.take_from(ctx, &mut plan).map_err(String::from)?;
+    reagents
+        .take_from(ctx, &mut plan)
+        .map_err(|refusal| reagents.missing(spell_id, refusal))?;
     plan.check_trade_offers(ctx).map_err(String::from)?;
     if crafts {
         return Ok(Some(Craft { plan, used_up_item }));
@@ -1264,6 +1269,7 @@ pub(crate) fn cast_triggered(
         &spell,
         CastOrigin::Triggered,
     )
+    .map_err(String::from)
 }
 
 pub(crate) fn cast_aura_triggered(
@@ -1273,7 +1279,7 @@ pub(crate) fn cast_aura_triggered(
     spell_id: u32,
     level: u8,
     target_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), CastGateRefusal> {
     let spell = LoadedSpell::load(ctx, spell_id)?;
     cast_triggered_with_origin(
         ctx,
@@ -1297,6 +1303,7 @@ pub(crate) fn cast_chance_on_hit(
         &spell,
         CastOrigin::ChanceOnHit,
     )
+    .map_err(String::from)
 }
 
 fn cast_triggered_with_origin(
@@ -1304,7 +1311,7 @@ fn cast_triggered_with_origin(
     request: &CastRequest,
     spell: &LoadedSpell,
     origin: CastOrigin,
-) -> Result<(), String> {
+) -> Result<(), CastGateRefusal> {
     let caster_guid = request.caster_guid;
     let _link = TriggerLink::enter(ctx.timestamp, request.spell_id)?;
     let caster = ctx
@@ -1319,8 +1326,7 @@ fn cast_triggered_with_origin(
         &spell.effects,
         request.target_guid,
         request.spell_id,
-    )
-    .map_err(String::from)?;
+    )?;
     take_triggered_reagents(ctx, &caster, request, origin)?;
     let launched = launch_cast(ctx, spell, request, origin);
     run_spell_effects(ctx, spell, request, origin, None, launched);
@@ -1463,7 +1469,7 @@ pub(crate) fn start_creature_spell(
                     CastOrigin::DeadCreatureCallbackTriggered
                 }
             };
-            cast_triggered_with_origin(ctx, &cast, &spell, origin)
+            cast_triggered_with_origin(ctx, &cast, &spell, origin).map_err(String::from)
         }
     }
 }

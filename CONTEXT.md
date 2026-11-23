@@ -655,9 +655,10 @@ A cast started by a Proc, a periodic aura, a spell's hit (a Follow-up Cast) or a
 effect. It checks faction targeting and target life, then runs the cast core's effect loop without
 cast-start position, range, line of sight, power cost, cooldown or stealth-break checks. It carries
 no reagents, except that a Proc or periodic trigger of an Aura carries and takes its own when the
-Aura's spell has no first reagent slot; a cast short of them is refused and never made. Its own hits
-fire no further Procs. Its non-periodic damage still ends its caster's stealth, whatever made the
-cast. The cast an `E_TRIGGER` effect makes is a Trigger Child Cast, not a Triggered Cast.
+Aura's spell's first reagent slot is empty. A cast short of them is refused and never made, and its
+Proc still spends its charge and starts its cooldown. Its own hits fire no further Procs. Its
+non-periodic damage still ends its caster's stealth, whatever made the cast. The cast an `E_TRIGGER`
+effect makes is a Trigger Child Cast, not a Triggered Cast.
 _Avoid_: proc cast, internal cast, free cast
 
 **Trigger Child Cast**:
