@@ -121,6 +121,19 @@ pub fn build_transfer_aborted(reason: TransferAbortReason) -> (u16, Vec<u8>) {
     (0x0040, vec![reason.as_int()])
 }
 
+/// SMSG_SUMMON_REQUEST; the raw zone id avoids the generated `Area` enum's unknown-zone refusal.
+pub fn build_summon_request_raw(
+    summoner_guid: u64,
+    zone_id: u32,
+    auto_decline: std::time::Duration,
+) -> (u16, Vec<u8>) {
+    let millis = auto_decline.as_millis().min(u128::from(u32::MAX)) as u32;
+    let mut body = summoner_guid.to_le_bytes().to_vec();
+    body.extend_from_slice(&zone_id.to_le_bytes());
+    body.extend_from_slice(&millis.to_le_bytes());
+    (0x02AB, body)
+}
+
 pub fn build_force_run_speed(guid: u64, speed: f32) -> SMSG_FORCE_RUN_SPEED_CHANGE {
     SMSG_FORCE_RUN_SPEED_CHANGE {
         guid: Guid::new(guid),
@@ -517,6 +530,17 @@ mod tests {
         MovementInfo, MovementInfo_MovementFlags, SMSG_MONSTER_MOVE_MonsterMoveType, ServerMessage,
         SplineFlag, Vector3d,
     };
+
+    #[test]
+    fn a_summon_request_names_the_summoner_zone_and_decline_milliseconds() {
+        let (opcode, body) =
+            build_summon_request_raw(0x0102, 12, std::time::Duration::from_secs(120));
+        assert_eq!(opcode, 0x02AB);
+        let mut expected = 0x0102u64.to_le_bytes().to_vec();
+        expected.extend_from_slice(&12u32.to_le_bytes());
+        expected.extend_from_slice(&120_000u32.to_le_bytes());
+        assert_eq!(body, expected);
+    }
 
     #[test]
     fn a_truncated_movement_block_is_never_framed() {

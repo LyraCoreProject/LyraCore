@@ -253,6 +253,7 @@ mod skill;
 mod skilldata;
 mod spell;
 mod stats;
+mod summoning_ritual;
 mod tables;
 mod talent;
 mod taxi;

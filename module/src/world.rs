@@ -638,6 +638,7 @@ fn relocate(
     if changes_partition {
         crate::duel::interrupt_duel_for(ctx, player_guid);
         crate::trade::cancel_trade_for(ctx, player_guid);
+        crate::summoning_ritual::character_left(ctx, player_guid);
     }
     let teleport_counter = crate::native::teleport::begin(ctx, player_guid, cross_map);
     // Drop queued pre-teleport motion so the next publish cannot snap peers back.

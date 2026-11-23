@@ -12,6 +12,7 @@ impl WorldEntity {
         crate::breath::clear(ctx, guid);
         crate::combo::forget(ctx, guid);
         crate::transport::leave(ctx, guid);
+        crate::summoning_ritual::character_left(ctx, guid);
         crate::aoi::entity_removed(ctx, guid);
         if removed {
             crate::native::realm_party::package::presence(ctx, guid);

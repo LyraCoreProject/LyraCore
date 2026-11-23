@@ -4,7 +4,7 @@ use spacetimedb::{ReducerContext, Table};
 use super::game_native_world_connection;
 use crate::game_hunter_pet_protocol;
 use crate::game_item_template;
-use crate::gameobject::game_gameobject_template;
+use crate::gameobject::{game_gameobject_ritual, game_gameobject_template};
 use crate::transport::game_transport;
 use crate::{
     game_creature_template, game_meeting_stone, game_npc_text, game_npc_text_slot,
@@ -48,12 +48,29 @@ pub(super) fn gameobject(ctx: &ReducerContext, entry: u32) -> ServerOpcodeMessag
             .entry()
             .find(entry)
             .map(|row| {
-                let stone = (row.type_id == lyracore_shared::constants::go_type::MEETINGSTONE)
-                    .then(|| ctx.db.game_meeting_stone().entry().find(entry))
-                    .flatten();
-                let (data0, data1, data2) = stone.map_or((row.data0, row.data1, 0), |stone| {
-                    (stone.min_level, stone.max_level, stone.area_id)
-                });
+                use lyracore_shared::constants::go_type;
+                let (data0, data1, data2) = match row.type_id {
+                    go_type::MEETINGSTONE => ctx
+                        .db
+                        .game_meeting_stone()
+                        .entry()
+                        .find(entry)
+                        .map(|stone| (stone.min_level, stone.max_level, stone.area_id)),
+                    go_type::SUMMONING_RITUAL => ctx
+                        .db
+                        .game_gameobject_ritual()
+                        .entry()
+                        .find(entry)
+                        .map(|ritual| {
+                            (
+                                ritual.required_participants,
+                                ritual.spell_id,
+                                ritual.anim_spell_id,
+                            )
+                        }),
+                    _ => None,
+                }
+                .unwrap_or((row.data0, row.data1, 0));
                 codec::GameObjectTemplateView {
                     type_id: row.type_id,
                     display_id: row.display_id,

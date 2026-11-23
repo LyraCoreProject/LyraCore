@@ -142,6 +142,7 @@ pub mod cast_failure {
     pub const TARGET_AURASTATE: u8 = 0x67;
     pub const TARGETS_DEAD: u8 = 0x65;
     pub const TARGET_DUELING: u8 = 0x68;
+    pub const TARGET_NOT_IN_INSTANCE: u8 = 0x7F;
     pub const TOO_CLOSE: u8 = 0x76;
     pub const UNIT_NOT_INFRONT: u8 = 0x7C;
 }

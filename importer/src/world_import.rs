@@ -83,6 +83,7 @@ const GO_QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER;
 const GO_CHEST: u8 = 3;
 const GO_GOOBER: u8 = 10;
 const GO_MEETINGSTONE: u8 = lyracore_shared::constants::go_type::MEETINGSTONE;
+const GO_SUMMONING_RITUAL: u8 = lyracore_shared::constants::go_type::SUMMONING_RITUAL;
 // Synthetic GATHER collides with vanilla FISHINGHOLE type 25; classify raw types first.
 const GO_GATHER: u8 = 25;
 const VANILLA_FISHINGHOLE_TYPE: u32 = 25;
@@ -1456,8 +1457,18 @@ struct GoMeta {
     trap_spell_id: u32,
     trap_cooldown_secs: u32,
     meeting_stone_area_id: u32,
+    ritual: Option<GoRitual>,
     size: f32,
     money: (u32, u32),
+}
+
+// vmangos GameObjectInfo summoningRitual: data0, data1, data2, data3 and data6.
+struct GoRitual {
+    required_participants: u32,
+    spell_id: u32,
+    anim_spell_id: u32,
+    persistent: bool,
+    casters_grouped: bool,
 }
 
 struct GameobjectSpawns {
@@ -1528,6 +1539,17 @@ fn collect_gameobject_spawns(
             } else {
                 0
             };
+            let ritual = if stored_type == GO_SUMMONING_RITUAL {
+                Some(GoRitual {
+                    required_participants: data0,
+                    spell_id: row.number(got::DATA1)?,
+                    anim_spell_id: row.number(got::DATA2)?,
+                    persistent: row.number::<u32>(got::DATA3)? != 0,
+                    casters_grouped: row.number::<u32>(got::DATA6)? != 0,
+                })
+            } else {
+                None
+            };
             let size: f32 = row.number(got::SIZE)?;
             let money = if stored_type == GO_CHEST {
                 (row.number(got::MIN_GOLD)?, row.number(got::MAX_GOLD)?)
@@ -1545,6 +1567,7 @@ fn collect_gameobject_spawns(
                     trap_spell_id,
                     trap_cooldown_secs,
                     meeting_stone_area_id,
+                    ritual,
                     size,
                     money,
                 },
@@ -1641,6 +1664,7 @@ fn gameobject_template_rows(
     let mut go_template_rows: Vec<String> = Vec::new();
     let mut go_trap_rows: Vec<String> = Vec::new();
     let mut go_meeting_stone_rows: Vec<String> = Vec::new();
+    let mut go_ritual_rows: Vec<String> = Vec::new();
     let mut go_type_histogram: std::collections::BTreeMap<u8, u32> =
         std::collections::BTreeMap::new();
     for entry in required_entries {
@@ -1667,6 +1691,16 @@ fn gameobject_template_rows(
                 meta.data0, meta.data1, meta.meeting_stone_area_id
             ));
         }
+        if let Some(ritual) = &meta.ritual {
+            go_ritual_rows.push(format!(
+                "({entry},{},{},{},{},{})",
+                ritual.required_participants,
+                ritual.spell_id,
+                ritual.anim_spell_id,
+                ritual.persistent,
+                ritual.casters_grouped
+            ));
+        }
     }
     const GO_LIVE_TYPE_NAMES: &[(u8, &str)] = &[
         (GO_DOOR, "DOOR"),
@@ -1674,6 +1708,7 @@ fn gameobject_template_rows(
         (GO_CHEST, "CHEST"),
         (GO_GOOBER, "GOOBER"),
         (GO_GATHER, "GATHER"),
+        (GO_SUMMONING_RITUAL, "RITUAL"),
     ];
     eprintln!(
         "gameobject type coverage ({} templates, {} spawns):",
@@ -1708,6 +1743,7 @@ fn gameobject_template_rows(
         templates: go_template_rows,
         traps: go_trap_rows,
         meeting_stones: go_meeting_stone_rows,
+        rituals: go_ritual_rows,
     })
 }
 
@@ -1943,27 +1979,29 @@ fn gossip_statements(stmts: &mut Vec<String>, gossip: &GossipEtl) {
         );
 }
 
-fn push_gameobject_statements(
-    stmts: &mut Vec<String>,
-    go_template_rows: &[String],
-    go_trap_rows: &[String],
-    go_meeting_stone_rows: &[String],
-) {
+fn push_gameobject_statements(stmts: &mut Vec<String>, templates: &GameobjectTemplateRows) {
     stmts.push("DELETE FROM game_gameobject_trap WHERE entry > 0".into());
     stmts.push("DELETE FROM game_meeting_stone WHERE entry > 0".into());
+    stmts.push("DELETE FROM game_gameobject_ritual WHERE entry > 0".into());
     stmts.push("DELETE FROM game_gameobject_template WHERE entry > 0".into());
-    push_insert(stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size,money_min,money_max", go_template_rows);
+    push_insert(stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size,money_min,money_max", &templates.templates);
     push_insert(
         stmts,
         "game_gameobject_trap",
         "entry,spell_id,cooldown_secs",
-        go_trap_rows,
+        &templates.traps,
     );
     push_insert(
         stmts,
         "game_meeting_stone",
         "entry,min_level,max_level,area_id",
-        go_meeting_stone_rows,
+        &templates.meeting_stones,
+    );
+    push_insert(
+        stmts,
+        "game_gameobject_ritual",
+        "entry,required_participants,spell_id,anim_spell_id,persistent,casters_grouped",
+        &templates.rituals,
     );
 }
 
@@ -2317,12 +2355,7 @@ fn vmangos_gameobjects_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Re
     let spawns = collect_gameobject_spawns(dump, &args.scope)?;
     let templates = gameobject_template_rows(&spawns, &Default::default())?;
     let mut stmts = Vec::new();
-    push_gameobject_statements(
-        &mut stmts,
-        &templates.templates,
-        &templates.traps,
-        &templates.meeting_stones,
-    );
+    push_gameobject_statements(&mut stmts, &templates);
     stmts.extend(transport_statements(dump, args.dbc.as_deref())?);
     let count = insert_row_count(&stmts) + spawns.go_packed_rows.len() as u64;
     Ok(DumpPlan {
@@ -2752,6 +2785,7 @@ struct GameobjectTemplateRows {
     templates: Vec<String>,
     traps: Vec<String>,
     meeting_stones: Vec<String>,
+    rituals: Vec<String>,
 }
 
 #[cfg(test)]

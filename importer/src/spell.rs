@@ -59,11 +59,12 @@ use lyracore_shared::spell::taxonomy::{
     E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING,
     E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT,
     E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE,
-    E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT,
-    M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG,
-    P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW,
-    P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
-    SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
+    E_SUMMON_OBJECT, E_SUMMON_PET, E_SUMMON_PLAYER, E_TAME_CREATURE, E_TAUNT, E_TRIGGER,
+    E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT,
+    P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY,
+    P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SKILL_LINE,
+    P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
     T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
@@ -414,7 +415,7 @@ fn resolve_instant_params(kind: u8, misc: u32, item_type: i32) -> (i32, u8) {
         E_DISPEL => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         E_CREATE_ITEM => (item_type, P_ITEM_ENTRY),
         E_SUMMON_PET | E_SUMMON_GUARDIANS => (misc as i32, P_ENTRY),
-        E_DUEL => (misc as i32, P_GAMEOBJECT_ENTRY),
+        E_DUEL | E_SUMMON_OBJECT => (misc as i32, P_GAMEOBJECT_ENTRY),
         E_SELF_RESURRECT => (misc as i32, P_FLAT_MANA),
         E_ENCHANT_ITEM_TEMPORARY => (misc as i32, P_ENCHANT_ID),
         _ => (0, P_NONE),
@@ -1433,8 +1434,10 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         | E_SUMMON_GUARDIANS
         | E_SELF_RESURRECT
         | E_RECALL_HOME
-        | E_ENCHANT_ITEM_TEMPORARY => T_SELF,
+        | E_ENCHANT_ITEM_TEMPORARY
+        | E_SUMMON_OBJECT => T_SELF,
         E_DUEL => T_TARGET_ANY,
+        E_SUMMON_PLAYER => T_TARGET_ALLY,
         _ => target,
     };
     let overrides = header.overrides;
@@ -1705,6 +1708,8 @@ fn kind_name(kind: u8) -> &'static str {
         E_FEED_PET => "E_FEED_PET",
         E_POWER_BURN => "E_POWER_BURN",
         E_DUEL => "E_DUEL",
+        E_SUMMON_OBJECT => "E_SUMMON_OBJECT",
+        E_SUMMON_PLAYER => "E_SUMMON_PLAYER",
         E_SELF_RESURRECT => "E_SELF_RESURRECT",
         E_SCRIPTED => "E_SCRIPTED",
         A_PERIODIC_DAMAGE => "A_PERIODIC_DAMAGE",
@@ -4403,6 +4408,17 @@ mod tests {
         assert_eq!(instant_effect_to_kind(19), E_ADD_EXTRA_ATTACKS);
         assert_eq!(instant_effect_to_kind(54), E_ENCHANT_ITEM_TEMPORARY);
         assert_eq!(instant_effect_to_kind(112), E_SCRIPTED);
+    }
+
+    #[test]
+    fn a_ritual_places_its_object_and_its_effect_summons_a_player() {
+        assert_eq!(instant_effect_to_kind(50), E_SUMMON_OBJECT);
+        assert_eq!(
+            resolve_instant_params(E_SUMMON_OBJECT, 36727, 0),
+            (36727, P_GAMEOBJECT_ENTRY)
+        );
+        assert_eq!(instant_effect_to_kind(85), E_SUMMON_PLAYER);
+        assert_eq!(resolve_instant_params(E_SUMMON_PLAYER, 0, 0), (0, P_NONE));
     }
 
     #[test]

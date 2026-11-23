@@ -196,6 +196,14 @@ pub(crate) mod character_owned_tripwire {
             "transient spell state removed, consumed, or made inert by its deadline",
         ),
         (
+            &[
+                "game_summon_offer",
+                "game_summoning_ritual",
+                "game_summoning_ritual_participant",
+            ],
+            "Summoning Ritual channels and Summon Offers end when their Character leaves its map, Instance or the world, or at their deadline",
+        ),
+        (
             &["game_corpse_loot", "game_corpse_loot_eligible"],
             "corpse-owned loot state removed when the corpse decays",
         ),

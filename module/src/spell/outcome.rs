@@ -98,6 +98,7 @@ cast_refusal_reasons! {
     NoDueling = 30,
     TargetDueling = 31,
     NoChargesRemain = 32,
+    TargetNotInInstance = 33,
 }
 
 impl CastRefusalReason {
