@@ -37,8 +37,8 @@ const MISSING_REAGENT: &str = "34";
 fn a_spell_short_of_its_reagents_is_refused_before_it_spends_power() {
     let (shard, mage) = native_realm("reagents-missing");
     mending(&shard, 0, MANA_COST);
-    shard.assert_call("debug_learn_spell", &[&mage, &MENDING.to_string()]);
     let mut connection = enter(&shard, &mage);
+    shard.assert_call("debug_learn_spell", &[&mage, &MENDING.to_string()]);
     grant(&shard, &mage, REAGENT, REAGENT_COUNT - 1);
     shard.assert_call("debug_set_power", &[&mage, "100"]);
 

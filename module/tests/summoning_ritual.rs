@@ -7,7 +7,7 @@ use lyracore_shared::spell::taxonomy::{
     T_TARGET_ALLY,
 };
 use support::{
-    distance, event_rows, poll_until, position, stage_group, Row, Standalone, POLL_TIMEOUT,
+    distance, event_rows, number, poll_until, position, stage_group, Row, Standalone, POLL_TIMEOUT,
 };
 
 const WARLOCK: u64 = 509_4101;
@@ -20,6 +20,7 @@ const WARRIOR_CLASS: u8 = 1;
 const RITUAL_OF_SUMMONING: u32 = 698;
 const RITUAL_OF_SUMMONING_EFFECT: u32 = 7720;
 const SUMMONING_PORTAL: u32 = 36727;
+// The seeded Soul Shard, `crate::combat::SOUL_SHARD_ENTRY`.
 const SOUL_SHARD: u32 = 6265;
 // vmangos gameobject_template 36727: three Ritual Participants, spell 7720 and anim spell 698.
 const REQUIRED_PARTICIPANTS: u32 = 3;
@@ -308,14 +309,6 @@ fn the_warlock_cancelling_during_the_ritual_cast_removes_the_portal_and_offers_n
 fn the_warlock_spends_one_soul_shard_on_the_ritual_and_none_on_its_completion() {
     let realm = start("summoning-ritual-soul-shard");
     stage_group(&realm, WARLOCK, &[PARTICIPANT_A, PARTICIPANT_B, TARGET]);
-    realm.insert_row(
-        "game_item_template",
-        &[
-            ("entry", &SOUL_SHARD),
-            ("name", &"Soul Shard"),
-            ("max_stack", &1),
-        ],
-    );
     // Spell.dbc reagent slot 0 under the importer's `spell_id << 3 | slot` key.
     for spell_id in [RITUAL_OF_SUMMONING, RITUAL_OF_SUMMONING_EFFECT] {
         realm.insert_row(
@@ -328,12 +321,10 @@ fn the_warlock_spends_one_soul_shard_on_the_ritual_and_none_on_its_completion() 
             ],
         );
     }
-    for _ in 0..2 {
-        realm.assert_call(
-            "debug_grant_item",
-            &[&WARLOCK.to_string(), &SOUL_SHARD.to_string(), "1"],
-        );
-    }
+    realm.assert_call(
+        "debug_grant_item",
+        &[&WARLOCK.to_string(), &SOUL_SHARD.to_string(), "2"],
+    );
 
     let portal_guid = open_ritual(&realm);
     assert_eq!(
@@ -353,10 +344,12 @@ fn the_warlock_spends_one_soul_shard_on_the_ritual_and_none_on_its_completion() 
     );
 }
 
-fn soul_shards(realm: &Standalone) -> usize {
+fn soul_shards(realm: &Standalone) -> u32 {
     realm
         .query_rows(&format!(
-            "SELECT guid FROM game_item_instance WHERE owner_guid = {WARLOCK} AND entry = {SOUL_SHARD}"
+            "SELECT stack_count FROM game_item_instance WHERE owner_guid = {WARLOCK} AND entry = {SOUL_SHARD}"
         ))
-        .len()
+        .iter()
+        .map(|row| number::<u32>(row, "stack_count"))
+        .sum()
 }
