@@ -45,10 +45,16 @@ symbol = "build_queued_strike_swing"
 evidence = "Source reading at d9173eca: Spell.cpp Spell::SendMeleeAttackingStateUpdate, SpellCaster.cpp RollMeleeOutcomeAgainst sets the ROLLED_* flags, Unit.cpp SetDamageIndependentHitInfoFlags and SetDamageDependentHitInfoFlags. LyraCore: module/src/combat/swing.rs fire_melee_swing writes no absorbed amount on the queued strike's GO row when a seal portion is folded in."
 
 [[known_gaps]]
-description = "An avoided instant cast reaches its caster as an SMSG_SPELL_GO that lists the target as hit, plus SMSG_SPELLLOGMISS (#1186). vmangos sends the caster and observers one GO with the avoided target in the miss list and no SMSG_SPELLLOGMISS for a miss, dodge or parry. Tier 1 cannot classify an avoided Mortal Strike, so white_melee_outcomes holds weapon_strike_sample at both levels for both public seeds and the cast Weapon Strike's rates stay unmeasured. After #1186 the block category still fails: a cast Weapon Strike is never partially blocked (spells/spell_cast_kinds.toml, hit_roll), so its damage log reports blocked 0. Since #1177 the damage log carries a blocked amount, but only a queued strike's GO row writes one."
-path = "module/src/native/cast.rs"
-symbol = "receive"
-evidence = "Source reading at d9173eca: Spell.cpp Spell::SendSpellGo and Spell::WriteSpellGoTargets; SMSG_SPELLLOGMISS reports immune and evade in Spell::DoSpellHitOnUnit and a resisted damage shield in Unit.cpp, never a miss, dodge or parry. LyraCore: native/cast.rs receive sends the instant-cast prelude GO with build_spell_go(target); native/spell.rs cast_event_messages sends the resolved GO to Peers and SMSG_SPELLLOGMISS to the source. ADR 0007 derives the cast Weapon Strike's rates; module/tests/conformance/weapon_strikes.rs collects them."
+description = "A cast Weapon Strike is never partially blocked, so its damage log reports blocked 0. vmangos rolls a landed melee spell's partial block after the attack table and reports the blocked amount. Since #1177 the damage log carries a blocked amount, but only a queued strike's GO row writes one. Tier 1 classifies every cast Mortal Strike since #1186, so white_melee_outcomes reports weapon_strike_distribution for the block category at both levels for both public seeds."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "hit_roll"
+evidence = "Source reading at d9173eca: Spell.cpp:1369-1429 calls Unit.cpp:2205-2233, whose melee branch calls IsSpellPartiallyBlocked (Unit.cpp:2351-2395). LyraCore: hit_roll discards the attack table's partial_block. ADR 0007 derives the cast Weapon Strike's rates; module/tests/conformance/weapon_strikes.rs collects them."
+
+[[known_gaps]]
+description = "An SMSG_SPELL_GO names only the cast's primary target: it lists that unit as hit or missed and leaves every other unit target out. vmangos Spell::WriteSpellGoTargets lists every unit target with its own hit or miss result, so an area or chain spell's GO differs."
+path = "module/src/native/spell.rs"
+symbol = "spell_go"
+evidence = "Source reading at d9173eca: Spell.cpp:4625-4653 Spell::WriteSpellGoTargets writes m_UniqueTargetInfo. LyraCore: SpellCastEvent keeps one target_guid and one miss_info, and spell_go builds one hit or one miss from them."
 
 [[known_gaps]]
 description = "Other white melee contexts retain the legacy Character dodge formula, Character parry and block eligibility, creature crushing chance, weapon-skill bonuses and offhand weapon-skill selection. Controlled units, ranged Weapon Strikes, ranged swings and target-side hit/crit auras need separate conformance."

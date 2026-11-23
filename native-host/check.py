@@ -4678,7 +4678,7 @@ def check_auras(host):
     peer.send(0x12e, cast(168))
     buff = peer.collect()
     observed = client.collect()
-    assert [opcode for opcode, _ in without_stray_destroys(buff, peer_guid)][:3] == [0x131, 0x130, 0x132]
+    assert [opcode for opcode, _ in without_stray_destroys(buff, peer_guid)][:2] == [0x131, 0x130]
     assert sum(opcode == 0x132 and spell_id(body) == 168 for opcode, body in buff) == 1
     assert sum(opcode == 0x132 and spell_id(body) == 168 for opcode, body in observed) == 1
     assert any(opcode == 0x137 and 5900 <= struct.unpack_from('<I', body, 1)[0] <= 6000 for opcode, body in buff)
@@ -4870,16 +4870,16 @@ def check_combo_points(host):
         packets = []
         def finished():
             packets.extend(rogue.collect())
-            return (1222 in values(packets, guid)
-                    or any(opcode == 0x24b for opcode, _ in packets))
-        host.wait_until(finished, 'the finisher neither spent its points nor reported a miss')
-        # Client-initiated casts report avoidance through SPELLLOGMISS after their launch GO.
-        missed = [struct.unpack('<IQBIQB', body) for opcode, body in packets if opcode == 0x24b]
+            return any(opcode == 0x132 and spell_id(body) == 133 for opcode, body in packets)
+        host.wait_until(finished, 'the finisher sent its caster no SMSG_SPELL_GO')
+        # vmangos reports a miss, dodge or parry in the GO miss list and sends no SPELLLOGMISS.
+        gos = [body for opcode, body in packets if opcode == 0x132 and spell_id(body) == 133]
+        assert len(gos) == 1 and not any(opcode == 0x24b for opcode, _ in packets), packets
+        missed = spell_go_misses(gos[0])
         if not missed:
             assert shown(packets) == (first, 0)
             break
-        assert len(missed) == 1 and missed[0][:5] == (133, guid, 0, 1, first), missed
-        assert missed[0][5] in (1, 3, 4), missed
+        assert len(missed) == 1 and missed[0][0] == first and missed[0][1] in (1, 3, 4), missed
         assert host.rows(held) == [[first, 2]], 'an avoided finisher consumed combo points'
     else:
         raise AssertionError('all finisher casts were avoided')

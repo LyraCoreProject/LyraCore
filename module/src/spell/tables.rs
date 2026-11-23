@@ -872,7 +872,7 @@ pub struct SpellCastEvent {
     pub is_proc_log: bool,
     #[default(0u8)]
     pub swing_hit_info: u8,
-    // Client-initiated casts received synchronous packets, so relays must suppress duplicates.
+    // The caster's own cast handler already sent it START and CAST_RESULT.
     #[default(false)]
     pub client_initiated: bool,
     // SpacetimeDB encodes an untyped zero as u32; u64 defaults must be typed.
@@ -944,7 +944,16 @@ impl SpellImpactEvent {
 
 impl SpellCastEvent {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
-        crate::native::spell::cast_event(ctx, &row);
+        Self::insert_at(ctx, row, None)
+    }
+
+    /// Inserts a resolved cast's row; its SMSG_SPELL_GO names the cast's ground point.
+    pub(crate) fn insert_at(
+        ctx: &ReducerContext,
+        row: Self,
+        ground_point: Option<(f32, f32, f32)>,
+    ) -> Self {
+        crate::native::spell::cast_event(ctx, &row, ground_point);
         ctx.db.game_spell_cast_event_live().insert(row)
     }
 

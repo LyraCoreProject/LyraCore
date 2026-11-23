@@ -31,12 +31,50 @@ fn deliver(ctx: &ReducerContext, caster: u64, audience: EventAudience, packet: P
     }
 }
 
-pub(crate) fn cast_event(ctx: &ReducerContext, event: &SpellCastEvent) {
+/// Delivers one cast event; a GO row's SMSG_SPELL_GO names `ground_point` when the cast has one.
+pub(crate) fn cast_event(
+    ctx: &ReducerContext,
+    event: &SpellCastEvent,
+    ground_point: Option<(f32, f32, f32)>,
+) {
     if ctx.db.game_native_player().count() == 0 {
         return;
     }
-    for (audience, packet) in cast_event_messages(event, projectile(ctx, event)) {
+    let go_targets = go_targets(ctx, event, ground_point);
+    for (audience, packet) in cast_event_messages(event, projectile(ctx, event), go_targets) {
         deliver(ctx, event.caster_guid, audience, packet);
+    }
+}
+
+/// The target block of a GO; vmangos `Spell::SendSpellGo` writes the cast's own targets.
+#[derive(Clone, Copy)]
+enum GoTargets {
+    Unit,
+    /// A persistent area hits the ground, so its GO lists no unit as hit.
+    Area,
+    GroundPoint((f32, f32, f32)),
+}
+
+fn go_targets(
+    ctx: &ReducerContext,
+    event: &SpellCastEvent,
+    ground_point: Option<(f32, f32, f32)>,
+) -> GoTargets {
+    use crate::game_spell_effect;
+    if let Some(point) = ground_point {
+        return GoTargets::GroundPoint(point);
+    }
+    let area = event.kind == SpellCastEventKind::Go as u8
+        && ctx
+            .db
+            .game_spell_effect()
+            .by_spell()
+            .filter(event.spell_id)
+            .any(|effect| effect.kind == crate::spell::E_PERSISTENT_AREA);
+    if area {
+        GoTargets::Area
+    } else {
+        GoTargets::Unit
     }
 }
 
@@ -160,6 +198,7 @@ fn strike_swing(row: &SpellCastEvent) -> Option<Packet> {
 fn cast_event_messages(
     row: &SpellCastEvent,
     ammo: Option<(u32, u32)>,
+    go_targets: GoTargets,
 ) -> Vec<(EventAudience, Packet)> {
     let mut out = Vec::new();
     let kind = match row.kind {
@@ -219,7 +258,8 @@ fn cast_event_messages(
         ));
         return out;
     }
-    let launch_audience = if row.client_initiated {
+    // A client-initiated cast's own handler already sent its caster START and CAST_RESULT.
+    let start_audience = if row.client_initiated {
         EventAudience::Peers
     } else {
         EventAudience::Everyone
@@ -227,7 +267,7 @@ fn cast_event_messages(
     if !row.is_completion {
         let start = codec::build_spell_start(row.caster_guid, row.spell_id, 0, 0, ammo);
         out.push((
-            launch_audience,
+            start_audience,
             message(ServerOpcodeMessage::SMSG_SPELL_START(Box::new(start))),
         ));
     }
@@ -241,46 +281,13 @@ fn cast_event_messages(
             },
         ));
     }
-    let mut go = codec::build_spell_go(row.caster_guid, row.spell_id, row.target_guid, ammo);
-    if row.is_completion && row.damage == 0 {
-        use wow_world_messages::vanilla::SpellMiss;
-        if let Some(mi) = swing_miss_info(row.swing_hit_info) {
-            go.hits.clear();
-            go.misses = vec![SpellMiss {
-                target: wow_world_messages::Guid::new(row.target_guid),
-                miss_info: mi,
-            }];
-        }
-    }
-    if let Some(mi) = cast_miss_info(row.miss_info) {
-        use wow_world_messages::vanilla::SpellMiss;
-        go.hits.clear();
-        go.misses = vec![SpellMiss {
-            target: wow_world_messages::Guid::new(row.target_guid),
-            miss_info: mi,
-        }];
-    }
+    // vmangos Spell::SendSpellGo: one GO, with its hit and miss lists, to the caster and observers.
     out.push((
-        launch_audience,
-        message(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(go))),
+        EventAudience::Everyone,
+        message(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(spell_go(
+            row, ammo, go_targets,
+        )))),
     ));
-    if row.client_initiated {
-        if let Some(mi) = cast_miss_info(row.miss_info) {
-            // The cast handler already sent this caster a GO listing the target as hit.
-            out.push((
-                EventAudience::Source,
-                Packet {
-                    opcode: codec::SMSG_SPELLLOGMISS_OPCODE,
-                    body: codec::build_spell_log_miss(
-                        row.caster_guid,
-                        row.spell_id,
-                        row.target_guid,
-                        mi.as_int(),
-                    ),
-                },
-            ));
-        }
-    }
 
     // vmangos sends a queued strike's swing after its GO and before its damage log.
     out.extend(strike_swing(row).map(|packet| (EventAudience::Everyone, packet)));
@@ -322,6 +329,25 @@ fn cast_event_messages(
         out.push((EventAudience::Source, packet));
     }
     out
+}
+
+fn spell_go(
+    row: &SpellCastEvent,
+    ammo: Option<(u32, u32)>,
+    go_targets: GoTargets,
+) -> wow_world_messages::vanilla::SMSG_SPELL_GO {
+    let (caster, spell) = (row.caster_guid, row.spell_id);
+    match go_targets {
+        GoTargets::GroundPoint(point) => codec::build_spell_go_dest(caster, spell, point),
+        GoTargets::Area => codec::build_spell_go_area(caster, spell),
+        GoTargets::Unit => {
+            let swing_miss = (row.is_completion && row.damage == 0)
+                .then(|| swing_miss_info(row.swing_hit_info))
+                .flatten();
+            let miss = cast_miss_info(row.miss_info).or(swing_miss);
+            codec::build_spell_go_outcome(caster, spell, row.target_guid, ammo, miss)
+        }
+    }
 }
 
 /// The SMSG_SPELL_GO miss for an `AttackOutcome::wire` code that deals no damage.
@@ -420,12 +446,12 @@ mod tests {
     fn zero_damage_still_logs_absorption_and_resistance() {
         let mut row = event();
         row.kind = SpellCastEventKind::ProcLog as u8;
-        assert!(cast_event_messages(&row, None).is_empty());
+        assert!(cast_event_messages(&row, None, GoTargets::Unit).is_empty());
         for (damage, absorbed, resisted) in [(1, 0, 0), (0, 1, 0), (0, 0, 1)] {
             row.damage = damage;
             row.absorbed = absorbed;
             row.resisted = resisted;
-            let packets = cast_event_messages(&row, None);
+            let packets = cast_event_messages(&row, None, GoTargets::Unit);
             assert_eq!(packets.len(), 1);
             assert_eq!(packets[0].1.opcode, 0x0250);
             assert!(matches!(packets[0].0, EventAudience::Everyone));
@@ -475,7 +501,7 @@ mod tests {
             row.caster_guid = caster;
             row.target_guid = caster;
             row.client_initiated = client_initiated;
-            let packets = cast_event_messages(&row, None);
+            let packets = cast_event_messages(&row, None, GoTargets::Unit);
             let cooldowns: Vec<_> = packets
                 .iter()
                 .filter(|(_, packet)| packet.opcode == 0x0134)
@@ -486,10 +512,33 @@ mod tests {
                 .iter()
                 .find(|(_, packet)| packet.opcode == 0x0132)
                 .unwrap();
-            assert!(matches!(
-                go.0,
-                EventAudience::Peers | EventAudience::Everyone
-            ));
+            assert!(matches!(go.0, EventAudience::Everyone));
+        }
+    }
+
+    #[test]
+    fn an_avoided_client_cast_reaches_its_caster_as_one_go_with_the_target_missed() {
+        let mut row = event();
+        row.target_guid = 9;
+        row.client_initiated = true;
+        row.cooldown_ms = 0;
+        for (miss_info, reason) in [
+            (crate::spell::CAST_MISS_MISS, 1),
+            (crate::spell::CAST_MISS_DODGE, 3),
+            (crate::spell::CAST_MISS_PARRY, 4),
+            (crate::spell::CAST_MISS_IMMUNE, 7),
+        ] {
+            row.miss_info = miss_info;
+            let packets = cast_event_messages(&row, None, GoTargets::Unit);
+            let opcodes: Vec<_> = packets.iter().map(|(_, packet)| packet.opcode).collect();
+            assert_eq!(opcodes, [0x0131, 0x0132], "START to peers, then the GO");
+            assert!(matches!(packets[0].0, EventAudience::Peers));
+            assert!(matches!(packets[1].0, EventAudience::Everyone));
+            let go = &packets[1].1.body;
+            // Two 2-byte packed guids, spell u32, flags u16, hit count, miss count, then misses.
+            assert_eq!(&go[10..12], &[0, 1], "no hit and one miss: {go:?}");
+            assert_eq!(&go[12..20], &9u64.to_le_bytes(), "{go:?}");
+            assert_eq!(go[20], reason, "{go:?}");
         }
     }
 
@@ -517,7 +566,7 @@ mod tests {
         row.kind = SpellCastEventKind::Interrupt as u8;
         row.is_interrupted = true;
         row.failure_reason = CastRefusalReason::OutOfRange.failure_code();
-        let packets = cast_event_messages(&row, None);
+        let packets = cast_event_messages(&row, None, GoTargets::Unit);
         assert_eq!(packets.len(), 2);
         assert!(matches!(packets[0].0, EventAudience::Everyone));
         assert_ne!(packets[0].1.opcode, codec::SMSG_CAST_RESULT_OPCODE);
@@ -534,7 +583,7 @@ mod tests {
         let mut row = event();
         row.kind = SpellCastEventKind::Interrupt as u8;
         row.is_interrupted = true;
-        let packets = cast_event_messages(&row, None);
+        let packets = cast_event_messages(&row, None, GoTargets::Unit);
         assert_eq!(packets.len(), 1);
         assert!(matches!(packets[0].0, EventAudience::Everyone));
     }

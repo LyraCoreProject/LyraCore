@@ -760,7 +760,7 @@ fn run_spell_effects(
         );
     }
     let school_index = crate::spell::school_index(hdr.school_mask);
-    crate::SpellCastEvent::insert(
+    crate::SpellCastEvent::insert_at(
         ctx,
         SpellCastEvent {
             target_guid,
@@ -785,6 +785,7 @@ fn run_spell_effects(
             client_initiated: request.client_initiated,
             ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id, SpellCastEventKind::Go)
         },
+        dest,
     );
     finish_items(craft);
     finish_weapon_hits(ctx, caster_guid, weapon_targets, shield_targets);
