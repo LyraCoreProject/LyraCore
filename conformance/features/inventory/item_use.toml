@@ -21,6 +21,7 @@ tests = [
     { path = "module/tests/conformance/item_learn.rs", function = "a_pattern_teaches_only_a_character_with_its_profession", rung = "durable_module" },
     { path = "module/tests/conformance/item_learn.rs", function = "a_warrior_can_never_use_a_mage_tome", rung = "durable_module" },
     { path = "module/tests/conformance/item_learn.rs", function = "a_grimoire_teaches_its_user_nothing", rung = "durable_module" },
+    { path = "module/tests/conformance/item_learn.rs", function = "a_reputation_pattern_teaches_only_from_its_required_rank", rung = "durable_module" },
     { path = "importer/src/spell.rs", function = "a_learn_effect_teaches_its_target_but_a_grimoire_effect_stays_inert", rung = "unit" },
 ]
 
@@ -73,3 +74,9 @@ description = "An item's required spell is not checked before use. vmangos Playe
 path = "module/src/items/inventory.rs"
 symbol = "check_user_requirements"
 evidence = "The importer does not keep item_template.required_spell, so game_item_template has no required spell column."
+
+[[known_gaps]]
+description = "An item's required honor rank is not checked before use. vmangos Player::CanUseItem refuses an item, such as a PvP mount, whose RequiredHonorRank is above the Character's rank with EQUIP_ERR_CANT_EQUIP_RANK."
+path = "module/src/items/ops.rs"
+symbol = "apply_item_use_on"
+evidence = "game_item_template has no required honor rank column, and the Module keeps no honor rank."

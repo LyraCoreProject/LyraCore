@@ -159,7 +159,7 @@ pub(crate) fn trainer_buy_check(
     Ok(())
 }
 
-// Spell rows imported before E_LEARN_SPELL store a learn effect as E_SCRIPTED.
+// Trainers still read E_SCRIPTED with a trigger spell as a learn effect, as before E_LEARN_SPELL.
 fn learn_kind(kind: u8) -> u8 {
     use lyracore_shared::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED};
     if kind == E_SCRIPTED {

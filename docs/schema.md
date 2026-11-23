@@ -126,8 +126,9 @@ An `E_LEARN_SPELL` effect teaches a Character target its `trigger_spell` and tha
 spells, and teaches any other target nothing, as vmangos `Spell::EffectLearnSpell` does. A
 grimoire's learn effect aims at the caster's pet, so it imports as `E_SCRIPTED` and teaches
 nothing. An `E_CREATE_ITEM` effect that a creature casts on a Character fills that Character's
-bags. Every item use first checks the item's class and race masks and its required skill and rank,
-as vmangos `Player::CanUseItem` does; the item's required spell is not imported.
+bags. Every item use first checks the item's class and race masks, its required skill and rank,
+its required level and its required reputation rank, as vmangos `Player::CanUseItem` does. The
+item's required spell and required honor rank are not imported.
 
 ### The three migration rules that have bitten
 

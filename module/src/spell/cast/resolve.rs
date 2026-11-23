@@ -472,7 +472,7 @@ fn take_triggered_reagents(
     Ok(())
 }
 
-/// Commits a spell's reagents now; a craft returns its plan to commit with its products.
+/// Commits a spell's reagents now; a Character's craft returns its plan to commit with its items.
 fn take_reagents(
     ctx: &ReducerContext,
     caster: &WorldEntity,
@@ -481,7 +481,7 @@ fn take_reagents(
     reagents: &CastReagents,
     used_up_item: Option<u64>,
 ) -> Result<Option<Craft>, CastGateRefusal> {
-    let crafts = effects.iter().any(|effect| effect.kind == E_CREATE_ITEM);
+    let crafts = caster.is_player() && effects.iter().any(|effect| effect.kind == E_CREATE_ITEM);
     if !crafts && reagents.items.is_empty() {
         return Ok(None);
     }

@@ -10,6 +10,9 @@ const TEACHER: u32 = 900_702;
 const TAUGHT: u32 = 900_703;
 const TAILORING: u32 = 197;
 const MAGE_CLASS_MASK: u32 = 0x80;
+const FACTION: u32 = 900_710;
+const FRIENDLY_RANK: u32 = 4;
+const FRIENDLY_STANDING: i32 = 3000;
 
 struct Stage {
     shard: Standalone,
@@ -126,4 +129,37 @@ fn a_grimoire_teaches_its_user_nothing() {
 
     let _ = stage.use_book(&slot);
     assert!(!stage.knows_taught_spell());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_reputation_pattern_teaches_only_from_its_required_rank() {
+    let stage = stage("item-learn-reputation", E_LEARN_SPELL, T_TARGET_ALLY);
+    stage.shard.insert_row(
+        "game_faction",
+        &[
+            ("faction_id", &FACTION),
+            ("reputation_index", &50),
+            ("base_standing", &0),
+        ],
+    );
+    let slot = stage.book(&[
+        ("required_reputation_faction", FACTION),
+        ("required_reputation_rank", FRIENDLY_RANK),
+    ]);
+
+    let refusal = stage.use_book(&slot).unwrap_err();
+    assert!(refusal.contains("item:required_reputation"), "{refusal}");
+    assert!(!stage.knows_taught_spell());
+
+    stage.shard.assert_call(
+        "debug_grant_reputation",
+        &[
+            &stage.character.to_string(),
+            &FACTION.to_string(),
+            &FRIENDLY_STANDING.to_string(),
+        ],
+    );
+    stage.use_book(&slot).unwrap();
+    assert!(stage.knows_taught_spell());
 }
