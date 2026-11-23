@@ -377,6 +377,7 @@ fn verified_counts(
         target_level,
         &[95, 162],
         None,
+        &MELEE_POSE,
     )?;
     println!(
         "roll fixture {shard_name}: verified {} level-60 human warriors, agility 100, unarmed/defense 300/300, no items or auras",
@@ -385,7 +386,18 @@ fn verified_counts(
     Ok(counts)
 }
 
-/// Checks the pinned warrior, target, skills, health and positions of each (Character, target).
+/// The Character class and the target's distance straight ahead that a roll context pins.
+pub(super) struct Pose {
+    pub(super) class: u8,
+    pub(super) distance: f32,
+}
+
+pub(super) const MELEE_POSE: Pose = Pose {
+    class: 1,
+    distance: 2.0,
+};
+
+/// Checks the pinned Character, target, skills, health and positions of each (Character, target).
 /// `target_aura` names the one spell whose Aura a target may hold.
 pub(super) fn verify_participants(
     shard: &Standalone,
@@ -394,6 +406,7 @@ pub(super) fn verify_participants(
     target_level: u32,
     skill_lines: &[u32],
     target_aura: Option<u32>,
+    pose: &Pose,
 ) -> Result<()> {
     let auras = shard.query_database_rows(shard_name, "SELECT target_guid,spell_id FROM game_aura");
     ensure!(
@@ -429,7 +442,9 @@ pub(super) fn verify_participants(
             .find(|row| row["guid"] == guid.to_string())
             .context("roll Character identity disappeared")?;
         ensure!(
-            identity["race"] == "1" && identity["class"] == "1" && identity["level"] == "60",
+            identity["race"] == "1"
+                && identity["class"] == pose.class.to_string()
+                && identity["level"] == "60",
             "roll Character race, class or level changed"
         );
         ensure!(
@@ -464,7 +479,7 @@ pub(super) fn verify_participants(
             Ok(row.get(name).context("roll coordinate missing")?.parse()?)
         };
         ensure!(
-            (coordinate(target, "x")? - coordinate(entity, "x")? - 2.0).abs() < 0.01
+            (coordinate(target, "x")? - coordinate(entity, "x")? - pose.distance).abs() < 0.01
                 && (coordinate(target, "y")? - coordinate(entity, "y")?).abs() < 0.01
                 && (coordinate(target, "z")? - coordinate(entity, "z")?).abs() < 0.01
                 && coordinate(entity, "orientation")?.cos() > 0.9999
@@ -607,6 +622,9 @@ pub(super) fn public_seeds() -> Result<()> {
     comparison
         .differences
         .extend(super::weapon_strikes::public_seeds(golden.scenario())?);
+    comparison
+        .differences
+        .extend(super::ranged_swings::public_seeds(golden.scenario())?);
     super::tier1::record_and_check(
         "white_melee_outcomes",
         &path,
@@ -675,6 +693,9 @@ pub(super) fn merge_seed(commit: &str) -> Result<()> {
     comparison
         .differences
         .extend(super::weapon_strikes::merge_seed(golden.scenario(), seed)?);
+    comparison
+        .differences
+        .extend(super::ranged_swings::merge_seed(golden.scenario(), seed)?);
     println!(
         "merge {commit}: {}",
         serde_json::to_string_pretty(

@@ -185,7 +185,7 @@ mod fixture {
         seed: u64,
         stream: u64,
     ) -> Result<(), String> {
-        use crate::{game_creature_ai_state, game_spell, game_spell_effect};
+        use crate::{game_spell, game_spell_effect};
 
         crate::helpers::require_operator(ctx)?;
         if !matches!(target_level, 60 | 63) || !crate::time::is_virtual(ctx) {
@@ -227,25 +227,7 @@ mod fixture {
         target.max_health = 1_000_000_000;
         target.orientation = std::f32::consts::PI;
         target.update(ctx);
-        let reactions = ctx.db.game_creature_ai_state();
-        if let Some(mut reaction) = reactions.creature_guid().find(target_guid) {
-            reaction.react_state = 0;
-            reactions.creature_guid().update(reaction);
-        } else {
-            reactions.insert(crate::CreatureAiState {
-                creature_guid: target_guid,
-                phase: 0,
-                lifecycle_id: crate::creatures::current_life_seq(ctx, target_guid),
-                engagement_id: 1,
-                ranged_distance: 0.0,
-                ranged_angle: 0.0,
-                ranged_posture_active: false,
-                definition_revision: 0,
-                active_object: false,
-                react_state: 0,
-                melee_enabled: true,
-            });
-        }
+        hold_passive(ctx, target_guid);
 
         let mut spell = crate::Spell::blank(2948, "Fixture spell 2948");
         spell.cost = 50;
@@ -336,6 +318,216 @@ mod fixture {
             state: seed ^ stream.wrapping_mul(0xd1b54a32d192ed03),
         });
         Ok(())
+    }
+
+    /// White melee's warrior with Auto Shot, a gun and its ammo, against a passive target; ADR 0007.
+    #[reducer]
+    pub fn debug_prepare_auto_shot_character(
+        ctx: &ReducerContext,
+        character_guid: u64,
+        target_guid: u64,
+        target_level: u32,
+        seed: u64,
+        stream: u64,
+    ) -> Result<(), String> {
+        crate::helpers::require_operator(ctx)?;
+        prepare_white_melee(ctx, character_guid, target_guid, target_level, seed, stream)?;
+        hold_passive(ctx, target_guid);
+        // Items 2508 and 2516 translate pinned rows; ADR 0007 explains delay, durability and stack.
+        let mut gun = crate::ItemTemplate::blank(2508, "Fixture gun 2508");
+        gun.class = 2;
+        gun.subclass = 3;
+        gun.display_id = 6606;
+        gun.quality = 1;
+        gun.inventory_type = 26;
+        gun.item_level = 2;
+        gun.required_level = 1;
+        gun.max_stack = 1;
+        gun.damage_min = 2.0;
+        gun.damage_max = 5.0;
+        gun.delay_ms = 300;
+        let mut ammo = crate::ItemTemplate::blank(2516, "Fixture ammo 2516");
+        ammo.class = 6;
+        ammo.subclass = 3;
+        ammo.display_id = 5998;
+        ammo.quality = 1;
+        ammo.inventory_type = 24;
+        ammo.item_level = 5;
+        ammo.required_level = 1;
+        ammo.max_stack = 10_000;
+        ammo.damage_min = 1.0;
+        ammo.damage_max = 2.0;
+        ammo.bag_family = 2;
+        carry(
+            ctx,
+            character_guid,
+            gun,
+            crate::items::equip_slot::RANGED,
+            1,
+        )?;
+        carry(
+            ctx,
+            character_guid,
+            ammo,
+            lyracore_shared::constants::starter_item::BACKPACK_SLOT_0,
+            10_000,
+        )?;
+        let mut spell = crate::Spell::blank(75, "Fixture spell 75");
+        spell.range_yd = 35;
+        spell.school_mask = 1;
+        spell.attributes = 327698;
+        spell.attributes_ex_2 = 32;
+        spell.attributes_ex_3 = 32768;
+        spell.spell_level = 1;
+        spell.is_negative = true;
+        spell.family_flags = 1;
+        spell.proc_chance = 101;
+        spell.equipped_item_class = 2;
+        spell.equipped_item_subclass_mask = 262156;
+        spell.damage_class = 3;
+        arm_ranged_swing(ctx, character_guid, spell, 46)
+    }
+
+    /// A priest with a wand's Shoot and the white melee inputs, against a passive target; ADR 0007.
+    #[reducer]
+    pub fn debug_prepare_wand_shot_character(
+        ctx: &ReducerContext,
+        character_guid: u64,
+        target_guid: u64,
+        target_level: u32,
+        seed: u64,
+        stream: u64,
+    ) -> Result<(), String> {
+        use crate::stats::{class_level_key, game_crit_per_agility, CritPerAgility};
+
+        crate::helpers::require_operator(ctx)?;
+        prepare_white_melee(ctx, character_guid, target_guid, target_level, seed, stream)?;
+        hold_passive(ctx, target_guid);
+        // The pinned player_crit_per_agility row (5, 60, 20); curated seeds hold only warriors.
+        let rates = ctx.db.game_crit_per_agility();
+        rates.class_level().delete(class_level_key(5, 60));
+        rates.insert(CritPerAgility {
+            class_level: class_level_key(5, 60),
+            class: 5,
+            level: 60,
+            rate: 20.0,
+        });
+        // Item 11287 translates its patch 7 row; ADR 0007 explains delay and durability.
+        let mut wand = crate::ItemTemplate::blank(11287, "Fixture wand 11287");
+        wand.class = 2;
+        wand.subclass = 19;
+        wand.display_id = 21096;
+        wand.quality = 2;
+        wand.inventory_type = 26;
+        wand.item_level = 15;
+        wand.required_level = 5;
+        wand.max_stack = 1;
+        wand.damage_min = 12.0;
+        wand.damage_max = 22.0;
+        wand.damage_school = 6;
+        wand.delay_ms = 400;
+        wand.bonding = 2;
+        wand.item_flags = 32768;
+        carry(
+            ctx,
+            character_guid,
+            wand,
+            crate::items::equip_slot::RANGED,
+            1,
+        )?;
+        let mut spell = crate::Spell::blank(5019, "Fixture spell 5019");
+        spell.range_yd = 30;
+        spell.school_mask = 1;
+        spell.attributes = 18;
+        spell.attributes_ex_2 = 32;
+        spell.attributes_ex_3 = 4227072;
+        spell.category = 351;
+        spell.spell_level = 1;
+        spell.is_negative = true;
+        spell.proc_chance = 101;
+        spell.equipped_item_class = 2;
+        spell.equipped_item_subclass_mask = 524288;
+        spell.damage_class = 1;
+        arm_ranged_swing(ctx, character_guid, spell, 228)
+    }
+
+    fn hold_passive(ctx: &ReducerContext, target_guid: u64) {
+        use crate::game_creature_ai_state;
+
+        let reactions = ctx.db.game_creature_ai_state();
+        if let Some(mut reaction) = reactions.creature_guid().find(target_guid) {
+            reaction.react_state = 0;
+            reactions.creature_guid().update(reaction);
+        } else {
+            reactions.insert(crate::CreatureAiState {
+                creature_guid: target_guid,
+                phase: 0,
+                lifecycle_id: crate::creatures::current_life_seq(ctx, target_guid),
+                engagement_id: 1,
+                ranged_distance: 0.0,
+                ranged_angle: 0.0,
+                ranged_posture_active: false,
+                definition_revision: 0,
+                active_object: false,
+                react_state: 0,
+                melee_enabled: true,
+            });
+        }
+    }
+
+    fn carry(
+        ctx: &ReducerContext,
+        character_guid: u64,
+        template: crate::ItemTemplate,
+        slot: u8,
+        stack_count: u32,
+    ) -> Result<(), String> {
+        use crate::game_item_template;
+
+        let entry = template.entry;
+        ctx.db.game_item_template().entry().delete(entry);
+        ctx.db.game_item_template().insert(template);
+        let owner = crate::helpers::live_entity(ctx, character_guid)?;
+        crate::ItemInstance::insert(
+            ctx,
+            crate::ItemInstance {
+                guid: crate::items::next_item_guid(ctx)?,
+                entry,
+                owner_identity: owner.owner_identity,
+                owner_guid: character_guid,
+                slot,
+                stack_count,
+                durability: 0,
+                created_at: crate::time::now(ctx),
+                enchant_id: 0,
+                soulbound: false,
+                random_property_id: 0,
+                item_text_id: 0,
+            },
+        );
+        Ok(())
+    }
+
+    // The auto-repeat path reads only the spell header, so the fixture stores no effect rows.
+    fn arm_ranged_swing(
+        ctx: &ReducerContext,
+        character_guid: u64,
+        mut spell: crate::Spell,
+        skill_line: u32,
+    ) -> Result<(), String> {
+        use crate::{game_spell, game_spell_effect};
+
+        let spell_id = spell.spell_id;
+        spell.cast_flags = lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
+        ctx.db.game_spell().spell_id().delete(spell_id);
+        ctx.db.game_spell().insert(spell);
+        let effects = ctx.db.game_spell_effect();
+        for effect in effects.by_spell().filter(&spell_id).collect::<Vec<_>>() {
+            effects.id().delete(effect.id);
+        }
+        let learner = crate::helpers::live_entity(ctx, character_guid)?;
+        crate::spell::learn_spell(ctx, character_guid, learner.owner_identity, spell_id);
+        crate::skill::debug_set_skill(ctx, character_guid, skill_line, 300)
     }
 
     // Item 37 translates a pinned database row; ADR 0007 explains delay and durability.

@@ -276,6 +276,7 @@ fn verify_context(
         TARGET_LEVELS[level_index],
         &[44, 95, 162],
         None,
+        &super::rolls::MELEE_POSE,
     )
 }
 

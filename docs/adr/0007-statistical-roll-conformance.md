@@ -1,6 +1,6 @@
 # 0007. Measure random rolls against source-derived probabilities
 
-Accepted design, 2026-11-05. Slices: white main-hand melee, direct-damage spells, the queued strike and the cast Weapon Strike at levels 60 and 63.
+Accepted design, 2026-11-05. Slices: white main-hand melee, direct-damage spells, the queued strike, the cast Weapon Strike, Auto Shot and wand Shoot at levels 60 and 63.
 
 [ADR 0005](0005-1-12-conformance.md) checks random fields' shape and range. A server that always
 crits can satisfy that contract. Roll Conformance compares delivered gameplay outcomes with fixed
@@ -545,3 +545,107 @@ measures it with white melee.
 
 No Reference Server recording exists for this context yet, and no harness scenario. Ranged Weapon
 Strikes, which roll only miss and crit, need their own context.
+
+## Pinned fifth and sixth contexts: ranged swings
+
+Added 2026-11-23 for issue #1026. Two auto-repeat ranged swings each get a context: Auto Shot,
+spell 75, from a gun, and Shoot, spell 5019, from a wand. Both Characters are level-60 humans with
+agility 100, defense and unarmed skill at 300/300, an empty main hand and no talents, auras or
+hit and crit bonuses. The Auto Shot Character is the first context's warrior. It holds gun 2508 in
+the ranged slot, bullets 2516 in its backpack, and guns skill 46 at 300/300. The wand Character is a priest, class 5, because vmangos gives a wand its weapon's
+school only for wand-using classes. It holds wand 11287, with wands skill 228 at 300/300. Each target is the first context's creature, passive so that it never closes to melee,
+ten yards ahead for Auto Shot and six for the wand; no roll formula reads distance.
+
+The pinned database selects `spell_template` 75 build 5086 (`mangos.sql:5882`) over build 4222
+(`mangos.sql:5887`): attributes `0x50012` (ranged slot, ability, not while shapeshifted, no
+sheath), ex2 `0x20` (auto-repeat), ex3 `0x8000` (normal ranged attack), damage class 3 (ranged),
+school 0, mechanic 0, range index 114, speed 40, equipped item class 2 with subclass mask 262156
+(bow, gun, crossbow) and one effect 58 (weapon damage). It selects 5019 build 5086
+(`mangos.sql:5882`) over builds 4449 and 4222: attributes `0x12`, ex2 `0x20`, ex3 `0x408000`
+(normal ranged attack, casting cancels auto-repeat), damage class 1, school 0, mechanic 0,
+category 351, range index 4, speed 20, subclass mask 524288 (wand) and one effect 17 (weapon
+damage, no school). Neither has the always-hit, cannot-crit, no-active-defense or
+completely-blocked attribute. `item_template` 2508 (`mangos.sql:2696`) is a quality 1 gun, damage
+2 to 5, delay 2300, durability 20, ammo type 3. Item 2516 (`mangos.sql:2696`) is bullets, damage 1
+to 2, stack 200. Item 11287 resolves to its patch 7 row (`mangos.sql:2702`): quality 2, arcane
+damage 12 to 22, delay 1500, durability 35. `player_crit_per_agility` (`mangos.sql:3897`) gives
+rate 20 for both class 1 and class 5 at level 60. Tier 1 fires the gun every 300 ms and the wand
+every 400 ms, gives neither durability and gives the ammo a 10,000-round stack. Each delay
+outlasts its projectile's flight, so one shot flies at a time. The roll formulas read none of
+these values; the Reference Server keeps the pinned ones.
+
+Source links use one-based lines at the pinned commit:
+
+- [Unit.cpp:2733–2778](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp): each ready auto-repeat shot casts its spell
+  as a triggered Spell.
+- [Spell.cpp:60–71](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp) and
+  [SpellEntry.cpp:434–455](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEntry.cpp): both spells take the ranged attack type,
+  Auto Shot through damage class 3 and Shoot through its auto-repeat attribute. A priest's Shoot
+  takes the wand's arcane school.
+- [SpellCaster.cpp:169–236](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp): a ranged attack with the normal
+  ranged attack attribute rolls as damage class ranged (lines 215–224), so both reach
+  `MeleeSpellHitResult` after evade, immunity and reflection checks that do not apply.
+- [SpellCaster.cpp:732–749](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp): the attack type is ranged (lines
+  734–736) and the table's crit is the shot's crit. [Spell.cpp:910–923](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)
+  keeps it.
+- [SpellCaster.cpp:336–425](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp): a spell skips the dual-wield penalty
+  (line 350). Ranged skill 300 against defense 300 and 315 gives miss 5% and 8%, as in the first
+  context.
+- [SpellCaster.cpp:428–729](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp): both spells can crit (line 437) and
+  require a weapon, so they use the ranged weapon skill (line 451). They have no mechanic to
+  resist. A ranged attack rolls no dodge, parry, block, glancing or crushing band (lines 532–541).
+  Crit comes from `GetSpellCritChance` (lines 499–509).
+- [Unit.cpp:5212–5316](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp): Shoot's ranged attack type selects the ranged
+  branch (lines 5234–5237), and both read `GetUnitCriticalChance` (lines 5295–5302) with no school
+  crit aura or spell modifier.
+- [Unit.cpp:2552–2595](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp) reads the ranged crit percentage and subtracts
+  0.2% per missing skill point against a creature: 3% at level 63.
+- [StatSystem.cpp:531–587](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/StatSystem.cpp) and
+  [Player.cpp:5146–5150](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp): ranged crit is agility over the class rate, plus
+  3% for a priest (lines 563–564) and no skill term at 300/300. Agility 100 over 20 gives 5% for
+  the warrior and 8% for the priest.
+
+Each table is a single `urand(0, 9999)` roll with only miss and crit bands:
+
+| Context | Target level | Miss | Crit | Hit |
+| --- | --- | ---: | ---: | ---: |
+| Auto Shot | 60 | 5% | 5% | 90% |
+| Auto Shot | 63 | 8% | 2% | 90% |
+| Shoot | 60 | 5% | 8% | 87% |
+| Shoot | 63 | 8% | 5% | 87% |
+
+A landed Auto Shot then rolls partial block separately. [Spell.cpp:1415](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)
+calls [Unit.cpp:2205–2233](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp) with the main-hand attack type. Its ranged and
+melee damage-class branch calls `IsSpellPartiallyBlocked`
+([Unit.cpp:2351–2395](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)). The target faces the Character and a creature's
+block chance is 5% ([Unit.cpp:2515–2550](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)). The skill term reads the
+Character's unarmed skill, so the chance is 5% at level 60 and 6.5% capped to 5% at level 63.
+The overlapping block probabilities are `9500*214748365/(10000*2^32)` and
+`9200*214748365/(10000*2^32)`. Shoot has magic damage class, so it never rolls block; its context
+expects a zero block probability. Partial resistance of the arcane Shoot is not part of the attack
+table; the classifier accepts a positive resisted amount and measures no resist rate.
+
+vmangos reports every shot through the Spell path. [Spell.cpp:4529–4561, 4625–4653](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)
+sends one `SMSG_SPELL_GO` at launch, with ammo for a ranged spell: a landed target is in the hit
+list, a missed target in the miss list with reason 1. A landed shot sends
+`SMSG_SPELLNONMELEEDAMAGELOG` on impact (Spell.cpp:1429), with crit flag `0x02` and a positive
+blocked amount for a partial block ([SpellCaster.cpp:1080–1096](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp)). Only a
+next-swing spell sends `SMSG_ATTACKERSTATEUPDATE` (Spell.cpp:1289, 1425). LyraCore sends the same
+packets: `combat_event` in `module/src/native/combat.rs` writes the GO and its miss list, and
+`ranged_impact` in `module/src/combat/swing.rs` logs the damage. The classifier in
+`conformance/support/ranged_swing_rolls.rs` pairs each own GO with the damage log of a landed shot,
+which can arrive in a later batch. A missing, extra or contradictory packet blocks the sample; it
+is not a rate.
+
+Tier 1 enters through `CMSG_CAST_SPELL`, which starts the auto-repeat, then the ordinary melee
+scheduler, ranged impact schedule and delivered packets, with the white seam stream and the public
+seeds. Each batch advances one weapon delay. An unretained readiness check requires two whole shots
+per Character. Each context reserves its own family: 1e-6 over four checks, two levels and three
+seeds, 24 tests at `1e-6/24`. Each submission's false-failure bound across the six contexts is
+therefore 5e-6. The signatures join `white_melee_outcomes`: rule `auto_shot_distribution` or
+`wand_shot_distribution` with field `["outcomes", category]`, or the `_sample` rule with field
+`["outcomes"]`. The checkpoint is `<context>_level_<level>_<seed slot>`, the stream `casts`, opcode
+`0x0132`. The merge seed measures both with white melee.
+
+No Reference Server recording exists for these contexts yet, and no harness scenario. Thrown
+weapons, bows and crossbows use the same table and remain unmeasured.

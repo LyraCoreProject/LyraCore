@@ -31,6 +31,9 @@ pub use report::*;
 #[path = "../../support/queued_strike_rolls.rs"]
 mod queued_strike_rolls;
 #[allow(dead_code)]
+#[path = "../../support/ranged_swing_rolls.rs"]
+mod ranged_swing_rolls;
+#[allow(dead_code)]
 #[path = "../../support/strike_rolls.rs"]
 mod strike_rolls;
 #[allow(dead_code)]
@@ -42,10 +45,12 @@ fn roll_difference(scenario: &wire_client::scenario::Scenario, difference: &Diff
     if scenario.spell_rolls.is_some() {
         return spell_difference(scenario, difference);
     }
-    // The queued and cast weapon strikes share white melee's pinned context and Golden Trace.
+    // The weapon strikes and ranged swings share white melee's pinned context and Golden Trace.
     if scenario.id == "white_melee_outcomes"
         && (queued_strike_rolls::CONTEXT.accepts(difference)
-            || weapon_strike_rolls::CONTEXT.accepts(difference))
+            || weapon_strike_rolls::CONTEXT.accepts(difference)
+            || ranged_swing_rolls::AUTO_SHOT.context.accepts(difference)
+            || ranged_swing_rolls::WAND_SHOT.context.accepts(difference))
     {
         return true;
     }

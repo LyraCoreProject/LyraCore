@@ -51,13 +51,19 @@ symbol = "hit_roll"
 evidence = "Source reading at d9173eca: Spell.cpp:1369-1429 calls Unit.cpp:2205-2233, whose melee branch calls IsSpellPartiallyBlocked (Unit.cpp:2351-2395). LyraCore: hit_roll discards the attack table's partial_block. ADR 0007 derives the cast Weapon Strike's rates; module/tests/conformance/weapon_strikes.rs collects them."
 
 [[known_gaps]]
+description = "A landed Auto Shot is never partially blocked, so its damage log reports blocked 0. vmangos rolls a landed ranged-damage-class spell's partial block after the attack table and reports the blocked amount; a wand's Shoot has magic damage class and is never blocked. Tier 1 classifies every Auto Shot since #1026, so white_melee_outcomes reports auto_shot_distribution for the block category at both levels for both public seeds."
+path = "module/src/combat/folds.rs"
+symbol = "roll_ranged_swing"
+evidence = "Source reading at d9173eca: Spell.cpp:1415 calls Unit.cpp:2205-2233 with BASE_ATTACK, whose ranged and melee branch calls IsSpellPartiallyBlocked (Unit.cpp:2351-2395). LyraCore: roll_ranged_swing takes no partial block from the attack table, whose partial_block band is melee-only, and ranged_impact logs blocked 0. ADR 0007 derives the ranged swing rates; module/tests/conformance/ranged_swings.rs collects them."
+
+[[known_gaps]]
 description = "An SMSG_SPELL_GO names only the cast's primary target: it lists that unit as hit or missed and leaves every other unit target out. vmangos Spell::WriteSpellGoTargets lists every unit target with its own hit or miss result, so an area or chain spell's GO differs."
 path = "module/src/native/spell.rs"
 symbol = "spell_go"
 evidence = "Source reading at d9173eca: Spell.cpp:4625-4653 Spell::WriteSpellGoTargets writes m_UniqueTargetInfo. LyraCore: SpellCastEvent keeps one target_guid and one miss_info, and spell_go builds one hit or one miss from them."
 
 [[known_gaps]]
-description = "Other white melee contexts retain the legacy Character dodge formula, Character parry and block eligibility, creature crushing chance, weapon-skill bonuses and offhand weapon-skill selection. Controlled units, ranged Weapon Strikes, ranged swings and target-side hit/crit auras need separate conformance."
+description = "Other white melee contexts retain the legacy Character dodge formula, Character parry and block eligibility, creature crushing chance, weapon-skill bonuses and offhand weapon-skill selection. Controlled units, ranged Weapon Strikes, thrown weapons and target-side hit/crit auras need separate conformance."
 path = "module/src/combat/attack_table.rs"
 symbol = "attack_table_for"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp"
