@@ -49,15 +49,12 @@ pub fn reputation_rank(standing: i32) -> u8 {
     }
 }
 
-/// vmangos `GetIndexFitTo`: the first slot admitting race and class (zero admits all), else 0.
-pub fn base_standing(slots: [(u32, u32, i32); 4], race: u8, class: u8) -> i32 {
+/// vmangos `GetIndexFitTo`: the first slot admitting race and class (a zero mask admits all).
+pub fn reputation_slot(masks: [(u32, u32); 4], race: u8, class: u8) -> Option<usize> {
     use crate::race_class::{mask_admits, ZeroMask::AdmitsAll};
-    slots
-        .into_iter()
-        .find(|&(race_mask, class_mask, _)| {
-            mask_admits(race_mask, race, AdmitsAll) && mask_admits(class_mask, class, AdmitsAll)
-        })
-        .map_or(0, |(_, _, standing)| standing)
+    masks.into_iter().position(|(race_mask, class_mask)| {
+        mask_admits(race_mask, race, AdmitsAll) && mask_admits(class_mask, class, AdmitsAll)
+    })
 }
 
 pub fn relation_holds(
@@ -78,40 +75,38 @@ pub fn relation_holds(
     mask & other_group != 0
 }
 
-pub fn refuses_interaction(reputation: Option<(i32, bool)>, template_hostile: bool) -> bool {
-    reputation.map_or(template_hostile, |(standing, at_war)| {
-        at_war || reputation_rank(standing) <= 2
-    })
-}
-
 #[cfg(test)]
 mod rule_tests {
     use super::*;
 
-    // Faction.dbc 1.12 rows for Cenarion Circle (609) and Wintersaber Trainers (589).
-    const CENARION_CIRCLE: [(u32, u32, i32); 4] =
-        [(255, 479, 0), (40, 1024, 2000), (0, 0, 0), (0, 0, 0)];
-    const WINTERSABER_TRAINERS: [(u32, u32, i32); 4] =
-        [(178, 0, -42000), (77, 0, 0), (0, 0, 0), (0, 0, 0)];
+    // Faction.dbc 1.12 masks for Cenarion Circle (609) and Wintersaber Trainers (589).
+    const CENARION_CIRCLE: [(u32, u32); 4] = [(255, 479), (40, 1024), (0, 0), (0, 0)];
+    const WINTERSABER_TRAINERS: [(u32, u32); 4] = [(178, 0), (77, 0), (0, 0), (0, 0)];
 
     #[test]
-    fn base_standing_takes_the_first_slot_that_admits_race_and_class() {
+    fn the_first_slot_that_admits_race_and_class_fits() {
         let (tauren, night_elf, human) = (6, 4, 1);
         let (warrior, druid) = (1, 11);
-        assert_eq!(base_standing(CENARION_CIRCLE, tauren, druid), 2000);
-        assert_eq!(base_standing(CENARION_CIRCLE, night_elf, druid), 2000);
-        assert_eq!(base_standing(CENARION_CIRCLE, tauren, warrior), 0);
-        assert_eq!(base_standing(WINTERSABER_TRAINERS, tauren, druid), -42000);
-        assert_eq!(base_standing(WINTERSABER_TRAINERS, human, warrior), 0);
+        assert_eq!(reputation_slot(CENARION_CIRCLE, tauren, druid), Some(1));
+        assert_eq!(reputation_slot(CENARION_CIRCLE, night_elf, druid), Some(1));
+        assert_eq!(reputation_slot(CENARION_CIRCLE, tauren, warrior), Some(0));
+        assert_eq!(
+            reputation_slot(WINTERSABER_TRAINERS, tauren, druid),
+            Some(0)
+        );
+        assert_eq!(
+            reputation_slot(WINTERSABER_TRAINERS, human, warrior),
+            Some(1)
+        );
     }
 
     #[test]
-    fn base_standing_is_zero_when_no_slot_admits_the_character() {
+    fn no_slot_fits_when_none_admits_the_character() {
         let (human, warrior) = (1, 1);
-        let other_races = [(2, 0, 500), (4, 0, 600), (8, 0, 700), (16, 0, 800)];
-        let druids_only = [(1, 1024, 2000); 4];
-        assert_eq!(base_standing(other_races, human, warrior), 0);
-        assert_eq!(base_standing(druids_only, human, warrior), 0);
+        let other_races = [(2, 0), (4, 0), (8, 0), (16, 0)];
+        let druids_only = [(1, 1024); 4];
+        assert_eq!(reputation_slot(other_races, human, warrior), None);
+        assert_eq!(reputation_slot(druids_only, human, warrior), None);
     }
 
     #[test]
@@ -138,14 +133,5 @@ mod rule_tests {
         assert!(!relation_holds(&[0; 4], &[7, 0, 0, 0], 1, 7, 1));
         assert!(relation_holds(&[0; 4], &[0; 4], 1, 0, 1));
         assert!(!relation_holds(&[0; 4], &[0; 4], 0, 0, 1));
-    }
-
-    #[test]
-    fn reputation_and_at_war_override_template_hostility() {
-        assert!(refuses_interaction(Some((42000, true)), false));
-        assert!(refuses_interaction(Some((-1, false)), false));
-        assert!(!refuses_interaction(Some((0, false)), true));
-        assert!(refuses_interaction(None, true));
-        assert!(!refuses_interaction(None, false));
     }
 }

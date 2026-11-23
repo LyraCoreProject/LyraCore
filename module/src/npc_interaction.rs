@@ -91,7 +91,7 @@ pub(crate) enum NpcGate {
     NotSelectable,
     OtherMap,
     OutOfRange,
-    Unfriendly,
+    Hostile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +118,7 @@ impl std::fmt::Display for NpcRefusal {
             (NpcGate::NotSelectable, _) => write!(f, "{noun} cannot be selected"),
             (NpcGate::OtherMap, _) => write!(f, "{noun} on another map"),
             (NpcGate::OutOfRange, _) => write!(f, "{noun} out of range"),
-            (NpcGate::Unfriendly, _) => write!(f, "{noun} refuses interaction"),
+            (NpcGate::Hostile, _) => write!(f, "{noun} refuses interaction"),
         }
     }
 }
@@ -144,7 +144,7 @@ impl From<NpcRefusal> for ActionRefusal {
             NpcGate::NpcDead => ActionRefusalKind::DeadTarget,
             NpcGate::OtherMap => ActionRefusalKind::OtherPartition,
             NpcGate::OutOfRange => ActionRefusalKind::OutOfRange,
-            NpcGate::NotSelectable | NpcGate::Unfriendly => ActionRefusalKind::CannotAct,
+            NpcGate::NotSelectable | NpcGate::Hostile => ActionRefusalKind::CannotAct,
             NpcGate::WrongService => ActionRefusalKind::Other,
         };
         ActionRefusal::new(kind, refusal.to_string())
@@ -241,8 +241,8 @@ fn refusal(
     if crate::helpers::dist_sq(actor, npc) > INTERACTION_RANGE_SQ {
         return Some(NpcGate::OutOfRange);
     }
-    if crate::reputation::npc_refuses_interaction(ctx, npc, actor) {
-        return Some(NpcGate::Unfriendly);
+    if crate::reputation::npc_is_hostile(ctx, npc, actor) {
+        return Some(NpcGate::Hostile);
     }
     None
 }

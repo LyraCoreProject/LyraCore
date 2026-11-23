@@ -11,6 +11,7 @@ pub(crate) const PLAN_FORMAT_VERSION: u32 = 5;
 // Linux limits one argv string to 128 KiB; `spacetime call` passes each argument as one.
 const MAX_REDUCER_ARGUMENT_BYTES: usize = 120_000;
 const SOULBOUND_FLAG: u32 = 0x1;
+const VISIBLE_FLAG: u32 = 0x1;
 const AT_WAR_FLAG: u32 = 0x2;
 const ACTION_BUTTONS: u8 = 120;
 const MAX_BANK_BAG_SLOTS: u8 = 6;
@@ -636,6 +637,8 @@ fn migrated_character(
             report,
         )
         .into_iter()
+        // vmangos saves every faction; LyraCore stores only factions the Character has seen.
+        .filter(|reputation| reputation.flags & VISIBLE_FLAG != 0 || reputation.standing != 0)
         .map(|reputation| MigratedReputation {
             faction_id: reputation.faction,
             earned_standing: reputation.standing,
@@ -1589,6 +1592,32 @@ mod tests {
                 faction_id: 72,
                 earned_standing: 3000,
                 at_war: true
+            }]
+        );
+    }
+
+    #[test]
+    fn an_unseen_faction_at_its_base_is_not_migrated() {
+        let mut source = character();
+        source.reputations = vec![
+            LegacyReputation {
+                faction: 72,
+                standing: 0,
+                flags: AT_WAR_FLAG,
+            },
+            LegacyReputation {
+                faction: 72,
+                standing: -50,
+                flags: 0,
+            },
+        ];
+        let reputations = &plan_one(source).characters[0].reputations;
+        assert_eq!(
+            reputations,
+            &[MigratedReputation {
+                faction_id: 72,
+                earned_standing: -50,
+                at_war: false
             }]
         );
     }

@@ -74,6 +74,15 @@ pub struct Faction {
     pub base_class_mask_3: u32,
     #[default(0)]
     pub base_class_mask_4: u32,
+    /// Faction.dbc `ReputationFlags[0]` to `[3]`, a Character's default flags by the same slot.
+    #[default(0)]
+    pub reputation_flags_1: u32,
+    #[default(0)]
+    pub reputation_flags_2: u32,
+    #[default(0)]
+    pub reputation_flags_3: u32,
+    #[default(0)]
+    pub reputation_flags_4: u32,
 }
 
 impl Faction {
@@ -92,33 +101,41 @@ impl Faction {
         .any(|&mask| mask != 0)
     }
 
-    pub(crate) fn base_standing_for(&self, race: u8, class: u8) -> i32 {
-        lyracore_shared::faction::base_standing(
+    fn slot_for(&self, race: u8, class: u8) -> Option<usize> {
+        lyracore_shared::faction::reputation_slot(
             [
-                (
-                    self.base_race_mask_1,
-                    self.base_class_mask_1,
-                    self.base_standing,
-                ),
-                (
-                    self.base_race_mask_2,
-                    self.base_class_mask_2,
-                    self.base_standing_2,
-                ),
-                (
-                    self.base_race_mask_3,
-                    self.base_class_mask_3,
-                    self.base_standing_3,
-                ),
-                (
-                    self.base_race_mask_4,
-                    self.base_class_mask_4,
-                    self.base_standing_4,
-                ),
+                (self.base_race_mask_1, self.base_class_mask_1),
+                (self.base_race_mask_2, self.base_class_mask_2),
+                (self.base_race_mask_3, self.base_class_mask_3),
+                (self.base_race_mask_4, self.base_class_mask_4),
             ],
             race,
             class,
         )
+    }
+
+    /// vmangos `GetBaseReputation`; 0 when no slot admits the race and class.
+    pub(crate) fn base_standing_for(&self, race: u8, class: u8) -> i32 {
+        self.slot_for(race, class).map_or(0, |slot| {
+            [
+                self.base_standing,
+                self.base_standing_2,
+                self.base_standing_3,
+                self.base_standing_4,
+            ][slot]
+        })
+    }
+
+    /// vmangos `GetDefaultStateFlags`; 0 when no slot admits the race and class.
+    pub(crate) fn default_flags_for(&self, race: u8, class: u8) -> u32 {
+        self.slot_for(race, class).map_or(0, |slot| {
+            [
+                self.reputation_flags_1,
+                self.reputation_flags_2,
+                self.reputation_flags_3,
+                self.reputation_flags_4,
+            ][slot]
+        })
     }
 }
 
@@ -297,6 +314,45 @@ mod tests {
                 "flags {flags:#x}"
             );
         }
+    }
+
+    #[test]
+    fn base_standing_and_default_flags_share_the_fitting_slot() {
+        // Faction.dbc 1.12 Cenarion Circle (609) masks and bases; the flags mark each slot.
+        let cenarion_circle = Faction {
+            faction_id: 609,
+            reputation_index: 33,
+            base_standing: 0,
+            base_standing_2: 2000,
+            base_standing_3: 0,
+            base_standing_4: 0,
+            base_race_mask_1: 255,
+            base_race_mask_2: 40,
+            base_race_mask_3: 0,
+            base_race_mask_4: 0,
+            base_class_mask_1: 479,
+            base_class_mask_2: 1024,
+            base_class_mask_3: 0,
+            base_class_mask_4: 0,
+            reputation_flags_1: 0x10,
+            reputation_flags_2: 0x11,
+            reputation_flags_3: 0,
+            reputation_flags_4: 0,
+        };
+        let (tauren, druid, warrior) = (6, 11, 1);
+        assert_eq!(cenarion_circle.base_standing_for(tauren, druid), 2000);
+        assert_eq!(cenarion_circle.default_flags_for(tauren, druid), 0x11);
+        assert_eq!(cenarion_circle.base_standing_for(tauren, warrior), 0);
+        assert_eq!(cenarion_circle.default_flags_for(tauren, warrior), 0x10);
+        let no_fit = Faction {
+            base_race_mask_1: 2,
+            base_race_mask_2: 2,
+            base_race_mask_3: 2,
+            base_race_mask_4: 2,
+            ..cenarion_circle
+        };
+        assert_eq!(no_fit.base_standing_for(1, warrior), 0);
+        assert_eq!(no_fit.default_flags_for(1, warrior), 0);
     }
 
     #[test]

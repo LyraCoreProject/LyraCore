@@ -877,6 +877,10 @@ pub(crate) fn seed_fixture_catalogue(ctx: &ReducerContext) {
             base_class_mask_2: 0,
             base_class_mask_3: 0,
             base_class_mask_4: 0,
+            reputation_flags_1: 0,
+            reputation_flags_2: 0,
+            reputation_flags_3: 0,
+            reputation_flags_4: 0,
         });
     }
 }

@@ -79,11 +79,125 @@ pub(crate) fn clamped_standing(standing: i32) -> i32 {
     standing.clamp(REP_MIN, REP_MAX)
 }
 
+fn race_and_class(ctx: &ReducerContext, character_guid: u64) -> (u8, u8) {
+    crate::helpers::character_by_guid(ctx, character_guid)
+        .map_or((0, 0), |character| (character.race, character.class))
+}
+
 /// vmangos `GetBaseReputation` for the Character's race and class; 0 when no slot admits it.
 pub(crate) fn base_standing(ctx: &ReducerContext, character_guid: u64, faction: &Faction) -> i32 {
-    let (race, class) = crate::helpers::character_by_guid(ctx, character_guid)
-        .map_or((0, 0), |character| (character.race, character.class));
+    let (race, class) = race_and_class(ctx, character_guid);
     faction.base_standing_for(race, class)
+}
+
+// vmangos ReputationMgr.h FactionFlags.
+const VISIBLE: u32 = 0x01;
+const AT_WAR: u32 = 0x02;
+const HIDDEN: u32 = 0x04;
+const INVISIBLE_FORCED: u32 = 0x08;
+const PEACE_FORCED: u32 = 0x10;
+
+// vmangos ReputationRank REP_HATED and REP_HOSTILE.
+const HATED: u8 = 0;
+const HOSTILE: u8 = 1;
+
+struct StoredReputation {
+    standing: i32,
+    earned: i32,
+    at_war: bool,
+}
+
+/// vmangos `SetAtWar(faction, true)`: peace forced refuses war above an earned Hated.
+fn declare_war(flags: &mut u32, earned: i32) {
+    if *flags & PEACE_FORCED == 0 || reputation_rank(earned) <= HATED {
+        *flags |= AT_WAR;
+    }
+}
+
+/// vmangos `FactionState::Flags` after `Initialize` and `LoadFromDB`; a stored row was seen.
+fn faction_flags(defaults: u32, stored: Option<StoredReputation>) -> u32 {
+    let mut flags = defaults;
+    let Some(stored) = stored else {
+        return flags;
+    };
+    if flags & (HIDDEN | INVISIBLE_FORCED) == 0 {
+        flags |= VISIBLE;
+    }
+    if stored.at_war {
+        declare_war(&mut flags, stored.earned);
+    } else if flags & VISIBLE != 0 {
+        flags &= !AT_WAR;
+    }
+    if reputation_rank(stored.standing) <= HOSTILE {
+        declare_war(&mut flags, stored.earned);
+    }
+    flags
+}
+
+/// A faction's base standing and default flags for one Character's race and class.
+struct CharacterFaction {
+    base: i32,
+    defaults: u32,
+}
+
+impl CharacterFaction {
+    fn new(faction: &Faction, race: u8, class: u8) -> Self {
+        Self {
+            base: faction.base_standing_for(race, class),
+            defaults: faction.default_flags_for(race, class),
+        }
+    }
+
+    fn read(ctx: &ReducerContext, character_guid: u64, faction: &Faction) -> Self {
+        let (race, class) = race_and_class(ctx, character_guid);
+        Self::new(faction, race, class)
+    }
+
+    fn flags(&self, row: Option<&PlayerReputation>) -> u32 {
+        faction_flags(
+            self.defaults,
+            row.map(|row| StoredReputation {
+                standing: row.standing,
+                earned: row.standing.saturating_sub(self.base),
+                at_war: row.at_war,
+            }),
+        )
+    }
+}
+
+fn stored_row(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    faction_id: u32,
+) -> Option<PlayerReputation> {
+    ctx.db
+        .game_player_reputation()
+        .by_character()
+        .filter(&character_guid)
+        .find(|row| row.faction_id == faction_id)
+}
+
+/// vmangos `SendInitialReputations`: each reputation slot's index, earned standing and flags.
+pub(crate) fn initial_factions(ctx: &ReducerContext, character_guid: u64) -> Vec<(i32, i32, u8)> {
+    let (race, class) = race_and_class(ctx, character_guid);
+    let rows = ctx
+        .db
+        .game_player_reputation()
+        .by_character()
+        .filter(&character_guid)
+        .collect::<Vec<_>>();
+    ctx.db
+        .game_faction()
+        .iter()
+        .filter(|faction| (0..64).contains(&faction.reputation_index))
+        .map(|faction| {
+            let state = CharacterFaction::new(&faction, race, class);
+            let row = rows.iter().find(|row| row.faction_id == faction.faction_id);
+            let earned = row.map_or(0, |row| row.standing.saturating_sub(state.base));
+            // The client's flag byte holds every vmangos FactionFlags bit.
+            (faction.reputation_index, earned, state.flags(row) as u8)
+        })
+        .collect()
 }
 
 /// vmangos `FactionState::Standing`, the standing relative to the base, which the client is sent.
@@ -111,17 +225,10 @@ pub(crate) fn reputation(
         .faction_id()
         .find(faction_id)
         .filter(|faction| faction.reputation_index >= 0)?;
-    Some(
-        ctx.db
-            .game_player_reputation()
-            .by_character()
-            .filter(&character_guid)
-            .find(|row| row.faction_id == faction_id)
-            .map_or_else(
-                || base_standing(ctx, character_guid, &faction),
-                |row| row.standing,
-            ),
-    )
+    Some(stored_row(ctx, character_guid, faction_id).map_or_else(
+        || base_standing(ctx, character_guid, &faction),
+        |row| row.standing,
+    ))
 }
 
 const BASE_STANDING_REPAIR_FAMILY: &str = "repair_base_standing";
@@ -192,37 +299,32 @@ pub(crate) fn vendor_discount_pct(
         .map_or(0, reputation_discount_pct)
 }
 
-pub(crate) fn npc_refuses_interaction(
+// vmangos Unit::IsHostileTo: Hostile or Hated. At war only caps the rank at Neutral.
+fn reaction_is_hostile(reputation_standing: Option<i32>, template_hostile: bool) -> bool {
+    reputation_standing.map_or(template_hostile, |standing| {
+        reputation_rank(standing) <= HOSTILE
+    })
+}
+
+/// vmangos `GetFactionReactionTo` is hostile: a reputation faction's rank, else the templates.
+pub(crate) fn npc_is_hostile(
     ctx: &ReducerContext,
     npc: &crate::WorldEntity,
     player: &crate::WorldEntity,
 ) -> bool {
     let templates = ctx.db.game_faction_template();
-    let Some(npc_ft) = templates.id().find(npc.faction_template) else {
+    let Some(npc_template) = templates.id().find(npc.faction_template) else {
         return false;
     };
-    let reputation = ctx
-        .db
-        .game_faction()
-        .faction_id()
-        .find(npc_ft.faction)
-        .filter(|faction| faction.reputation_index >= 0)
-        .map(|faction| {
-            ctx.db
-                .game_player_reputation()
-                .by_character()
-                .filter(&player.guid)
-                .find(|row| row.faction_id == faction.faction_id)
-                .map_or_else(
-                    || (base_standing(ctx, player.guid, &faction), false),
-                    |row| (row.standing, row.at_war),
-                )
-        });
-    let template_hostile = templates
-        .id()
-        .find(player.faction_template)
-        .is_some_and(|player_ft| crate::faction::compute_hostile(&npc_ft, &player_ft));
-    lyracore_shared::faction::refuses_interaction(reputation, template_hostile)
+    reaction_is_hostile(
+        reputation(ctx, player.guid, npc_template.faction),
+        templates
+            .id()
+            .find(player.faction_template)
+            .is_some_and(|player_template| {
+                crate::faction::compute_hostile(&npc_template, &player_template)
+            }),
+    )
 }
 
 pub(crate) fn grant_reputation(
@@ -231,51 +333,62 @@ pub(crate) fn grant_reputation(
     faction_id: u32,
     amount: i32,
 ) {
-    let (base, rep_index) = match ctx.db.game_faction().faction_id().find(faction_id) {
-        Some(f) if f.reputation_index >= 0 => {
-            (base_standing(ctx, player_guid, &f), f.reputation_index)
-        }
-        _ => return,
-    };
-    let reps = ctx.db.game_player_reputation();
-    if let Some(mut row) = reps
-        .by_character()
-        .filter(&player_guid)
-        .find(|r| r.faction_id == faction_id)
-    {
-        row.standing = clamped_standing(row.standing.saturating_add(amount));
-        row.reputation_index = rep_index;
-        row.update(ctx);
+    let Some(faction) = ctx
+        .db
+        .game_faction()
+        .faction_id()
+        .find(faction_id)
+        .filter(|faction| faction.reputation_index >= 0)
+    else {
         return;
+    };
+    let state = CharacterFaction::read(ctx, player_guid, &faction);
+    let (mut row, existing) = match stored_row(ctx, player_guid, faction_id) {
+        Some(row) => (row, true),
+        None => match new_row(ctx, player_guid, &faction, &state) {
+            Some(row) => (row, false),
+            None => return,
+        },
+    };
+    row.standing = clamped_standing(row.standing.saturating_add(amount));
+    row.reputation_index = faction.reputation_index;
+    // vmangos SetOneFactionReputation declares war at Hostile or below.
+    row.at_war = state.flags(Some(&row)) & AT_WAR != 0;
+    if existing {
+        row.update(ctx);
+    } else {
+        PlayerReputation::insert(ctx, row);
     }
-    let Some(owner) = ctx
+}
+
+fn new_row(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    faction: &Faction,
+    state: &CharacterFaction,
+) -> Option<PlayerReputation> {
+    let owner_identity = ctx
         .db
         .game_world_entity()
         .guid()
-        .find(player_guid)
+        .find(character_guid)
         .map(|e| e.owner_identity)
         .or_else(|| {
             ctx.db
                 .game_character()
                 .guid()
-                .find(player_guid)
+                .find(character_guid)
                 .map(|c| c.owner_identity)
-        })
-    else {
-        return;
-    };
-    PlayerReputation::insert(
-        ctx,
-        PlayerReputation {
-            id: 0,
-            character_guid: player_guid,
-            owner_identity: owner,
-            faction_id,
-            standing: clamped_standing(base.saturating_add(amount)),
-            reputation_index: rep_index,
-            at_war: false,
-        },
-    );
+        })?;
+    Some(PlayerReputation {
+        id: 0,
+        character_guid,
+        owner_identity,
+        faction_id: faction.faction_id,
+        standing: clamped_standing(state.base),
+        reputation_index: faction.reputation_index,
+        at_war: state.defaults & AT_WAR != 0,
+    })
 }
 
 pub(crate) fn apply_set_faction_at_war(
@@ -295,12 +408,21 @@ pub(crate) fn apply_set_faction_at_war(
     else {
         return Err(format!("no faction at reputation index {reputation_index}"));
     };
-    let reps = ctx.db.game_player_reputation();
-    if let Some(mut row) = reps
-        .by_character()
-        .filter(&player.guid)
-        .find(|r| r.faction_id == faction.faction_id)
+    let state = CharacterFaction::read(ctx, player.guid, &faction);
+    let row = stored_row(ctx, player.guid, faction.faction_id);
+    let flags = state.flags(row.as_ref());
+    let mut declared = flags;
+    let standing = row.as_ref().map_or(state.base, |row| row.standing);
+    declare_war(&mut declared, standing.saturating_sub(state.base));
+    // vmangos ignores the request in combat, for a hidden faction, under peace forced or unchanged.
+    if player.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
+        || flags & (HIDDEN | INVISIBLE_FORCED) != 0
+        || (flags & AT_WAR != 0) == at_war
+        || (at_war && declared & AT_WAR == 0)
     {
+        return Ok(());
+    }
+    if let Some(mut row) = row {
         row.at_war = at_war;
         row.reputation_index = reputation_index as i32;
         row.update(ctx);
@@ -313,7 +435,7 @@ pub(crate) fn apply_set_faction_at_war(
             character_guid: player.guid,
             owner_identity: player.owner_identity,
             faction_id: faction.faction_id,
-            standing: clamped_standing(base_standing(ctx, player.guid, &faction)),
+            standing: clamped_standing(state.base),
             reputation_index: reputation_index as i32,
             at_war,
         },
@@ -342,7 +464,71 @@ pub(crate) fn apply_set_watched_faction(
 
 #[cfg(test)]
 mod rep_tests {
-    use super::{clamped_standing, reputation_discount_pct, reputation_rank};
+    use super::{
+        clamped_standing, faction_flags, reaction_is_hostile, reputation_discount_pct,
+        reputation_rank, StoredReputation, AT_WAR, HIDDEN, INVISIBLE_FORCED, PEACE_FORCED, VISIBLE,
+    };
+
+    fn stored(standing: i32, at_war: bool) -> Option<StoredReputation> {
+        Some(StoredReputation {
+            standing,
+            earned: standing,
+            at_war,
+        })
+    }
+
+    #[test]
+    fn a_faction_without_a_row_keeps_its_default_flags() {
+        assert_eq!(
+            faction_flags(HIDDEN | PEACE_FORCED, None),
+            HIDDEN | PEACE_FORCED
+        );
+        assert_eq!(faction_flags(AT_WAR, None), AT_WAR);
+    }
+
+    #[test]
+    fn a_stored_row_is_visible_unless_its_faction_is_hidden() {
+        assert_eq!(faction_flags(0, stored(500, false)), VISIBLE);
+        assert_eq!(faction_flags(HIDDEN, stored(500, false)), HIDDEN);
+        assert_eq!(
+            faction_flags(INVISIBLE_FORCED | AT_WAR, stored(500, false)),
+            INVISIBLE_FORCED | AT_WAR
+        );
+    }
+
+    #[test]
+    fn peace_forced_refuses_war_above_an_earned_hated() {
+        assert_eq!(
+            faction_flags(PEACE_FORCED, stored(-6000, true)),
+            PEACE_FORCED | VISIBLE
+        );
+        assert_eq!(
+            faction_flags(PEACE_FORCED, stored(-6001, true)),
+            PEACE_FORCED | VISIBLE | AT_WAR
+        );
+        assert_eq!(faction_flags(0, stored(42_000, true)), VISIBLE | AT_WAR);
+    }
+
+    #[test]
+    fn a_hostile_rank_declares_war_and_a_visible_row_clears_a_default_war() {
+        assert_eq!(faction_flags(0, stored(-3001, false)), VISIBLE | AT_WAR);
+        assert_eq!(faction_flags(0, stored(-3000, false)), VISIBLE);
+        assert_eq!(faction_flags(AT_WAR, stored(0, false)), VISIBLE);
+    }
+
+    #[test]
+    fn only_a_hostile_or_hated_reputation_rank_is_hostile() {
+        assert!(reaction_is_hostile(Some(-3001), false));
+        assert!(reaction_is_hostile(Some(-42000), false));
+        assert!(!reaction_is_hostile(Some(-3000), true), "Unfriendly");
+        assert!(!reaction_is_hostile(Some(0), true));
+    }
+
+    #[test]
+    fn without_a_reputation_faction_the_templates_decide() {
+        assert!(reaction_is_hostile(None, true));
+        assert!(!reaction_is_hostile(None, false));
+    }
 
     #[test]
     fn standing_reaches_the_vmangos_cap_of_42999() {
