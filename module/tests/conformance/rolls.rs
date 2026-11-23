@@ -370,7 +370,14 @@ fn verified_counts(
         .iter()
         .map(|character| (character.guid, character.target))
         .collect();
-    verify_participants(shard, shard_name, &participants, target_level, &[95, 162])?;
+    verify_participants(
+        shard,
+        shard_name,
+        &participants,
+        target_level,
+        &[95, 162],
+        None,
+    )?;
     println!(
         "roll fixture {shard_name}: verified {} level-60 human warriors, agility 100, unarmed/defense 300/300, no items or auras",
         characters.len()
@@ -379,18 +386,24 @@ fn verified_counts(
 }
 
 /// Checks the pinned warrior, target, skills, health and positions of each (Character, target).
+/// `target_aura` names the one spell whose Aura a target may hold.
 pub(super) fn verify_participants(
     shard: &Standalone,
     shard_name: &str,
     participants: &[(u64, u64)],
     target_level: u32,
     skill_lines: &[u32],
+    target_aura: Option<u32>,
 ) -> Result<()> {
+    let auras = shard.query_database_rows(shard_name, "SELECT target_guid,spell_id FROM game_aura");
     ensure!(
-        shard
-            .query_database_rows(shard_name, "SELECT id FROM game_aura")
-            .is_empty(),
-        "roll participants have auras"
+        auras.iter().all(|aura| {
+            target_aura.is_some_and(|spell| aura["spell_id"] == spell.to_string())
+                && participants
+                    .iter()
+                    .any(|(_, target)| aura["target_guid"] == target.to_string())
+        }),
+        "roll participants have auras: {auras:?}"
     );
     let entities = shard.query_database_rows(shard_name,
         "SELECT guid,level,agility,health,max_health,dead,map_id,x,y,z,orientation FROM game_world_entity");
@@ -591,6 +604,9 @@ pub(super) fn public_seeds() -> Result<()> {
     comparison
         .differences
         .extend(super::queued_strikes::public_seeds(golden.scenario())?);
+    comparison
+        .differences
+        .extend(super::weapon_strikes::public_seeds(golden.scenario())?);
     super::tier1::record_and_check(
         "white_melee_outcomes",
         &path,
@@ -656,6 +672,9 @@ pub(super) fn merge_seed(commit: &str) -> Result<()> {
     comparison
         .differences
         .extend(super::queued_strikes::merge_seed(golden.scenario(), seed)?);
+    comparison
+        .differences
+        .extend(super::weapon_strikes::merge_seed(golden.scenario(), seed)?);
     println!(
         "merge {commit}: {}",
         serde_json::to_string_pretty(

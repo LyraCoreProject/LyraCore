@@ -1,6 +1,6 @@
 # 0007. Measure random rolls against source-derived probabilities
 
-Accepted design, 2026-11-05. Slices: white main-hand melee, direct-damage spells and the queued strike at levels 60 and 63.
+Accepted design, 2026-11-05. Slices: white main-hand melee, direct-damage spells, the queued strike and the cast Weapon Strike at levels 60 and 63.
 
 [ADR 0005](0005-1-12-conformance.md) checks random fields' shape and range. A server that always
 crits can satisfy that contract. Roll Conformance compares delivered gameplay outcomes with fixed
@@ -459,3 +459,88 @@ measures it with white melee.
 
 No Reference Server recording exists for this context yet, and no harness scenario. A later
 harness change can move the specification and classifier there with one recorded check.
+
+## Pinned fourth context: cast Weapon Strike
+
+Added 2026-11-23 for issue #1026. The queued strike's Character, axe, skills and target cast
+Mortal Strike rank 1, spell 12294, instead of queueing Heroic Strike. The Character sends no
+attack request. Mortal Strike is an instant melee Weapon Strike that is not a next-swing spell, so
+it exercises the cast branch of the attack table.
+
+The pinned database selects `spell_template` 12294 build 5086 (`mangos.sql:5882`) over build 4878
+(`mangos.sql:5884`) for build 5875: attributes `0x50010` (ability, not while shapeshifted, no
+sheath), attributes ex `0x08000400` (no threat, refunds power on a miss), ex3 `0x400` (main-hand
+weapon), ex2 and ex4 zero, damage class 2, school 0, mechanic 0, range index 2, equipped item
+class 2 with subclass mask 173555, rage cost 300, no cast time, category 971 with a 6000 ms
+category cooldown, a 1500 ms global cooldown in category 133 and duration index 1. Effect 1 applies
+aura 118 (healing taken, -50%) to the target; the importer stores it as an inert Aura. Effect 2 is
+effect 121 (normalized weapon damage) with base points 84 and a one-sided die. Tier 1 casts every
+50 ms and drops both cooldowns, as it shortens the axe delay. The roll formulas read neither; the
+Reference Server keeps them.
+
+Source links use one-based lines at the pinned commit:
+
+- [SpellCaster.cpp:169–236](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  damage class 2 selects `MeleeSpellHitResult`, after evade, immunity and reflection checks that
+  do not apply here (lines 221–233).
+- [SpellCaster.cpp:732–749](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  the attack type is the main hand (lines 735–736), and the table's crit outcome is the cast's crit
+  (lines 742–743). [Spell.cpp:910–923](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp) keeps that result
+  and does not roll crit again.
+- [SpellCaster.cpp:336–425](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  Mortal Strike lacks the always-hit attribute (line 341), and a spell skips the dual-wield penalty
+  (line 351). Miss stays 5% and 8%.
+- [SpellCaster.cpp:428–729](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  the spell can crit (line 437). Its combat range keeps weapon skill 300 (line 451). It has no
+  mechanic to resist (line 487). Dodge and parry follow the first context: 5%, 5% at level 60 and
+  6.5%, 14% at level 63. The table blocks a spell only with the completely-blocked attribute,
+  which Mortal Strike lacks (lines 546–547). Only a next-swing spell can glance (lines 548–549),
+  and only creatures crush (lines 550–551). Mortal Strike lacks no-active-defense (line 577).
+  Crit comes from `GetSpellCritChance` (lines 504–508).
+- [Unit.cpp:5212–5316](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp):
+  a melee damage class reads `GetUnitCriticalChance` (lines 5295–5302), which at
+  [Unit.cpp:2552–2595](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp) gives 5% and 2% as in the first
+  context. No spell crit aura or spell modifier applies.
+- [SpellEntry.h:506–525, 887–890, 1110–1121](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEntry.h):
+  effect 121 can crit, and neither next-swing attribute is set.
+- [SpellDefines.h:190–214, 828–981](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellDefines.h) define the
+  miss reasons and the attribute bits read above.
+
+The table is a single `urand(0, 9999)` roll with no glancing, block or crushing band:
+
+| Target level | Miss | Dodge | Parry | Crit | Hit |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 60 | 5% | 5% | 5% | 5% | 80% |
+| 63 | 8% | 6.5% | 14% | 2% | 69.5% |
+
+A landed cast then rolls partial block separately, exactly as the queued strike does.
+[Spell.cpp:1369–1429](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp) calls
+[Unit.cpp:2205–2233](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp), whose melee branch calls
+`IsSpellPartiallyBlocked` ([Unit.cpp:2351–2395](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)). The
+block chance is 5% at both levels, and the overlapping block probabilities are
+`8500*214748365/(10000*2^32)` and `7150*214748365/(10000*2^32)`.
+
+vmangos reports every outcome through the Spell path. [Spell.cpp:4529–4561, 4625–4653](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)
+sends one `SMSG_SPELL_GO` to the caster and its observers: a landed target is in the hit list, an
+avoided target is in the miss list with reason 1 (miss), 3 (dodge) or 4 (parry). A landed cast then
+sends `SMSG_SPELLNONMELEEDAMAGELOG` (Spell.cpp:1429), with crit flag `0x02` and a positive blocked
+amount for a partial block ([SpellCaster.cpp:1080–1096, 1253–1258](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp)).
+Only a next-swing spell sends `SMSG_ATTACKERSTATEUPDATE` (Spell.cpp:1289–1290, 1424–1426), and
+`SMSG_SPELLLOGMISS` reports only immunity and evasion (Spell.cpp:1614, 1643, 1700). The classifier
+in `conformance/support/weapon_strike_rolls.rs` reads one own `SMSG_SPELL_GO` per cast and the
+damage log of a landed cast. A missing, extra or contradictory packet blocks the sample; it is not
+a rate.
+
+Tier 1 enters through `CMSG_CAST_SPELL`, ordinary cast admission and resolution, and delivered
+packets, with the caster seam stream and the public seeds. Each Character's caster stream starts
+from the first context's per-stream state. An unretained readiness cast per Character requires an
+accepted cast and an own `SMSG_SPELL_GO`. This context reserves its own family: 1e-6 over six
+checks, two levels and three seeds, 36 tests at `1e-6/36`. Each submission's false-failure bound
+across the four contexts is therefore 3e-6. The signatures join `white_melee_outcomes`, whose
+pinned context this extends: rule `weapon_strike_distribution` with field `["outcomes", category]`,
+or `weapon_strike_sample` with field `["outcomes"]`. The checkpoint is
+`weapon_strike_level_<level>_<seed slot>`, the stream `casts`, opcode `0x0132`. The merge seed
+measures it with white melee.
+
+No Reference Server recording exists for this context yet, and no harness scenario. Ranged Weapon
+Strikes, which roll only miss and crit, need their own context.
