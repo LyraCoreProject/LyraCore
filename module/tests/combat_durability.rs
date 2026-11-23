@@ -15,10 +15,8 @@ const BLADE_DURABILITY: u32 = 50;
 const HEAD_DURABILITY: u32 = 20;
 const HELM_ENTRY: u32 = 9_000_100;
 const HELM_STAMINA: u32 = 20;
-const HELM_GUID: u64 = 9_000_001;
 const HEAD_INVENTORY_TYPE: u8 = 1;
 const ARMOUR_CLASS: u8 = 4;
-const BACKPACK_SLOT: u8 = 23;
 const DUEL: u64 = 509_0001;
 /// `state::ACTIVE` in `module/src/duel.rs`.
 const DUEL_ACTIVE: u8 = 2;
@@ -38,7 +36,7 @@ const SEED_FAILING_THE_ROLL: u64 = 1;
 fn a_landed_hit_wears_the_equipment_slot_the_roll_picks_and_a_failed_roll_wears_nothing() {
     let mut standalone = Standalone::start("combat-durability-hit-done");
     let wolf = stage(&mut standalone);
-    give_helm(&standalone, HEAD_SLOT, HEAD_DURABILITY);
+    give_helm(&standalone, true, HEAD_DURABILITY);
     standalone.insert_row(
         "game_conformance_wear_random",
         &[
@@ -76,7 +74,7 @@ fn a_landed_hit_wears_the_equipment_slot_the_roll_picks_and_a_failed_roll_wears_
 fn a_hit_taken_wears_the_victims_armour_slot_the_roll_picks() {
     let mut standalone = Standalone::start("combat-durability-hit-taken");
     let wolf = stage(&mut standalone);
-    give_helm(&standalone, HEAD_SLOT, HEAD_DURABILITY);
+    give_helm(&standalone, true, HEAD_DURABILITY);
     standalone.insert_row(
         "game_conformance_wear_random",
         &[("character_guid", &PLAYER), ("state", &SEED_PICKING_HEAD)],
@@ -134,8 +132,8 @@ fn wear_that_breaks_a_helm_removes_its_stamina() {
     let mut standalone = Standalone::start("combat-durability-broken-helm");
     let wolf = stage(&mut standalone);
     let unequipped_health = max_health(&standalone);
-    give_helm(&standalone, BACKPACK_SLOT, 1);
-    standalone.assert_call("debug_equip_item", &["1", &BACKPACK_SLOT.to_string()]);
+    let bag_slot = give_helm(&standalone, false, 1);
+    standalone.assert_call("debug_equip_item", &["1", &bag_slot.to_string()]);
     assert!(
         max_health(&standalone) > unequipped_health,
         "the equipped helm adds stamina"
@@ -325,19 +323,28 @@ fn stage(standalone: &mut Standalone) -> u64 {
     wolf
 }
 
-fn give_helm(standalone: &Standalone, slot: u8, durability: u32) {
-    standalone.insert_row(
-        "game_item_instance",
-        &[
-            ("guid", &HELM_GUID),
-            ("entry", &HELM_ENTRY),
-            ("owner_guid", &PLAYER),
-            ("owner_identity", &format!("0x{}", "00".repeat(32))),
-            ("slot", &slot),
-            ("stack_count", &1),
-            ("durability", &durability),
-        ],
+/// Grants the helm at `durability` and returns its bag slot, or equips it when `equip` is set.
+fn give_helm(standalone: &Standalone, equip: bool, durability: u32) -> u8 {
+    standalone.assert_call(
+        "debug_grant_item",
+        &[&PLAYER.to_string(), &HELM_ENTRY.to_string(), "1"],
     );
+    standalone.assert_sql(&format!(
+        "UPDATE game_item_instance SET durability = {durability} \
+         WHERE owner_guid = {PLAYER} AND entry = {HELM_ENTRY}"
+    ));
+    let slot: u8 = standalone.query_rows(&format!(
+        "SELECT slot FROM game_item_instance WHERE owner_guid = {PLAYER} AND entry = {HELM_ENTRY}"
+    ))[0]["slot"]
+        .parse()
+        .unwrap();
+    if equip {
+        standalone.assert_call(
+            "debug_equip_item",
+            &[&PLAYER.to_string(), &slot.to_string()],
+        );
+    }
+    slot
 }
 
 fn max_health(standalone: &Standalone) -> u32 {
