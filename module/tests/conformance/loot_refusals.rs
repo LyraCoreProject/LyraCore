@@ -695,6 +695,15 @@ fn a_corpse_whose_only_drop_is_an_unneeded_quest_item_is_not_lootable_and_can_be
             ("max_rank", &300),
         ],
     );
+    // The fixture wolf's skinning loot drops Light Leather.
+    stage.shard.insert_row(
+        "game_item_template",
+        &[
+            ("entry", &2318),
+            ("name", &"Light Leather"),
+            ("max_stack", &20),
+        ],
+    );
     stage
         .shard
         .assert_call("debug_skin_nearest", &[&stage.character.to_string()]);
