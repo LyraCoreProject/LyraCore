@@ -362,6 +362,13 @@ impl Table {
                         | "required_min_rep_value"
                         | "required_max_rep_faction"
                         | "required_max_rep_value"
+                        | "required_money"
+                        | "rew_rep_faction_3"
+                        | "rew_rep_value_3"
+                        | "rew_rep_faction_4"
+                        | "rew_rep_value_4"
+                        | "rew_rep_faction_5"
+                        | "rew_rep_value_5"
                 )
                 | (
                     Self::PickpocketLoot
@@ -554,6 +561,13 @@ const QUEST_COLUMNS: &[Column] = &[
     column("required_min_rep_value", FieldType::I32),
     column("required_max_rep_faction", FieldType::U32),
     column("required_max_rep_value", FieldType::I32),
+    column("required_money", FieldType::U32),
+    column("rew_rep_faction_3", FieldType::U32),
+    column("rew_rep_value_3", FieldType::I32),
+    column("rew_rep_faction_4", FieldType::U32),
+    column("rew_rep_value_4", FieldType::I32),
+    column("rew_rep_faction_5", FieldType::U32),
+    column("rew_rep_value_5", FieldType::I32),
 ];
 
 const QUEST_TEXT_COLUMNS: &[Column] = &[

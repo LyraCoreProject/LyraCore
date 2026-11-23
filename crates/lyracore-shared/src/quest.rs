@@ -1,25 +1,5 @@
 use crate::race_class::{mask_admits, ZeroMask};
 
-// Placeholder XP curve for templates without an explicit reward.
-fn xp_reward(quest_level: u32) -> u32 {
-    quest_level.saturating_mul(45).saturating_add(40)
-}
-
-// Placeholder conversion of six copper per XP at the level cap.
-const MAX_LEVEL_XP_TO_COPPER: u32 = 6;
-
-pub fn max_level_money_reward(xp: u32) -> u32 {
-    xp.saturating_mul(MAX_LEVEL_XP_TO_COPPER)
-}
-
-// Vanilla XP is ceil(RewMoneyMaxLevel / 0.6).
-fn quest_xp(reward_money_max_level: u32) -> u32 {
-    if reward_money_max_level == 0 {
-        return 0;
-    }
-    (((reward_money_max_level as u64) * 5).div_ceil(3)) as u32
-}
-
 // game_group_event kind 9 is retired; quest sharing uses 10 and 11.
 pub mod share_event_kind {
     pub const QUEST_SHARE: u8 = 10;
@@ -89,29 +69,37 @@ mod tests {
     }
 
     #[test]
-    fn xp_reward_is_monotonic_and_nonzero() {
-        assert_eq!(xp_reward(1), 85);
-        assert_eq!(xp_reward(2), 130);
-        assert_eq!(xp_reward(5), 265);
-        assert!(xp_reward(10) > xp_reward(5));
-        assert!(xp_reward(u32::MAX) > 0);
+    fn a_quest_cost_is_offered_as_negative_money() {
+        assert_eq!(offered_money(150, 0), 150);
+        assert_eq!(offered_money(0, 250), -250);
+        assert_eq!(offered_money(0, 0), 0);
     }
 
     #[test]
-    fn quest_xp_is_authentic_and_exact() {
-        assert_eq!(quest_xp(102), 170);
-        assert_eq!(quest_xp(150), 250);
-        assert_eq!(quest_xp(270), 450);
-        assert_eq!(quest_xp(0), 0);
-        assert_eq!(quest_xp(3), 5);
-        assert!(quest_xp(u32::MAX) > 0);
+    fn quest_xp_is_full_up_to_five_levels_above_the_quest() {
+        assert_eq!(quest_xp_for_level(110, 10, 1), 110);
+        assert_eq!(quest_xp_for_level(110, 10, 15), 110);
     }
 
     #[test]
-    fn max_level_money_reward_uses_the_documented_v_coefficient() {
-        assert_eq!(max_level_money_reward(0), 0);
-        assert_eq!(max_level_money_reward(100), 600);
-        assert_eq!(max_level_money_reward(u32::MAX), u32::MAX);
+    fn quest_xp_falls_to_a_tenth_by_the_vmangos_steps() {
+        let steps = [(16, 88), (17, 66), (18, 44), (19, 22), (20, 11), (60, 11)];
+        for (player_level, expected) in steps {
+            assert_eq!(quest_xp_for_level(110, 10, player_level), expected);
+        }
+    }
+
+    #[test]
+    fn quest_xp_rounds_up_in_single_precision_like_the_reference_server() {
+        assert_eq!(quest_xp_for_level(100, 10, 16), 80);
+        assert_eq!(quest_xp_for_level(100, 10, 17), 61);
+        assert_eq!(quest_xp_for_level(1, 10, 60), 1);
+    }
+
+    #[test]
+    fn a_quest_without_xp_grants_none_at_any_level() {
+        assert_eq!(quest_xp_for_level(0, 10, 10), 0);
+        assert_eq!(quest_xp_for_level(0, 10, 40), 0);
     }
 
     #[test]
@@ -455,16 +443,25 @@ impl AcceptanceRefusal {
     }
 }
 
+/// `Quest::XPValue`: full XP up to five levels above the quest, then 80%, 60%, 40%, 20% and 10%.
+pub fn quest_xp_for_level(reward_xp: u32, quest_level: u32, player_level: u32) -> u32 {
+    let full = reward_xp as f32;
+    let factor = match player_level.saturating_sub(quest_level) {
+        0..=5 => return reward_xp,
+        6 => 0.8f32,
+        7 => 0.6,
+        8 => 0.4,
+        9 => 0.2,
+        _ => 0.1,
+    };
+    (full * factor).ceil() as u32
+}
+
 pub const QUEST_LOG_FULL_TEXT: &str = "quest log is full";
 
-pub fn base_reward_xp(explicit_xp: u32, reward_money_max_level: u32, quest_level: u32) -> u32 {
-    if explicit_xp > 0 {
-        explicit_xp
-    } else if reward_money_max_level > 0 {
-        quest_xp(reward_money_max_level)
-    } else {
-        xp_reward(quest_level)
-    }
+/// The signed `RewOrReqMoney` wire value: a quest cost shows as a negative reward.
+pub fn offered_money(reward_money: u32, required_money: u32) -> i32 {
+    reward_money.wrapping_sub(required_money) as i32
 }
 
 #[cfg(test)]
@@ -1047,12 +1044,5 @@ mod rule_tests {
             ),
             StartSighting::Hidden
         );
-    }
-
-    #[test]
-    fn reward_priority_is_explicit_then_imported_then_placeholder() {
-        assert_eq!(base_reward_xp(123, 270, 10), 123);
-        assert_eq!(base_reward_xp(0, 270, 10), 450);
-        assert_eq!(base_reward_xp(0, 0, 10), 490);
     }
 }

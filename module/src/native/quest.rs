@@ -18,11 +18,6 @@ pub(super) fn quest_detail_view(
 ) -> Option<lyracore_protocol::codec::QuestDetailView> {
     use lyracore_protocol::codec::QuestDetailView;
     let tmpl = ctx.db.game_quest_template().entry().find(quest_id)?;
-    let reward_xp = lyracore_shared::quest::base_reward_xp(
-        tmpl.reward_xp,
-        tmpl.reward_money_max_level,
-        tmpl.quest_level,
-    );
     let text = ctx.db.game_quest_text().quest_entry().find(quest_id);
     let details = text.as_ref().map(|t| t.details.clone()).unwrap_or_default();
     let offer_reward_text = text
@@ -61,8 +56,7 @@ pub(super) fn quest_detail_view(
         objectives_text: synthesized_objectives(ctx, quest_id, imported_objectives),
         offer_reward_text,
         request_items_text,
-        money_reward: tmpl.reward_money,
-        reward_xp,
+        money_reward: lyracore_shared::quest::offered_money(tmpl.reward_money, tmpl.required_money),
         next_quest_id: tmpl.next_quest_id,
         max_level_money_reward: tmpl.reward_money_max_level,
         flags: ctx
@@ -81,6 +75,19 @@ pub(super) fn quest_detail_view(
             .map(|(_, a, b, c, d)| (a, b, c, d))
             .collect(),
     })
+}
+
+// The XP and signed money of the turn-in, read at the Character's level before it is granted.
+fn turn_in_payout_of(ctx: &ReducerContext, guid: u64, quest: u32) -> Option<(u32, i32)> {
+    use crate::game_world_entity;
+    let level = ctx.db.game_world_entity().guid().find(guid)?.level;
+    let tmpl = ctx.db.game_quest_template().entry().find(quest)?;
+    let payout = turn_in_payout(ctx, level, &tmpl);
+    let money = tmpl.reward_money.wrapping_add(payout.money);
+    Some((
+        payout.xp.unwrap_or(0),
+        lyracore_shared::quest::offered_money(money, tmpl.required_money),
+    ))
 }
 
 fn quest_emotes(ctx: &ReducerContext, quest_id: u32) -> codec::QuestEmotes {
@@ -473,18 +480,18 @@ fn refused_turn_in_screen(
     let Some(detail) = quest_detail_view(ctx, quest).filter(|_| alive && ends_quest) else {
         return Ok(Vec::new());
     };
-    let reason = match refusal.kind {
-        ActionRefusalKind::InventoryFull => Some(Reason::QuestFailedInventoryFull),
-        ActionRefusalKind::DuplicateItem => Some(Reason::QuestFailedDuplicateItem),
-        _ => None,
+    let failed = |reason| {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_FAILED(codec::build_questgiver_quest_failed(
+            quest, reason,
+        ))
     };
-    let notice = reason
-        .map(|reason| {
-            packet(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_FAILED(
-                codec::build_questgiver_quest_failed(quest, reason),
-            ))
-        })
-        .transpose()?;
+    let notice = match refusal.kind {
+        ActionRefusalKind::InventoryFull => Some(failed(Reason::QuestFailedInventoryFull)),
+        ActionRefusalKind::DuplicateItem => Some(failed(Reason::QuestFailedDuplicateItem)),
+        _ => None,
+    }
+    .map(packet)
+    .transpose()?;
     Ok(notice
         .into_iter()
         .chain([offer_reward(giver, &detail)?])
@@ -604,6 +611,7 @@ pub(super) fn receive(
             if q.reward >= QUEST_REWARD_CHOICES_COUNT {
                 return Ok(());
             }
+            let payout = turn_in_payout_of(ctx, guid, q.quest_id);
             let turned_in = super::actor(ctx, guid)
                 .map_err(|refusal| ActionRefusal::from(String::from(refusal)))
                 .and_then(|_| request_turn_in_quest(ctx, guid, q.guid.guid(), q.quest_id, q.reward))
@@ -617,9 +625,10 @@ pub(super) fn receive(
                 return Err(Rollback::replies(packets, reason).into());
             }
             let mut packets: Vec<Packet> = quest_detail_view(ctx, q.quest_id)
-                .map(|detail| {
+                .zip(payout)
+                .map(|(detail, (xp, money))| {
                     packet(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(
-                        Box::new(codec::build_quest_complete(&detail)),
+                        Box::new(codec::build_quest_complete(&detail, xp, money)),
                     ))
                 })
                 .transpose()?

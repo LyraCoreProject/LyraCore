@@ -57,6 +57,76 @@ path = "module/tests/conformance/quest_turn_in.rs"
 function = "a_level_up_turn_in_sends_the_next_level_threshold_with_the_xp"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "a_quest_cost_stays_incomplete_without_the_money_and_is_taken_with_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "a_quest_with_explicit_zero_xp_grants_none_and_a_quest_with_xp_grants_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "a_quest_with_five_reputation_rewards_grants_all_five"
+rung = "durable_module"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "a_quest_cost_is_offered_as_negative_money"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/quest.rs"
+function = "a_quest_cost_is_the_required_money_and_a_reward_requires_none"
+rung = "codec"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "quest_xp_falls_with_the_level_above_the_quest_and_the_popup_shows_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "a_level_60_turn_in_pays_the_max_level_money_instead_of_xp"
+rung = "durable_module"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "quest_xp_is_full_up_to_five_levels_above_the_quest"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "quest_xp_falls_to_a_tenth_by_the_vmangos_steps"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "quest_xp_rounds_up_in_single_precision_like_the_reference_server"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "a_quest_without_xp_grants_none_at_any_level"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/quest.rs"
+function = "quest_complete_carries_the_granted_payout_with_a_signed_cost"
+rung = "codec"
+
+[[tests]]
+path = "module/src/quest.rs"
+function = "a_turn_in_scales_the_quest_xp_by_level_before_the_rate"
+rung = "unit"
+
+[[tests]]
+path = "module/src/quest.rs"
+function = "a_level_60_turn_in_pays_the_max_level_money_and_no_xp"
+rung = "unit"
+
 [[deliberate_deviations]]
 id = "absent_choice_slot"
 result = "A turn-in that picks a choice slot below 6 with no item is refused and re-offers the reward. The Reference Server completes the quest and grants no choice item."

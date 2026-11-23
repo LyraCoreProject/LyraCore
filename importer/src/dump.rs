@@ -196,8 +196,6 @@ pub(crate) mod qt {
     pub const OBJECTIVES: &str = "Objectives";
     pub const OFFER_REWARD_TEXT: &str = "OfferRewardText";
     pub const REQUEST_ITEMS_TEXT: &str = "RequestItemsText";
-    pub const REW_REP_FACTION1: &str = "RewRepFaction1";
-    pub const REW_REP_VALUE1: &str = "RewRepValue1";
     pub const REW_OR_REQ_MONEY: &str = "RewOrReqMoney";
     pub const REW_SPELL: &str = "RewSpell";
     pub const REW_SPELL_CAST: &str = "RewSpellCast";

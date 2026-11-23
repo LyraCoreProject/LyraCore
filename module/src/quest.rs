@@ -85,26 +85,45 @@ const PARTY_SHARE_RANGE_SQ: f32 = crate::group::GROUP_XP_RANGE_SQ;
 pub(crate) const MAX_QUEST_LOG_SIZE: usize = 20;
 pub(crate) const QUEST_REWARD_CHOICES_COUNT: u32 = 6;
 
-const QUEST_MAX_LEVEL_PAYOUT: u32 = 60;
-
 #[derive(Debug, PartialEq, Eq)]
-struct QuestPayout {
-    money: u32,
-    xp: Option<u32>,
+pub(crate) struct QuestPayout {
+    pub(crate) money: u32,
+    pub(crate) xp: Option<u32>,
 }
 
-fn quest_payout(level: u32, xp: u32) -> QuestPayout {
-    if level >= QUEST_MAX_LEVEL_PAYOUT {
+fn quest_payout(
+    level: u32,
+    quest_level: u32,
+    reward_xp: u32,
+    reward_money_max_level: u32,
+    rated_xp: impl FnOnce(u32) -> u32,
+) -> QuestPayout {
+    if level >= crate::xp::LEVEL_CAP {
         QuestPayout {
-            money: lyracore_shared::quest::max_level_money_reward(xp),
+            money: reward_money_max_level,
             xp: None,
         }
     } else {
+        let xp = lyracore_shared::quest::quest_xp_for_level(reward_xp, quest_level, level);
         QuestPayout {
             money: 0,
-            xp: Some(xp),
+            xp: Some(rated_xp(xp)),
         }
     }
+}
+
+pub(crate) fn turn_in_payout(
+    ctx: &ReducerContext,
+    level: u32,
+    tmpl: &QuestTemplate,
+) -> QuestPayout {
+    quest_payout(
+        level,
+        tmpl.quest_level,
+        tmpl.reward_xp,
+        tmpl.reward_money_max_level,
+        |xp| crate::xp::rated_xp(ctx, xp),
+    )
 }
 
 #[table(accessor = game_quest_template, public)]
@@ -158,6 +177,20 @@ pub struct QuestTemplate {
     pub required_max_rep_faction: u32,
     #[default(0)]
     pub required_max_rep_value: i32,
+    #[default(0)]
+    pub required_money: u32,
+    #[default(0)]
+    pub rew_rep_faction_3: u32,
+    #[default(0)]
+    pub rew_rep_value_3: i32,
+    #[default(0)]
+    pub rew_rep_faction_4: u32,
+    #[default(0)]
+    pub rew_rep_value_4: i32,
+    #[default(0)]
+    pub rew_rep_faction_5: u32,
+    #[default(0)]
+    pub rew_rep_value_5: i32,
 }
 
 #[table(accessor = game_quest_flags)]
@@ -584,7 +617,26 @@ crate::character_owned!(transfer, fn sweep_transfer_game_character_quest_event_c
 
 pub const MAX_OBJECTIVES: usize = 4;
 
+fn holds_required_money(ctx: &ReducerContext, cq: &CharacterQuest) -> bool {
+    let required = ctx
+        .db
+        .game_quest_template()
+        .entry()
+        .find(cq.quest_entry)
+        .map_or(0, |tmpl| tmpl.required_money);
+    required == 0
+        || ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(cq.character_guid)
+            .is_some_and(|entity| entity.money >= required)
+}
+
 pub(crate) fn quest_is_complete(ctx: &ReducerContext, cq: &CharacterQuest) -> bool {
+    if !holds_required_money(ctx, cq) {
+        return false;
+    }
     let requires_event_credit = ctx
         .db
         .game_quest_event_requirement()
@@ -1301,13 +1353,11 @@ pub(crate) fn request_turn_in_quest(
     if let Some(reward) = pick_choice_reward(&choices, reward_index, quest_entry)? {
         rewards.insert(0, reward);
     }
-    player.money = player.money.saturating_add(tmpl.reward_money);
-    let base_xp = lyracore_shared::quest::base_reward_xp(
-        tmpl.reward_xp,
-        tmpl.reward_money_max_level,
-        tmpl.quest_level,
-    );
-    let payout = quest_payout(player.level, crate::xp::rated_xp(ctx, base_xp));
+    player.money = player
+        .money
+        .saturating_sub(tmpl.required_money)
+        .saturating_add(tmpl.reward_money);
+    let payout = turn_in_payout(ctx, player.level, &tmpl);
     player.money = player.money.saturating_add(payout.money);
     // Packages can catch a Refusal; resolve every item Gate before the infallible quest effects.
     crate::items::exchange_items(
@@ -1317,19 +1367,8 @@ pub(crate) fn request_turn_in_quest(
         &rewards,
         crate::items::ItemPush::QUEST_REWARD,
     )?;
-    crate::reputation::grant_reputation(
-        ctx,
-        player_guid,
-        tmpl.rew_rep_faction_1,
-        tmpl.rew_rep_value_1,
-    );
-    crate::reputation::grant_reputation(
-        ctx,
-        player_guid,
-        tmpl.rew_rep_faction_2,
-        tmpl.rew_rep_value_2,
-    );
-    if let Some(xp) = payout.xp {
+    grant_reputation_rewards(ctx, player_guid, &tmpl);
+    if let Some(xp) = payout.xp.filter(|&xp| xp > 0) {
         crate::xp::XpEvent::send(
             ctx,
             player_guid,
@@ -1363,6 +1402,18 @@ pub(crate) fn request_turn_in_quest(
         },
     );
     Ok(())
+}
+
+fn grant_reputation_rewards(ctx: &ReducerContext, character_guid: u64, tmpl: &QuestTemplate) {
+    for (faction, value) in [
+        (tmpl.rew_rep_faction_1, tmpl.rew_rep_value_1),
+        (tmpl.rew_rep_faction_2, tmpl.rew_rep_value_2),
+        (tmpl.rew_rep_faction_3, tmpl.rew_rep_value_3),
+        (tmpl.rew_rep_faction_4, tmpl.rew_rep_value_4),
+        (tmpl.rew_rep_faction_5, tmpl.rew_rep_value_5),
+    ] {
+        crate::reputation::grant_reputation(ctx, character_guid, faction, value);
+    }
 }
 
 fn credit_objective(
@@ -2002,7 +2053,7 @@ mod tests {
     #[test]
     fn a_level_59_turn_in_grants_the_quest_xp() {
         assert_eq!(
-            quest_payout(59, 1_450),
+            quest_payout(59, 60, 1_450, 870, |xp| xp),
             QuestPayout {
                 money: 0,
                 xp: Some(1_450)
@@ -2011,11 +2062,22 @@ mod tests {
     }
 
     #[test]
-    fn a_level_60_turn_in_pays_six_copper_per_xp_instead() {
+    fn a_turn_in_scales_the_quest_xp_by_level_before_the_rate() {
         assert_eq!(
-            quest_payout(60, 1_450),
+            quest_payout(59, 50, 1_450, 870, |xp| xp * 2),
             QuestPayout {
-                money: 8_700,
+                money: 0,
+                xp: Some(580)
+            }
+        );
+    }
+
+    #[test]
+    fn a_level_60_turn_in_pays_the_max_level_money_and_no_xp() {
+        assert_eq!(
+            quest_payout(60, 60, 1_450, 870, |_| unreachable!("no XP at the cap")),
+            QuestPayout {
+                money: 870,
                 xp: None
             }
         );
