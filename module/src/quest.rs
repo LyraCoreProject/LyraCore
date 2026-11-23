@@ -1392,7 +1392,7 @@ fn grant_reputation_rewards(ctx: &ReducerContext, character_guid: u64, tmpl: &Qu
     }
 }
 
-/// vmangos `Player::RewardQuest`: a creature ender casts teach, create-item and ally spells.
+/// A creature ender casts a learn, create-item or `T_TARGET_ALLY` spell; docs/schema.md has why.
 fn cast_reward_spell(
     ctx: &ReducerContext,
     tmpl: &QuestTemplate,

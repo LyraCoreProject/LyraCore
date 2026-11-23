@@ -1328,6 +1328,22 @@ fn apply_reposition_effect(
     }
 }
 
+/// vmangos `Spell::DoCreateItem`: another caster's cast fills the bags of the Character it targets.
+fn create_item_recipient(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) -> u64 {
+    let is_character = |guid| {
+        ctx.db
+            .game_world_entity()
+            .guid()
+            .find(guid)
+            .is_some_and(|entity| entity.is_player())
+    };
+    if !is_character(caster_guid) && is_character(target_guid) {
+        target_guid
+    } else {
+        caster_guid
+    }
+}
+
 fn apply_inventory_effect(
     ctx: &ReducerContext,
     e: &SpellEffect,
@@ -1337,7 +1353,7 @@ fn apply_inventory_effect(
 ) -> EffectHit {
     match e.kind {
         E_CREATE_ITEM => {
-            // Vanilla CreateItem grants to the caster regardless of the explicit target.
+            let recipient = create_item_recipient(ctx, caster_guid, target_guid);
             let entry = e.p0.max(0) as u32;
             let count = points.max(1) as u32;
             if entry == 0 {
@@ -1349,9 +1365,9 @@ fn apply_inventory_effect(
                     item: ItemGrantOutcome::Refused,
                     ..EffectHit::default()
                 };
-            } else if let Err(err) = crate::items::grant_item(ctx, caster_guid, entry, count) {
+            } else if let Err(err) = crate::items::grant_item(ctx, recipient, entry, count) {
                 log::info!(
-                    "spell {} E_CREATE_ITEM: could not grant {count}x item {entry} to {caster_guid}: {err}",
+                    "spell {} E_CREATE_ITEM: could not grant {count}x item {entry} to {recipient}: {err}",
                     e.spell_id
                 );
                 return EffectHit {

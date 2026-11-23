@@ -18,6 +18,10 @@ tests = [
     { path = "module/tests/item_cast.rs", function = "an_expendable_item_is_used_up_by_its_last_charge", rung = "durable_module" },
     { path = "module/tests/item_state_transfers.rs", function = "an_item_with_spent_charges_cannot_be_mailed", rung = "durable_module" },
     { path = "module/tests/item_state_transfers.rs", function = "a_traded_item_keeps_its_spent_charges_under_its_new_guid", rung = "durable_module" },
+    { path = "module/tests/conformance/item_learn.rs", function = "a_pattern_teaches_only_a_character_with_its_profession", rung = "durable_module" },
+    { path = "module/tests/conformance/item_learn.rs", function = "a_warrior_can_never_use_a_mage_tome", rung = "durable_module" },
+    { path = "module/tests/conformance/item_learn.rs", function = "a_grimoire_teaches_its_user_nothing", rung = "durable_module" },
+    { path = "importer/src/spell.rs", function = "a_learn_effect_teaches_its_target_but_a_grimoire_effect_stays_inert", rung = "unit" },
 ]
 
 [vmangos]
@@ -63,3 +67,9 @@ description = "An item use refused for no charges left answers \"can't do that r
 path = "module/src/items/ops.rs"
 symbol = "apply_item_use_on"
 evidence = "vmangos Spell::CheckItems sends SPELL_FAILED_NO_CHARGES_REMAIN; apply_item_use_on maps every cast Gate refusal without an item refusal to ItemRefusal::NotRightNow, and the item query and ITEM_FIELD_SPELL_CHARGES send zero charges."
+
+[[known_gaps]]
+description = "An item's required spell is not checked before use. vmangos Player::CanUseItem refuses an item whose RequiredSpell the Character does not know with EQUIP_ERR_NO_REQUIRED_PROFICIENCY."
+path = "module/src/items/inventory.rs"
+symbol = "check_user_requirements"
+evidence = "The importer does not keep item_template.required_spell, so game_item_template has no required spell column."

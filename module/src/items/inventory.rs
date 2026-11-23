@@ -284,6 +284,26 @@ pub(super) fn validate_equipment(
     if !fits {
         return Err(InventoryResult::ItemCantBeEquipped);
     }
+    check_user_requirements(ctx, &character, template)?;
+    if !meets_required_level(character.level, template.required_level) {
+        return Err(InventoryResult::CantEquipLevelI);
+    }
+    let proficiency = Proficiency::from_spellbook(character.class(), |spell_id| {
+        crate::spell::knows_spell(ctx, character_guid, spell_id)
+    });
+    if !proficiency.can_equip(template.class, template.subclass) {
+        return Err(InventoryResult::NoRequiredProficiency);
+    }
+    Ok(())
+}
+
+/// vmangos `Player::CanUseItem`: the class and race masks, then the required skill and its rank.
+pub(super) fn check_user_requirements(
+    ctx: &ReducerContext,
+    character: &crate::WorldEntity,
+    template: &crate::ItemTemplate,
+) -> Result<(), lyracore_protocol::messages::vanilla::InventoryResult> {
+    use lyracore_protocol::messages::vanilla::InventoryResult;
     if !mask_admits(
         template.allowed_class,
         character.class(),
@@ -296,7 +316,7 @@ pub(super) fn validate_equipment(
         return Err(InventoryResult::YouCanNeverUseThatItem);
     }
     let current_skill =
-        crate::skill::skill_value(ctx, character_guid, template.required_skill, false) as u16;
+        crate::skill::skill_value(ctx, character.guid, template.required_skill, false) as u16;
     if template.required_skill != 0 && current_skill == 0 {
         return Err(InventoryResult::NoRequiredProficiency);
     }
@@ -306,15 +326,6 @@ pub(super) fn validate_equipment(
         Some(current_skill),
     ) {
         return Err(InventoryResult::CantEquipSkill);
-    }
-    if !meets_required_level(character.level, template.required_level) {
-        return Err(InventoryResult::CantEquipLevelI);
-    }
-    let proficiency = Proficiency::from_spellbook(character.class(), |spell_id| {
-        crate::spell::knows_spell(ctx, character_guid, spell_id)
-    });
-    if !proficiency.can_equip(template.class, template.subclass) {
-        return Err(InventoryResult::NoRequiredProficiency);
     }
     Ok(())
 }

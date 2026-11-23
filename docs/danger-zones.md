@@ -808,8 +808,9 @@ Deltas written before the change omit the new columns and still apply.
 and `game_quest_reward_spell` moves to `retired.rs`. Spell effect 36 now imports as
 `E_LEARN_SPELL` (code 0x2D); older spell rows keep it as `E_SCRIPTED`, which trainers still read as
 a learn effect. Reimport the `spell` and `quests` families straight after the publish. Until then
-no quest shows or casts a reward spell, so a quest that taught a spell teaches nothing. No repair
-is needed. Package Deltas written before the change omit the columns and still apply, with no
+no quest shows or casts a reward spell, so a quest that taught a spell teaches nothing. After the
+`spell` reimport, a recipe, tome or manual teaches its spell when it is used. Item use checks the
+item's class, race and required skill from the publish on. No repair is needed. Package Deltas written before the change omit the columns and still apply, with no
 reward spell.
 
 ### Repair cost migration

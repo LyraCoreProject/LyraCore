@@ -116,10 +116,18 @@ so Packages can still set one. Reimport quests to populate an existing Realm.
 quest-query packets show. A turn-in casts `reward_spell_cast`, or `reward_spell` when that is 0, as
 a triggered cast on the Character after its other rewards and the turn-in hook, as vmangos
 `Player::RewardQuest` does. A creature ender casts a spell with an `E_LEARN_SPELL` or
-`E_CREATE_ITEM` effect or an effect aimed at an ally; otherwise the Character casts it. An
-`E_LEARN_SPELL` effect teaches a Character target its `trigger_spell` and that spell's dependent
-spells, and teaches any other target nothing, as vmangos `Spell::EffectLearnSpell` does. The
-retired `game_quest_reward_spell` held the taught spell of a single-effect learn reward.
+`E_CREATE_ITEM` effect or an effect whose imported target is `T_TARGET_ALLY`; otherwise the
+Character casts it. vmangos checks the raw implicit target for 21 or 25, so for a few spells the
+caster differs (the `reward_spell_caster`
+[deviation](../conformance/features/quests/quest_reward.toml)). The retired
+`game_quest_reward_spell` held the taught spell of a single-effect learn reward.
+
+An `E_LEARN_SPELL` effect teaches a Character target its `trigger_spell` and that spell's dependent
+spells, and teaches any other target nothing, as vmangos `Spell::EffectLearnSpell` does. A
+grimoire's learn effect aims at the caster's pet, so it imports as `E_SCRIPTED` and teaches
+nothing. An `E_CREATE_ITEM` effect that a creature casts on a Character fills that Character's
+bags. Every item use first checks the item's class and race masks and its required skill and rank,
+as vmangos `Player::CanUseItem` does; the item's required spell is not imported.
 
 ### The three migration rules that have bitten
 

@@ -448,6 +448,8 @@ fn resolve_target(target: i32, is_negative: bool) -> u8 {
     }
 }
 
+const TARGET_UNIT_CASTER_PET: i32 = 5;
+
 const LOCATION_TARGET_CODES: [i32; 19] = [
     9, 10, 17, 18, 22, 32, 39, 41, 42, 43, 44, 46, 47, 48, 49, 50, 53, 55, 63,
 ];
@@ -1313,6 +1315,9 @@ fn resolve_effect_kind(
             E_SUMMON_GUARDIANS
         } else if effect_id == 5 && (s.implicit_target_a[i] == 9 || s.implicit_target_b[i] == 9) {
             E_RECALL_HOME
+        } else if effect_id == 36 && s.implicit_target_a[i] == TARGET_UNIT_CASTER_PET {
+            // vmangos teaches a grimoire's spell to the caster's pet, which LyraCore cannot do.
+            E_SCRIPTED
         } else {
             instant_effect_to_kind(effect_id)
         };
@@ -2299,6 +2304,19 @@ mod tests {
         tables.spells = crate::vmangos_spell::read(&source).unwrap().0;
         let (rows, _, _) = derive_spell_rows(&tables, &[], &[]).unwrap();
         rows.effects.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn a_learn_effect_teaches_its_target_but_a_grimoire_effect_stays_inert() {
+        // vmangos spell 28285 of Tome of Polymorph: Pig 4142 teaches 28272 to its user.
+        let tome = temporary_enchantment_effect("UPDATE spell_template SET effect1=36, effectApplyAuraName1=0, effectTriggerSpell1=28272, effectImplicitTargetA1=0, effectImplicitTargetB1=0, targets=0, spellFamilyName=0, effect2=0 WHERE build=5875");
+        assert_eq!(
+            (tome.kind, tome.target, tome.trigger_spell),
+            (E_LEARN_SPELL, T_TARGET_ALLY, 28272)
+        );
+        // vmangos spell 20270 of Grimoire of Firebolt (Rank 2) 16302 teaches 7799 to the pet.
+        let grimoire = temporary_enchantment_effect("UPDATE spell_template SET effect1=36, effectApplyAuraName1=0, effectTriggerSpell1=7799, effectImplicitTargetA1=5, effectImplicitTargetB1=0, targets=0, spellFamilyName=0, effect2=0 WHERE build=5875");
+        assert_eq!(grimoire.kind, E_SCRIPTED);
     }
 
     #[test]

@@ -1,8 +1,12 @@
 // Behavior checks for the quest reward spell against vmangos d9173eca Player::RewardQuest.
-use lyracore_package_delta::{fixture_ids::SCENARIO_QUESTGIVER_ENTRY, packed_spell_effect_id};
+use lyracore_package_delta::{
+    fixture_ids::{FIXTURE_JERKY, SCENARIO_QUESTGIVER_ENTRY},
+    packed_spell_effect_id,
+};
 use lyracore_shared::constants::npc_flags;
 use lyracore_shared::spell::taxonomy::{
-    A_MOD_STAT, E_LEARN_SPELL, P_STAT_ID, STAT_STR, T_SELF, T_TARGET_ALLY,
+    A_MOD_STAT, E_CREATE_ITEM, E_LEARN_SPELL, P_ITEM_ENTRY, P_STAT_ID, STAT_STR, T_SELF,
+    T_TARGET_ALLY,
 };
 use lyracore_test_support::{ReducerConnection, Standalone};
 
@@ -15,6 +19,7 @@ const SELF_BUFF: u32 = 5_091_302;
 const TEACHER: u32 = 5_091_303;
 const FIRST_TAUGHT: u32 = 5_091_304;
 const SECOND_TAUGHT: u32 = 5_091_305;
+const CONJURER: u32 = 5_091_306;
 
 const CMSG_QUESTGIVER_REQUEST_REWARD: u32 = 0x18C;
 const CMSG_QUESTGIVER_CHOOSE_REWARD: u32 = 0x18E;
@@ -138,6 +143,14 @@ fn aura_casters(shard: &Standalone, target: u64, spell_id: u32) -> Vec<String> {
         .collect()
 }
 
+fn jerky_owned_by(shard: &Standalone, owner: u64) -> usize {
+    shard
+        .query_rows(&format!(
+            "SELECT guid FROM game_item_instance WHERE owner_guid = {owner} AND entry = {FIXTURE_JERKY}"
+        ))
+        .len()
+}
+
 fn knows(shard: &Standalone, character: u64, spell_id: u32) -> bool {
     !shard
         .query_rows(&format!(
@@ -223,4 +236,29 @@ fn the_offer_shows_the_reward_spell_and_the_turn_in_casts_the_reward_cast_spell(
         1
     );
     assert!(aura_casters(&stage.shard, stage.character, ALLY_BUFF).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_create_item_reward_cast_by_the_giver_fills_the_characters_bags() {
+    let mut stage = stage("quest-reward-spell-create-item", 0, CONJURER);
+    spell(&stage.shard, CONJURER, &[]);
+    stage.shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(CONJURER, 0)),
+            ("spell_id", &CONJURER),
+            ("kind", &E_CREATE_ITEM),
+            ("base_points", &1),
+            ("target", &T_TARGET_ALLY),
+            ("p_0", &FIXTURE_JERKY),
+            ("p_0_kind", &P_ITEM_ENTRY),
+        ],
+    );
+    let carried = jerky_owned_by(&stage.shard, stage.character);
+
+    turn_in(&mut stage);
+
+    assert_eq!(jerky_owned_by(&stage.shard, stage.character), carried + 1);
+    assert_eq!(jerky_owned_by(&stage.shard, stage.giver), 0);
 }

@@ -40,6 +40,7 @@ pub struct QuestDetailView {
     pub flags: u32,
     /// `RewSpell`, the spell the quest windows show.
     pub reward_spell: u32,
+    pub src_item: u32,
     pub rewards: Vec<QuestRewardView>,
     pub choice_rewards: Vec<QuestRewardView>,
     pub required_items: Vec<QuestRewardView>,
@@ -360,7 +361,7 @@ pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
     u32le(&mut body, d.money_reward as u32);
     u32le(&mut body, d.max_level_money_reward);
     u32le(&mut body, d.reward_spell);
-    u32le(&mut body, 0);
+    u32le(&mut body, d.src_item);
     u32le(&mut body, d.flags);
     for i in 0..4 {
         let (item, count) = d
@@ -567,6 +568,7 @@ mod tests {
             max_level_money_reward: 0,
             flags: 0,
             reward_spell: 0,
+            src_item: 0,
             rewards: vec![],
             choice_rewards: vec![],
             required_items: vec![],
@@ -690,6 +692,7 @@ mod tests {
             max_level_money_reward: 0,
             flags: 0,
             reward_spell: 0,
+            src_item: 0,
             rewards: Vec::new(),
             choice_rewards: Vec::new(),
             required_items: Vec::new(),
@@ -749,6 +752,7 @@ mod tests {
             max_level_money_reward: 0,
             flags: 0,
             reward_spell: 0,
+            src_item: 0,
             rewards: vec![QuestRewardView {
                 item_entry: 6078,
                 count: 1,
@@ -863,11 +867,12 @@ mod tests {
     }
 
     #[test]
-    fn details_and_quest_query_show_the_reward_spell_after_the_money() {
+    fn details_and_quest_query_show_the_reward_spell_after_the_money_and_the_source_item() {
         let d = QuestDetailView {
             money_reward: 25,
             max_level_money_reward: 4200,
             reward_spell: 1460,
+            src_item: 5_090_052,
             ..detail_view()
         };
         let (_, details) = build_quest_details_raw(100, &d);
@@ -877,7 +882,7 @@ mod tests {
         let (_, query) = build_quest_query_response_raw(&d);
         assert_eq!(&query[44..48], &4200u32.to_le_bytes(), "max level money");
         assert_eq!(&query[48..52], &1460u32.to_le_bytes(), "reward spell");
-        assert_eq!(&query[52..56], &0u32.to_le_bytes(), "source item");
+        assert_eq!(&query[52..56], &5_090_052u32.to_le_bytes(), "source item");
     }
 
     #[test]
