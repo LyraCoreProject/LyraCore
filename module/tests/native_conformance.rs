@@ -36,6 +36,8 @@ mod queued_strike_spec;
 mod queued_strikes;
 #[path = "conformance/repair.rs"]
 mod repair;
+#[path = "conformance/reputation.rs"]
+mod reputation;
 #[path = "conformance/rolls.rs"]
 mod rolls;
 #[path = "conformance/skills.rs"]

@@ -7,6 +7,8 @@ use support::{actor, Standalone};
 const AREA_BIT: u32 = 37;
 const FACTION: u32 = 5_099_400;
 const FACTION_BASE: i32 = 100;
+// Slot 1 admits only Orcs, so the migrated Human takes slot 2's base.
+const ORC_RACE_MASK: u32 = 2;
 const SKILL: u32 = 5_099_500;
 const TAXI_CLIENT_NODE: u32 = 300;
 const TALENT: u32 = 5_099_100;
@@ -57,7 +59,9 @@ fn realm(name: &str) -> (Standalone, Catalogue) {
         &[
             ("faction_id", &FACTION),
             ("reputation_index", &50),
-            ("base_standing", &FACTION_BASE),
+            ("base_standing", &-42_000),
+            ("base_race_mask_1", &ORC_RACE_MASK),
+            ("base_standing_2", &FACTION_BASE),
         ],
     );
     shard.insert_row(

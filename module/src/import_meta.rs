@@ -48,6 +48,9 @@ pub fn stamp_import_meta(
 ) -> Result<(), String> {
     require_operator(ctx)?;
     stamp(ctx, &family, &source_sha, &file_hash, row_count);
+    if family == lyracore_package_delta::DBC_FAMILY {
+        crate::reputation::repair_base_standing(ctx);
+    }
     Ok(())
 }
 

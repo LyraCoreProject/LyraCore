@@ -77,6 +77,21 @@ pub struct Faction {
 }
 
 impl Faction {
+    pub(crate) fn has_slot_masks(&self) -> bool {
+        [
+            self.base_race_mask_1,
+            self.base_race_mask_2,
+            self.base_race_mask_3,
+            self.base_race_mask_4,
+            self.base_class_mask_1,
+            self.base_class_mask_2,
+            self.base_class_mask_3,
+            self.base_class_mask_4,
+        ]
+        .iter()
+        .any(|&mask| mask != 0)
+    }
+
     pub(crate) fn base_standing_for(&self, race: u8, class: u8) -> i32 {
         lyracore_shared::faction::base_standing(
             [

@@ -90,7 +90,7 @@ pub(crate) fn base_standing(ctx: &ReducerContext, character_guid: u64, faction: 
     faction.base_standing_for(race, class)
 }
 
-/// vmangos `FactionState::Standing`, the part above the base that the client is sent.
+/// vmangos `FactionState::Standing`, the standing relative to the base, which the client is sent.
 pub(crate) fn earned_standing(ctx: &ReducerContext, row: &PlayerReputation) -> i32 {
     let base = ctx
         .db
@@ -128,6 +128,39 @@ pub(crate) fn reputation(
     )
 }
 
+const BASE_STANDING_REPAIR_FAMILY: &str = "repair_base_standing";
+
+/// One-shot after the first `dbc` stamp with masks; see danger-zones "Base reputation migration".
+pub(crate) fn repair_base_standing(ctx: &ReducerContext) {
+    if crate::import_meta::is_imported(ctx, BASE_STANDING_REPAIR_FAMILY)
+        || !ctx
+            .db
+            .game_faction()
+            .iter()
+            .any(|faction| faction.reputation_index >= 0 && faction.has_slot_masks())
+    {
+        return;
+    }
+    let mut moved = 0u64;
+    for mut row in ctx.db.game_player_reputation().iter().collect::<Vec<_>>() {
+        let Some(faction) = ctx.db.game_faction().faction_id().find(row.faction_id) else {
+            continue;
+        };
+        let standing = clamped_standing(
+            row.standing
+                .saturating_sub(faction.base_standing)
+                .saturating_add(base_standing(ctx, row.character_guid, &faction)),
+        );
+        if standing != row.standing {
+            row.standing = standing;
+            row.update(ctx);
+            moved += 1;
+        }
+    }
+    crate::import_meta::stamp(ctx, BASE_STANDING_REPAIR_FAMILY, "", "", moved);
+    spacetimedb::log::info!("repair_base_standing: moved {moved} reputation row(s) to their slot");
+}
+
 pub(crate) fn reputation_rank(standing: i32) -> u8 {
     lyracore_shared::faction::reputation_rank(standing)
 }
@@ -162,15 +195,23 @@ pub(crate) fn npc_refuses_interaction(
     let Some(npc_ft) = templates.id().find(npc.faction_template) else {
         return false;
     };
-    let reputation = reputation(ctx, player.guid, npc_ft.faction).map(|standing| {
-        let at_war = ctx
-            .db
-            .game_player_reputation()
-            .by_character()
-            .filter(&player.guid)
-            .any(|row| row.faction_id == npc_ft.faction && row.at_war);
-        (standing, at_war)
-    });
+    let reputation = ctx
+        .db
+        .game_faction()
+        .faction_id()
+        .find(npc_ft.faction)
+        .filter(|faction| faction.reputation_index >= 0)
+        .map(|faction| {
+            ctx.db
+                .game_player_reputation()
+                .by_character()
+                .filter(&player.guid)
+                .find(|row| row.faction_id == faction.faction_id)
+                .map_or_else(
+                    || (base_standing(ctx, player.guid, &faction), false),
+                    |row| (row.standing, row.at_war),
+                )
+        });
     let template_hostile = templates
         .id()
         .find(player.faction_template)

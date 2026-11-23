@@ -49,7 +49,8 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
    `crates/lyracore-protocol/src/codec/values.rs`; each has a wire-pinning test.
 4. **`SMSG_SET_FACTION_STANDING` sends the reputation index** (`Faction.dbc` `ReputationListID`),
    not the `faction_id`. The id indexes past the client's 64-slot array and crashes the client
-   with ERROR #132.
+   with ERROR #132. It and `SMSG_INITIALIZE_FACTIONS` send the stored standing less the
+   Character's base standing; the client adds the base from its own Faction.dbc.
 5. **Don't gate features on client-display readback.** The server is authoritative, so verify
    effects server-side. Flag client visuals for a human to look at.
 6. **`#[default(...)]` cannot default a `String` column.** The SpacetimeDB macro type-checks every
@@ -170,9 +171,15 @@ quest givers serve it. Reimport the `dbc` family straight after the publish. Sha
 defaults fill older inserts.
 
 `SMSG_INITIALIZE_FACTIONS` and `SMSG_SET_FACTION_STANDING` now send a stored standing less the
-Character's base, as vmangos sends its earned standing; the client adds the base from its own
-Faction.dbc. A stored row keeps the standing it reached on slot 1's base, so for a Character whose
-slot differs it stays off by the difference between the two bases. No repair runs.
+Character's base (trap 4). A reputation pane for a faction with a non-zero base drops to the correct
+value: the client used to add its base to the full standing.
+
+Every `game_player_reputation` row written before the reimport holds slot 1's base. Order: publish,
+reimport the `dbc` family straight away, and the `dbc` stamp from `stamp_import_meta` runs a
+one-shot repair. It sets each row to `standing - base_standing + the Character's base`, clamped,
+and records the `repair_base_standing` family in `game_import_meta` so it never runs again. It
+skips, and records nothing, until some reputation faction has a non-zero mask. Do not write rows
+on new masks before the stamp: the repair would shift them too.
 
 ### Buyback migration
 

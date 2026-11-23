@@ -16,7 +16,9 @@ const WARRIOR: u8 = 1;
 const DRUID: u8 = 11;
 
 // Faction.dbc 1.12 slots as (race mask, class mask, base standing).
-const FACTIONS: [(u32, [(u32, u32, i32); 4]); 3] = [
+type Slots = [(u32, u32, i32); 4];
+
+const FACTIONS: [(u32, Slots); 3] = [
     (
         CENARION_CIRCLE,
         [(255, 479, 0), (40, 1024, 2000), (0, 0, 0), (0, 0, 0)],
@@ -31,7 +33,7 @@ const FACTIONS: [(u32, [(u32, u32, i32); 4]); 3] = [
     ),
 ];
 
-fn start(name: &str, race: u8, class: u8) -> Standalone {
+fn character(name: &str, race: u8, class: u8) -> Standalone {
     let mut shard = Standalone::start(name);
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
@@ -40,6 +42,11 @@ fn start(name: &str, race: u8, class: u8) -> Standalone {
     shard.assert_sql(&format!(
         "UPDATE game_character SET race = {race}, class = {class} WHERE guid = {CHARACTER}"
     ));
+    shard
+}
+
+fn start(name: &str, race: u8, class: u8) -> Standalone {
+    let shard = character(name, race, class);
     for (reputation_index, (faction_id, slots)) in (40_i32..).zip(FACTIONS) {
         let [one, two, three, four] = slots;
         shard.insert_row(
@@ -65,12 +72,20 @@ fn start(name: &str, race: u8, class: u8) -> Standalone {
     shard
 }
 
-// A zero grant stores the standing the Character starts with.
-fn starting_standing(shard: &Standalone, faction_id: u32) -> i32 {
+fn grant(shard: &Standalone, faction_id: u32, amount: i32) {
     shard.assert_call(
         "debug_grant_reputation",
-        &[CHARACTER, &faction_id.to_string(), "0"],
+        &[CHARACTER, &faction_id.to_string(), &amount.to_string()],
     );
+}
+
+// A zero grant stores the standing the Character starts with.
+fn starting_standing(shard: &Standalone, faction_id: u32) -> i32 {
+    grant(shard, faction_id, 0);
+    standing(shard, faction_id)
+}
+
+fn standing(shard: &Standalone, faction_id: u32) -> i32 {
     number(
         &shard.query_rows(&format!(
             "SELECT standing FROM game_player_reputation WHERE character_guid = {CHARACTER} AND faction_id = {faction_id}"
@@ -102,4 +117,38 @@ fn a_character_no_slot_admits_starts_at_0() {
     assert_eq!(starting_standing(&shard, NO_HUMAN_SLOT), 0);
     let orc = start("base-reputation-orc-slot", ORC, WARRIOR);
     assert_eq!(starting_standing(&orc, NO_HUMAN_SLOT), 500);
+}
+
+fn stamp_dbc(shard: &Standalone) {
+    shard.assert_call("stamp_import_meta", &["\"dbc\"", "\"\"", "\"\"", "0"]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_dbc_stamp_moves_a_row_stored_on_slot_1_to_the_characters_slot_once() {
+    let shard = character("base-reputation-repair", NIGHT_ELF, WARRIOR);
+    shard.insert_row(
+        "game_faction",
+        &[
+            ("faction_id", &WINTERSABER_TRAINERS),
+            ("reputation_index", &40),
+            ("base_standing", &-42_000),
+        ],
+    );
+    grant(&shard, WINTERSABER_TRAINERS, 10_000);
+    assert_eq!(standing(&shard, WINTERSABER_TRAINERS), -32_000);
+    stamp_dbc(&shard);
+    assert_eq!(
+        standing(&shard, WINTERSABER_TRAINERS),
+        -32_000,
+        "the repair waits until the masks are imported"
+    );
+
+    shard.assert_sql(&format!(
+        "UPDATE game_faction SET base_race_mask_1 = 178, base_race_mask_2 = 77 WHERE faction_id = {WINTERSABER_TRAINERS}"
+    ));
+    stamp_dbc(&shard);
+    assert_eq!(standing(&shard, WINTERSABER_TRAINERS), 10_000);
+    stamp_dbc(&shard);
+    assert_eq!(standing(&shard, WINTERSABER_TRAINERS), 10_000);
 }
