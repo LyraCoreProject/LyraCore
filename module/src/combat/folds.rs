@@ -953,7 +953,7 @@ pub(crate) fn roll_ranged_swing(
             0
         };
         let unblocked = pre_mit - blocked;
-        let resisted = crate::spell::apply_resistance(
+        let after_resist = crate::spell::apply_resistance(
             ctx,
             target.guid,
             attacker.guid,
@@ -963,9 +963,9 @@ pub(crate) fn roll_ranged_swing(
         )
         .max(0) as u32;
         return RangedRoll {
-            damage: resisted,
+            damage: after_resist,
             outcome,
-            resisted: unblocked.saturating_sub(resisted),
+            resisted: unblocked.saturating_sub(after_resist),
             blocked,
         };
     }

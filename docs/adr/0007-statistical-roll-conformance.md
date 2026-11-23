@@ -626,8 +626,11 @@ block chance is 5% ([Unit.cpp:2515–2550](https://raw.githubusercontent.com/vma
 Character's unarmed skill, so the chance is 5% at level 60 and 6.5% capped to 5% at level 63.
 The overlapping block probabilities are `9500*214748365/(10000*2^32)` and
 `9200*214748365/(10000*2^32)`. Shoot has magic damage class, so it never rolls block; its context
-expects a zero block probability. Partial resistance of the arcane Shoot is not part of the attack
-table; the classifier accepts a positive resisted amount and measures no resist rate.
+expects a zero block probability. LyraCore rolls the block in `roll_ranged_swing` after the weapon
+draw, from a spell row with damage class ranged only, with the main-hand skill, and the damage log
+reports the blocked amount. Partial resistance of the arcane Shoot is not part of the attack
+table; `ranged_impact` reports its resisted amount, the classifier accepts a positive one and
+measures no resist rate.
 
 vmangos reports every shot through the Spell path. [Spell.cpp:4529–4561, 4625–4653](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)
 sends one `SMSG_SPELL_GO` at launch, with ammo for a ranged spell: a landed target is in the hit
