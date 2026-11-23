@@ -119,8 +119,7 @@ impl<'a> NamedInsert<'a> {
     }
 }
 
-// SpacetimeDB 2.14 publishes `convert_case` 0.6 `Case::Snake` column names (`value1` as `value_1`);
-// SQL also accepts the source name. This ports its default boundaries for ASCII identifiers.
+// Ports SpacetimeDB 2.14's convert_case 0.6 Case::Snake column naming (value1 → value_1).
 fn canonical(name: &str) -> String {
     let chars: Vec<char> = name.chars().collect();
     let mut words: Vec<String> = vec![String::new()];
@@ -379,6 +378,11 @@ mod tests {
             ("value_1", "value_1"),
             ("castTimeIndex", "cast_time_index"),
             ("HTTPServer", "http_server"),
+            ("a__b", "a_b"),
+            ("_x1", "x_1"),
+            ("9lives", "9_lives"),
+            ("ABC1", "abc_1"),
+            ("IDs", "i_ds"),
         ] {
             assert_eq!(canonical(source), published, "{source}");
         }

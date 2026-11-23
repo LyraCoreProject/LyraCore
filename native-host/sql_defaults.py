@@ -89,7 +89,8 @@ def value_rows(text):
 def in_table_order(query, columns_of):
     """SpacetimeDB SQL assigns INSERT values by table position, so write named columns in that order.
 
-    Raises ValueError for a column the table lacks, a column named twice or a row of the wrong length.
+    Raises ValueError for a column the table lacks, a column named twice, unreadable VALUES or a row of
+    the wrong length.
     """
     statements = statements_of(query)
     for index, statement in enumerate(statements):
@@ -107,7 +108,7 @@ def in_table_order(query, columns_of):
                 raise ValueError(f'{table}.{column} is named twice')
         rows = value_rows(match[5])
         if rows is None:
-            continue
+            raise ValueError(f'{table}: malformed VALUES')
         for row in rows:
             if len(row) != len(columns):
                 raise ValueError(f'{table}: {len(row)} values for {len(columns)} columns')

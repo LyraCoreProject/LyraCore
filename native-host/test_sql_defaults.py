@@ -18,7 +18,7 @@ class SpellDefaultsTest(unittest.TestCase):
         self.assertEqual(insert_defaults(query), expected)
         self.assertEqual(insert_defaults(expected), expected)
 
-    def test_a_column_named_in_source_spelling_keeps_its_default(self):
+    def test_a_column_named_in_source_spelling_is_not_defaulted_again(self):
         defaults = {'game_x': [('value_1', '0'), ('value_2', '0')]}
         query = "INSERT INTO game_x (id,value1) VALUES (1,5)"
         with unittest.mock.patch.dict('sql_defaults.DEFAULTS', defaults):
@@ -54,7 +54,6 @@ class TableOrderTest(unittest.TestCase):
     def test_ordered_and_unrelated_statements_are_unchanged(self):
         for query in [
             "INSERT INTO game_faction (faction_id,base_standing) VALUES (1,2)",
-            "INSERT INTO game_faction (base_standing,faction_id) VALUES 1, 2",
             "SELECT * FROM game_faction",
         ]:
             self.assertEqual(self.order(query), query)
@@ -64,6 +63,7 @@ class TableOrderTest(unittest.TestCase):
             ("INSERT INTO game_faction (faction_id,other) VALUES (1,2)", "game_faction has no column `other`"),
             ("INSERT INTO game_faction (faction_id,faction_id) VALUES (1,2)", "game_faction.faction_id is named twice"),
             ("INSERT INTO game_faction (faction_id,base_standing) VALUES (1,2,3)", "game_faction: 3 values for 2 columns"),
+            ("INSERT INTO game_faction (base_standing,faction_id) VALUES 1, 2", "game_faction: malformed VALUES"),
         ]:
             with self.assertRaisesRegex(ValueError, f'^{re.escape(error)}$'):
                 self.order(query)
@@ -71,5 +71,6 @@ class TableOrderTest(unittest.TestCase):
     def test_canonical_names_split_where_convert_case_snake_splits(self):
         for source, published in [('value1', 'value_1'), ('p0_kind', 'p_0_kind'), ('data10', 'data_10'), ('x2y', 'x_2_y'),
                                   ('base_standing_2', 'base_standing_2'), ('castTimeIndex', 'cast_time_index'),
-                                  ('HTTPServer', 'http_server')]:
+                                  ('HTTPServer', 'http_server'), ('a__b', 'a_b'), ('_x1', 'x_1'), ('9lives', '9_lives'),
+                                  ('ABC1', 'abc_1'), ('IDs', 'i_ds')]:
             self.assertEqual(canonical(source), published)
