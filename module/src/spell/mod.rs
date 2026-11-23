@@ -123,10 +123,10 @@ pub(crate) use lyracore_shared::spell::taxonomy::{
 };
 #[cfg(test)]
 pub(crate) use lyracore_shared::spell::taxonomy::{A_MOD_STAT, T_SCRIPTED};
-pub(crate) use tables::SpellCastEventKind;
 pub(crate) use tables::{
     backfill_dbc_form_sets, delete_form_set, shed_auras_before_projection, write_dbc_form_set,
 };
+pub(crate) use tables::{SpellCastEventKind, StrikeSwingReport};
 pub(crate) use taxonomy::{DISARM_SWING_RETAINED_PCT, PROJECTILE_SPEED_YPS};
 
 pub(crate) use tables::{

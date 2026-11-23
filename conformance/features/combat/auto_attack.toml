@@ -11,7 +11,12 @@ deliberate_deviations = [
   { id = "moving_character_reach_floor", result = "A moving Character that swings at a moving unit other than a Character reaches at least 9 yd. vmangos gives a normal pair 5 + 2.66 = 7.66 yd.", reason = "A creature's stored position moves to its rendered point once per 0.5 s movement tick, and swings run every 100 ms. A creature that flees at run speed is then up to 3.5 yd behind where the client draws it, so a Character at its rendered back needs 5 + 3.5 yd. A Character's position follows its own client movement, so two Characters keep 7.66 yd.", source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.cpp#L1890" },
 ]
 prerequisites = []
-tests = []
+tests = [
+    { path = "crates/lyracore-protocol/src/codec/combat.rs", function = "a_queued_strike_swing_carries_its_spell_outcome_and_block_without_damage", rung = "codec" },
+    { path = "module/tests/conformance/queued_strikes.rs", function = "a_dodged_queued_strike_sends_its_go_miss_then_a_dodge_swing", rung = "durable_module" },
+    { path = "module/tests/conformance/queued_strikes.rs", function = "a_glancing_queued_strike_sends_go_then_a_glancing_swing_then_its_damage_log", rung = "durable_module" },
+    { path = "module/tests/conformance/queued_strikes.rs", function = "a_fully_blocked_queued_strike_still_sends_its_swing_and_a_damage_log", rung = "durable_module" },
+]
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -34,10 +39,10 @@ symbol = "public_seeds"
 evidence = "docs/adr/0007-statistical-roll-conformance.md"
 
 [[known_gaps]]
-description = "A queued strike is not delivered as vmangos delivers it, in four ways (#1177). It sends no SMSG_ATTACKERSTATEUPDATE; vmangos sends one with the strike's spell id, table outcome and partial-block flag before its damage log. Its damage log always reports blocked 0. A fully blocked strike sends no damage log, and Heroic Strike rank 1 with Worn Axe is always fully blocked. A blocked glancing strike becomes a Block outcome, so the glancing is lost. Tier 1 cannot classify the strike until all four are fixed, so white_melee_outcomes holds queued_strike_sample at both levels for both public seeds and the queued strike's rates stay unmeasured."
-path = "module/src/native/combat.rs"
-symbol = "combat_event"
-evidence = "Source reading at d9173eca: Spell.cpp Spell::SendMeleeAttackingStateUpdate and its two calls in Spell::DoAllEffectOnTarget; Unit.cpp CalculateAbsorbResistBlock. LyraCore: combat_event skips the packet when spell_swing is set; lyracore-protocol codec/combat.rs writes blocked 0; native/spell.rs damage_log skips a zero-damage row; combat/folds.rs turns a blocked Glancing into Block. ADR 0007 derives the queued strike's rates; module/tests/conformance/queued_strikes.rs collects them."
+description = "A queued strike's SMSG_ATTACKERSTATEUPDATE omits four vmangos hit-info flags: the guessed table flags ROLLED_DODGE 0x100 and ROLLED_PARRY 0x200, PvP 0x40000 and blood spurt 0x2000. White swings omit them too. Its swing and damage log report no absorbed amount. The queued strike classifier masks these flags, and its context absorbs nothing."
+path = "crates/lyracore-protocol/src/codec/combat.rs"
+symbol = "build_queued_strike_swing"
+evidence = "Source reading at d9173eca: Spell.cpp Spell::SendMeleeAttackingStateUpdate, SpellCaster.cpp RollMeleeOutcomeAgainst sets the ROLLED_* flags, Unit.cpp SetDamageIndependentHitInfoFlags and SetDamageDependentHitInfoFlags. LyraCore: module/src/combat/swing.rs fire_melee_swing writes no absorbed amount on the queued strike's GO row."
 
 [[known_gaps]]
 description = "An avoided instant cast reaches its caster as an SMSG_SPELL_GO that lists the target as hit, plus SMSG_SPELLLOGMISS (#1186). vmangos sends the caster and observers one GO with the avoided target in the miss list and no SMSG_SPELLLOGMISS for a miss, dodge or parry. Tier 1 cannot classify an avoided Mortal Strike, so white_melee_outcomes holds weapon_strike_sample at both levels for both public seeds and the cast Weapon Strike's rates stay unmeasured. After #1186 the block category still fails: a cast Weapon Strike is never partially blocked (spells/spell_cast_kinds.toml, hit_roll), and the damage log always reports blocked 0 (#1177)."

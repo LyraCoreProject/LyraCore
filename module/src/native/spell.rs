@@ -1,5 +1,5 @@
 use super::{bounded as message, game_native_player};
-use crate::spell::{CastRefusalReason, SpellCastEventKind};
+use crate::spell::{CastRefusalReason, SpellCastEventKind, StrikeSwingReport};
 use crate::{SpellCastEvent, SpellImpactEvent};
 use lyracore_protocol::{codec, messages as wow_world_messages, world::Packet};
 use spacetimedb::{ReducerContext, Table};
@@ -112,13 +112,14 @@ pub(crate) fn spell_impact(ctx: &ReducerContext, event: &SpellImpactEvent) {
             event.is_crit,
             event.resisted,
             event.absorbed,
+            0,
         ),
     )));
     deliver(ctx, event.caster_guid, EventAudience::Everyone, packet);
 }
 
 fn damage_log(row: &SpellCastEvent) -> Option<Packet> {
-    (row.damage > 0 || row.absorbed > 0 || row.resisted > 0).then(|| {
+    (row.damage > 0 || row.absorbed > 0 || row.resisted > 0 || row.blocked > 0).then(|| {
         let log = codec::build_spell_non_melee_damage_log(
             row.target_guid,
             row.caster_guid,
@@ -128,11 +129,32 @@ fn damage_log(row: &SpellCastEvent) -> Option<Packet> {
             row.is_crit,
             row.resisted,
             row.absorbed,
+            row.blocked,
         );
         message(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(
             log,
         )))
     })
+}
+
+fn strike_swing(row: &SpellCastEvent) -> Option<Packet> {
+    let reports_damage = match StrikeSwingReport::from_code(row.strike_swing_report) {
+        StrikeSwingReport::None => return None,
+        StrikeSwingReport::WithDamage => true,
+        StrikeSwingReport::WithoutDamage => false,
+    };
+    Some(codec::build_queued_strike_swing(codec::QueuedStrikeSwing {
+        attacker_guid: row.caster_guid,
+        target_guid: row.target_guid,
+        spell_id: row.spell_id,
+        outcome: row.swing_hit_info,
+        damage: row.damage,
+        school: row.school,
+        absorbed: row.absorbed,
+        resisted: row.resisted,
+        blocked: row.blocked,
+        reports_damage,
+    }))
 }
 
 fn cast_event_messages(
@@ -260,6 +282,8 @@ fn cast_event_messages(
         }
     }
 
+    // vmangos sends a queued strike's swing after its GO and before its damage log.
+    out.extend(strike_swing(row).map(|packet| (EventAudience::Everyone, packet)));
     out.extend(damage_log(row).map(|packet| (EventAudience::Everyone, packet)));
     if row.healed > 0 {
         use wow_world_messages::vanilla::SMSG_SPELLHEALLOG;
@@ -387,6 +411,8 @@ mod tests {
             miss_info: 0,
             energized: 0,
             power_type: 0,
+            blocked: 0,
+            strike_swing_report: 0,
         }
     }
 
@@ -404,6 +430,42 @@ mod tests {
             assert_eq!(packets[0].1.opcode, 0x0250);
             assert!(matches!(packets[0].0, EventAudience::Everyone));
         }
+    }
+
+    #[test]
+    fn a_fully_blocked_queued_strike_sends_go_then_its_swing_then_its_damage_log() {
+        let mut row = event();
+        row.spell_id = 78;
+        row.target_guid = 2;
+        row.is_completion = true;
+        row.cooldown_ms = 0;
+        row.blocked = 14;
+        row.strike_swing_report = StrikeSwingReport::WithoutDamage as u8;
+        let packets = cast_event_messages(&row, None);
+        let opcodes: Vec<_> = packets.iter().map(|(_, packet)| packet.opcode).collect();
+        assert_eq!(
+            opcodes,
+            [codec::SMSG_CAST_RESULT_OPCODE, 0x0132, 0x014a, 0x0250]
+        );
+        assert!(packets[1..]
+            .iter()
+            .all(|(audience, _)| matches!(audience, EventAudience::Everyone)));
+    }
+
+    #[test]
+    fn a_dodged_queued_strike_sends_its_swing_without_a_damage_log() {
+        let mut row = event();
+        row.spell_id = 78;
+        row.target_guid = 2;
+        row.is_completion = true;
+        row.cooldown_ms = 0;
+        row.swing_hit_info = 3;
+        row.strike_swing_report = StrikeSwingReport::WithoutDamage as u8;
+        let opcodes: Vec<_> = cast_event_messages(&row, None)
+            .iter()
+            .map(|(_, packet)| packet.opcode)
+            .collect();
+        assert_eq!(opcodes, [codec::SMSG_CAST_RESULT_OPCODE, 0x0132, 0x014a]);
     }
 
     #[test]

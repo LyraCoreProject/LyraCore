@@ -613,17 +613,7 @@ fn fire_melee_swing(
     let damage = resolve_damage(ctx, attacker_guid, target_guid, rolled);
     let (projected_swing, projected_seal) = split_damage_projection(damage.amount(), seal_portion);
 
-    CombatEvent::insert(
-        ctx,
-        CombatEvent {
-            damage: projected_swing,
-            hit_info: hit_info.wire(),
-            killing_blow: is_killing_blow(ctx, attacker_guid, target, damage.amount()),
-            blocked_amount: blocked,
-            spell_swing: swing_is_spell,
-            ..CombatEvent::signal_at(ctx, attacker, target_guid)
-        },
-    );
+    // vmangos reports a queued strike before the damage lands, so a killing blow follows it.
     if swing_is_spell {
         let cooldown_ms = queued_header.as_ref().map_or(0, |h| h.cooldown_ms);
         crate::spell::start_spell_cooldown(ctx, attacker_guid, queued_spell, cooldown_ms);
@@ -636,10 +626,24 @@ fn fire_melee_swing(
                 is_crit: hit_info == AttackOutcome::Crit,
                 swing_hit_info: hit_info.wire(),
                 cooldown_ms,
+                blocked,
+                strike_swing_report: super::queued_strike::swing_report(queued_header.as_ref())
+                    as u8,
                 ..SpellCastEvent::signal_at(ctx, attacker, queued_spell, SpellCastEventKind::Go)
             },
         );
     }
+    CombatEvent::insert(
+        ctx,
+        CombatEvent {
+            damage: projected_swing,
+            hit_info: hit_info.wire(),
+            killing_blow: is_killing_blow(ctx, attacker_guid, target, damage.amount()),
+            blocked_amount: blocked,
+            spell_swing: swing_is_spell,
+            ..CombatEvent::signal_at(ctx, attacker, target_guid)
+        },
+    );
     if projected_seal > 0 {
         crate::SpellCastEvent::insert(
             ctx,

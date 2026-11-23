@@ -36,6 +36,7 @@ pub fn build_spell_non_melee_damage_log(
     is_crit: bool,
     resisted: u32,
     absorbed: u32,
+    blocked: u32,
 ) -> SMSG_SPELLNONMELEEDAMAGELOG {
     SMSG_SPELLNONMELEEDAMAGELOG {
         target: Guid::new(target_guid),
@@ -47,7 +48,7 @@ pub fn build_spell_non_melee_damage_log(
         resisted,
         periodic_log: false,
         unused: 0,
-        blocked: 0,
+        blocked,
         // Spell crits use 0x2; the binding's melee CriticalHit bit, 0x80, is wrong here.
         hit_info: if is_crit {
             HitInfo::AffectsVictim
@@ -468,6 +469,103 @@ fn attacker_state_update(
     }
 }
 
+/// A queued strike's swing, reported after its SMSG_SPELL_GO and before its damage log.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueuedStrikeSwing {
+    pub attacker_guid: u64,
+    pub target_guid: u64,
+    pub spell_id: u32,
+    /// The `AttackOutcome::wire` code of the strike's table roll.
+    pub outcome: u8,
+    pub damage: u32,
+    /// SpellSchool index 0..=6.
+    pub school: u8,
+    pub absorbed: u32,
+    pub resisted: u32,
+    pub blocked: u32,
+    /// False for a Spell with SPELL_ATTR_ON_NEXT_SWING_NO_DAMAGE; its damage shows only in the log.
+    pub reports_damage: bool,
+}
+
+// vmangos Spell::SendMeleeAttackingStateUpdate, without its guessed ROLLED_* and PvP flags.
+pub fn build_queued_strike_swing(strike: QueuedStrikeSwing) -> crate::world::Packet {
+    const HITINFO_AFFECTS_VICTIM: u32 = 0x2;
+    const HITINFO_MISS: u32 = 0x10;
+    const HITINFO_ABSORB: u32 = 0x20;
+    const HITINFO_RESIST: u32 = 0x40;
+    const HITINFO_CRITICALHIT: u32 = 0x80;
+    const HITINFO_ROLLED_BLOCK: u32 = 0x400;
+    const HITINFO_BLOCK: u32 = 0x800;
+    const HITINFO_SUPPRESS_MISS_TEXT: u32 = 0x1000;
+    const HITINFO_GLANCING: u32 = 0x4000;
+    const HITINFO_CRUSHING: u32 = 0x8000;
+    const HITINFO_NOACTION: u32 = 0x10000;
+    let (table_flags, victim_state) = match strike.outcome {
+        1 => (HITINFO_CRITICALHIT, VICTIMSTATE_NORMAL),
+        2 => (HITINFO_MISS, VICTIMSTATE_UNAFFECTED),
+        3 => (0, VICTIMSTATE_DODGE),
+        4 => (0, VICTIMSTATE_PARRY),
+        5 => (HITINFO_GLANCING, VICTIMSTATE_NORMAL),
+        6 => (HITINFO_CRUSHING, VICTIMSTATE_NORMAL),
+        7 => (HITINFO_ROLLED_BLOCK | HITINFO_BLOCK, VICTIMSTATE_BLOCK),
+        8 => (0, VICTIMSTATE_IS_IMMUNE),
+        _ => (0, VICTIMSTATE_NORMAL),
+    };
+    let landed = victim_state == VICTIMSTATE_NORMAL;
+    let mut flags = HITINFO_NOACTION | table_flags;
+    if landed {
+        if strike.blocked > 0 {
+            flags |= HITINFO_ROLLED_BLOCK | HITINFO_BLOCK;
+        }
+        if strike.absorbed > 0 {
+            flags |= HITINFO_ABSORB;
+        }
+        if strike.resisted > 0 {
+            flags |= HITINFO_RESIST;
+        }
+        if strike.damage > 0 || strike.blocked > 0 {
+            flags |= HITINFO_AFFECTS_VICTIM;
+        }
+    }
+    let shown = (landed && strike.reports_damage).then_some(strike);
+    let damage = shown.map_or(0, |strike| strike.damage);
+    let absorb = shown.map_or(0, |strike| strike.absorbed);
+    let resist = shown.map_or(0, |strike| strike.resisted);
+    let blocked_amount = shown.map_or(0, |strike| strike.blocked);
+    if damage == 0
+        && absorb == 0
+        && resist == 0
+        && blocked_amount == 0
+        && victim_state != VICTIMSTATE_UNAFFECTED
+    {
+        flags |= HITINFO_SUPPRESS_MISS_TEXT;
+    }
+    let message = SMSG_ATTACKERSTATEUPDATE {
+        hit_info: HitInfo::NormalSwing,
+        attacker: Guid::new(strike.attacker_guid),
+        target: Guid::new(strike.target_guid),
+        total_damage: damage,
+        damages: vec![DamageInfo {
+            spell_school_mask: shown.map_or(0, |strike| u32::from(strike.school)),
+            damage_float: damage as f32,
+            damage_uint: damage,
+            absorb,
+            resist,
+        }],
+        damage_state: u32::from(victim_state),
+        // vmangos attackerState: 1000 on a landed strike.
+        unknown1: if landed { 1000 } else { 0 },
+        spell_id: strike.spell_id,
+        blocked_amount,
+    };
+    let mut packet = crate::world::encode(&ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(
+        Box::new(message),
+    ))
+    .expect("one melee damage entry fits a world frame");
+    packet.body[..4].copy_from_slice(&flags.to_le_bytes());
+    packet
+}
+
 const VICTIMSTATE_UNAFFECTED: u8 = 0;
 const VICTIMSTATE_NORMAL: u8 = 1;
 const VICTIMSTATE_DODGE: u8 = 2;
@@ -656,6 +754,71 @@ mod tests {
         assert_eq!(ranged.damage, 9);
     }
 
+    fn heroic_strike(outcome: u8, damage: u32, blocked: u32) -> QueuedStrikeSwing {
+        QueuedStrikeSwing {
+            attacker_guid: 1,
+            target_guid: 2,
+            spell_id: 78,
+            outcome,
+            damage,
+            blocked,
+            ..QueuedStrikeSwing::default()
+        }
+    }
+
+    // Expected from vmangos SendMeleeAttackingStateUpdate and SetDamageDependentHitInfoFlags.
+    #[test]
+    fn a_queued_strike_swing_carries_its_spell_outcome_and_block_without_damage() {
+        for (outcome, damage, blocked, flags, state) in [
+            (2, 0, 0, 0x10010, 0),
+            (3, 0, 0, 0x11000, 2),
+            (4, 0, 0, 0x11000, 3),
+            (8, 0, 0, 0x11000, 7),
+            (0, 40, 0, 0x11002, 1),
+            (1, 80, 0, 0x11082, 1),
+            (5, 28, 0, 0x15002, 1),
+            (0, 0, 14, 0x11c02, 1),
+            (5, 0, 9, 0x15c02, 1),
+        ] {
+            let swing = melee_packet(build_queued_strike_swing(heroic_strike(
+                outcome, damage, blocked,
+            )));
+            assert_eq!((swing.hit_info, swing.victim_state), (flags, state));
+            assert_eq!((swing.attacker, swing.victim), (1, 2));
+            assert_eq!(swing.melee_spell_id, 78);
+            assert_eq!((swing.damage, swing.blocked, swing.absorb), (0, 0, 0));
+        }
+    }
+
+    #[test]
+    fn a_queued_strike_that_reports_damage_fills_the_swing_fields() {
+        let shown = QueuedStrikeSwing {
+            school: 1,
+            absorbed: 5,
+            resisted: 3,
+            reports_damage: true,
+            ..heroic_strike(0, 40, 10)
+        };
+        let swing = melee_packet(build_queued_strike_swing(shown));
+        assert_eq!(swing.hit_info, 0x10c62);
+        assert_eq!(swing.victim_state, 1);
+        assert_eq!(
+            (
+                swing.damage,
+                swing.absorb,
+                swing.resist,
+                swing.blocked,
+                swing.school
+            ),
+            (40, 5, 3, 10, 1)
+        );
+        let dodged = melee_packet(build_queued_strike_swing(QueuedStrikeSwing {
+            reports_damage: true,
+            ..heroic_strike(3, 0, 0)
+        }));
+        assert_eq!((dodged.hit_info, dodged.damage), (0x11000, 0));
+    }
+
     #[test]
     fn cast_result_failed_body_carries_the_spell_status_and_reason() {
         assert_eq!(
@@ -666,7 +829,7 @@ mod tests {
 
     #[test]
     fn spell_damage_log_renders_crit_and_breakdown() {
-        let crit = build_spell_non_melee_damage_log(0x42, 0x7, 133, 30, 4, true, 5, 3);
+        let crit = build_spell_non_melee_damage_log(0x42, 0x7, 133, 30, 4, true, 5, 3, 0);
         assert_eq!(crit.hit_info, HitInfo::AffectsVictim);
         assert_eq!(crit.hit_info.as_int(), 0x2);
         assert_eq!(crit.damage, 30);
@@ -674,7 +837,9 @@ mod tests {
         assert_eq!(crit.absorbed_damage, 3);
         assert_eq!(crit.blocked, 0);
         assert_eq!(crit.school, SpellSchool::Frost);
-        let normal = build_spell_non_melee_damage_log(0x42, 0x7, 133, 20, 0, false, 0, 0);
+        let blocked = build_spell_non_melee_damage_log(0x42, 0x7, 78, 0, 0, false, 0, 0, 14);
+        assert_eq!((blocked.damage, blocked.blocked), (0, 14));
+        let normal = build_spell_non_melee_damage_log(0x42, 0x7, 133, 20, 0, false, 0, 0, 0);
         assert_eq!(normal.hit_info, HitInfo::NormalSwing);
         assert_eq!(normal.resisted, 0);
         assert_eq!(normal.absorbed_damage, 0);
