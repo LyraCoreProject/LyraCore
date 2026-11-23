@@ -9,6 +9,23 @@ for declaration in (Path(__file__).resolve().parents[1] / 'crates/lyracore-share
     DEFAULTS.setdefault(table, []).append((column, value))
 
 
+def canonical(name):
+    """SpacetimeDB 2.14 publishes `convert_case` 0.6 snake_case column names (`value1` as `value_1`)."""
+    words = ['']
+    for at, char in enumerate(name):
+        if char in '_- ':
+            words.append('')
+            continue
+        before = name[at - 1] if at else ''
+        after = name[at + 1:at + 2]
+        if (before.islower() and char.isupper()) or (before.isupper() and char.isdigit()) \
+                or (before.isdigit() and char.isalpha()) or (before.islower() and char.isdigit()) \
+                or (before.isupper() and char.isupper() and after.islower()):
+            words.append('')
+        words[-1] += char.lower()
+    return '_'.join(word for word in words if word)
+
+
 def statements_of(query):
     return re.split(r"(;)(?=(?:[^']*'[^']*')*[^']*$)", query)
 
@@ -20,7 +37,8 @@ def insert_defaults(query):
         if not match or match[1] not in DEFAULTS:
             continue
         columns = [column.strip() for column in match[2].split(',')]
-        missing = [(name, value) for name, value in DEFAULTS[match[1]] if name not in columns]
+        named = {canonical(column) for column in columns}
+        missing = [(name, value) for name, value in DEFAULTS[match[1]] if canonical(name) not in named]
         if not missing:
             continue
         close = statement.index(')', match.start(2))
@@ -69,20 +87,32 @@ def value_rows(text):
 
 
 def in_table_order(query, columns_of):
-    """SpacetimeDB SQL assigns INSERT values by table position, so put named columns in that order."""
+    """SpacetimeDB SQL assigns INSERT values by table position, so write named columns in that order.
+
+    Raises ValueError for a column the table lacks, a column named twice or a row of the wrong length.
+    """
     statements = statements_of(query)
     for index, statement in enumerate(statements):
         match = re.match(r'(\s*INSERT INTO (\w+)\s*)\(([^)]*)\)(\s*VALUES\s*)(.*)$', statement, re.S)
         if not match:
             continue
+        table = match[2]
         columns = [column.strip() for column in match[3].split(',')]
-        order = columns_of(match[2])
-        ordered = [column for column in order if column in columns]
+        named = [canonical(column) for column in columns]
+        order = columns_of(table)
+        for at, column in enumerate(columns):
+            if named[at] not in order:
+                raise ValueError(f'{table} has no column `{column}`')
+            if named[at] in named[:at]:
+                raise ValueError(f'{table}.{column} is named twice')
         rows = value_rows(match[5])
-        if ordered == columns or len(ordered) != len(columns) or rows is None \
-                or any(len(row) != len(columns) for row in rows):
+        if rows is None:
             continue
-        positions = [columns.index(column) for column in ordered]
+        for row in rows:
+            if len(row) != len(columns):
+                raise ValueError(f'{table}: {len(row)} values for {len(columns)} columns')
+        ordered = [column for column in order if column in named]
+        positions = [named.index(column) for column in ordered]
         values = ','.join('(' + ','.join(row[position] for position in positions) + ')' for row in rows)
         statements[index] = f"{match[1]}({','.join(ordered)}){match[4]}{values}"
     return ''.join(statements)
