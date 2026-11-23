@@ -75,11 +75,12 @@ fn binary_periodic_damage_and_slow_share_one_resist_roll_at_cast() {
         &[("character_guid", &1), ("target_guid", &target)],
     );
     let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
+    // The seeds' hit rolls are 7599, 7600 and 10000; 300 resistance makes a 7600 miss band.
     for (index, (resistance, seed, miss)) in [
-        (300, 10161, "2"),
-        (300, 21988, "0"),
+        (300, 8750, "2"),
+        (300, 4186, "0"),
         (300, 26747, "0"),
-        (0, 10161, "0"),
+        (0, 8750, "0"),
     ]
     .into_iter()
     .enumerate()
@@ -280,7 +281,7 @@ fn aura_cast_hit_testing_uses_damage_class_and_hostility() {
         &[
             ("character_guid", &1),
             ("target_guid", &target),
-            ("state", &20554),
+            ("state", &17846),
         ],
     );
     let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
@@ -295,7 +296,7 @@ fn aura_cast_hit_testing_uses_damage_class_and_hostility() {
     {
         shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {flags}, school_mask = {school}, is_negative = {negative} WHERE spell_id = 133"));
         shard.assert_sql(
-            "UPDATE game_conformance_spell_random SET state = 20554 WHERE character_guid = 1",
+            "UPDATE game_conformance_spell_random SET state = 17846 WHERE character_guid = 1",
         );
         shard.assert_call("debug_force_cast_at", &["1", "133", &target]);
         fence_subscription(&shard, &events);
