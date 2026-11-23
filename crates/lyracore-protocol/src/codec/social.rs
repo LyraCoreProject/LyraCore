@@ -921,6 +921,11 @@ pub fn build_raid_group_only(timer_ms: u32) -> (u16, Vec<u8>) {
     )
 }
 
+/// SMSG_RAID_GROUP_ONLY with no countdown and error 1: vmangos's refusal at a raid map's entry.
+pub fn build_raid_group_required() -> (u16, Vec<u8>) {
+    (0x0286, [0u32.to_le_bytes(), 1u32.to_le_bytes()].concat())
+}
+
 #[cfg(test)]
 mod party_tests {
     use super::*;
@@ -1183,6 +1188,14 @@ mod party_tests {
                 "timer {timer_ms}"
             );
         }
+    }
+
+    #[test]
+    fn the_raid_group_required_refusal_has_no_countdown_and_error_one() {
+        assert_eq!(
+            build_raid_group_required(),
+            (0x0286, vec![0, 0, 0, 0, 1, 0, 0, 0])
+        );
     }
 
     #[test]

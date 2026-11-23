@@ -307,6 +307,10 @@ pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, tr
         .map(|t| (t.target_map, t.x, t.y, t.z, t.o));
     crate::quest::on_areatrigger_entered(ctx, player_guid, trigger_id);
     if let Some((target_map, x, y, z, o)) = teleport_target {
+        if crate::instance::raid_entry_refused(ctx, player_guid, target_map) {
+            crate::native::instance::raid_group_required(ctx, player_guid);
+            return;
+        }
         let instance_id = if crate::instance::is_dungeon_map(target_map) {
             if crate::native::instance_shard::enter(
                 ctx,
