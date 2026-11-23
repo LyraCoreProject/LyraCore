@@ -22,6 +22,15 @@ pub(crate) fn wear_for_landed_damage(
     }
 }
 
+// vmangos Player::EnvironmentalDamage deals through DealDamage(this, ...), so the player is both
+// victim and attacker: each damaging, non-killing fall, drowning or fatigue hit rolls wear twice.
+// A broken item recomputes the owner's vitals, so callers save the entity row first.
+pub(crate) fn wear_for_environmental_damage(ctx: &ReducerContext, character_guid: u64, hits: u32) {
+    for _ in 0..hits * 2 {
+        roll_equipment_wear(ctx, character_guid);
+    }
+}
+
 fn roll_equipment_wear(ctx: &ReducerContext, character_guid: u64) {
     let stream = RollStream::Wear(character_guid);
     if draw(ctx, stream) % 10_000 >= DURABILITY_LOSS_CHANCE_DAMAGE_BP {

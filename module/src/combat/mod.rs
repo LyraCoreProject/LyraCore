@@ -63,6 +63,7 @@ pub(crate) use folds::{
 };
 
 pub(crate) use energy::regenerate_energy;
+pub(crate) use wear::wear_for_environmental_damage;
 
 #[cfg(feature = "debug_reducers")]
 pub(crate) use swing::offhand_swing_range;

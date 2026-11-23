@@ -2,7 +2,7 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
 use support::{
-    event_rows, fence_subscription, number, poll_until, subscribe_with_fence, Standalone,
+    actor, event_rows, fence_subscription, number, poll_until, subscribe_with_fence, Standalone,
     TableSubscription, POLL_TIMEOUT,
 };
 
@@ -30,6 +30,11 @@ const HIT: u32 = 5;
 const SEED_PICKING_MAIN_HAND: u64 = 7128;
 const SEED_PICKING_HEAD: u64 = 991;
 const SEED_FAILING_THE_ROLL: u64 = 1;
+// `Wear(1)` state after N draws from state S is S + N * this, wrapping.
+const WEAR_STATE_STEP: u64 = 0x9e37_79b9_7f4a_7c15;
+const FALL_LAND: u32 = lyracore_shared::opcodes::movement::MSG_MOVE_FALL_LAND;
+// A 1.5 s fall costs about 14.8% of maximum health, so a full-health Character survives it.
+const SURVIVABLE_FALL_MS: u32 = 1_500;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -280,6 +285,75 @@ fn a_duel_ending_hit_wears_like_any_other_damaging_hit() {
     assert_eq!(
         durability(&standalone, MAIN_HAND_SLOT),
         BLADE_DURABILITY - 1
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_damaging_fall_rolls_wear_twice_and_a_harmless_or_lethal_landing_rolls_none() {
+    let mut standalone = Standalone::start("combat-durability-fall");
+    stage(&mut standalone);
+    give_helm(&standalone, HEAD_DURABILITY);
+    standalone.insert_row(
+        "game_conformance_wear_random",
+        &[
+            ("character_guid", &PLAYER),
+            ("state", &SEED_PICKING_MAIN_HAND),
+        ],
+    );
+
+    land(&standalone, 0, 10);
+    assert_eq!(wear_stream_state(&standalone), SEED_PICKING_MAIN_HAND);
+
+    land(&standalone, SURVIVABLE_FALL_MS, 20);
+    assert_eq!(
+        durability(&standalone, MAIN_HAND_SLOT),
+        BLADE_DURABILITY - 1,
+        "the first roll picks the main hand"
+    );
+    assert_eq!(durability(&standalone, HEAD_SLOT), HEAD_DURABILITY);
+    assert_eq!(
+        wear_stream_state(&standalone),
+        SEED_PICKING_MAIN_HAND.wrapping_add(3 * WEAR_STATE_STEP),
+        "the picking roll draws twice and the second, failing roll once"
+    );
+
+    let after_fall = wear_stream_state(&standalone);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = 1 WHERE guid = {PLAYER}"
+    ));
+    land(&standalone, SURVIVABLE_FALL_MS, 30);
+    assert_eq!(
+        wear_stream_state(&standalone),
+        after_fall,
+        "a lethal fall rolls no wear; Character death applies its own loss"
+    );
+}
+
+fn land(standalone: &Standalone, fall_time_ms: u32, time_ms: u32) {
+    let rows = standalone.query_rows(&format!(
+        "SELECT x, y, z FROM game_world_entity WHERE guid = {PLAYER}"
+    ));
+    let [x, y, z]: [f32; 3] = ["x", "y", "z"].map(|axis| number(&rows[0], axis));
+    let mut body = vec![0u8; 24];
+    body.extend_from_slice(&fall_time_ms.to_le_bytes());
+    let body = format!(
+        "[{}]",
+        body.iter().map(u8::to_string).collect::<Vec<_>>().join(",")
+    );
+    let args = [
+        actor(PLAYER),
+        FALL_LAND.to_string(),
+        body,
+        x.to_string(),
+        y.to_string(),
+        z.to_string(),
+        "1.0".to_string(),
+        time_ms.to_string(),
+    ];
+    standalone.assert_call(
+        "gw_movement_update",
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
     );
 }
 

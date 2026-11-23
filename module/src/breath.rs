@@ -187,6 +187,7 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
         }
         let mut health = entity.health;
         let mut died = false;
+        let mut hits = 0;
         for _ in 0..advanced.expired_ticks {
             let nominal = drowning_damage(entity.max_health);
             let actual = nominal.min(health);
@@ -199,6 +200,7 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
                         pre_death.update(ctx);
                     }
                 }
+                crate::combat::wear_for_environmental_damage(ctx, entity_guid, hits);
                 crate::combat::kill_player(ctx, entity_guid, entity_guid);
                 crate::breath_relay::drowning_damage(ctx, entity_guid, actual);
                 states.entity_guid().delete(entity_guid);
@@ -208,12 +210,16 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
             if actual > 0 {
                 health -= actual;
                 crate::breath_relay::drowning_damage(ctx, entity_guid, actual);
+                hits += 1;
             }
         }
         if !died && health != entity.health {
             let mut hurt = entity;
             hurt.health = health;
             hurt.update(ctx);
+        }
+        if !died {
+            crate::combat::wear_for_environmental_damage(ctx, entity_guid, hits);
         }
         // Every expired tick is a damage event, so the victim loses stealth even on a tick that
         // deals 0.

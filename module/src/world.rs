@@ -893,6 +893,9 @@ pub(crate) fn apply_movement_update(
     // A fall that deals 0 damage is no damage event in vmangos and keeps stealth.
     if fall_hurt {
         crate::spell::break_stealth(ctx, mover_guid);
+        if !fall_lethal {
+            crate::combat::wear_for_environmental_damage(ctx, mover_guid, 1);
+        }
     }
 
     // Dismount after the entity write so its projection cannot be overwritten by the old snapshot.
