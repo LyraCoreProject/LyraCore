@@ -291,9 +291,9 @@ enum CorpseSeen {
     Created { kind: u64, flags: u64 },
 }
 
-// game_native_packet: id, audience, opcode, body, close_after, not_before_micros, authenticated.
+// Columns: id, audience, opcode, body, close_after, not_before_micros, authentication_complete.
 type NativePacketRow = (
-    IgnoredAny,
+    u64,
     (u8, Box<RawValue>),
     (u8, Box<RawValue>),
     String,
@@ -345,10 +345,13 @@ fn enter_viewer(shard: &Standalone, name: &str) -> (u64, ReducerConnection) {
 
 fn corpse_seen(rows: &[Box<RawValue>], connection: u128) -> Vec<CorpseSeen> {
     let corpse: u64 = CORPSE.parse().unwrap();
-    rows.iter()
-        .filter_map(|row| {
-            let (_, (audience, recipient), (option, opcode), body, ..): NativePacketRow =
-                serde_json::from_str(row.get()).unwrap();
+    let mut rows: Vec<NativePacketRow> = rows
+        .iter()
+        .map(|row| serde_json::from_str(row.get()).unwrap())
+        .collect();
+    rows.sort_by_key(|(id, ..)| *id);
+    rows.into_iter()
+        .filter_map(|(_, (audience, recipient), (option, opcode), body, ..)| {
             if !matches!(audience, GRANT | REVOKE) || option != 0 {
                 return None;
             }

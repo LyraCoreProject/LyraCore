@@ -114,17 +114,6 @@ pub(crate) fn corpse_created(ctx: &ReducerContext, corpse: &Corpse) {
     super::send_raw_to_character(ctx, corpse.owner_guid, opcode, body);
 }
 
-pub(crate) fn corpse_removed(ctx: &ReducerContext, owner: u64) {
-    super::send_to_character(
-        ctx,
-        owner,
-        ServerOpcodeMessage::MSG_CORPSE_QUERY(Box::new(
-            lyracore_protocol::messages::vanilla::MSG_CORPSE_QUERY_Server::NotFound,
-        )),
-        super::EncodeFailure::Disconnect,
-    );
-}
-
 pub(crate) fn resurrect_offered(ctx: &ReducerContext, offer: &ResurrectRequest) {
     let (opcode, body) = codec::build_resurrect_request_raw(offer.caster_guid, &offer.caster_name);
     super::send_raw_to_character(ctx, offer.target_guid, opcode, body);

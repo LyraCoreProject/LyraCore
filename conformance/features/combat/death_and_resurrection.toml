@@ -45,3 +45,9 @@ description = "On a Realm with an Instance Shard, a ghost whose corpse is in a d
 path = "module/src/corpse.rs"
 symbol = "revive_ghost_bound_for_corpse_map"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"
+
+[[known_gaps]]
+description = "A corpse CREATE carries no CORPSE_FIELD_GUILD, and a resurrectable Corpse carries no CORPSE_FIELD_ITEM display entries and no CORPSE_FLAG_HIDE_HELM or CORPSE_FLAG_HIDE_CLOAK. vmangos Player::CreateCorpse sets all of them, and Map::RemoveCorpses keeps the guild on bones but clears their items."
+path = "module/src/native/death.rs"
+symbol = "create"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"

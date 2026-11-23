@@ -115,9 +115,7 @@ impl Corpse {
         self.cell = self.position_cell();
         let previous = ctx.db.game_corpse().guid().find(self.guid);
         let row = ctx.db.game_corpse().guid().update(self);
-        let turned_to_bones = previous
-            .as_ref()
-            .is_some_and(|old| !old.is_bones && row.is_bones);
+        let turned_to_bones = previous.is_some_and(|old| !old.is_bones && row.is_bones);
         // vmangos Map::RemoveCorpses: DESTROY the body, then CREATE bones under the same GUID.
         if turned_to_bones {
             crate::aoi::remove_subject(ctx, crate::aoi::CORPSE, row.guid);
@@ -130,15 +128,12 @@ impl Corpse {
                 row.cell,
             );
         }
-        crate::aoi::corpse_changed(ctx, &row, previous.is_none() || turned_to_bones);
+        crate::aoi::corpse_changed(ctx, &row, turned_to_bones);
         row
     }
 
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
-        if let Some(corpse) = ctx.db.game_corpse().guid().find(guid) {
-            ctx.db.game_corpse().guid().delete(guid);
-            crate::native::death::corpse_removed(ctx, corpse.owner_guid);
-        }
+        ctx.db.game_corpse().guid().delete(guid);
         crate::aoi::remove_subject(ctx, crate::aoi::CORPSE, guid);
     }
 }
