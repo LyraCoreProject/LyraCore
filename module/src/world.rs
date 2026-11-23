@@ -546,7 +546,8 @@ pub(crate) fn apply_zone_transition(
     }
 }
 
-/// Moves a Character to `pose`; a `teleport_gate` refusal leaves everything unchanged.
+/// Moves a Character to `pose`, reviving a ghost bound for its corpse's map; a `teleport_gate`
+/// refusal leaves everything unchanged.
 pub(crate) fn teleport(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -631,6 +632,7 @@ fn relocate(
     aboard: Option<crate::transport::Aboard>,
 ) -> Result<(), crate::actor::ActionRefusal> {
     let destination = teleport_gate(ctx, player_guid, map_id, instance_id)?;
+    crate::corpse::revive_ghost_bound_for_corpse_map(ctx, player_guid, map_id);
     let entities = ctx.db.game_world_entity();
     let e = entities
         .guid()
