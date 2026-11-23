@@ -432,6 +432,23 @@ fn inventory_failure(reason: u8) -> (u16, Vec<u8>) {
     (SMSG_INVENTORY_CHANGE_FAILURE, body)
 }
 
+/// Keeps the loot and inventory replies. The other Character's movement and visibility
+/// broadcasts reach a second connection at any moment, so a whole-reply compare drops them.
+fn loot_replies(packets: Vec<(u16, Vec<u8>)>) -> Vec<(u16, Vec<u8>)> {
+    packets
+        .into_iter()
+        .filter(|(opcode, _)| {
+            [
+                SMSG_LOOT_RESPONSE,
+                SMSG_LOOT_RELEASE_RESPONSE,
+                SMSG_LOOT_REMOVED,
+                SMSG_INVENTORY_CHANGE_FAILURE,
+            ]
+            .contains(opcode)
+        })
+        .collect()
+}
+
 fn loot_error(target: u64, error: u8) -> (u16, Vec<u8>) {
     let mut body = target.to_le_bytes().to_vec();
     body.extend([0, error]);
@@ -614,7 +631,7 @@ fn a_quest_item_taken_by_one_needer_is_gone_from_every_needers_window() {
     assert_eq!(stage.carried(FIXTURE_JERKY), 1);
     assert_eq!(stage.loot_rows(), 0);
     assert_eq!(
-        request(&mut second, CMSG_AUTOSTORE_LOOT_ITEM, vec![0]),
+        loot_replies(request(&mut second, CMSG_AUTOSTORE_LOOT_ITEM, vec![0])),
         [inventory_failure(ALREADY_LOOTED)]
     );
     assert_eq!(carried_by(&stage.shard, second_guid, FIXTURE_JERKY), 0);
