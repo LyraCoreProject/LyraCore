@@ -112,7 +112,7 @@ pub struct LearnEffect {
     pub trigger_spell: u32,
 }
 
-// vmangos trainers offer the trigger spell of effect 0 for a grimoire or pet spell wrapper.
+// vmangos trainers resolve every wrapper, a pet-learn one included, to effect 0's trigger spell.
 pub fn learn_kind(kind: u8, target: u8) -> u8 {
     use crate::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED, T_CASTER_PET};
     if kind == E_SCRIPTED && target == T_CASTER_PET {
