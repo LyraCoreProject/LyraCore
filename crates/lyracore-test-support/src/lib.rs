@@ -372,7 +372,12 @@ impl Standalone {
     }
 
     fn insert_rows_database(&self, database: &str, table: &str, rows: &[&[Field]]) {
-        let schema = Arc::clone(
+        let sql = self.fixture_schema(database).insert(table, rows);
+        self.assert_sql_database(database, &sql);
+    }
+
+    fn fixture_schema(&self, database: &str) -> Arc<fixture_rows::FixtureSchema> {
+        Arc::clone(
             self.fixture_schemas
                 .lock()
                 .unwrap()
@@ -382,8 +387,7 @@ impl Standalone {
                         &self.describe_database(database),
                     ))
                 }),
-        );
-        self.assert_sql_database(database, &schema.insert(table, rows));
+        )
     }
 
     pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
@@ -498,8 +502,13 @@ impl Standalone {
         self.assert_sql_database(&self.database, query);
     }
 
+    /// Writes each named INSERT with every published column in published order first.
     pub fn assert_sql_database(&self, database: &str, query: &str) {
-        self.assert_ok(&self.sql_database(database, query));
+        let query = lyracore_shared::import_sql::in_table_order(query, |table| {
+            self.fixture_schema(database).columns(table)
+        })
+        .unwrap_or_else(|error| panic!("{error}: {query}"));
+        self.assert_ok(&self.sql_database(database, &query));
     }
 
     pub fn query_rows(&self, query: &str) -> Vec<BTreeMap<String, String>> {
