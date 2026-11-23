@@ -91,14 +91,14 @@ fn has_ghost_aura(shard: &Standalone, guid: u64) -> bool {
         .is_empty()
 }
 
-fn release_with_corpse_on(shard: &Standalone, guid: u64, corpse_map: u32, is_bones: bool) -> u32 {
+fn release_with_corpse_on(shard: &Standalone, guid: u64, corpse_map: u32) -> u32 {
     let max_health = number(&entity(shard, guid), "max_health");
     shard.assert_call("debug_set_health", &[&guid.to_string(), "0"]);
     shard.assert_call("debug_repop", &[&guid.to_string()]);
     assert_eq!(entity(shard, guid)["dead"], "true");
     assert!(has_ghost_aura(shard, guid));
     shard.assert_sql(&format!(
-        "UPDATE game_corpse SET map_id = {corpse_map}, is_bones = {is_bones} WHERE owner_guid = {guid}"
+        "UPDATE game_corpse SET map_id = {corpse_map} WHERE owner_guid = {guid}"
     ));
     max_health
 }
@@ -187,21 +187,21 @@ fn a_ghost_revives_at_the_entrance_of_the_map_holding_its_corpse() {
         );
     }
 
-    let max_health = release_with_corpse_on(&shard, DEADMINES_GHOST, DEADMINES, true);
+    let max_health = release_with_corpse_on(&shard, DEADMINES_GHOST, DEADMINES);
     shard.assert_call(
         "debug_enter_areatrigger",
         &[&DEADMINES_GHOST.to_string(), &TO_DEADMINES.to_string()],
     );
     assert_revived_inside_deadmines(&shard, DEADMINES_GHOST, max_health);
 
-    let max_health = release_with_corpse_on(&shard, raid_ghost, RAID_MAP, false);
+    let max_health = release_with_corpse_on(&shard, raid_ghost, RAID_MAP);
     shard.assert_call(
         "debug_enter_areatrigger",
         &[&raid_ghost.to_string(), &TO_RAID.to_string()],
     );
     assert_revived_outside(&shard, raid_ghost, max_health);
 
-    let max_health = release_with_corpse_on(&shard, teleported_ghost, DEADMINES, false);
+    let max_health = release_with_corpse_on(&shard, teleported_ghost, DEADMINES);
     shard.assert_call(
         "debug_teleport",
         &[

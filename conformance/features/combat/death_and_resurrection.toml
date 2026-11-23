@@ -7,12 +7,15 @@ replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
-deliberate_deviations = []
+deliberate_deviations = [
+  { id = "one_corpse_row_per_character", result = "A new release removes the bones of the Character's previous death. vmangos keeps old bones for up to 60 minutes under a new guid.", reason = "A Corpse row takes its guid from its owner, so a Character has one corpse or bones row at a time. This bounds the table and keeps reclaim and AOI keyed by owner.", source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp" },
+]
 prerequisites = []
 tests = [
     { path = "module/tests/ghost_instance_entry.rs", function = "a_ghost_revives_at_the_entrance_of_the_map_holding_its_corpse", rung = "durable_module" },
     { path = "module/tests/ghost.rs", function = "a_ghost_reclaims_its_corpse_after_six_minutes", rung = "durable_module" },
     { path = "module/tests/ghost.rs", function = "a_corpse_expires_to_bones_after_three_days_and_a_ghost_cannot_reclaim_it", rung = "durable_module" },
+    { path = "module/tests/ghost.rs", function = "a_ghost_that_logs_in_after_its_corpse_turned_to_bones_is_revived_at_half_health", rung = "durable_module" },
     { path = "module/tests/ghost.rs", function = "bones_of_a_revived_character_disappear_after_an_hour", rung = "durable_module" },
 ]
 

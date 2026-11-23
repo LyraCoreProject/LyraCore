@@ -225,11 +225,35 @@ fn a_corpse_expires_to_bones_after_three_days_and_a_ghost_cannot_reclaim_it() {
     shard.assert_call("debug_age_corpse", &[CORPSE, "259201"]);
     assert_eq!(corpse_is_bones(&shard), "true");
     move_corpse_to_ghost(&shard);
-    assert!(!shard
-        .call("gw_reclaim_corpse", &[&actor("1"), "1"])
-        .status
-        .success());
+    let refusal = shard.call("gw_reclaim_corpse", &[&actor("1"), "1"]);
+    assert!(!refusal.status.success());
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refusal.stdout),
+        String::from_utf8_lossy(&refusal.stderr)
+    );
+    assert!(output.contains("corpse has decayed to bones"), "{output}");
     assert_ghost(&shard, true);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_ghost_that_logs_in_after_its_corpse_turned_to_bones_is_revived_at_half_health() {
+    let shard = fixture("ghost-login-bones", 4);
+    bind_session(&shard);
+    release(&shard);
+    shard.assert_call("debug_logout_character", &["1"]);
+    shard.assert_call("debug_age_corpse", &[CORPSE, "259201"]);
+    bind_session(&shard);
+    shard.assert_call("gw_player_login", &["1", &actor("1")]);
+    assert_alive(&shard);
+    let row = entity(&shard);
+    let (health, max_health): (u32, u32) = (number(&row, "health"), number(&row, "max_health"));
+    assert!(
+        (max_health / 2..max_health).contains(&health),
+        "{health} of {max_health}"
+    );
+    assert_eq!(corpse_is_bones(&shard), "true");
 }
 
 #[test]

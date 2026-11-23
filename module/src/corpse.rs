@@ -201,10 +201,28 @@ pub(crate) fn revive_ghost_bound_for_corpse_map(
         .game_corpse()
         .guid()
         .find(corpse_guid_for(character_guid))
-        .is_some_and(|corpse| corpse.map_id == map_id)
+        .is_some_and(|corpse| corpse.map_id == map_id && !corpse.is_bones)
     {
         revive_at_half(ctx, player);
     }
+}
+
+/// vmangos `Player::LoadCorpse`: a ghost that logs in without a resurrectable corpse revives.
+pub(crate) fn revive_ghost_without_corpse(ctx: &ReducerContext, character_guid: u64) -> bool {
+    let has_resurrectable_corpse = ctx
+        .db
+        .game_corpse()
+        .guid()
+        .find(corpse_guid_for(character_guid))
+        .is_some_and(|corpse| !corpse.is_bones);
+    let Some(player) = ctx.db.game_world_entity().guid().find(character_guid) else {
+        return false;
+    };
+    if has_resurrectable_corpse || !player.dead || player.player_flags & player_flags::GHOST == 0 {
+        return false;
+    }
+    revive_at_half(ctx, player);
+    true
 }
 
 pub(crate) fn convert_to_bones(ctx: &ReducerContext, corpse_guid: u64) {
@@ -232,7 +250,7 @@ pub(crate) fn delete_resurrectable_corpse(ctx: &ReducerContext, owner_guid: u64)
     }
 }
 
-pub(crate) fn sweep_corpse_decay(ctx: &ReducerContext) {
+pub(crate) fn sweep_corpse_expiry(ctx: &ReducerContext) {
     let t = ctx.db.game_corpse();
     let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let expired: Vec<u64> = t

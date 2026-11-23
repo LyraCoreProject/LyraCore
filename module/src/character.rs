@@ -613,6 +613,10 @@ pub(crate) fn apply_player_login(
 
     crate::spell::recompute_vitals(ctx, character.guid);
     crate::spell::recompute_sheet(ctx, character.guid);
+    if entry == WorldEntry::Login && crate::corpse::revive_ghost_without_corpse(ctx, character_guid)
+    {
+        character.pending_ghost = false;
+    }
 
     let (rested, consumed) = crate::xp::accrue_rested_on_login(
         crate::time::now(ctx).to_micros_since_unix_epoch(),
