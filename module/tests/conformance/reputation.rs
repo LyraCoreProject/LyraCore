@@ -1,4 +1,4 @@
-// Base standing, default flags and NPC hostility against vmangos d9173eca ReputationMgr,
+// Base standing, default flags and NPC service against vmangos d9173eca ReputationMgr,
 // Unit::GetFactionReactionTo and Player::CanInteractWithNPC.
 use super::buy_in_slot::{buy, delivered, inventory, money, request, stage};
 use super::{enter, fixture};
@@ -201,12 +201,12 @@ fn a_peace_forced_faction_cannot_be_set_at_war() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn an_unfriendly_vendor_at_war_serves_and_a_hostile_one_refuses() {
+fn a_neutral_vendor_at_war_serves_and_an_unfriendly_one_refuses() {
     const VENDOR_FACTION: u32 = 5_120_821;
     const VENDOR_TEMPLATE: u32 = 5_120_821;
-    let (shard, mut connection, guid, vendor) = stage("reputation-vendor-hostile");
+    let (shard, mut connection, guid, vendor) = stage("reputation-vendor-unfriendly");
     set_race(&shard, guid, 1);
-    insert_faction(&shard, VENDOR_FACTION, 56, [0, 0]);
+    insert_faction(&shard, VENDOR_FACTION, 56, [0, VISIBLE]);
     shard.insert_row(
         "game_faction_template",
         &[("id", &VENDOR_TEMPLATE), ("faction", &VENDOR_FACTION)],
@@ -214,13 +214,14 @@ fn an_unfriendly_vendor_at_war_serves_and_a_hostile_one_refuses() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET faction_template = {VENDOR_TEMPLATE} WHERE guid = {vendor}"
     ));
-    grant_reputation(&shard, guid, VENDOR_FACTION, -3000);
     set_at_war(&mut connection, 56);
+    let stored = format!(
+        "SELECT standing, at_war FROM game_player_reputation WHERE character_guid = {guid}"
+    );
+    let row = &shard.query_rows(&stored)[0];
     assert_eq!(
-        shard.query_rows(&format!(
-            "SELECT at_war FROM game_player_reputation WHERE character_guid = {guid}"
-        ))[0]["at_war"],
-        "true"
+        (row["standing"].as_str(), row["at_war"].as_str()),
+        ("0", "true")
     );
 
     buy(&mut connection, vendor, FIXTURE_JERKY, guid, 30, 1);

@@ -339,7 +339,7 @@ fn interacting_flight_master(
         .find(npc_guid)
         .ok_or(TaxiGateDenied::FlightMasterMissing)?;
     flight_master_gate(&player, &npc)?;
-    if crate::reputation::npc_is_hostile(ctx, &npc, &player) {
+    if crate::reputation::npc_refuses_service(ctx, &npc, &player) {
         return Err(TaxiGateDenied::Hostile);
     }
     Ok((player, npc))

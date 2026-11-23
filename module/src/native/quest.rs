@@ -524,7 +524,7 @@ pub(super) fn receive(
                     .game_world_entity()
                     .guid()
                     .find(giver)
-                    .is_some_and(|npc| crate::reputation::npc_is_hostile(ctx, &npc, &actor))
+                    .is_some_and(|npc| crate::reputation::npc_refuses_service(ctx, &npc, &actor))
             };
             if refused {
                 return Ok(());

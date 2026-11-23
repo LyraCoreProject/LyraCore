@@ -633,12 +633,14 @@ inserts.
 
 `game_player_reputation` keeps its layout, so Transfer is unchanged and no repair runs. Login sends
 a stored row as visible unless its faction is hidden or invisible forced, and at war when its row
-says so or its rank is Hostile or Hated, as vmangos `LoadFromDB` does. A row written before the
-publish of a faction that defaults to at war, at a rank above Hostile, reads as not at war.
+says so. A faction at Hostile or Hated, stored or not, is at war, as vmangos `LoadFromDB` does,
+unless it is peace forced and the earned standing is above Hated. A row written before the publish
+of a faction that defaults to at war, at a rank above Hostile, reads as not at war.
 
-From the publish on, an NPC refuses service only when it is hostile: a reputation faction at
-Hostile or Hated, else hostile faction templates. Unfriendly and at-war factions' vendors,
-trainers, taxis, quest givers, bankers and auctioneers now serve the Character.
+From the publish on, war alone no longer makes an NPC refuse service. Vendors, trainers, taxis,
+quest givers, bankers and auctioneers of a reputation faction refuse at Unfriendly or below, and
+otherwise serve the Character, at war or not, as vmangos `CanInteractWithNPC` does. A quest giver
+hides its mark only at Hostile or below.
 
 ### Global cooldown migration
 

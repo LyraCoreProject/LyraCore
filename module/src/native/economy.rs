@@ -430,7 +430,7 @@ fn buy_result(refusal: &BuyRefusal) -> BuyResult {
             | NpcGate::WrongService
             | NpcGate::NpcDead
             | NpcGate::NotSelectable
-            | NpcGate::Hostile => BuyResult::CantFindItem,
+            | NpcGate::Unfriendly => BuyResult::CantFindItem,
         },
         BuyRefusal::NotEnoughMoney { .. } => BuyResult::NotEnoughMoney,
         BuyRefusal::InventoryFull => BuyResult::CantCarryMore,
@@ -453,7 +453,7 @@ fn sell_result(refusal: &SellRefusal) -> SellItemResult {
             | NpcGate::NotSelectable
             | NpcGate::OtherMap
             | NpcGate::OutOfRange
-            | NpcGate::Hostile => SellItemResult::CantFindVendor,
+            | NpcGate::Unfriendly => SellItemResult::CantFindVendor,
         },
         SellRefusal::NoItemInSlot(_) => SellItemResult::CantFindItem,
         SellRefusal::Refused(_) => SellItemResult::CantSellItem,
@@ -509,7 +509,7 @@ mod tests {
             (R::Vendor(npc(G::NpcDead)), 0),
             (R::Vendor(npc(G::OtherMap)), 5),
             (R::Vendor(npc(G::OutOfRange)), 5),
-            (R::Vendor(npc(G::Hostile)), 0),
+            (R::Vendor(npc(G::Unfriendly)), 0),
             (R::NotEnoughMoney { have: 9, need: 10 }, 2),
             (R::InventoryFull, 8),
             (R::CommitFailed(Box::new(R::InventoryFull)), 8),
@@ -532,7 +532,7 @@ mod tests {
             (R::Vendor(npc(G::NpcDead)), 3),
             (R::Vendor(npc(G::OtherMap)), 3),
             (R::Vendor(npc(G::OutOfRange)), 3),
-            (R::Vendor(npc(G::Hostile)), 3),
+            (R::Vendor(npc(G::Unfriendly)), 3),
             (R::NoItemInSlot(40), 1),
             (R::Refused("item has no sell value".into()), 2),
         ] {

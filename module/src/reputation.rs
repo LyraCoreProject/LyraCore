@@ -97,9 +97,10 @@ const HIDDEN: u32 = 0x04;
 const INVISIBLE_FORCED: u32 = 0x08;
 const PEACE_FORCED: u32 = 0x10;
 
-// vmangos ReputationRank REP_HATED and REP_HOSTILE.
+// vmangos ReputationRank REP_HATED, REP_HOSTILE and REP_UNFRIENDLY.
 const HATED: u8 = 0;
 const HOSTILE: u8 = 1;
+const UNFRIENDLY: u8 = 2;
 
 struct StoredReputation {
     standing: i32,
@@ -109,15 +110,18 @@ struct StoredReputation {
 
 /// vmangos `SetAtWar(faction, true)`: peace forced refuses war above an earned Hated.
 fn declare_war(flags: &mut u32, earned: i32) {
-    if *flags & PEACE_FORCED == 0 || reputation_rank(earned) <= HATED {
+    if *flags & PEACE_FORCED == 0 || reputation_rank(earned) == HATED {
         *flags |= AT_WAR;
     }
 }
 
-/// vmangos `FactionState::Flags` after `Initialize` and `LoadFromDB`; a stored row was seen.
-fn faction_flags(defaults: u32, stored: Option<StoredReputation>) -> u32 {
+/// vmangos `FactionState::Flags` after `LoadFromDB`.
+fn faction_flags(defaults: u32, base: i32, stored: Option<StoredReputation>) -> u32 {
     let mut flags = defaults;
     let Some(stored) = stored else {
+        if reputation_rank(base) <= HOSTILE {
+            declare_war(&mut flags, 0);
+        }
         return flags;
     };
     if flags & (HIDDEN | INVISIBLE_FORCED) == 0 {
@@ -156,6 +160,7 @@ impl CharacterFaction {
     fn flags(&self, row: Option<&PlayerReputation>) -> u32 {
         faction_flags(
             self.defaults,
+            self.base,
             row.map(|row| StoredReputation {
                 standing: row.standing,
                 earned: row.standing.saturating_sub(self.base),
@@ -299,24 +304,24 @@ pub(crate) fn vendor_discount_pct(
         .map_or(0, reputation_discount_pct)
 }
 
-// vmangos Unit::IsHostileTo: Hostile or Hated. At war only caps the rank at Neutral.
-fn reaction_is_hostile(reputation_standing: Option<i32>, template_hostile: bool) -> bool {
+// A reputation rank at or below `limit`, else hostile templates; at war never refuses alone.
+fn rank_refuses(reputation_standing: Option<i32>, template_hostile: bool, limit: u8) -> bool {
     reputation_standing.map_or(template_hostile, |standing| {
-        reputation_rank(standing) <= HOSTILE
+        reputation_rank(standing) <= limit
     })
 }
 
-/// vmangos `GetFactionReactionTo` is hostile: a reputation faction's rank, else the templates.
-pub(crate) fn npc_is_hostile(
+fn npc_reaction_refuses(
     ctx: &ReducerContext,
     npc: &crate::WorldEntity,
     player: &crate::WorldEntity,
+    limit: u8,
 ) -> bool {
     let templates = ctx.db.game_faction_template();
     let Some(npc_template) = templates.id().find(npc.faction_template) else {
         return false;
     };
-    reaction_is_hostile(
+    rank_refuses(
         reputation(ctx, player.guid, npc_template.faction),
         templates
             .id()
@@ -324,7 +329,26 @@ pub(crate) fn npc_is_hostile(
             .is_some_and(|player_template| {
                 crate::faction::compute_hostile(&npc_template, &player_template)
             }),
+        limit,
     )
+}
+
+/// vmangos `Unit::IsHostileTo` for the creature: Hostile or Hated, else hostile templates.
+pub(crate) fn npc_is_hostile(
+    ctx: &ReducerContext,
+    npc: &crate::WorldEntity,
+    player: &crate::WorldEntity,
+) -> bool {
+    npc_reaction_refuses(ctx, npc, player, HOSTILE)
+}
+
+/// vmangos `CanInteractWithNPC`: hostile, or a reputation faction at Unfriendly or below.
+pub(crate) fn npc_refuses_service(
+    ctx: &ReducerContext,
+    npc: &crate::WorldEntity,
+    player: &crate::WorldEntity,
+) -> bool {
+    npc_reaction_refuses(ctx, npc, player, UNFRIENDLY)
 }
 
 pub(crate) fn grant_reputation(
@@ -465,8 +489,9 @@ pub(crate) fn apply_set_watched_faction(
 #[cfg(test)]
 mod rep_tests {
     use super::{
-        clamped_standing, faction_flags, reaction_is_hostile, reputation_discount_pct,
-        reputation_rank, StoredReputation, AT_WAR, HIDDEN, INVISIBLE_FORCED, PEACE_FORCED, VISIBLE,
+        clamped_standing, faction_flags, rank_refuses, reputation_discount_pct, reputation_rank,
+        StoredReputation, AT_WAR, HIDDEN, HOSTILE, INVISIBLE_FORCED, PEACE_FORCED, UNFRIENDLY,
+        VISIBLE,
     };
 
     fn stored(standing: i32, at_war: bool) -> Option<StoredReputation> {
@@ -480,18 +505,26 @@ mod rep_tests {
     #[test]
     fn a_faction_without_a_row_keeps_its_default_flags() {
         assert_eq!(
-            faction_flags(HIDDEN | PEACE_FORCED, None),
+            faction_flags(HIDDEN | PEACE_FORCED, 0, None),
             HIDDEN | PEACE_FORCED
         );
-        assert_eq!(faction_flags(AT_WAR, None), AT_WAR);
+        assert_eq!(faction_flags(AT_WAR, 0, None), AT_WAR);
+    }
+
+    #[test]
+    fn a_faction_without_a_row_is_at_war_from_a_hostile_base_unless_peace_forced() {
+        assert_eq!(faction_flags(0, -42_000, None), AT_WAR);
+        assert_eq!(faction_flags(0, -3001, None), AT_WAR);
+        assert_eq!(faction_flags(0, -3000, None), 0);
+        assert_eq!(faction_flags(PEACE_FORCED, -42_000, None), PEACE_FORCED);
     }
 
     #[test]
     fn a_stored_row_is_visible_unless_its_faction_is_hidden() {
-        assert_eq!(faction_flags(0, stored(500, false)), VISIBLE);
-        assert_eq!(faction_flags(HIDDEN, stored(500, false)), HIDDEN);
+        assert_eq!(faction_flags(0, 0, stored(500, false)), VISIBLE);
+        assert_eq!(faction_flags(HIDDEN, 0, stored(500, false)), HIDDEN);
         assert_eq!(
-            faction_flags(INVISIBLE_FORCED | AT_WAR, stored(500, false)),
+            faction_flags(INVISIBLE_FORCED | AT_WAR, 0, stored(500, false)),
             INVISIBLE_FORCED | AT_WAR
         );
     }
@@ -499,35 +532,38 @@ mod rep_tests {
     #[test]
     fn peace_forced_refuses_war_above_an_earned_hated() {
         assert_eq!(
-            faction_flags(PEACE_FORCED, stored(-6000, true)),
+            faction_flags(PEACE_FORCED, 0, stored(-6000, true)),
             PEACE_FORCED | VISIBLE
         );
         assert_eq!(
-            faction_flags(PEACE_FORCED, stored(-6001, true)),
+            faction_flags(PEACE_FORCED, 0, stored(-6001, true)),
             PEACE_FORCED | VISIBLE | AT_WAR
         );
-        assert_eq!(faction_flags(0, stored(42_000, true)), VISIBLE | AT_WAR);
+        assert_eq!(faction_flags(0, 0, stored(42_000, true)), VISIBLE | AT_WAR);
     }
 
     #[test]
     fn a_hostile_rank_declares_war_and_a_visible_row_clears_a_default_war() {
-        assert_eq!(faction_flags(0, stored(-3001, false)), VISIBLE | AT_WAR);
-        assert_eq!(faction_flags(0, stored(-3000, false)), VISIBLE);
-        assert_eq!(faction_flags(AT_WAR, stored(0, false)), VISIBLE);
+        assert_eq!(faction_flags(0, 0, stored(-3001, false)), VISIBLE | AT_WAR);
+        assert_eq!(faction_flags(0, 0, stored(-3000, false)), VISIBLE);
+        assert_eq!(faction_flags(AT_WAR, 0, stored(0, false)), VISIBLE);
     }
 
     #[test]
-    fn only_a_hostile_or_hated_reputation_rank_is_hostile() {
-        assert!(reaction_is_hostile(Some(-3001), false));
-        assert!(reaction_is_hostile(Some(-42000), false));
-        assert!(!reaction_is_hostile(Some(-3000), true), "Unfriendly");
-        assert!(!reaction_is_hostile(Some(0), true));
+    fn hostility_refuses_from_hostile_and_service_from_unfriendly() {
+        assert!(rank_refuses(Some(-3001), false, HOSTILE));
+        assert!(rank_refuses(Some(-42000), false, HOSTILE));
+        assert!(!rank_refuses(Some(-3000), true, HOSTILE), "Unfriendly");
+        assert!(rank_refuses(Some(-1), false, UNFRIENDLY), "Unfriendly");
+        assert!(!rank_refuses(Some(0), true, UNFRIENDLY), "Neutral");
     }
 
     #[test]
     fn without_a_reputation_faction_the_templates_decide() {
-        assert!(reaction_is_hostile(None, true));
-        assert!(!reaction_is_hostile(None, false));
+        for limit in [HOSTILE, UNFRIENDLY] {
+            assert!(rank_refuses(None, true, limit));
+            assert!(!rank_refuses(None, false, limit));
+        }
     }
 
     #[test]
