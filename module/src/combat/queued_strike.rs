@@ -1,6 +1,6 @@
 use spacetimedb::ReducerContext;
 
-use crate::spell::SpellCastEventKind;
+use crate::spell::{SpellCastEventKind, StrikeSwingReport};
 use crate::{game_spell, game_spell_effect, game_world_entity, WorldEntity};
 use crate::{Spell, SpellCastEvent, SpellEffect};
 
@@ -73,6 +73,17 @@ pub(crate) fn charge(
     }
     payer.update(ctx);
     true
+}
+
+const SPELL_ATTR_ON_NEXT_SWING_NO_DAMAGE: u32 = 0x4;
+
+/// vmangos Spell::SendMeleeAttackingStateUpdate hides the swing's damage behind this attribute.
+pub(crate) fn swing_report(strike: Option<&Spell>) -> StrikeSwingReport {
+    if strike.is_some_and(|strike| strike.attributes & SPELL_ATTR_ON_NEXT_SWING_NO_DAMAGE != 0) {
+        StrikeSwingReport::WithoutDamage
+    } else {
+        StrikeSwingReport::WithDamage
+    }
 }
 
 pub(crate) fn damage(

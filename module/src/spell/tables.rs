@@ -898,6 +898,32 @@ pub struct SpellCastEvent {
     pub energized: u32,
     #[default(0u8)]
     pub power_type: u8,
+    // Damage a queued strike's partial block took; only a queued strike writes it.
+    #[default(0u32)]
+    pub blocked_amount: u32,
+    // A `StrikeSwingReport` code; a queued strike's GO row also reports its swing.
+    #[default(0u8)]
+    pub strike_swing_report: u8,
+}
+
+/// How a GO row reports a queued strike's swing (vmangos Spell::SendMeleeAttackingStateUpdate).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub(crate) enum StrikeSwingReport {
+    None = 0,
+    WithDamage = 1,
+    /// SPELL_ATTR_ON_NEXT_SWING_NO_DAMAGE: the swing's damage fields stay zero.
+    WithoutDamage = 2,
+}
+
+impl StrikeSwingReport {
+    pub(crate) fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::WithDamage,
+            2 => Self::WithoutDamage,
+            _ => Self::None,
+        }
+    }
 }
 
 pub const CAST_MISS_NONE: u8 = 0;
@@ -1008,6 +1034,8 @@ impl SpellCastEvent {
             miss_info: CAST_MISS_NONE,
             energized: 0,
             power_type: 0,
+            blocked_amount: 0,
+            strike_swing_report: 0,
         }
     }
 }

@@ -57,10 +57,22 @@ mod fixture {
         pub state: u64,
     }
 
+    /// Exact swing draws, oldest id first, that a forced-outcome test takes before the seeded ones.
+    #[table(accessor = game_conformance_scripted_swing_draw)]
+    pub struct ScriptedSwingDraw {
+        #[primary_key]
+        #[auto_inc]
+        pub id: u64,
+        #[index(btree)]
+        pub character_guid: u64,
+        pub draw: u32,
+    }
+
     crate::outside_table_catalog!(
         game_conformance_swing_random,
         game_conformance_spell_random,
-        game_conformance_wear_random
+        game_conformance_wear_random,
+        game_conformance_scripted_swing_draw
     );
 
     fn next(state: &mut u64) -> u32 {
@@ -92,6 +104,15 @@ mod fixture {
                 .find(guid)
                 .map(|row| next_spell(ctx, row)),
             RollStream::Swing(guid) => {
+                let scripted = ctx.db.game_conformance_scripted_swing_draw();
+                if let Some(scripted_draw) = scripted
+                    .character_guid()
+                    .filter(guid)
+                    .min_by_key(|row| row.id)
+                {
+                    scripted.id().delete(scripted_draw.id);
+                    return Some(scripted_draw.draw);
+                }
                 let swings = ctx.db.game_conformance_swing_random();
                 let mut row = swings.character_guid().find(guid)?;
                 let draw = next(&mut row.state);
@@ -135,6 +156,24 @@ mod fixture {
             attacker_weapon_skill: 0,
             defender_defense_skill: 0,
         });
+    }
+
+    #[reducer]
+    pub fn debug_script_swing_draws(
+        ctx: &ReducerContext,
+        character_guid: u64,
+        draws: Vec<u32>,
+    ) -> Result<(), String> {
+        crate::helpers::require_operator(ctx)?;
+        let scripted = ctx.db.game_conformance_scripted_swing_draw();
+        for draw in draws {
+            scripted.insert(ScriptedSwingDraw {
+                id: 0,
+                character_guid,
+                draw,
+            });
+        }
+        Ok(())
     }
 
     #[reducer]
@@ -469,6 +508,10 @@ mod fixture {
         target.update(ctx);
         crate::skill::debug_set_skill(ctx, character_guid, 162, 300)?;
         crate::skill::debug_set_skill(ctx, character_guid, 95, 300)?;
+        ctx.db
+            .game_conformance_scripted_swing_draw()
+            .character_guid()
+            .delete(character_guid);
         let table = ctx.db.game_conformance_swing_random();
         table.character_guid().delete(character_guid);
         table.insert(SwingRandom {

@@ -82,6 +82,7 @@ pub(crate) mod character_owned_tripwire {
                 "game_conformance_swing_random",
                 "game_conformance_spell_random",
                 "game_conformance_wear_random",
+                "game_conformance_scripted_swing_draw",
             ],
             "fixture-only random input state retained for the lifetime of its disposable Shard",
         ),

@@ -814,7 +814,7 @@ struct Defender {
     block_value: u32,
 }
 
-// Returns (damage, outcome, blocked); a blocked crit stays a crit.
+// Returns (damage, outcome, blocked).
 fn resolve_swing(
     outcome: AttackOutcome,
     partial_block_bp: u32,
@@ -844,7 +844,7 @@ fn resolve_swing(
         AttackOutcome::Normal | AttackOutcome::Block => base,
     };
     let dmg = armor_mitigated(pre_mit, defender.armor_pct);
-    // vmangos rolls a queued strike's partial block after the table, so it can crit and block.
+    // vmangos rolls a queued strike's partial block after the table; it keeps its table outcome.
     let blocks = match strike {
         Some(_) => rolls.block < partial_block_bp,
         None => outcome == AttackOutcome::Block,
@@ -853,11 +853,6 @@ fn resolve_swing(
         return (dmg, outcome, 0);
     }
     let blocked = defender.block_value.min(dmg);
-    let outcome = if outcome == AttackOutcome::Crit {
-        AttackOutcome::Crit
-    } else {
-        AttackOutcome::Block
-    };
     (dmg - blocked, outcome, blocked)
 }
 
@@ -1047,6 +1042,23 @@ mod queued_strike_tests {
                 30
             ),
             (81, AttackOutcome::Crit, 30)
+        );
+    }
+
+    #[test]
+    fn a_blocked_queued_strike_keeps_its_glancing_outcome() {
+        // (100 + 11) glances to 77, then 30 of it is blocked.
+        assert_eq!(
+            resolve_swing(
+                AttackOutcome::Glancing,
+                10_000,
+                rolls(0),
+                (100, 100),
+                heroic_strike(11),
+                0,
+                30
+            ),
+            (47, AttackOutcome::Glancing, 30)
         );
     }
 

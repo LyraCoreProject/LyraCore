@@ -76,6 +76,7 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
         "debug_prepare_spell_roll_character",
         "debug_prepare_queued_strike_character",
         "debug_prepare_weapon_strike_character",
+        "debug_script_swing_draws",
     ] {
         assert!(!reducers
             .iter()
@@ -94,6 +95,7 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
         "game_conformance_swing_random",
         "game_conformance_spell_random",
         "game_conformance_wear_random",
+        "game_conformance_scripted_swing_draw",
         "game_conformance_schedule_revision",
     ] {
         assert!(!schema_section(&schema, "Tables")

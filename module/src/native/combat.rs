@@ -128,6 +128,7 @@ pub(crate) fn combat_event(ctx: &ReducerContext, event: &CombatEvent) {
             false,
         );
     } else if !event.spell_swing && ctx.db.game_native_player().count() != 0 {
+        // A queued strike's swing follows its SMSG_SPELL_GO, so native/spell.rs sends it.
         let packet = codec::build_attacker_state_update(
             event.attacker_guid,
             event.target_guid,

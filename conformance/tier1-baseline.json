@@ -1924,54 +1924,6 @@
       "scenario_sha256": "52c55709d94ea782d9d7c17122096b18fdbf81c74f9ac67ff8156ab7286a74b5",
       "rule": [
         {
-          "rule": "queued_strike_sample",
-          "checkpoint": "queued_strike_level_60_public_1",
-          "stream": {
-            "kind": "broadcast",
-            "id": "swings"
-          },
-          "opcode": 330,
-          "field_path": [
-            "outcomes"
-          ]
-        },
-        {
-          "rule": "queued_strike_sample",
-          "checkpoint": "queued_strike_level_60_public_2",
-          "stream": {
-            "kind": "broadcast",
-            "id": "swings"
-          },
-          "opcode": 330,
-          "field_path": [
-            "outcomes"
-          ]
-        },
-        {
-          "rule": "queued_strike_sample",
-          "checkpoint": "queued_strike_level_63_public_1",
-          "stream": {
-            "kind": "broadcast",
-            "id": "swings"
-          },
-          "opcode": 330,
-          "field_path": [
-            "outcomes"
-          ]
-        },
-        {
-          "rule": "queued_strike_sample",
-          "checkpoint": "queued_strike_level_63_public_2",
-          "stream": {
-            "kind": "broadcast",
-            "id": "swings"
-          },
-          "opcode": 330,
-          "field_path": [
-            "outcomes"
-          ]
-        },
-        {
           "rule": "weapon_strike_sample",
           "checkpoint": "weapon_strike_level_60_public_1",
           "stream": {
