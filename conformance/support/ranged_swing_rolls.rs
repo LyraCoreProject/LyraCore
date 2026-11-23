@@ -76,7 +76,7 @@ impl Flight {
 }
 
 impl RangedSwing {
-    /// Counts one batch of a shooter's packets until `quota` shots; an error is a gap blocking the sample.
+    /// Counts a batch of own packets up to `quota` shots; an error is a gap blocking the sample.
     pub fn observe(
         &self,
         flight: &mut Flight,
@@ -114,7 +114,7 @@ impl RangedSwing {
                     counts.record(if crit { CRIT } else { HIT }, blocked);
                 }
                 SPELL_LOG_MISS if own(packet) => anyhow::bail!(
-                    "vmangos names a ranged swing's miss in its SMSG_SPELL_GO, never in SMSG_SPELLLOGMISS"
+                    "vmangos names a ranged miss in its SMSG_SPELL_GO, never in SMSG_SPELLLOGMISS"
                 ),
                 ATTACKER_STATE_UPDATE if packet.fields.get("attacker") == Some(&shooter_guid) => {
                     anyhow::bail!(

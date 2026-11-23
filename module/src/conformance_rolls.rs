@@ -320,7 +320,7 @@ mod fixture {
         Ok(())
     }
 
-    /// White melee's warrior with Auto Shot, a gun and its ammo, against a passive target; ADR 0007.
+    /// White melee's warrior with Auto Shot, a gun and ammo, against a passive target; ADR 0007.
     #[reducer]
     pub fn debug_prepare_auto_shot_character(
         ctx: &ReducerContext,
