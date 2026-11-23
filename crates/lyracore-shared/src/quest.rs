@@ -249,7 +249,7 @@ pub trait QuestHistory {
     fn standing(&self, quest_entry: u32) -> QuestStanding;
     fn exclusive_group(&self, quest_entry: u32) -> i32;
     fn exclusive_group_members(&self, group: i32) -> Vec<u32>;
-    /// Stored standing, else `game_faction.base_standing` (first Faction.dbc slot).
+    /// Stored standing, else the Character's Faction.dbc base standing.
     fn reputation(&self, faction_id: u32) -> i32;
     /// vmangos `GetSkillValue`: with temporary and permanent bonuses; zero when unlearned.
     fn skill_value(&self, skill_line: u32) -> u32;

@@ -50,7 +50,61 @@ pub struct Faction {
     #[primary_key]
     pub faction_id: u32,
     pub reputation_index: i32,
+    /// Faction.dbc `BaseRepValue[0]`; the `_2` to `_4` columns hold the other three slots.
     pub base_standing: i32,
+    #[default(0)]
+    pub base_standing_2: i32,
+    #[default(0)]
+    pub base_standing_3: i32,
+    #[default(0)]
+    pub base_standing_4: i32,
+    #[default(0)]
+    pub base_race_mask_1: u32,
+    #[default(0)]
+    pub base_race_mask_2: u32,
+    #[default(0)]
+    pub base_race_mask_3: u32,
+    #[default(0)]
+    pub base_race_mask_4: u32,
+    #[default(0)]
+    pub base_class_mask_1: u32,
+    #[default(0)]
+    pub base_class_mask_2: u32,
+    #[default(0)]
+    pub base_class_mask_3: u32,
+    #[default(0)]
+    pub base_class_mask_4: u32,
+}
+
+impl Faction {
+    pub(crate) fn base_standing_for(&self, race: u8, class: u8) -> i32 {
+        lyracore_shared::faction::base_standing(
+            [
+                (
+                    self.base_race_mask_1,
+                    self.base_class_mask_1,
+                    self.base_standing,
+                ),
+                (
+                    self.base_race_mask_2,
+                    self.base_class_mask_2,
+                    self.base_standing_2,
+                ),
+                (
+                    self.base_race_mask_3,
+                    self.base_class_mask_3,
+                    self.base_standing_3,
+                ),
+                (
+                    self.base_race_mask_4,
+                    self.base_class_mask_4,
+                    self.base_standing_4,
+                ),
+            ],
+            race,
+            class,
+        )
+    }
 }
 
 fn relation_holds(

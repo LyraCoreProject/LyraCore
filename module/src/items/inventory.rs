@@ -13,7 +13,6 @@ use super::rules::{
 use super::tables::{
     game_item_instance, game_item_template, item_in_slot, slot_occupied, ItemInstance,
 };
-use crate::game_player_reputation;
 
 pub(super) fn bag_has_contents(ctx: &ReducerContext, character_guid: u64, slot: u8) -> bool {
     if !(BAG_SLOT_START..=BAG_SLOT_END_INCL).contains(&slot) {
@@ -181,13 +180,8 @@ pub(crate) fn apply_item_move(
                 .find(src.entry)
                 .ok_or(ItemRefusal::CannotEquip)?;
             validate_equipment(ctx, player_guid, &tmpl, to_slot).map_err(equipment_refusal)?;
-            let reputation_standing = ctx
-                .db
-                .game_player_reputation()
-                .by_character()
-                .filter(player_guid)
-                .find(|reputation| reputation.faction_id == tmpl.required_reputation_faction)
-                .map(|reputation| reputation.standing);
+            let reputation_standing =
+                crate::reputation::reputation(ctx, player_guid, tmpl.required_reputation_faction);
             if !meets_required_reputation(
                 tmpl.required_reputation_faction,
                 tmpl.required_reputation_rank,

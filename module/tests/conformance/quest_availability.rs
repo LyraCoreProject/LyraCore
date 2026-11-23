@@ -468,6 +468,45 @@ fn a_minimum_reputation_quest_opens_at_friendly() {
     accepted(&mut stage, FIRST);
 }
 
+// Cenarion Circle's Faction.dbc slots: a Night Elf or Tauren Druid starts at 2000.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_tauren_druid_needs_only_1000_more_for_a_friendly_cenarion_circle_quest() {
+    let mut stage = stage("quest-availability-druid-base-reputation");
+    offer(&stage, FIRST, 1, 1);
+    require(
+        &stage,
+        FIRST,
+        &format!(
+            "required_min_rep_faction = {REQUIRED_FACTION}, required_min_rep_value = {FRIENDLY}"
+        ),
+    );
+    stage.shard.insert_row(
+        "game_faction",
+        &[
+            ("faction_id", &REQUIRED_FACTION),
+            ("reputation_index", &61),
+            ("base_standing", &0),
+            ("base_race_mask_1", &255),
+            ("base_class_mask_1", &479),
+            ("base_standing_2", &2000),
+            ("base_race_mask_2", &40),
+            ("base_class_mask_2", &1024),
+        ],
+    );
+    stage.shard.assert_sql(&format!(
+        "UPDATE game_character SET race = 6, class = 11 WHERE guid = {}",
+        stage.guid
+    ));
+
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
+    gain_required_reputation(&stage, 999);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
+    gain_required_reputation(&stage, 1);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
+    accepted(&mut stage, FIRST);
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_maximum_reputation_quest_closes_at_its_cap() {

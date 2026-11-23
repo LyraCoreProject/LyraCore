@@ -866,6 +866,17 @@ pub(crate) fn seed_fixture_catalogue(ctx: &ReducerContext) {
             // The client has 64 reputation slots; the real import uses 0..=54.
             reputation_index: 60,
             base_standing: 0,
+            base_standing_2: 0,
+            base_standing_3: 0,
+            base_standing_4: 0,
+            base_race_mask_1: 0,
+            base_race_mask_2: 0,
+            base_race_mask_3: 0,
+            base_race_mask_4: 0,
+            base_class_mask_1: 0,
+            base_class_mask_2: 0,
+            base_class_mask_3: 0,
+            base_class_mask_4: 0,
         });
     }
 }

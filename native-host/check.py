@@ -4972,11 +4972,13 @@ def check_progression(host):
     assert host.rows(f'SELECT player_bytes_2 FROM game_world_entity WHERE guid = {guid}') == [[rest_bytes]]
     host.sql(f'UPDATE game_world_entity SET z = 0 WHERE guid = {guid}')
     peer.collect()
-    host.sql('INSERT INTO game_faction (faction_id,reputation_index,base_standing) VALUES (5090901,62,0)')
+    # Slot 1 admits no race, so the Character's base is slot 2's 1000; the client is sent the rest.
+    host.sql('INSERT INTO game_faction (faction_id,reputation_index,base_standing,base_race_mask_1,base_standing_2) VALUES (5090901,62,-42000,2147483648,1000)')
     host.call('debug_grant_reputation', [guid, 5090901, 3175])
     assert (0x124, struct.pack('<IIi', 1, 62, 3175)) in client.collect()
     host.call('debug_grant_reputation', [guid, 5090901, 25])
     assert (0x124, struct.pack('<IIi', 1, 62, 3200)) in client.collect()
+    assert host.rows(f'SELECT standing FROM game_player_reputation WHERE character_guid = {guid} AND faction_id = 5090901') == [[4200]]
     client.send(0x125, struct.pack('<IB', 62, 1))
     client.collect()
     assert host.rows(f'SELECT at_war FROM game_player_reputation WHERE character_guid = {guid} AND faction_id = 5090901') == [[True]]

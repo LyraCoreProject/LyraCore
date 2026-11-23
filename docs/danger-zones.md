@@ -157,6 +157,23 @@ These rules come from `Creature::GetVendorItemCurrentCount`, `UpdateVendorItemCu
 List zero counts remain visible, as in
 [`SendListInventory`](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/ItemHandler.cpp).
 
+### Base reputation migration
+
+`game_faction` gains `base_standing_2` to `base_standing_4`, `base_race_mask_1` to
+`base_race_mask_4` and `base_class_mask_1` to `base_class_mask_4`, end-appended with default 0.
+`base_standing` keeps slot 1. A Character starts each faction at the first slot whose race and
+class masks admit it, a zero mask admitting all, and at 0 when none does. Until a reimport every
+mask is 0, so slot 1 admits every Character. Interaction refusal now reads that base for a faction
+with no stored row instead of the faction templates, so until the reimport a Character counts as
+Friendly to the other team's capital cities (their slot 1 holds 3100) and their vendors, taxis and
+quest givers serve it. Reimport the `dbc` family straight after the publish. Shared import SQL
+defaults fill older inserts.
+
+`SMSG_INITIALIZE_FACTIONS` and `SMSG_SET_FACTION_STANDING` now send a stored standing less the
+Character's base, as vmangos sends its earned standing; the client adds the base from its own
+Faction.dbc. A stored row keeps the standing it reached on slot 1's base, so for a Character whose
+slot differs it stays off by the difference between the two bases. No repair runs.
+
 ### Buyback migration
 
 `game_buyback_item` and `game_buyback_state` are new private tables. Existing table layouts and the
