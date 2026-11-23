@@ -814,7 +814,7 @@ struct Defender {
     block_value: u32,
 }
 
-// Returns (damage, outcome, blocked); a blocked crit stays a crit.
+// Returns (damage, outcome, blocked).
 fn resolve_swing(
     outcome: AttackOutcome,
     partial_block_bp: u32,

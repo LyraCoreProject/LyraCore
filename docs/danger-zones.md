@@ -269,6 +269,15 @@ spent charges, as they refuse an opened item, until their rows can carry the cha
 and imports with no rows; an older Shard has spent no charges. An older destination refuses the new
 manifest, so update both Shards before moving active World Sessions.
 
+### Queued strike report migration
+
+`game_spell_cast_event` and `game_spell_cast_event_live` gain `blocked_amount` and
+`strike_swing_report`, end-appended with default 0. Only a queued strike's GO row writes them; every
+other row keeps 0, which means no partial block and no swing report. Nothing reads stored rows, so
+no repair or reimport is needed. The Native Host's delivery layouts do not change. An SDK client
+that subscribes to `game_spell_cast_event_live` needs regenerated bindings to decode the new
+columns.
+
 ### Summoning ritual migration
 
 The imported `game_gameobject_ritual` table and the private `game_summoning_ritual`,

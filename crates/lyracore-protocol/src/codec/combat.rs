@@ -487,7 +487,7 @@ pub struct QueuedStrikeSwing {
     pub reports_damage: bool,
 }
 
-// vmangos Spell::SendMeleeAttackingStateUpdate, without its guessed ROLLED_* and PvP flags.
+// vmangos SendMeleeAttackingStateUpdate, without ROLLED_DODGE/ROLLED_PARRY, PvP and blood spurt.
 pub fn build_queued_strike_swing(strike: QueuedStrikeSwing) -> crate::world::Packet {
     const HITINFO_AFFECTS_VICTIM: u32 = 0x2;
     const HITINFO_MISS: u32 = 0x10;

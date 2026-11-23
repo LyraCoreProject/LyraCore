@@ -603,7 +603,6 @@ fn fire_melee_swing(
         rolled += seal_portion;
     }
 
-    let queued_fired = swing_is_spell && rolled > 0;
     if !extra {
         super::queued_strike::clear(ctx, attacker_guid);
     }
@@ -622,11 +621,17 @@ fn fire_melee_swing(
             SpellCastEvent {
                 target_guid,
                 is_completion: true,
-                damage: if queued_fired { projected_swing } else { 0 },
+                damage: projected_swing,
+                // A Seal of Righteousness portion shares the absorb, so it is not reported.
+                absorbed: if seal_portion == 0 {
+                    damage.absorbed()
+                } else {
+                    0
+                },
                 is_crit: hit_info == AttackOutcome::Crit,
                 swing_hit_info: hit_info.wire(),
                 cooldown_ms,
-                blocked,
+                blocked_amount: blocked,
                 strike_swing_report: super::queued_strike::swing_report(queued_header.as_ref())
                     as u8,
                 ..SpellCastEvent::signal_at(ctx, attacker, queued_spell, SpellCastEventKind::Go)

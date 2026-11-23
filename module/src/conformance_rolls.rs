@@ -508,6 +508,10 @@ mod fixture {
         target.update(ctx);
         crate::skill::debug_set_skill(ctx, character_guid, 162, 300)?;
         crate::skill::debug_set_skill(ctx, character_guid, 95, 300)?;
+        ctx.db
+            .game_conformance_scripted_swing_draw()
+            .character_guid()
+            .delete(character_guid);
         let table = ctx.db.game_conformance_swing_random();
         table.character_guid().delete(character_guid);
         table.insert(SwingRandom {

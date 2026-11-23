@@ -119,7 +119,7 @@ pub(crate) fn spell_impact(ctx: &ReducerContext, event: &SpellImpactEvent) {
 }
 
 fn damage_log(row: &SpellCastEvent) -> Option<Packet> {
-    (row.damage > 0 || row.absorbed > 0 || row.resisted > 0 || row.blocked > 0).then(|| {
+    (row.damage > 0 || row.absorbed > 0 || row.resisted > 0 || row.blocked_amount > 0).then(|| {
         let log = codec::build_spell_non_melee_damage_log(
             row.target_guid,
             row.caster_guid,
@@ -129,7 +129,7 @@ fn damage_log(row: &SpellCastEvent) -> Option<Packet> {
             row.is_crit,
             row.resisted,
             row.absorbed,
-            row.blocked,
+            row.blocked_amount,
         );
         message(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(
             log,
@@ -152,7 +152,7 @@ fn strike_swing(row: &SpellCastEvent) -> Option<Packet> {
         school: row.school,
         absorbed: row.absorbed,
         resisted: row.resisted,
-        blocked: row.blocked,
+        blocked: row.blocked_amount,
         reports_damage,
     }))
 }
@@ -411,7 +411,7 @@ mod tests {
             miss_info: 0,
             energized: 0,
             power_type: 0,
-            blocked: 0,
+            blocked_amount: 0,
             strike_swing_report: 0,
         }
     }
@@ -439,7 +439,7 @@ mod tests {
         row.target_guid = 2;
         row.is_completion = true;
         row.cooldown_ms = 0;
-        row.blocked = 14;
+        row.blocked_amount = 14;
         row.strike_swing_report = StrikeSwingReport::WithoutDamage as u8;
         let packets = cast_event_messages(&row, None);
         let opcodes: Vec<_> = packets.iter().map(|(_, packet)| packet.opcode).collect();

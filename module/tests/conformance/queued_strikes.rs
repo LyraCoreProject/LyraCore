@@ -12,6 +12,9 @@ use super::queued_strike_spec::{self as spec, Counts};
 use super::transport::{prepare_character, Delivery};
 
 pub(super) const CMSG_CAST_SPELL: u32 = 0x12e;
+const SMSG_SPELL_GO: u16 = 0x132;
+const SMSG_ATTACKERSTATEUPDATE: u16 = 0x14a;
+const SMSG_SPELLNONMELEEDAMAGELOG: u16 = 0x250;
 // Each 100 ms melee tick swings the 50 ms fixture axe once.
 const TICKS_PER_SWING: u32 = 2;
 
@@ -86,7 +89,12 @@ fn own_packets(
         .delivery
         .route_rows(rows.to_vec())?
         .into_iter()
-        .filter(|packet| matches!(packet.opcode, 0x132 | 0x14a | 0x250))
+        .filter(|packet| {
+            matches!(
+                packet.opcode,
+                SMSG_SPELL_GO | SMSG_ATTACKERSTATEUPDATE | SMSG_SPELLNONMELEEDAMAGELOG
+            )
+        })
         .map(|packet| decode(packet.opcode, &packet.body))
         .collect()
 }
@@ -147,12 +155,14 @@ fn ready_strikes(
             let guid = Field::Guid(character.guid);
             let packets = own_packets(character, &rows)?;
             ensure!(
-                packets.iter().any(|packet| packet.opcode == 0x132
+                packets.iter().any(|packet| packet.opcode == SMSG_SPELL_GO
                     && packet.fields.get("caster") == Some(&guid)
                     && packet.fields.get("spell") == Some(&Field::Unsigned(spec::SPELL_ID.into())))
-                    && !packets.iter().any(|packet| packet.opcode == 0x14a
-                        && packet.fields.get("attacker") == Some(&guid)
-                        && packet.fields.get("spell") == Some(&Field::Unsigned(0))),
+                    && !packets
+                        .iter()
+                        .any(|packet| packet.opcode == SMSG_ATTACKERSTATEUPDATE
+                            && packet.fields.get("attacker") == Some(&guid)
+                            && packet.fields.get("spell") == Some(&Field::Unsigned(0))),
                 "the swing did not fire the queued strike: {packets:?}"
             );
         }
@@ -485,10 +495,6 @@ pub(super) fn merge_seed(scenario: &Scenario, seed: u64) -> Result<Vec<Differenc
     );
     compare_samples(&samples, "merge")
 }
-
-const SMSG_SPELL_GO: u16 = 0x132;
-const SMSG_ATTACKERSTATEUPDATE: u16 = 0x14a;
-const SMSG_SPELLNONMELEEDAMAGELOG: u16 = 0x250;
 
 struct ForcedStrike {
     attacker: u64,
