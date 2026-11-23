@@ -115,10 +115,22 @@ impl Corpse {
         self.cell = self.position_cell();
         let previous = ctx.db.game_corpse().guid().find(self.guid);
         let row = ctx.db.game_corpse().guid().update(self);
-        crate::aoi::corpse_changed(ctx, &row, previous.is_none());
-        if previous.is_some_and(|old| old.is_bones != row.is_bones) {
-            crate::native::death::corpse_changed(ctx, &row);
+        let turned_to_bones = previous
+            .as_ref()
+            .is_some_and(|old| !old.is_bones && row.is_bones);
+        // vmangos Map::RemoveCorpses: DESTROY the body, then CREATE bones under the same GUID.
+        if turned_to_bones {
+            crate::aoi::remove_subject(ctx, crate::aoi::CORPSE, row.guid);
+            #[cfg(feature = "conformance_test_fixture")]
+            crate::native::debug::record_birth(
+                ctx,
+                row.guid,
+                row.map_id,
+                row.instance_id,
+                row.cell,
+            );
         }
+        crate::aoi::corpse_changed(ctx, &row, previous.is_none() || turned_to_bones);
         row
     }
 

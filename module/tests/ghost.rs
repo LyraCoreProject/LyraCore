@@ -3,7 +3,10 @@ mod support;
 use lyracore_package_delta::fixture_ids::{SCENARIO_VENDOR_ENTRY, TEST_WOLF_ENTRY};
 use lyracore_shared::constants::{player_flags, unit_vis_flags};
 use lyracore_shared::spell::taxonomy::*;
-use support::{actor, number, Row, Standalone};
+use serde::de::IgnoredAny;
+use serde_json::{json, value::RawValue};
+use support::{actor, number, ReducerConnection, Row, Standalone};
+use wire_client::decode::{self, Field};
 
 fn fixture(name: &str, race: u8) -> Standalone {
     let mut shard = Standalone::start(name);
@@ -269,6 +272,171 @@ fn bones_of_a_revived_character_disappear_after_an_hour() {
     assert!(shard
         .query_rows("SELECT guid FROM game_corpse WHERE owner_guid = 1")
         .is_empty());
+}
+
+const SMSG_DESTROY_OBJECT: u16 = 0x00aa;
+const GRANT: u8 = 2;
+const REVOKE: u8 = 3;
+// UPDATETYPE_CREATE_OBJECT, and UPDATETYPE_CREATE_OBJECT2 for an object that just entered the map.
+const CREATE_OBJECT: u64 = 2;
+const CREATE_OBJECT2: u64 = 3;
+// Build 5875 CORPSE_FIELD_FLAGS.
+const CORPSE_FIELD_FLAGS: &str = "field_35";
+// vmangos Corpse.h CORPSE_FLAG_UNK2 | CORPSE_FLAG_BONES.
+const BONES_FLAGS: u64 = 0x05;
+
+#[derive(Debug, PartialEq)]
+enum CorpseSeen {
+    Destroyed,
+    Created { kind: u64, flags: u64 },
+}
+
+// game_native_packet: id, audience, opcode, body, close_after, not_before_micros, authenticated.
+type NativePacketRow = (
+    IgnoredAny,
+    (u8, Box<RawValue>),
+    (u8, Box<RawValue>),
+    String,
+    IgnoredAny,
+    IgnoredAny,
+    IgnoredAny,
+);
+
+/// Enters the world as a new human on its own Account; an Account holds one World Session.
+fn enter_viewer(shard: &Standalone, name: &str) -> (u64, ReducerConnection) {
+    let username = name.to_uppercase();
+    let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
+    shard.assert_call(
+        "provision_account",
+        &[&format!("\"{username}\""), &credentials, &credentials],
+    );
+    let account = shard.query_rows(&format!(
+        "SELECT id FROM game_account WHERE username = '{username}'"
+    ))[0]["id"]
+        .clone();
+    shard.assert_call(
+        "create_character",
+        &[
+            &account,
+            &format!("\"{name}\""),
+            "1",
+            "1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+    );
+    let guid: u64 = number(
+        &shard.query_rows(&format!(
+            "SELECT guid FROM game_character WHERE name = '{name}'"
+        ))[0],
+        "guid",
+    );
+    let mut connection = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    connection.call("native_world_open", json!([42])).unwrap();
+    connection
+        .call("debug_native_enter_world", json!([guid]))
+        .unwrap();
+    (guid, connection)
+}
+
+fn corpse_seen(rows: &[Box<RawValue>], connection: u128) -> Vec<CorpseSeen> {
+    let corpse: u64 = CORPSE.parse().unwrap();
+    rows.iter()
+        .filter_map(|row| {
+            let (_, (audience, recipient), (option, opcode), body, ..): NativePacketRow =
+                serde_json::from_str(row.get()).unwrap();
+            if !matches!(audience, GRANT | REVOKE) || option != 0 {
+                return None;
+            }
+            let ((to,), _, subject): ((u128,), u8, u64) =
+                serde_json::from_str(recipient.get()).unwrap();
+            if to != connection || subject != corpse {
+                return None;
+            }
+            let opcode: u16 = serde_json::from_str(opcode.get()).unwrap();
+            let body: Vec<u8> = (0..body.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
+                .collect();
+            if opcode == SMSG_DESTROY_OBJECT {
+                assert_eq!(body, corpse.to_le_bytes());
+                return Some(CorpseSeen::Destroyed);
+            }
+            let packet = decode::decode(opcode, &body).unwrap();
+            let Some(Field::List(objects)) = packet.fields.get("objects") else {
+                panic!("a corpse CREATE carries objects: {packet:?}");
+            };
+            let [Field::Object(object)] = objects.as_slice() else {
+                panic!("a corpse CREATE carries one object: {packet:?}");
+            };
+            let unsigned = |field: Option<&Field>| match field {
+                Some(Field::Unsigned(value) | Field::Guid(value)) => *value,
+                other => panic!("expected an unsigned field, got {other:?}"),
+            };
+            assert_eq!(unsigned(object.get("guid")), corpse);
+            let Some(Field::Object(values)) = object.get("values") else {
+                panic!("a corpse CREATE carries values: {object:?}");
+            };
+            Some(CorpseSeen::Created {
+                kind: unsigned(object.get("kind")),
+                flags: unsigned(values.get(CORPSE_FIELD_FLAGS)),
+            })
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_viewer_sees_a_revived_characters_corpse_destroyed_then_created_as_bones() {
+    let shard = fixture("ghost-bones-viewer", 4);
+    let (watcher, mut viewer) = enter_viewer(&shard, "Watcher");
+    let at = &shard.query_rows(&format!(
+        "SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {watcher}"
+    ))[0];
+    viewer
+        .call(
+            "debug_teleport",
+            json!([
+                1,
+                number::<u32>(at, "map_id"),
+                number::<f32>(at, "x"),
+                number::<f32>(at, "y"),
+                number::<f32>(at, "z"),
+                0.0
+            ]),
+        )
+        .unwrap();
+    release(&shard);
+    let revived = viewer.call("debug_spirit_healer_res", json!([1])).unwrap();
+    assert_eq!(corpse_is_bones(&shard), "true");
+    assert_eq!(
+        corpse_seen(
+            revived.inserts("game_native_packet"),
+            viewer.connection_id()
+        ),
+        [
+            CorpseSeen::Destroyed,
+            CorpseSeen::Created {
+                kind: CREATE_OBJECT2,
+                flags: BONES_FLAGS
+            }
+        ],
+        "vmangos Map::RemoveCorpses removes the body, then adds bones under the same GUID"
+    );
+
+    let (_, mut late) = enter_viewer(&shard, "Latecomer");
+    assert_eq!(
+        corpse_seen(&late.drain_packets(), late.connection_id()),
+        [CorpseSeen::Created {
+            kind: CREATE_OBJECT,
+            flags: BONES_FLAGS
+        }],
+        "a viewer arriving later sees only the bones"
+    );
 }
 
 fn power_after_reclaim(name: &str, class: u32, power_type: u32, max_power: u32, power: u32) -> u32 {
