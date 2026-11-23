@@ -44,6 +44,10 @@ mod skills;
 mod spell_rolls;
 #[path = "../../conformance/support/spell_world.rs"]
 mod spell_world;
+#[path = "conformance/strike_collector.rs"]
+mod strike_collector;
+#[path = "../../conformance/support/strike_rolls.rs"]
+mod strike_rolls;
 #[path = "conformance/taxi.rs"]
 mod taxi;
 #[path = "../../conformance/support/taxi_route.rs"]
