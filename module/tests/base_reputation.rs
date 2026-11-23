@@ -2,7 +2,7 @@
 // FactionEntry::GetIndexFitTo.
 mod support;
 
-use support::{number, Standalone};
+use support::{actor, number, Standalone};
 
 const CHARACTER: &str = "1";
 const CENARION_CIRCLE: u32 = 609;
@@ -147,6 +147,46 @@ fn the_dbc_stamp_moves_a_row_stored_on_slot_1_to_the_characters_slot_once() {
     shard.assert_sql(&format!(
         "UPDATE game_faction SET base_race_mask_1 = 178, base_race_mask_2 = 77 WHERE faction_id = {WINTERSABER_TRAINERS}"
     ));
+    stamp_dbc(&shard);
+    assert_eq!(standing(&shard, WINTERSABER_TRAINERS), 10_000);
+    stamp_dbc(&shard);
+    assert_eq!(standing(&shard, WINTERSABER_TRAINERS), 10_000);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_repair_waits_while_a_character_is_in_transfer() {
+    let shard = character("base-reputation-repair-transfer", NIGHT_ELF, WARRIOR);
+    shard.insert_row(
+        "game_faction",
+        &[
+            ("faction_id", &WINTERSABER_TRAINERS),
+            ("reputation_index", &40),
+            ("base_standing", &-42_000),
+        ],
+    );
+    grant(&shard, WINTERSABER_TRAINERS, 10_000);
+    shard.assert_sql(&format!(
+        "UPDATE game_faction SET base_race_mask_1 = 178, base_race_mask_2 = 77 WHERE faction_id = {WINTERSABER_TRAINERS}"
+    ));
+    shard.assert_call(
+        "begin_transfer",
+        &[
+            "5119401",
+            &actor(CHARACTER),
+            "0",
+            "0",
+            "1200",
+            "1200",
+            "50",
+            "0",
+            "true",
+        ],
+    );
+    stamp_dbc(&shard);
+    assert_eq!(standing(&shard, WINTERSABER_TRAINERS), -32_000);
+
+    shard.assert_sql("DELETE FROM game_transfer_out WHERE transfer_id = 5119401");
     stamp_dbc(&shard);
     assert_eq!(standing(&shard, WINTERSABER_TRAINERS), 10_000);
     stamp_dbc(&shard);

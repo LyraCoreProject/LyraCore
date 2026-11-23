@@ -81,11 +81,7 @@ pub(crate) fn clamped_standing(standing: i32) -> i32 {
 
 /// vmangos `GetBaseReputation` for the Character's race and class; 0 when no slot admits it.
 pub(crate) fn base_standing(ctx: &ReducerContext, character_guid: u64, faction: &Faction) -> i32 {
-    let (race, class) = ctx
-        .db
-        .game_character()
-        .guid()
-        .find(character_guid)
+    let (race, class) = crate::helpers::character_by_guid(ctx, character_guid)
         .map_or((0, 0), |character| (character.race, character.class));
     faction.base_standing_for(race, class)
 }
@@ -141,8 +137,18 @@ pub(crate) fn repair_base_standing(ctx: &ReducerContext) {
     {
         return;
     }
+    let rows = ctx.db.game_player_reputation().iter().collect::<Vec<_>>();
+    if rows
+        .iter()
+        .any(|row| crate::transfer::is_in_transit(ctx, row.character_guid))
+    {
+        spacetimedb::log::warn!(
+            "repair_base_standing: a Character is in transit; the next dbc stamp runs the repair"
+        );
+        return;
+    }
     let mut moved = 0u64;
-    for mut row in ctx.db.game_player_reputation().iter().collect::<Vec<_>>() {
+    for mut row in rows {
         let Some(faction) = ctx.db.game_faction().faction_id().find(row.faction_id) else {
             continue;
         };

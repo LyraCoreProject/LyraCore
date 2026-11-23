@@ -178,8 +178,10 @@ Every `game_player_reputation` row written before the reimport holds slot 1's ba
 reimport the `dbc` family straight away, and the `dbc` stamp from `stamp_import_meta` runs a
 one-shot repair. It sets each row to `standing - base_standing + the Character's base`, clamped,
 and records the `repair_base_standing` family in `game_import_meta` so it never runs again. It
-skips, and records nothing, until some reputation faction has a non-zero mask. Do not write rows
-on new masks before the stamp: the repair would shift them too.
+skips, and records nothing, until some reputation faction has a non-zero mask, and while any
+Character with a reputation row is in Transfer; a later `dbc` stamp then runs it. Do not write rows
+on new masks before the stamp: the repair would shift them too. Move no Character between Shards
+until both Shards have run the repair, because a Transfer carries its rows unchanged.
 
 ### Buyback migration
 
