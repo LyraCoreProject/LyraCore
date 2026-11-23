@@ -150,7 +150,7 @@ fn resolve_loaded_cast(
 
     check_cast_gates(ctx, &caster, spell, request, GateRun::Resolve(phase))?;
 
-    let reagents = CastReagents::of(ctx, &caster, request, phase == CastPhase::Trigger);
+    let reagents = CastReagents::of(ctx, &caster, request, CastOrigin::Direct(phase));
     let cast_item = request
         .cast_item
         .filter(|_| !reagents.include_cast_item)
@@ -243,7 +243,10 @@ fn resolve_loaded_cast(
 pub(crate) enum CastOrigin {
     Direct(CastPhase),
     Triggered,
-    AuraTriggered,
+    /// A Proc or periodic trigger of an Aura; `source_spell` is the Aura's spell.
+    AuraTriggered {
+        source_spell: u32,
+    },
     DeadCreatureCallbackTriggered,
     ChanceOnHit,
 }
@@ -253,7 +256,7 @@ impl CastOrigin {
         matches!(
             self,
             Self::Triggered
-                | Self::AuraTriggered
+                | Self::AuraTriggered { .. }
                 | Self::DeadCreatureCallbackTriggered
                 | Self::ChanceOnHit
         )
@@ -262,7 +265,7 @@ impl CastOrigin {
     // Simplifies vmangos Spell::m_canTrigger; see the ledger gap in spell_cast_kinds.toml.
     fn can_trigger(self, hdr: &Spell) -> bool {
         match self {
-            Self::AuraTriggered => false,
+            Self::AuraTriggered { .. } => false,
             Self::ChanceOnHit => hdr.negative(),
             _ => true,
         }
@@ -372,22 +375,13 @@ impl CastReagents {
         ctx: &ReducerContext,
         caster: &WorldEntity,
         request: &CastRequest,
-        trigger_child: bool,
+        origin: CastOrigin,
     ) -> Self {
         let mut reagents = Self {
             items: Vec::new(),
             include_cast_item: false,
         };
-        // vmangos Spell::IgnoreItemRequirements: a parent with Reagent[0] pays for its trigger child.
-        let paid_by_parent = trigger_child
-            && super::depth::TriggerLink::parent_spell(ctx.timestamp).is_some_and(|parent| {
-                ctx.db
-                    .game_spell_reagent()
-                    .by_spell()
-                    .filter(&parent)
-                    .any(|reagent| reagent.id & 7 == 0)
-            });
-        if !caster.is_player() || paid_by_parent {
+        if !caster.is_player() || reagents_are_paid_elsewhere(ctx, origin) {
             return reagents;
         }
         reagents.items = recipe_reagents(ctx, request.spell_id);
@@ -410,6 +404,28 @@ impl CastReagents {
         reagents
     }
 
+    fn check(
+        &self,
+        ctx: &ReducerContext,
+        caster: &WorldEntity,
+        spell_id: u32,
+    ) -> Result<(), CastGateRefusal> {
+        if self.items.is_empty() {
+            return Ok(());
+        }
+        let mut plan = crate::items::ItemStoragePlan::read(ctx, caster.guid, caster.owner_identity);
+        self.take_from(ctx, &mut plan).map_err(|refusal| {
+            CastGateRefusal::other(
+                CastRefusalReason::MissingReagent,
+                format!(
+                    "spell {spell_id} needs reagents {:?}: {}",
+                    self.items,
+                    String::from(refusal)
+                ),
+            )
+        })
+    }
+
     fn take_from(
         &self,
         ctx: &ReducerContext,
@@ -419,6 +435,40 @@ impl CastReagents {
             .iter()
             .try_for_each(|&(entry, count)| plan.consume_untraded(ctx, entry, count))
     }
+}
+
+/// vmangos `Spell::IgnoreItemRequirements`; CONTEXT.md "Triggered Cast" says whose reagents pay.
+fn reagents_are_paid_elsewhere(ctx: &ReducerContext, origin: CastOrigin) -> bool {
+    match origin {
+        CastOrigin::Direct(CastPhase::Trigger) => TriggerLink::parent_spell(ctx.timestamp)
+            .is_some_and(|parent| has_first_reagent(ctx, parent)),
+        CastOrigin::Direct(_) => false,
+        CastOrigin::AuraTriggered { source_spell } => has_first_reagent(ctx, source_spell),
+        CastOrigin::Triggered
+        | CastOrigin::DeadCreatureCallbackTriggered
+        | CastOrigin::ChanceOnHit => true,
+    }
+}
+
+fn has_first_reagent(ctx: &ReducerContext, spell_id: u32) -> bool {
+    ctx.db
+        .game_spell_reagent()
+        .by_spell()
+        .filter(&spell_id)
+        .any(|reagent| reagent.id & 7 == 0)
+}
+
+/// Refuses a Triggered Cast whose reagents its caster lacks, and takes them otherwise.
+fn take_triggered_reagents(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    request: &CastRequest,
+    origin: CastOrigin,
+) -> Result<(), String> {
+    let reagents = CastReagents::of(ctx, caster, request, origin);
+    reagents.check(ctx, caster, request.spell_id)?;
+    take_reagents(ctx, caster, &[], &reagents, None)?;
+    Ok(())
 }
 
 /// Commits a spell's reagents now; a craft returns its plan to commit with its products.
@@ -568,7 +618,7 @@ fn answer_whole_refusals(
         if origin.can_trigger(hdr) {
             crate::spell::proc::run_immune_proc_pass(ctx, caster_guid, t, hdr.spell_id);
         }
-        if t != caster_guid && !matches!(origin, CastOrigin::AuraTriggered) {
+        if t != caster_guid && !matches!(origin, CastOrigin::AuraTriggered { .. }) {
             engage_refusing_unit(ctx, caster_guid, t);
         }
     }
@@ -835,7 +885,7 @@ fn run_spell_effects(
                 continue;
             }
             // After the GO and cost, so a miss counts; vmangos skips a cast an aura triggers.
-            if t != caster_guid && !matches!(origin, CastOrigin::AuraTriggered) {
+            if t != caster_guid && !matches!(origin, CastOrigin::AuraTriggered { .. }) {
                 crate::pvp::spell_targeted(ctx, caster_guid, t, e);
             }
             let Some((roll, immune)) = targets.admit(e, t) else {
@@ -1219,6 +1269,7 @@ pub(crate) fn cast_triggered(
 
 pub(crate) fn cast_aura_triggered(
     ctx: &ReducerContext,
+    source_spell: u32,
     caster_guid: u64,
     spell_id: u32,
     level: u8,
@@ -1229,7 +1280,7 @@ pub(crate) fn cast_aura_triggered(
         ctx,
         &CastRequest::new(caster_guid, spell_id, level, target_guid),
         &spell,
-        CastOrigin::AuraTriggered,
+        CastOrigin::AuraTriggered { source_spell },
     )
 }
 
@@ -1271,6 +1322,7 @@ fn cast_triggered_with_origin(
         request.spell_id,
     )
     .map_err(String::from)?;
+    take_triggered_reagents(ctx, &caster, request, origin)?;
     let launched = launch_cast(ctx, spell, request, origin);
     run_spell_effects(ctx, spell, request, origin, None, launched);
     Ok(())
@@ -1803,22 +1855,15 @@ impl GateCheck<'_> {
 
     fn check_reagents(&self) -> Result<(), CastGateRefusal> {
         let (ctx, caster) = (self.ctx, self.caster);
-        let reagents = CastReagents::of(ctx, caster, self.request, self.run.is_trigger_child());
-        if reagents.items.is_empty() {
-            return Ok(());
-        }
-        let mut plan = crate::items::ItemStoragePlan::read(ctx, caster.guid, caster.owner_identity);
-        reagents.take_from(ctx, &mut plan).map_err(|refusal| {
-            CastGateRefusal::other(
-                CastRefusalReason::MissingReagent,
-                format!(
-                    "spell {} needs reagents {:?}: {}",
-                    self.request.spell_id,
-                    reagents.items,
-                    String::from(refusal)
-                ),
-            )
-        })
+        let phase = match self.run {
+            GateRun::Resolve(phase) => phase,
+            _ => CastPhase::Start,
+        };
+        CastReagents::of(ctx, caster, self.request, CastOrigin::Direct(phase)).check(
+            ctx,
+            caster,
+            self.request.spell_id,
+        )
     }
 
     fn range_leeway_yd(&self) -> f32 {

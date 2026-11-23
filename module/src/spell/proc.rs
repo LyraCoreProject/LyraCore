@@ -766,6 +766,7 @@ fn fire_proc(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) -> bool {
             }
             match crate::spell::cast_aura_triggered(
                 ctx,
+                row.spell_id,
                 row.target_guid,
                 trigger_spell,
                 row.level,

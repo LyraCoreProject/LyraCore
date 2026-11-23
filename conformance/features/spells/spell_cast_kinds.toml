@@ -186,6 +186,18 @@ path = "module/src/spell/cast/resolve.rs"
 symbol = "launch_cast"
 evidence = "Source reading, not measured. At d9173eca, Spell.cpp:3816-3822 Spell::handle_immediate sends SMSG_SPELL_GO before the effects unless the spell has SPELL_EFFECT_INSTAKILL or SPELL_EFFECT_SPAWN, and then sends it after them (Spell.cpp:3875-3876)."
 
+[[known_gaps]]
+description = "A Triggered Cast never reads an item target, so a triggered spell aimed at another player's trade-slot item is not refused when its caster lacks the reagents."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "reagents_are_paid_elsewhere"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp:7069-7076 Spell::IgnoreItemRequirements returns false for a triggered spell whose item target is not the caster's; every Triggered Cast request carries no item_target, and no shipped spell is known to reach it."
+
+[[known_gaps]]
+description = "A Trigger Child Cast of a parent without a first reagent takes its own reagents. vmangos casts an effect 64 trigger spell with no triggering spell, so its reagents are always ignored."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "reagents_are_paid_elsewhere"
+evidence = "Source reading, not measured. At d9173eca, SpellEffects.cpp:1575 Spell::EffectTriggerSpell calls CastSpell(unitTarget, spellInfo, true, nullptr, nullptr, m_originalCasterGUID), leaving triggeredBy null, and Spell::IgnoreItemRequirements returns true for a null m_triggeredBySpellInfo; only a dummy-script cast such as 17009 passes m_spellInfo. importer/src/spell_kind.rs maps effect 64 to E_TRIGGER."
+
 [[tests]]
 path = "module/tests/aura_charges.rs"
 function = "flurry_spends_a_charge_on_each_of_three_swings_hit_or_miss"
@@ -529,4 +541,14 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/damage_shield.rs"
 function = "a_creature_whose_template_is_immune_to_the_shields_school_takes_no_shield_damage"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_reagents.rs"
+function = "a_periodic_trigger_whose_source_has_no_reagent_needs_the_reagents_of_its_spell"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_reagents.rs"
+function = "a_periodic_trigger_whose_source_has_a_first_reagent_takes_none_of_its_own"
 rung = "durable_module"

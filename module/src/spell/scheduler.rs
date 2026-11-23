@@ -266,7 +266,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     let mut duel_losers: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut duel_finishes: Vec<(u64, u64, u64)> = Vec::new();
     // Defer channel effects that may kill targets until folds and cadence updates finish.
-    let mut channel_fires: Vec<(u64, u32, u8, u64)> = Vec::new();
+    let mut channel_fires: Vec<(u32, u64, u32, u8, u64)> = Vec::new();
     let mut channel_end: Vec<u64> = Vec::new();
     for a in &due {
         let Some(target) = entities.guid().find(a.target_guid) else {
@@ -490,7 +490,13 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 if is_action_blocked(ctx, a.caster_guid) || !target_alive {
                     channel_end.push(a.id);
                 } else {
-                    channel_fires.push((a.caster_guid, a.eff_p1 as u32, a.level, a.channel_target));
+                    channel_fires.push((
+                        a.spell_id,
+                        a.caster_guid,
+                        a.eff_p1 as u32,
+                        a.level,
+                        a.channel_target,
+                    ));
                 }
             }
             _ => {}
@@ -525,11 +531,18 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         .filter_map(|id| auras.id().find(id))
         .collect();
     shed_auras(ctx, ended);
-    for (caster_guid, trigger_spell, level, channel_target) in channel_fires {
+    for (source_spell, caster_guid, trigger_spell, level, channel_target) in channel_fires {
         if trigger_spell == 0 {
             continue;
         }
-        let result = cast_aura_triggered(ctx, caster_guid, trigger_spell, level, channel_target);
+        let result = cast_aura_triggered(
+            ctx,
+            source_spell,
+            caster_guid,
+            trigger_spell,
+            level,
+            channel_target,
+        );
         if let Err(e) = result {
             log::info!(
                 "channel tick: caster {caster_guid}'s trigger {trigger_spell} at {channel_target} did not resolve: {e}"

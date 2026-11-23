@@ -145,30 +145,35 @@ fn a_trigger_child_of_a_parent_without_reagents_takes_its_own() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_periodic_trigger_casts_a_reagent_spell_without_its_reagents() {
-    let shard = stage("reagents-triggered-cast");
-    mending(&shard, 0, 0);
-    spell(&shard, PARENT, 0, 0);
-    shard.assert_sql(&format!(
-        "UPDATE game_spell SET duration_ms = 10000 WHERE spell_id = {PARENT}"
-    ));
-    shard.insert_row(
-        "game_spell_effect",
-        &[
-            ("id", &packed_spell_effect_id(PARENT, 0)),
-            ("spell_id", &PARENT),
-            ("effect_index", &0u8),
-            ("kind", &A_PERIODIC_TRIGGER),
-            ("target", &T_SELF),
-            ("period_ms", &1_000u32),
-            ("trigger_spell", &MENDING),
-        ],
-    );
+fn a_periodic_trigger_whose_source_has_no_reagent_needs_the_reagents_of_its_spell() {
+    let shard = stage("reagents-triggered-cast-own");
+    periodic_trigger_parent(&shard);
+
+    cast_spell(&shard, PARENT);
+    shard.assert_call("debug_advance_roll_batch", &["40"]);
+    assert_eq!(health(&shard), 5000, "the Triggered Cast is refused");
+
+    grant(&shard, PLAYER, REAGENT, REAGENT_COUNT);
+    shard.assert_call("debug_advance_roll_batch", &["40"]);
+    assert!(health(&shard) > 5000, "the Triggered Cast carries them");
+    assert_eq!(stack(&shard, PLAYER, REAGENT), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_periodic_trigger_whose_source_has_a_first_reagent_takes_none_of_its_own() {
+    let shard = stage("reagents-triggered-cast-paid");
+    periodic_trigger_parent(&shard);
+    reagent(&shard, PARENT, PARENT_REAGENT, 1);
+    item(&shard, PARENT_REAGENT, "Parent reagent fixture", 0);
+    grant(&shard, PLAYER, PARENT_REAGENT, 1);
+    grant(&shard, PLAYER, REAGENT, 5);
 
     cast_spell(&shard, PARENT);
     shard.assert_call("debug_advance_roll_batch", &["40"]);
     assert!(health(&shard) > 5000, "the Triggered Cast heals");
-    assert_eq!(stack(&shard, PLAYER, REAGENT), None);
+    assert_eq!(stack(&shard, PLAYER, PARENT_REAGENT), None);
+    assert_eq!(stack(&shard, PLAYER, REAGENT), Some(5));
 }
 
 #[test]
@@ -307,6 +312,26 @@ fn triggering_parent(shard: &Standalone) {
             ("effect_index", &0u8),
             ("kind", &E_TRIGGER),
             ("target", &T_SELF),
+            ("trigger_spell", &MENDING),
+        ],
+    );
+}
+
+fn periodic_trigger_parent(shard: &Standalone) {
+    mending(shard, 0, 0);
+    spell(shard, PARENT, 0, 0);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET duration_ms = 10000 WHERE spell_id = {PARENT}"
+    ));
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(PARENT, 0)),
+            ("spell_id", &PARENT),
+            ("effect_index", &0u8),
+            ("kind", &A_PERIODIC_TRIGGER),
+            ("target", &T_SELF),
+            ("period_ms", &1_000u32),
             ("trigger_spell", &MENDING),
         ],
     );
