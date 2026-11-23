@@ -848,7 +848,7 @@ impl lyracore_shared::quest::QuestHistory for CharacterQuestHistory<'_> {
     }
 
     fn reputation(&self, faction_id: u32) -> i32 {
-        crate::reputation::reputation(self.ctx, self.character_guid, faction_id)
+        crate::reputation::reputation(self.ctx, self.character_guid, faction_id).unwrap_or(0)
     }
 
     fn skill_value(&self, skill_line: u32) -> u32 {

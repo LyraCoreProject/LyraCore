@@ -425,7 +425,7 @@ fn require(stage: &Stage, quest: u32, columns: &str) {
     ));
 }
 
-fn reputation_quest(stage: &Stage, columns: &str) {
+fn reputation_quest(stage: &Stage, columns: &str, base_standing: i32) {
     offer(stage, FIRST, 1, 1);
     require(stage, FIRST, columns);
     stage.shard.insert_row(
@@ -433,7 +433,7 @@ fn reputation_quest(stage: &Stage, columns: &str) {
         &[
             ("faction_id", &REQUIRED_FACTION),
             ("reputation_index", &61),
-            ("base_standing", &0),
+            ("base_standing", &base_standing),
         ],
     );
 }
@@ -458,11 +458,10 @@ fn a_minimum_reputation_quest_opens_at_friendly() {
         &format!(
             "required_min_rep_faction = {REQUIRED_FACTION}, required_min_rep_value = {FRIENDLY}"
         ),
+        FRIENDLY - 1,
     );
 
     assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
-    refused(&mut stage, FIRST, dont_have_req());
-    gain_required_reputation(&stage, FRIENDLY - 1);
     refused(&mut stage, FIRST, dont_have_req());
     gain_required_reputation(&stage, 1);
     assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
@@ -478,13 +477,18 @@ fn a_maximum_reputation_quest_closes_at_its_cap() {
         &format!(
             "required_max_rep_faction = {REQUIRED_FACTION}, required_max_rep_value = {HONORED}"
         ),
+        HONORED,
     );
 
-    gain_required_reputation(&stage, HONORED - 1);
-    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
-    gain_required_reputation(&stage, 1);
-    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
+    assert_eq!(
+        status(&mut stage),
+        status_reply(&stage, STATUS_NONE),
+        "with no stored standing the faction's base standing counts"
+    );
     refused(&mut stage, FIRST, dont_have_req());
+    gain_required_reputation(&stage, -1);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
+    accepted(&mut stage, FIRST);
 }
 
 #[test]

@@ -245,12 +245,11 @@ impl QuestStanding {
     }
 }
 
-/// The Character's record the Gate reads: quest standings, reputation and skills.
 pub trait QuestHistory {
     fn standing(&self, quest_entry: u32) -> QuestStanding;
     fn exclusive_group(&self, quest_entry: u32) -> i32;
     fn exclusive_group_members(&self, group: i32) -> Vec<u32>;
-    /// vmangos `ReputationMgr::GetReputation`: the raw value, base standing included.
+    /// Stored standing, else `game_faction.base_standing` (first Faction.dbc slot).
     fn reputation(&self, faction_id: u32) -> i32;
     /// vmangos `GetSkillValue`: with temporary and permanent bonuses; zero when unlearned.
     fn skill_value(&self, skill_line: u32) -> u32;
@@ -729,6 +728,37 @@ mod rule_tests {
         );
         assert_eq!(
             acceptance(&uncapped, eligible(), None, &open_group),
+            Err(AcceptanceRefusal::Prerequisite)
+        );
+        let gated = AcceptanceRequirements {
+            required_skill: Some(SkillRequirement {
+                skill_line: SKILL_LINE,
+                value: 50,
+            }),
+            min_reputation: Some(ReputationRequirement {
+                faction_id: FACTION,
+                value: FRIENDLY,
+            }),
+            ..uncapped
+        };
+        assert_eq!(
+            acceptance(&gated, applicant(9, 1, 2), None, &open_group),
+            Err(AcceptanceRefusal::Level)
+        );
+        assert_eq!(
+            acceptance(&gated, eligible(), None, &open_group),
+            Err(AcceptanceRefusal::Skill)
+        );
+        let skilled = History::default().skill(SKILL_LINE, 50);
+        assert_eq!(
+            acceptance(&gated, eligible(), None, &skilled),
+            Err(AcceptanceRefusal::Reputation)
+        );
+        let skilled_and_friendly = History::default()
+            .skill(SKILL_LINE, 50)
+            .reputation(FACTION, FRIENDLY);
+        assert_eq!(
+            acceptance(&gated, eligible(), None, &skilled_and_friendly),
             Err(AcceptanceRefusal::Prerequisite)
         );
     }
