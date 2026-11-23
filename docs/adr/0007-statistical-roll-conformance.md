@@ -632,6 +632,19 @@ reports the blocked amount. Partial resistance of the arcane Shoot is not part o
 table; `ranged_impact` reports its resisted amount, the classifier accepts a positive one and
 measures no resist rate.
 
+A cast ranged Weapon Strike (Aimed Shot, Multi-Shot, Throw) takes the same partial block through
+the same Spell.cpp:1415 branch. LyraCore rolls it in `launch_ranged_strike` from the Caster stream,
+after the cast's hit roll, the effect's points draw and the strike's damage roll, and carries the
+blocked amount to the impact. No Roll Conformance context measures a ranged cast strike: the cast
+Weapon Strike context is melee Mortal Strike, so Tier 1 signatures do not move.
+
+vmangos raises `PROC_EX_BLOCK` for a fully blocked ranged hit, `PROC_EX_ABSORB` for an absorbed one
+and `PROC_EX_MISS` for a missed one (`CreateProcExtendMask`,
+[Unit.cpp:8776–8830](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)).
+`ranged_impact` runs the unlanded proc pass for the first two when its shot lands with no damage. An
+Auto Shot or Shoot that misses or meets an immune target has no impact, so `fire_ranged_shot`
+runs that pass at launch; a cast strike's miss already runs it with the cast.
+
 vmangos reports every shot through the Spell path. [Spell.cpp:4529–4561, 4625–4653](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)
 sends one `SMSG_SPELL_GO` at launch, with ammo for a ranged spell: a landed target is in the hit
 list, a missed target in the miss list with reason 1. A landed shot sends

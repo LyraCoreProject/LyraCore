@@ -826,6 +826,17 @@ fn fire_ranged_shot(
     };
     let roll = roll_ranged_swing(ctx, attacker, target, ranged_spell_id, (rdmin, rdmax));
     let hit_info = roll.outcome;
+    if hit_info.is_avoided() {
+        // A shot that cannot land has no impact to carry its Miss or Immune procs.
+        crate::spell::proc::run_unlanded_proc_pass(
+            ctx,
+            attacker_guid,
+            target_guid,
+            &Hit::weapon(HitSource::Ranged, false),
+            hit_info,
+            (0, 0),
+        );
+    }
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
@@ -872,9 +883,10 @@ pub(crate) fn launch_ranged_strike(
     attacker: &WorldEntity,
     target: &WorldEntity,
     rolled: u32,
-    spell_id: u32,
+    spell: &crate::Spell,
     is_crit: bool,
 ) {
+    let (rolled, blocked) = super::folds::block_ranged_strike(ctx, attacker, target, spell, rolled);
     let damage = FrozenDamage::launch(ctx, attacker.guid, target.guid, rolled);
     let (dx, dy, dz) = (
         target.x - attacker.x,
@@ -891,10 +903,10 @@ pub(crate) fn launch_ranged_strike(
         target.guid,
         RangedShot {
             damage,
-            ranged_spell_id: spell_id,
+            ranged_spell_id: spell.spell_id,
             is_crit,
             resisted: 0,
-            blocked: 0,
+            blocked,
         },
         travel_ms,
     );
@@ -988,9 +1000,19 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     let hit = if strike {
         Hit::spell(HitSource::Ranged, shot.ranged_spell_id, shot.is_crit)
     } else {
-        Hit::weapon(HitSource::Ranged, false).with_block(shot.blocked)
-    };
+        Hit::weapon(HitSource::Ranged, false)
+    }
+    .with_block(shot.blocked);
+    let dealt = damage.amount();
     let outcome = damage.land(ctx, shot.attacker_guid, shot.target_guid, hit);
+    crate::spell::proc::run_unlanded_proc_pass(
+        ctx,
+        shot.attacker_guid,
+        shot.target_guid,
+        &hit,
+        AttackOutcome::Normal,
+        (dealt, damage.absorbed()),
+    );
     let reports_damage = damage.amount() > 0 || shot.resisted > 0 || shot.blocked > 0;
     if reports_damage && shot.ranged_spell_id != 0 {
         crate::SpellCastEvent::insert(
