@@ -2,7 +2,7 @@ mod support;
 
 use lyracore_shared::constants::player_flags;
 use lyracore_shared::spell::taxonomy::*;
-use support::{number, Row, Standalone};
+use support::{actor, number, Row, Standalone};
 
 const DEADMINES_GHOST: u64 = 1;
 
@@ -11,6 +11,7 @@ const RAID_MAP: u32 = 409;
 const TO_DEADMINES: u32 = 5_340_001;
 const TO_RAID: u32 = 5_340_002;
 const GHOST_SPELL: u32 = 8326;
+const REAPED_RUN: u64 = 901;
 
 fn entity(shard: &Standalone, guid: u64) -> Row {
     shard
@@ -136,19 +137,12 @@ fn assert_revived_outside(shard: &Standalone, guid: u64, max_health: u32) {
     assert!(!has_resurrectable_corpse(shard, guid));
 }
 
-#[test]
-#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_ghost_revives_at_the_entrance_of_the_map_holding_its_corpse() {
-    let mut shard = Standalone::start("ghost-instance-entry");
+fn realm(name: &str) -> Standalone {
+    let mut shard = Standalone::start(name);
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("set_gm_level", &["\"Tester\"", "0"]);
-    let raid_ghost = create_character(&shard, "RaidGhost");
-    let teleported_ghost = create_character(&shard, "TeleportedGhost");
-    for guid in [DEADMINES_GHOST, raid_ghost, teleported_ghost] {
-        shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
-    }
     insert_ghost_spell(&shard);
     for (map, map_type) in [(RAID_MAP, 2), (DEADMINES, 1)] {
         shard.insert_row(
@@ -186,6 +180,18 @@ fn a_ghost_revives_at_the_entrance_of_the_map_holding_its_corpse() {
             ],
         );
     }
+    shard
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_ghost_revives_at_the_entrance_of_the_map_holding_its_corpse() {
+    let shard = realm("ghost-instance-entry");
+    let raid_ghost = create_character(&shard, "RaidGhost");
+    let teleported_ghost = create_character(&shard, "TeleportedGhost");
+    for guid in [DEADMINES_GHOST, raid_ghost, teleported_ghost] {
+        shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
+    }
 
     let max_health = release_with_corpse_on(&shard, DEADMINES_GHOST, DEADMINES);
     shard.assert_call(
@@ -214,4 +220,54 @@ fn a_ghost_revives_at_the_entrance_of_the_map_holding_its_corpse() {
         ],
     );
     assert_revived_inside_deadmines(&shard, teleported_ghost, max_health);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_ghost_whose_dungeon_run_was_reaped_keeps_its_corpse_and_revives_at_the_entrance() {
+    let shard = realm("ghost-reaped-instance");
+    shard.assert_call("debug_spawn_player_entity", &[&DEADMINES_GHOST.to_string()]);
+    shard.assert_call(
+        "ensure_instance",
+        &[
+            &REAPED_RUN.to_string(),
+            &DEADMINES.to_string(),
+            "0",
+            &actor(DEADMINES_GHOST),
+        ],
+    );
+    let max_health = release_with_corpse_on(&shard, DEADMINES_GHOST, DEADMINES);
+    shard.assert_sql(&format!(
+        "UPDATE game_corpse SET instance_id = {REAPED_RUN} WHERE owner_guid = {DEADMINES_GHOST}"
+    ));
+
+    shard.assert_call("debug_reap_instance", &[&REAPED_RUN.to_string()]);
+    assert!(dungeon_runs(&shard).is_empty());
+    assert!(
+        has_resurrectable_corpse(&shard, DEADMINES_GHOST),
+        "the corpse outlives its Instance"
+    );
+
+    shard.assert_call(
+        "debug_enter_areatrigger",
+        &[&DEADMINES_GHOST.to_string(), &TO_DEADMINES.to_string()],
+    );
+    assert_revived_inside_deadmines(&shard, DEADMINES_GHOST, max_health);
+    let runs = dungeon_runs(&shard);
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_ne!(
+        runs[0],
+        REAPED_RUN.to_string(),
+        "the ghost entered a new run"
+    );
+}
+
+fn dungeon_runs(shard: &Standalone) -> Vec<String> {
+    shard
+        .query_rows(&format!(
+            "SELECT instance_id FROM game_instance WHERE map_id = {DEADMINES}"
+        ))
+        .into_iter()
+        .map(|row| row["instance_id"].clone())
+        .collect()
 }

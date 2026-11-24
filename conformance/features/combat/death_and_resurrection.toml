@@ -13,6 +13,7 @@ deliberate_deviations = [
 prerequisites = []
 tests = [
     { path = "module/tests/ghost_instance_entry.rs", function = "a_ghost_revives_at_the_entrance_of_the_map_holding_its_corpse", rung = "durable_module" },
+    { path = "module/tests/ghost_instance_entry.rs", function = "a_ghost_whose_dungeon_run_was_reaped_keeps_its_corpse_and_revives_at_the_entrance", rung = "durable_module" },
     { path = "module/tests/ghost.rs", function = "a_ghost_reclaims_its_corpse_after_six_minutes", rung = "durable_module" },
     { path = "module/tests/ghost.rs", function = "a_corpse_expires_to_bones_after_three_days_and_a_ghost_cannot_reclaim_it", rung = "durable_module" },
     { path = "module/tests/ghost.rs", function = "a_ghost_that_logs_in_after_its_corpse_turned_to_bones_is_revived_at_half_health", rung = "durable_module" },

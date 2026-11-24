@@ -24,6 +24,23 @@ after 30 minutes empty, or on the next empty observation when `reset_requested` 
 clears the stamp. Teardown removes population, encounter state, the dedicated tick row, Character
 bindings, and finally the lease.
 
+`loot::reap_corpse_loot_family` removes a Loot Source's loot. It first resolves the source's open
+Loot Rolls as if their deadline had passed, so a missing vote counts as Pass. A winner who is in the
+world gets the item. A passed item, or one the winner cannot carry, goes with the rest of the loot.
+Teardown, encounter reset and creature corpse decay all remove loot this way; corpse decay still
+waits for open rolls to end. vmangos `Group::CountTheRoll` drops a roll without a result once its
+loot is gone, so this is a deliberate deviation in the `loot_collection` Feature Ledger entry.
+
+Teardown keeps player corpses. vmangos keeps a resurrectable corpse when its map unloads:
+`Map::UnloadAll` removes only corpses already queued for removal. `Player::TeleportTo` then revives
+a ghost that travels to its corpse's map, whatever the Instance
+([`Map.cpp`](https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Maps/Map.cpp),
+[`Player.cpp`](https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp)).
+After a wipe and a reset, the ghosts therefore revive at the entrance and enter the new run alive.
+A resurrectable corpse left in a reaped Instance turns to bones after three days, and bones go an
+hour after they form. On a Realm with an Instance Shard, the entrance revive does not reach such a
+corpse; the `death_and_resurrection` Feature Ledger entry records this gap.
+
 Each Instance copies its selected source spawn rows and waypoint routes. The copies own their death and
 respawn timers, movement home, and life sequence. Reaping an Instance deletes those copies,
 including dead creatures awaiting respawn. Imported dungeon and battleground source rows stay

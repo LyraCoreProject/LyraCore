@@ -534,19 +534,37 @@ pub(crate) fn sweep_loot_rolls(ctx: &ReducerContext) {
         .filter(|r| !r.resolved && r.deadline_micros <= now)
         .collect();
     for roll in due {
-        let votes_tab = ctx.db.game_loot_roll_vote();
-        let mut all: Vec<LootRollVote> = votes_tab.by_roll().filter(&roll.id).collect();
-        for v in all.iter_mut() {
-            if !v.voted {
-                v.voted = true;
-                v.vote = vote_kind::PASS;
-                v.rolled = 0;
-                votes_tab.id().update(v.clone());
-            }
-        }
-        let recipients: Vec<u64> = all.iter().map(|v| v.voter_guid).collect();
-        resolve_roll(ctx, &roll, &all, &recipients);
+        close_roll(ctx, &roll);
     }
+}
+
+/// Resolves every open Loot Roll on `corpse_guid` now, as if its deadline had passed.
+pub(crate) fn close_open_rolls(ctx: &ReducerContext, corpse_guid: u64) {
+    let open: Vec<LootRoll> = ctx
+        .db
+        .game_loot_roll()
+        .by_corpse()
+        .filter(&corpse_guid)
+        .filter(|r| !r.resolved)
+        .collect();
+    for roll in open {
+        close_roll(ctx, &roll);
+    }
+}
+
+fn close_roll(ctx: &ReducerContext, roll: &LootRoll) {
+    let votes_tab = ctx.db.game_loot_roll_vote();
+    let mut all: Vec<LootRollVote> = votes_tab.by_roll().filter(&roll.id).collect();
+    for v in all.iter_mut() {
+        if !v.voted {
+            v.voted = true;
+            v.vote = vote_kind::PASS;
+            v.rolled = 0;
+            votes_tab.id().update(v.clone());
+        }
+    }
+    let recipients: Vec<u64> = all.iter().map(|v| v.voter_guid).collect();
+    resolve_roll(ctx, roll, &all, &recipients);
 }
 
 pub(crate) fn force_resolve_rolls_for_disband(

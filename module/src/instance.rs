@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::{
-    game_corpse, game_creature_move_schedule, game_creature_spawn, game_creature_template,
+    game_creature_move_schedule, game_creature_spawn, game_creature_template,
     game_creature_waypoint, game_encounter_spawn, game_gameobject, game_gameobject_template,
     game_group, game_group_member, game_map, game_world_entity,
 };
@@ -886,16 +886,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
     }
     crate::creatures::population::clear_instance(ctx, instance_id);
 
-    let corpses = ctx.db.game_corpse();
-    let dead_bodies: Vec<u64> = corpses
-        .by_instance()
-        .filter(instance_id)
-        .map(|c| c.guid)
-        .collect();
-    for guid in dead_bodies {
-        crate::Corpse::delete(ctx, guid);
-    }
-
+    // Player corpses outlive the Instance; see docs/instance-lifecycle.md before deleting them here.
     let gos = ctx.db.game_gameobject();
     let copies: Vec<u64> = gos
         .iter()
