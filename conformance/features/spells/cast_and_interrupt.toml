@@ -173,7 +173,7 @@ symbol = "resolve_effect_kind"
 evidence = "Source reading, not measured. vmangos reference world rows 10, 5740, 1510 and 16914 carry effect 27 with aura 3 at implicit target 28 and SPELL_ATTR_EX_CHANNELED_1, and no other channel effect. At d9173eca, SpellEffects.cpp Spell::EffectPersistentAA creates a DynamicObject, and DynamicObject::Update applies the Aura to the units inside its radius on every update. Only Consecration and Flamestrike set periodic_damage_as_persistent_area."
 
 [[known_gaps]]
-description = "Damage taken never shortens a channel. vmangos delays a channel on a hit, shortening its Auras and its DynamicObject, and interrupts it when no time remains; the Module pushes back only a cast in progress."
+description = "Damage taken neither shortens nor cancels a channel. vmangos delays a channel on a hit, shortening its Auras and its DynamicObject, interrupts it when no time remains, and cancels it outright when its ChannelInterruptFlags say so; the Module pushes back only a cast in progress and does not import ChannelInterruptFlags."
 path = "module/src/spell/control.rs"
 symbol = "pushback_cast"
 evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::DelayedChannel subtracts the delay from the channel timer, calls DelaySpellAuraHolder on each target and DynamicObject::Delay on each of the caster's DynamicObjects for the spell, and sends MSG_CHANNEL_UPDATE with the remaining time."
