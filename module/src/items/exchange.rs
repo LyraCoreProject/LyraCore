@@ -40,6 +40,16 @@ pub(super) fn consume_item_stacks(
     consume_matching_stacks(items, entry, count, |_| true)
 }
 
+// vmangos Player::DestroyItemCount, d9173eca: backpack, keyring and bag contents before equipment.
+fn consumption_rank(slot: u8) -> u8 {
+    match slot {
+        23..=38 => 0,
+        81..=112 => 1,
+        120..=191 => 2,
+        _ => 3,
+    }
+}
+
 fn consume_matching_stacks(
     items: &mut [ItemInstance],
     entry: u32,
@@ -59,7 +69,7 @@ fn consume_matching_stacks(
     if available < u64::from(count) {
         return Err(format!("missing {} of item {entry}", u64::from(count) - available).into());
     }
-    matching.sort_by_key(|&index| items[index].slot);
+    matching.sort_by_key(|&index| (consumption_rank(items[index].slot), items[index].slot));
     for index in matching {
         let item = &mut items[index];
         let take = count.min(item.stack_count);
@@ -770,6 +780,7 @@ impl ItemStoragePlan {
             .filter(|item| item.guid == 0)
             .count();
         let mut guids = allocate_item_guids(ctx, new_guids)?.into_iter();
+        let mut removed_equipment = false;
         for (index, mut item) in self.items.into_iter().enumerate() {
             match self.original_stacks.get(index) {
                 Some(&(slot, count, soulbound))
@@ -777,6 +788,7 @@ impl ItemStoragePlan {
                         != (item.slot, item.stack_count, item.soulbound) =>
                 {
                     if item.stack_count == 0 {
+                        removed_equipment |= slot <= super::rules::equip_slot::END;
                         crate::ItemInstance::delete(ctx, item.guid);
                     } else if restored {
                         item.update_restored(ctx);
@@ -796,6 +808,10 @@ impl ItemStoragePlan {
                     }
                 }
             }
+        }
+        if removed_equipment {
+            crate::spell::recompute_vitals(ctx, self.character_guid);
+            crate::spell::recompute_sheet(ctx, self.character_guid);
         }
         if changed_offer {
             crate::trade::refresh_offer(ctx, self.character_guid);
@@ -874,6 +890,27 @@ mod tests {
         let refusal = plan.consume(1, 3).unwrap_err();
         assert_eq!(refusal.detail, "missing 1 of item 1");
         assert_eq!(plan.items[1].stack_count, 20, "bank copies stay owned");
+    }
+
+    #[test]
+    fn consumption_takes_backpack_keyring_and_bag_copies_before_equipped_ones() {
+        let slots = [15, 120, 81, 24, 23];
+        let remaining_after = |taken| {
+            let mut items: Vec<_> = slots.iter().map(|&slot| item(slot, 1, 1)).collect();
+            consume_item_stacks(&mut items, 1, taken).unwrap();
+            let mut left: Vec<_> = items
+                .iter()
+                .filter(|item| item.stack_count > 0)
+                .map(|item| item.slot)
+                .collect();
+            left.sort_unstable();
+            left
+        };
+        assert_eq!(remaining_after(1), vec![15, 24, 81, 120]);
+        assert_eq!(remaining_after(2), vec![15, 81, 120]);
+        assert_eq!(remaining_after(3), vec![15, 120]);
+        assert_eq!(remaining_after(4), vec![15]);
+        assert_eq!(remaining_after(5), Vec::<u8>::new());
     }
 
     #[test]

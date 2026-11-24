@@ -4,7 +4,9 @@ use serde_json::json;
 use super::buy_in_slot::{delivered, money, request};
 use super::repair::price_the_blade;
 use super::{enter, fixture};
-use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, SCENARIO_VENDOR_ENTRY};
+use lyracore_package_delta::fixture_ids::{
+    FIXTURE_BLADE, FIXTURE_JERKY, FIXTURE_MOUNT_SPELL, SCENARIO_VENDOR_ENTRY,
+};
 use lyracore_package_delta::packed_spell_effect_id;
 
 #[path = "buyback_handoff.rs"]
@@ -1077,6 +1079,47 @@ fn selling_equipped_gear_relays_client_armor_and_every_resistance() {
     for index in 0..7 {
         assert_eq!(sold_again.get(&(155 + index)), sold.get(&(155 + index)));
     }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn selling_equipped_gear_keeps_the_mount_projection_its_shed_aura_computed_and_pays() {
+    let (shard, mut connection, guid, vendor) = stage("buyback-equipped-mount-aura");
+    shard.assert_sql(&format!(
+        "UPDATE game_spell_effect SET equip_supported = true WHERE spell_id = {FIXTURE_MOUNT_SPELL}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET spellid_1 = {FIXTURE_MOUNT_SPELL}, spelltrigger_1 = 1 \
+         WHERE entry = {FIXTURE_BLADE}"
+    ));
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
+    connection
+        .call("debug_equip_item", json!([guid, 23]))
+        .unwrap();
+    let mounted = mount_projection(&shard, guid);
+    assert_ne!(mounted.0, "0", "the equipped item mounts the Character");
+    let money_before = money(&shard, guid).parse::<u32>().unwrap();
+
+    sell(&mut connection, vendor, item, 0);
+
+    assert_eq!(
+        mount_projection(&shard, guid),
+        ("0".to_string(), "10000".to_string())
+    );
+    assert_eq!(
+        money(&shard, guid).parse::<u32>().unwrap(),
+        money_before + 13
+    );
+}
+
+fn mount_projection(shard: &Standalone, guid: u64) -> (String, String) {
+    let row = &shard.query_rows(&format!(
+        "SELECT mount_display_id, run_speed_mult_bp FROM game_world_entity WHERE guid = {guid}"
+    ))[0];
+    (
+        row["mount_display_id"].clone(),
+        row["run_speed_mult_bp"].clone(),
+    )
 }
 
 #[test]

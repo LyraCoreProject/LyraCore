@@ -5,13 +5,16 @@ use lyracore_package_delta::fixture_ids::{
 };
 use lyracore_shared::constants::npc_flags;
 use lyracore_test_support::{ReducerConnection, Standalone};
+use serde_json::json;
 
-use super::buy_in_slot::{inventory, request};
+use super::buy_in_slot::{grant, inventory, request};
 use super::{enter, fixture};
 
 const QUEST: u32 = 5_091_200;
 const OBJECTIVE_QUEST: u32 = 5_091_201;
 const UNRELATED_QUEST: u32 = 5_091_202;
+const WORN_ITEM_QUEST: u32 = 5_091_203;
+const WORN_ITEM_STAMINA: u32 = 20;
 const REQUIRED_COUNT: u32 = 5;
 const CHOICE_COUNT: u32 = 2;
 
@@ -822,4 +825,86 @@ fn a_level_60_turn_in_pays_the_max_level_money_instead_of_xp() {
     let popup = completion_popup(&replies);
     assert_eq!(word(popup, 8), 0, "no XP at the cap");
     assert_eq!(word(popup, 12), 30 + 870);
+}
+
+fn max_health(shard: &Standalone, guid: u64) -> u32 {
+    shard.query_rows(&format!(
+        "SELECT max_health FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["max_health"]
+        .parse()
+        .unwrap()
+}
+
+fn blade_slots(shard: &Standalone, guid: u64) -> Vec<String> {
+    shard
+        .query_rows(&format!(
+            "SELECT slot FROM game_item_instance WHERE owner_guid = {guid} AND entry = {FIXTURE_BLADE}"
+        ))
+        .iter()
+        .map(|row| row["slot"].clone())
+        .collect()
+}
+
+fn stage_worn_item_quest(name: &str) -> (Standalone, ReducerConnection, u64, u64, u32) {
+    let (shard, connection, guid, giver) = stage(name);
+    seed_quest(&shard, WORN_ITEM_QUEST, FIXTURE_BLADE, true);
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_objective SET required_count = 1 WHERE quest_entry = {WORN_ITEM_QUEST}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET stat_stamina = {WORN_ITEM_STAMINA} WHERE entry = {FIXTURE_BLADE}"
+    ));
+    let base_health = max_health(&shard, guid);
+    (shard, connection, guid, giver, base_health)
+}
+
+fn turn_in_for_reins(connection: &mut ReducerConnection, giver: u64) {
+    quest_request(
+        connection,
+        CMSG_QUESTGIVER_CHOOSE_REWARD,
+        giver,
+        WORN_ITEM_QUEST,
+        Some(1),
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_collect_turn_in_hands_in_the_carried_copy_and_keeps_the_worn_one() {
+    let (shard, mut connection, guid, giver, base_health) =
+        stage_worn_item_quest("quest-worn-copy");
+    grant(&shard, guid, FIXTURE_BLADE, 1, 23);
+    connection
+        .call("debug_equip_item", json!([guid, 23]))
+        .unwrap();
+    grant(&shard, guid, FIXTURE_BLADE, 1, 23);
+    let worn_health = max_health(&shard, guid);
+    assert!(worn_health > base_health, "the worn blade adds stamina");
+    grant_quest(&shard, guid, WORN_ITEM_QUEST);
+
+    turn_in_for_reins(&mut connection, giver);
+
+    assert_eq!(blade_slots(&shard, guid), ["15"]);
+    assert_eq!(max_health(&shard, guid), worn_health);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn handing_in_the_only_copy_while_it_is_worn_removes_its_stats() {
+    let (shard, mut connection, guid, giver, base_health) =
+        stage_worn_item_quest("quest-worn-only-copy");
+    grant(&shard, guid, FIXTURE_BLADE, 1, 23);
+    connection
+        .call("debug_equip_item", json!([guid, 23]))
+        .unwrap();
+    assert!(
+        max_health(&shard, guid) > base_health,
+        "the worn blade adds stamina"
+    );
+    grant_quest(&shard, guid, WORN_ITEM_QUEST);
+
+    turn_in_for_reins(&mut connection, giver);
+
+    assert!(blade_slots(&shard, guid).is_empty());
+    assert_eq!(max_health(&shard, guid), base_health);
 }

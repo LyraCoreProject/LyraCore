@@ -152,8 +152,7 @@ pub(crate) fn apply_item_sell_count(
     slot: u8,
     count: u32,
 ) -> Result<(), SellRefusal> {
-    let (mut player, _vendor) =
-        crate::npc_interaction::gate(ctx, player_guid, vendor_guid, NpcService::Vendor)?;
+    crate::npc_interaction::gate(ctx, player_guid, vendor_guid, NpcService::Vendor)?;
     let inst = item_in_slot(ctx, player_guid, slot).ok_or(SellRefusal::NoItemInSlot(slot))?;
     let count = if count == 0 { inst.stack_count } else { count };
     if count > inst.stack_count {
@@ -185,6 +184,8 @@ pub(crate) fn apply_item_sell_count(
         earned = sell_value_after_wear(earned, cost);
     }
     super::buyback::sell(ctx, inst, &tmpl, count, earned)?;
+    // Removing the item updated the Character row, so read it again before paying.
+    let mut player = crate::helpers::live_entity(ctx, player_guid)?;
     player.money = player.money.saturating_add(earned);
     player.update(ctx);
     if slot <= equip_slot::END {
@@ -588,7 +589,10 @@ pub(crate) fn apply_player_repair(
         inst.update(ctx);
     }
     if spent {
-        player.update(ctx);
+        // Repairing worn gear updated the Character row, so write the money onto a fresh read.
+        let mut fresh = crate::helpers::live_entity(ctx, player_guid)?;
+        fresh.money = player.money;
+        fresh.update(ctx);
     }
     if restored_equipped_stats {
         crate::spell::recompute_vitals(ctx, player_guid);
