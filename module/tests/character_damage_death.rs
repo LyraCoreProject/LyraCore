@@ -57,11 +57,15 @@ fn a_spell_kill_by_a_characters_pet_costs_no_durability() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET owner_guid = {owner} WHERE guid = {wolf}"
     ));
+    let flags = &shard.query_rows(&format!(
+        "SELECT unit_flags, player_flags FROM game_world_entity WHERE guid = {CHARACTER}"
+    ))[0];
+    let unit: u32 = flags["unit_flags"].parse().unwrap();
+    let player: u32 = flags["player_flags"].parse().unwrap();
     shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET unit_flags = unit_flags | {}, \
-         player_flags = player_flags | {} WHERE guid = {CHARACTER}",
-        unit_flags::PVP,
-        player_flags::PVP_DESIRED
+        "UPDATE game_world_entity SET unit_flags = {}, player_flags = {} WHERE guid = {CHARACTER}",
+        unit | unit_flags::PVP,
+        player | player_flags::PVP_DESIRED
     ));
     equip_blade(&shard);
     insert_direct_spell(&shard);
