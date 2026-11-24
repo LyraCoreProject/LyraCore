@@ -1,10 +1,4 @@
-use lyracore_protocol::{
-    codec,
-    messages::vanilla::{
-        opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-        MSG_CHANNEL_START_Server, MSG_CHANNEL_UPDATE_Server,
-    },
-};
+use lyracore_protocol::{codec, messages::vanilla::opcodes::ClientOpcodeMessage};
 use spacetimedb::ReducerContext;
 
 use super::Unhandled;
@@ -28,33 +22,6 @@ pub(super) fn receive(
         }
         other => Err(Unhandled::Declined(other)),
     }
-}
-
-pub(crate) fn channel_started(ctx: &ReducerContext, guid: u64, spell_id: u32, duration_ms: u32) {
-    if !super::has_world_session(ctx, guid) {
-        return;
-    }
-    super::send_to_character(
-        ctx,
-        guid,
-        ServerOpcodeMessage::MSG_CHANNEL_START(MSG_CHANNEL_START_Server {
-            spell: spell_id,
-            duration: duration_ms,
-        }),
-        super::EncodeFailure::Panic,
-    );
-}
-
-pub(crate) fn channel_ended(ctx: &ReducerContext, guid: u64) {
-    if !super::has_world_session(ctx, guid) {
-        return;
-    }
-    super::send_to_character(
-        ctx,
-        guid,
-        ServerOpcodeMessage::MSG_CHANNEL_UPDATE(MSG_CHANNEL_UPDATE_Server { time: 0 }),
-        super::EncodeFailure::Panic,
-    );
 }
 
 pub(crate) fn cast_refused(

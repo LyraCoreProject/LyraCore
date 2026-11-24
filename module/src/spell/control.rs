@@ -2,9 +2,9 @@ use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use super::*;
 use crate::{
-    game_aura, game_creature_template, game_global_cooldown, game_pending_cast,
-    game_school_lockout, game_spell, game_spell_effect, game_world_entity, Aura, PendingCast,
-    SchoolLockout, SpellCastEvent,
+    game_aura, game_creature_template, game_global_cooldown, game_ground_area, game_pending_cast,
+    game_school_lockout, game_spell, game_spell_effect, game_world_entity, Aura, GroundArea,
+    PendingCast, SchoolLockout, SpellCastEvent,
 };
 
 fn has_control_mechanic(ctx: &ReducerContext, unit_guid: u64, mechanic: i32) -> bool {
@@ -149,6 +149,12 @@ pub(crate) fn is_non_melee_spell_casting(ctx: &ReducerContext, unit_guid: u64) -
             .by_caster()
             .filter(&unit_guid)
             .any(|aura| is_channel_aura(ctx, &aura))
+        || ctx
+            .db
+            .game_ground_area()
+            .by_caster()
+            .filter(&unit_guid)
+            .any(|area| super::cast::is_channelled_area(ctx, &area))
 }
 
 pub(crate) fn is_stunned(ctx: &ReducerContext, unit_guid: u64) -> bool {
@@ -531,8 +537,18 @@ pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
         .filter(&caster_guid)
         .filter(|aura| is_channel_aura(ctx, aura))
         .collect();
-    let broke_channel = !removed.is_empty();
+    let channelled_areas: Vec<GroundArea> = ctx
+        .db
+        .game_ground_area()
+        .by_caster()
+        .filter(&caster_guid)
+        .filter(|area| super::cast::is_channelled_area(ctx, area))
+        .collect();
+    let broke_channel = !removed.is_empty() || !channelled_areas.is_empty();
     shed_auras(ctx, removed);
+    for area in &channelled_areas {
+        super::cast::end_ground_area(ctx, area);
+    }
     let broke_cast = interrupt_cast(ctx, caster_guid);
     let left_ritual = crate::summoning_ritual::leave(ctx, caster_guid);
     if broke_channel {

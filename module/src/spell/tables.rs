@@ -1107,7 +1107,7 @@ pub struct AuraSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
-#[table(accessor = game_ground_area)]
+#[table(accessor = game_ground_area, index(accessor = by_caster, btree(columns = [caster_guid])))]
 pub struct GroundArea {
     #[primary_key]
     #[auto_inc]
