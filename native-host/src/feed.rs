@@ -688,15 +688,15 @@ impl Feed {
 
 type FeedSlot = Arc<tokio::sync::Mutex<Option<Arc<Feed>>>>;
 
-/// Each Shard's Feed; while one Shard's Feed is created, only attaches to that Shard wait.
+/// Each Shard's `Feed`; while one Shard's output subscription is created, only its attaches wait.
 #[derive(Default)]
 struct Feeds(Mutex<BTreeMap<Identity, FeedSlot>>);
 
 impl Feeds {
-    /// The Shard's open Feed, made by `create` when it has none; a cancelled open drops `create`.
+    /// The Shard's open `Feed`; a miss runs `create` in a task that a cancelled open leaves running.
     async fn open<F>(&self, database: Identity, create: impl FnOnce() -> F) -> Result<Arc<Feed>>
     where
-        F: std::future::Future<Output = Result<Arc<Feed>>>,
+        F: std::future::Future<Output = Result<Arc<Feed>>> + Send + 'static,
     {
         let slot = self
             .0
@@ -705,13 +705,18 @@ impl Feeds {
             .entry(database)
             .or_default()
             .clone();
-        let mut current = slot.lock().await;
+        let mut current = slot.lock_owned().await;
         if let Some(feed) = current.as_ref().filter(|feed| !feed.closed()) {
             return Ok(feed.clone());
         }
-        let feed = create().await?;
-        *current = Some(feed.clone());
-        Ok(feed)
+        let creation = create();
+        tokio::spawn(async move {
+            let feed = creation.await?;
+            *current = Some(feed.clone());
+            Ok::<_, anyhow::Error>(feed)
+        })
+        .await
+        .context("native output subscription creation stopped")?
     }
 }
 
@@ -786,7 +791,7 @@ async fn create(ctx: Arc<StandaloneEnv>, database: Identity, owner: Identity) ->
             };
             tokio::select! {
                 _ = process => {},
-                // `create` drops `keep` unsent when it does not hand back this Feed.
+                // `create` drops `keep` unsent when it does not hand back this `Feed`.
                 Err(_) = kept => {},
                 _ = client.watch_module_host() => {},
             }
@@ -1458,36 +1463,62 @@ mod tests {
     }
 
     fn not_created() -> Result<Arc<Feed>> {
-        bail!("the Shard's Feed was created again")
+        bail!("the Shard's output subscription was created again")
+    }
+
+    fn panicked() -> Result<Arc<Feed>> {
+        panic!("the Shard's output subscription creation panicked")
     }
 
     #[tokio::test]
     async fn attaches_to_one_shard_wait_for_its_feed_and_share_it() {
-        let feeds = Arc::new(Feeds::default());
+        let feeds = Feeds::default();
         let (started, creating) = tokio::sync::oneshot::channel();
         let (finish, finished) = tokio::sync::oneshot::channel::<()>();
-        let first = tokio::spawn({
-            let feeds = feeds.clone();
-            async move {
-                feeds
-                    .open(shard(1), || async move {
-                        started.send(()).unwrap();
-                        finished.await.unwrap();
-                        created()
-                    })
-                    .await
+        let mut first = std::pin::pin!(feeds.open(shard(1), || async move {
+            started.send(()).unwrap();
+            finished.await.unwrap();
+            created()
+        }));
+        tokio::select! {
+            _ = &mut first => panic!("the first attach did not wait for its creation"),
+            started = creating => started.unwrap(),
+        }
+        let mut second = std::pin::pin!(feeds.open(shard(1), || async { not_created() }));
+        tokio::select! {
+            biased;
+            _ = &mut second => panic!("the second attach did not wait for the creation"),
+            _ = std::future::ready(()) => {}
+        }
+        finish.send(()).unwrap();
+        let (first, second) = tokio::join!(first, second);
+        assert!(Arc::ptr_eq(&first.unwrap(), &second.unwrap()));
+    }
+
+    #[tokio::test]
+    async fn an_attach_that_stops_waiting_leaves_the_creation_to_finish_for_the_next() {
+        let feeds = Feeds::default();
+        let (started, creating) = tokio::sync::oneshot::channel();
+        let (finish, finished) = tokio::sync::oneshot::channel::<()>();
+        let feed = Arc::new(Feed::default());
+        let gave_up = feeds.open(shard(1), {
+            let feed = feed.clone();
+            || async move {
+                started.send(()).unwrap();
+                finished.await.unwrap();
+                Ok::<_, anyhow::Error>(feed)
             }
         });
-        creating.await.unwrap();
-        let second = tokio::spawn({
-            let feeds = feeds.clone();
-            async move { feeds.open(shard(1), || async { not_created() }).await }
-        });
-        tokio::task::yield_now().await;
+        tokio::select! {
+            _ = gave_up => panic!("the attach did not wait for its creation"),
+            started = creating => started.unwrap(),
+        }
         finish.send(()).unwrap();
-        let first = first.await.unwrap().unwrap();
-        let second = second.await.unwrap().unwrap();
-        assert!(Arc::ptr_eq(&first, &second));
+        let opened = feeds
+            .open(shard(1), || async { not_created() })
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&opened, &feed));
     }
 
     #[tokio::test]
@@ -1516,21 +1547,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_or_abandoned_creation_leaves_nothing_and_the_next_attach_creates() {
+    async fn a_failed_or_panicked_creation_leaves_the_next_attach_to_create() {
         let feeds = Feeds::default();
         let failed = feeds.open(shard(1), || async { not_created() }).await;
         assert!(failed.is_err());
-        let (attempt, abandoned) = tokio::sync::oneshot::channel::<()>();
-        let timed_out = tokio::time::timeout(
-            Duration::from_millis(10),
-            feeds.open(shard(1), || async move {
-                let _attempt = attempt;
-                std::future::pending::<Result<Arc<Feed>>>().await
-            }),
-        )
-        .await;
-        assert!(timed_out.is_err());
-        assert!(abandoned.await.is_err());
+        let panicked = feeds.open(shard(1), || async { panicked() }).await;
+        assert!(panicked.is_err());
         let feed = Arc::new(Feed::default());
         let opened = feeds
             .open(shard(1), {
