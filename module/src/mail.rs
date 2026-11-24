@@ -124,6 +124,11 @@ impl Mail {
         }
     }
 }
+// Excludes the equipped bag slots, so a bag that holds contents never passes.
+pub(crate) fn is_unequipped_carried_slot(slot: u8) -> bool {
+    slot >= lyracore_shared::constants::starter_item::BACKPACK_SLOT_0
+        && crate::items::is_carried_slot(slot)
+}
 pub(crate) fn detach_item(
     ctx: &ReducerContext,
     sender_guid: u64,
@@ -139,6 +144,14 @@ pub(crate) fn detach_item(
         .find(item_guid)
         .filter(|item| item.owner_guid == sender_guid)
         .ok_or(MailRefusal::NotYourItem)?;
+    if !is_unequipped_carried_slot(inst.slot)
+        || crate::items::validate_bag_dest_slot(ctx, sender_guid, inst.slot).is_err()
+    {
+        return Err(lyracore_shared::mail::ITEM_NOT_IN_BAGS.to_string().into());
+    }
+    if crate::trade::item_is_offered(ctx, sender_guid, inst.guid) {
+        return Err(lyracore_shared::mail::ITEM_IS_OFFERED.to_string().into());
+    }
     if inst.soulbound {
         return Err(MailRefusal::ItemIsSoulbound);
     }

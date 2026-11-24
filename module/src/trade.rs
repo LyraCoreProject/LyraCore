@@ -537,6 +537,7 @@ pub(crate) enum CommitRefusal {
     GoldShort { side: u64 },
     GoldOverflow { side: u64 },
     InventoryFull { side: u64 },
+    OfferGone { side: u64, item_guid: u64 },
 }
 
 pub(crate) fn gold_after(balance: u32, outgoing: u32, incoming: u32) -> Option<u32> {
@@ -645,7 +646,7 @@ fn gather_commit_side(
     ctx: &ReducerContext,
     session: &TradeSession,
     entity: &WorldEntity,
-) -> (CommitSide, Vec<crate::ItemInstance>) {
+) -> Result<(CommitSide, Vec<crate::ItemInstance>), CommitRefusal> {
     let gold_offered = if entity.guid == session.initiator_guid {
         session.initiator_gold
     } else {
@@ -656,17 +657,19 @@ fn gather_commit_side(
         if row.owner_guid != entity.guid || row.trade_slot >= WILL_NOT_BE_TRADED_SLOT {
             continue;
         }
-        if let Some(inst) = ctx
+        let inst = ctx
             .db
             .game_item_instance()
             .guid()
             .find(row.item_guid)
             .filter(|inst| inst.owner_guid == entity.guid)
-        {
-            items.push(inst);
-        }
+            .ok_or(CommitRefusal::OfferGone {
+                side: entity.guid,
+                item_guid: row.item_guid,
+            })?;
+        items.push(inst);
     }
-    (
+    Ok((
         CommitSide {
             guid: entity.guid,
             gold_offered,
@@ -675,7 +678,7 @@ fn gather_commit_side(
             free_bag_slots: crate::items::count_free_inventory_slots(ctx, entity.guid),
         },
         items,
-    )
+    ))
 }
 
 fn run_trade_commit(
@@ -697,9 +700,21 @@ fn run_trade_commit(
     }
     let partner = partner.expect("gate passed, partner present");
 
-    let (acceptor_side, acceptor_items) = gather_commit_side(ctx, &session, acceptor);
-    let (partner_side, partner_items) = gather_commit_side(ctx, &session, &partner);
-    match commit_verdict(&acceptor_side, &partner_side) {
+    let verdict = gather_commit_side(ctx, &session, acceptor).and_then(|acceptor_offer| {
+        let partner_offer = gather_commit_side(ctx, &session, &partner)?;
+        commit_verdict(&acceptor_offer.0, &partner_offer.0)?;
+        Ok((acceptor_offer, partner_offer))
+    });
+    match verdict {
+        Err(CommitRefusal::OfferGone { side, item_guid }) => {
+            spacetimedb::log::warn!(
+                "trade commit: Trade Session {} offers item {item_guid} that Character {side} \
+                 no longer holds; cancelling the trade",
+                session.id
+            );
+            cancel_trade_for(ctx, acceptor.guid);
+            Ok(())
+        }
         Err(CommitRefusal::InventoryFull { side }) => {
             remove_session(ctx, &session);
             let (full, other) = if side == acceptor.guid {
@@ -722,7 +737,7 @@ fn run_trade_commit(
             push_trade_event(ctx, other, event_kind::GOLD_FAIL_PARTNER, failed);
             Ok(())
         }
-        Ok(()) => {
+        Ok(((acceptor_side, acceptor_items), (partner_side, partner_items))) => {
             // Reserve incoming GUIDs before removing outgoing rows so identities cannot be reused.
             let mut partner_guids =
                 crate::items::allocate_item_guids(ctx, acceptor_items.len() + partner_items.len())?;
