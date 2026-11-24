@@ -1274,7 +1274,7 @@ pub(crate) fn request_turn_in_quest(
     reward_index: u32,
 ) -> Result<(), ActionRefusal> {
     let entities = ctx.db.game_world_entity();
-    let mut player = entities.guid().find(player_guid).ok_or_else(|| {
+    let player = entities.guid().find(player_guid).ok_or_else(|| {
         ActionRefusal::new(ActionRefusalKind::MissingActor, "player not in world")
     })?;
     if player.dead {
@@ -1332,12 +1332,7 @@ pub(crate) fn request_turn_in_quest(
     if let Some(reward) = pick_choice_reward(&choices, reward_index, quest_entry)? {
         rewards.insert(0, reward);
     }
-    player.money = player
-        .money
-        .saturating_sub(tmpl.required_money)
-        .saturating_add(tmpl.reward_money);
     let payout = turn_in_payout(ctx, player.level, &tmpl);
-    player.money = player.money.saturating_add(payout.money);
     // Packages can catch a Refusal; resolve every item Gate before the infallible quest effects.
     crate::items::exchange_items(
         ctx,
@@ -1347,6 +1342,16 @@ pub(crate) fn request_turn_in_quest(
         crate::items::ItemPush::QUEST_REWARD,
     )?;
     grant_reputation_rewards(ctx, player_guid, &tmpl);
+    // Consuming worn items updated the Character row, so read it again before paying.
+    let mut player = entities
+        .guid()
+        .find(player_guid)
+        .expect("the exchange kept the Character in the world");
+    player.money = player
+        .money
+        .saturating_sub(tmpl.required_money)
+        .saturating_add(tmpl.reward_money)
+        .saturating_add(payout.money);
     if let Some(xp) = payout.xp.filter(|&xp| xp > 0) {
         crate::xp::XpEvent::send(
             ctx,

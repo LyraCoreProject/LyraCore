@@ -1,7 +1,7 @@
 use lyracore_test_support::{ReducerConnection, Standalone};
 
 use super::buy_in_slot::{grant, inventory, money, request, stage};
-use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_MOUNT_SPELL};
 
 const FIXTURE_FACTION: u32 = 50900;
 const VENDOR_FACTION_TEMPLATE: u32 = 35;
@@ -165,6 +165,37 @@ fn repairing_a_broken_equipped_item_gives_its_stats_back() {
     assert_no_chat_or_refusal(&repair(&mut connection, vendor, blade));
     assert_eq!(durability(&shard, blade), "70");
     assert!(max_health(&shard) > broken);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn repairing_a_broken_equipped_item_keeps_the_mount_projection_its_aura_computed_and_charges() {
+    let (shard, mut connection, guid, vendor) = stage("repair-broken-mount-aura");
+    price_the_blade(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell_effect SET equip_supported = true WHERE spell_id = {FIXTURE_MOUNT_SPELL}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET spellid_1 = {FIXTURE_MOUNT_SPELL}, spelltrigger_1 = 1 \
+         WHERE entry = {FIXTURE_BLADE}"
+    ));
+    let blade = damaged_blade(&shard, guid, 15, 0);
+    let mount_display = || -> String {
+        shard.query_rows(&format!(
+            "SELECT mount_display_id FROM game_world_entity WHERE guid = {guid}"
+        ))[0]["mount_display_id"]
+            .clone()
+    };
+    assert_eq!(mount_display(), "0", "a broken item applies no aura");
+
+    assert_no_chat_or_refusal(&repair(&mut connection, vendor, blade));
+
+    assert_ne!(
+        mount_display(),
+        "0",
+        "the repaired item mounts the Character"
+    );
+    assert_eq!(money(&shard, guid), "48950");
 }
 
 #[test]
