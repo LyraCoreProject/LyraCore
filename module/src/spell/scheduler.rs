@@ -400,8 +400,10 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                         dying.insert(a.target_guid, death);
                         pending.remove(&a.target_guid);
                     }
-                    (crate::combat::DamageResult::Survives, _)
-                    | (crate::combat::DamageResult::EndsDuel, None) => {
+                    (crate::combat::DamageResult::EndsDuel, None) => {
+                        pending.insert(a.target_guid, 1);
+                    }
+                    (crate::combat::DamageResult::Survives, _) => {
                         pending.insert(a.target_guid, damaged_value(cur, amount));
                     }
                 }

@@ -886,8 +886,9 @@ fn run_spell_effects(
             draw,
         );
         for t in select_targets(ctx, caster_guid, target_guid, e, dest) {
-            // vmangos lands a cast's other effects before its damage, and the death strips them.
-            if !targets.may_reach(t) || slain.contains(&t) {
+            // vmangos applies a cast's auras before its damage, and the death strips them.
+            let aura_on_slain = e.kind & KIND_AURA_BIT != 0 && slain.contains(&t);
+            if !targets.may_reach(t) || aura_on_slain {
                 continue;
             }
             // After the GO and cost, so a miss counts; vmangos skips a cast an aura triggers.
