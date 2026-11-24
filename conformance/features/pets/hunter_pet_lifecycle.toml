@@ -1,14 +1,14 @@
 schema_version = 1
 id = "hunter_pet_lifecycle"
 system = "pets"
-scope = "A Hunter tames an eligible creature and commands, dismisses or abandons the pet with the corresponding ownership and persistence rules. Taming is refused while the Hunter has a pet, live or durable. Call Pet brings a dismissed pet back with its level, loyalty, happiness, name and spells, and refuses with a tame failure when the Hunter has no pet or the pet is dead. A pet that was out at logout is out again at world entry. Stables and action-bar editing are separate Behaviors."
+scope = "A Hunter tames an eligible creature and commands, dismisses or abandons the pet with the corresponding ownership and persistence rules. Taming is refused while the Hunter has a pet, live or durable. Call Pet brings a dismissed pet back with its level, loyalty, happiness, name and spells, and refuses with a tame failure when the Hunter has no pet or the pet is dead. Revive Pet brings a dead pet back beside the Hunter with the effect's percent of its maximum health, and is refused with a tame failure when the Hunter has a pet out, has no pet or the pet is not dead. A pet that was out at logout is out again at world entry. Stables and action-bar editing are separate Behaviors."
 requests = ["0x012E", "0x0175", "0x0176"]
 replies = ["0x0173", "0x0179"]
 dependencies = []
 required_rungs = ["durable_module", "tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
-prerequisites = ["A tameable creature, its template and the Hunter's spells are present."]
+prerequisites = ["A tameable creature, its template and the Hunter's spells are present.", "Revive Pet (982) is imported by an importer that maps SPELL_EFFECT_SUMMON_DEAD_PET to E_REVIVE_PET; older imports hold it as E_SCRIPTED until the spell family is reimported."]
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -25,12 +25,6 @@ symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
 
 [[known_gaps]]
-description = "Revive Pet (982, SPELL_EFFECT_SUMMON_DEAD_PET) imports as a scripted effect that does nothing, so a dead pet stays dead and its Hunter can neither call nor tame a pet."
-path = "module/src/spell/cast/targeting.rs"
-symbol = "apply_effect"
-evidence = "importer/src/spell_kind.rs maps effect 109 to E_SCRIPTED; https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEffects.cpp Spell::EffectSummonDeadPet"
-
-[[known_gaps]]
 description = "Dismiss Pet (2641, SPELL_EFFECT_DISMISS_PET) imports as a scripted effect that does nothing; only the pet bar's dismiss command dismisses the pet."
 path = "module/src/spell/cast/targeting.rs"
 symbol = "apply_effect"
@@ -40,6 +34,12 @@ evidence = "importer/src/spell_kind.rs maps effect 102 to E_SCRIPTED; https://gi
 description = "Call Pet with a pet already out resolves and adds nothing; vmangos refuses the cast with SPELL_FAILED_ALREADY_HAVE_SUMMON."
 path = "module/src/spell/cast/resolve.rs"
 symbol = "check_cast_gates"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp Spell::CheckCast"
+
+[[known_gaps]]
+description = "A Revive Pet that the Gate refuses at cast completion, after its cast time, sends SMSG_CAST_RESULT without the SMSG_PET_TAME_FAILURE it sends when refused at the start."
+path = "module/src/spell/scheduler.rs"
+symbol = "fire_pending_cast"
 evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp Spell::CheckCast"
 
 [[known_gaps]]
@@ -75,11 +75,31 @@ function = "a_dead_pet_answers_neither_call_pet_nor_world_entry"
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/hunter_pet.rs"
+function = "revive_pet_returns_only_a_dead_pet_and_it_stays_out_across_login"
+rung = "durable_module"
+
+[[tests]]
 path = "module/src/creatures/hunter_pet.rs"
 function = "call_pet_refuses_an_out_pet_no_pet_and_a_dead_pet"
 rung = "unit"
 
 [[tests]]
+path = "module/src/creatures/hunter_pet.rs"
+function = "revive_pet_refuses_an_out_pet_no_pet_and_a_living_pet"
+rung = "unit"
+
+[[tests]]
+path = "module/src/creatures/hunter_pet.rs"
+function = "a_revived_pet_gets_the_effect_percent_of_its_maximum_health_and_at_least_one"
+rung = "unit"
+
+[[tests]]
 path = "module/src/native/pet.rs"
-function = "call_pet_refusals_send_the_1_12_1_tame_failure_reason"
+function = "pet_refusals_send_the_1_12_1_tame_failure_reason"
 rung = "codec"
+
+[[tests]]
+path = "module/src/transfer/legacy_item_rows_tests.rs"
+function = "a_hunter_pet_that_travelled_before_presence_arrives_dismissed_with_its_identity"
+rung = "unit"

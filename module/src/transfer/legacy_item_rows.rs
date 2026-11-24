@@ -5,7 +5,7 @@ use spacetimedb::{Identity, SpacetimeType, Timestamp};
 use super::TableRows;
 use crate::mail::Mail;
 use crate::mail_escrow::MailEscrow;
-use crate::{BuybackEntry, ItemInstance};
+use crate::{BuybackEntry, HunterPet, ItemInstance};
 
 const FORMATS: &[(&str, &str)] = &[
     ("game_item_instance", "game_item_instance@item-text-1"),
@@ -16,6 +16,7 @@ const FORMATS: &[(&str, &str)] = &[
     ("game_mail", "game_mail@letter-text-1"),
     ("game_mail_escrow", "game_mail_escrow@letter-text-1"),
     ("game_auction_hold", "game_auction_hold@letter-text-1"),
+    ("game_hunter_pet", "game_hunter_pet@presence-1"),
 ];
 const RANDOM_PROPERTY_ITEM_INSTANCE: &str = "game_item_instance@random-property-1";
 const RANDOM_PROPERTY_MAIL: &str = "game_mail@random-property-1";
@@ -58,6 +59,7 @@ pub(super) fn prepare(payload: &[TableRows]) -> Result<Vec<TableRows>, String> {
                 }
                 "game_mail" => upgrade::<LegacyMail, Mail>(&entry.rows),
                 "game_mail_escrow" => upgrade::<RewardHeaderMailEscrow, MailEscrow>(&entry.rows),
+                "game_hunter_pet" => upgrade::<LegacyHunterPet, HunterPet>(&entry.rows),
                 _ => Ok(entry.rows),
             }
             .map_err(|error| format!("table {}: {error}", entry.table))?;
@@ -373,6 +375,50 @@ impl From<RewardHeaderMailEscrow> for MailEscrow {
             sender_entry: row.sender_entry,
             mail_template_id: row.mail_template_id,
             item_text_id: 0,
+        }
+    }
+}
+
+#[derive(SpacetimeType)]
+struct LegacyHunterPet {
+    pet_id: u64,
+    owner_guid: u64,
+    creature_entry: u32,
+    creature_family: u32,
+    name: String,
+    rename_allowed: bool,
+    level: u32,
+    pet_xp: u32,
+    loyalty_level: u8,
+    loyalty_progress: u32,
+    happiness: u32,
+    created_at: Timestamp,
+    care_updated_at: Timestamp,
+    loyalty_updated_at: Timestamp,
+    name_timestamp: u32,
+}
+
+// A pet that travelled before `presence` arrives dismissed, as the column default reads it.
+impl From<LegacyHunterPet> for HunterPet {
+    fn from(row: LegacyHunterPet) -> Self {
+        Self {
+            pet_id: row.pet_id,
+            owner_guid: row.owner_guid,
+            creature_entry: row.creature_entry,
+            creature_family: row.creature_family,
+            name: row.name,
+            rename_allowed: row.rename_allowed,
+            level: row.level,
+            pet_xp: row.pet_xp,
+            loyalty_level: row.loyalty_level,
+            loyalty_progress: row.loyalty_progress,
+            happiness: row.happiness,
+            created_at: row.created_at,
+            care_updated_at: row.care_updated_at,
+            loyalty_updated_at: row.loyalty_updated_at,
+            name_timestamp: row.name_timestamp,
+            presence: 0,
+            display_id: 0,
         }
     }
 }

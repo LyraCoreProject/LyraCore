@@ -289,6 +289,18 @@ before moving active World Sessions. `game_drunk_sobering` is a Character-owned 
 transported. A blob from an older source lacks it and imports with no rows; login on the
 destination starts a new timer.
 
+### Hunter pet presence migration
+
+`game_hunter_pet` gains the END-appended columns `presence` and `display_id` with default 0. Every
+existing pet reads as dismissed with its template's model: a pet out at the publish stays out, but
+returns at its owner's next login only after Call Pet. Spell effect 109 now imports as
+`E_REVIVE_PET` (code 0x2E); older spell rows keep Revive Pet as `E_SCRIPTED`, so a dead pet stays
+dead until a reimport of the `spell` family. No repair is needed.
+
+`game_hunter_pet` crosses in the Transfer blob under the `game_hunter_pet@presence-1` tag. An
+untagged row from an older source arrives dismissed with its template's model. An older destination
+refuses the tag before it applies any row, so update both Shards before moving Hunters.
+
 ### DynamicObject AOI migration
 
 The native runtime adds a map, Instance and `cell` index to `game_dynamic_object`. Its new `cell`

@@ -460,10 +460,13 @@ the live pet from the durable row through one builder, at full health for its le
 
 `game_hunter_pet.presence` and `display_id` are end-appended with default 0. `presence` is 1 while
 the pet is out, including across logout and Transfer, so world entry rebuilds it; 0 after a dismiss,
-a summon over it or a spirit release, so only Call Pet brings it back; 2 once it dies, so neither
-does. Rows written before the column read as dismissed: a pet out at the publish stays out, but does
-not return at its owner's next login until Call Pet. `display_id` is the model the tamed creature
-wore; 0 takes the template's model.
+a summon over it or a spirit release, so only Call Pet brings it back; 2 once it dies, so only
+Revive Pet does. Rows written before the column read as dismissed: a pet out at the publish stays
+out, but does not return at its owner's next login until Call Pet. `display_id` is the model the
+tamed creature wore; 0 takes the template's model. A Transfer carries both columns under the
+`game_hunter_pet@presence-1` tag; an untagged row from an older blob arrives dismissed with the
+template's model. Revive Pet needs the `spell` family reimported, since older imports hold its
+`SPELL_EFFECT_SUMMON_DEAD_PET` as `E_SCRIPTED`.
 
 ### Forms (`module/src/form/`)
 

@@ -287,6 +287,8 @@ Setup. A Hunter who knows Tame Beast and has no pet, next to a tameable boar at 
 - Log out with the pet out and log back in: the pet is out with its bar. After a dismiss, the next
   login brings no pet.
 - Call Pet with no pet, or after the pet dies, shows the client's tame-failure text and brings none.
+- After the pet dies, Revive Pet brings it back beside the Hunter at 15% health with its bar. With
+  the pet out, dismissed or absent, Revive Pet shows the tame-failure text and costs no mana.
 
 ## Mount
 

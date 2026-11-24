@@ -50,24 +50,50 @@ fn live_pet(shard: &Standalone) -> Option<Row> {
         .pop()
 }
 
-/// Rewrites the fixture Tame Beast into Call Pet: SPELL_EFFECT_SUMMON_PET with no creature entry.
-fn make_tame_call_pet(shard: &Standalone) {
-    use lyracore_shared::spell::taxonomy::{E_SUMMON_PET, T_SELF};
+/// Rewrites the fixture Tame Beast into an instant self-cast of `kind` with `points` as its amount.
+fn rewrite_tame(shard: &Standalone, kind: u8, points: i32) {
+    use lyracore_shared::spell::taxonomy::T_SELF;
     shard.assert_sql(&format!(
         "UPDATE game_spell SET cast_flags = 0, duration_ms = 0 WHERE spell_id = {TAME}"
     ));
     shard.assert_sql(&format!(
-        "UPDATE game_spell_effect SET kind = {E_SUMMON_PET}, target = {T_SELF}, p0 = 0 WHERE spell_id = {TAME}"
+        "UPDATE game_spell_effect SET kind = {kind}, target = {T_SELF}, p0 = 0, base_points = {points}, die_sides = 0 WHERE spell_id = {TAME}"
     ));
 }
 
-fn call_pet(shard: &Standalone) {
+/// Call Pet is SPELL_EFFECT_SUMMON_PET with no creature entry.
+fn make_tame_call_pet(shard: &Standalone) {
+    rewrite_tame(shard, lyracore_shared::spell::taxonomy::E_SUMMON_PET, 0);
+}
+
+/// Revive Pet (982) returns the pet with 15 percent of its maximum health.
+const REVIVE_PERCENT: u32 = 15;
+
+fn make_tame_revive_pet(shard: &Standalone) {
+    rewrite_tame(
+        shard,
+        lyracore_shared::spell::taxonomy::E_REVIVE_PET,
+        REVIVE_PERCENT as i32,
+    );
+}
+
+fn cast_at_self(shard: &Standalone) {
     assert!(
         poll_until(POLL_TIMEOUT, || shard
             .call("debug_force_cast_at", &[HUNTER, TAME, HUNTER])
             .status
             .success()),
-        "Call Pet must resolve after the global cooldown"
+        "the cast must resolve after the global cooldown"
+    );
+}
+
+fn assert_cast_refused(shard: &Standalone, reason: &str) {
+    assert!(
+        poll_until(POLL_TIMEOUT, || {
+            let output = shard.call("debug_force_cast_at", &[HUNTER, TAME, HUNTER]);
+            !output.status.success() && String::from_utf8_lossy(&output.stderr).contains(reason)
+        }),
+        "the cast must be refused because {reason}"
     );
 }
 
@@ -208,8 +234,8 @@ fn call_pet_builds_the_dismissed_pet_from_its_durable_identity() {
         "UPDATE game_hunter_pet SET level = 12, loyalty_level = 3, happiness = 700000 WHERE owner_guid = 1",
     );
 
-    make_tame_call_pet(&shard);
-    call_pet(&shard);
+    make_tame_cast_at_self(&shard);
+    cast_at_self(&shard);
     let live = live_pet(&shard).expect("Call Pet builds the live pet");
     assert_eq!(live["owner_guid"], HUNTER);
     assert_eq!(live["entry"], BOAR);
@@ -235,7 +261,7 @@ fn call_pet_builds_the_dismissed_pet_from_its_durable_identity() {
     assert_eq!(live_pet_flags(&shard) & PET_RENAME_FLAG, 0);
     assert_eq!(presence(&shard), OUT);
 
-    call_pet(&shard);
+    cast_at_self(&shard);
     assert_eq!(
         shard
             .query_rows(&format!(
@@ -290,8 +316,8 @@ fn a_dead_pet_answers_neither_call_pet_nor_world_entry() {
     relog(&shard);
     assert!(live_pet(&shard).is_none());
 
-    make_tame_call_pet(&shard);
-    call_pet(&shard);
+    make_tame_cast_at_self(&shard);
+    cast_at_self(&shard);
     assert!(
         live_pet(&shard).is_none(),
         "a dead pet waits for Revive Pet"
@@ -299,11 +325,46 @@ fn a_dead_pet_answers_neither_call_pet_nor_world_entry() {
     assert_eq!(presence(&shard), DEAD);
 
     shard.assert_sql("DELETE FROM game_hunter_pet WHERE owner_guid = 1");
-    call_pet(&shard);
+    cast_at_self(&shard);
     assert!(
         live_pet(&shard).is_none(),
         "Call Pet without a pet brings none"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn revive_pet_returns_only_a_dead_pet_and_it_stays_out_across_login() {
+    let shard = hunter("hunter-pet-revive");
+    let wild = wild_boar(&shard);
+    shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
+    make_tame_revive_pet(&shard);
+    assert_cast_refused(&shard, "already has a pet out");
+    assert_eq!(presence(&shard), OUT);
+
+    shard.assert_call("debug_kill_creature", &[HUNTER, &HUNTER_PET.to_string()]);
+    assert_eq!(presence(&shard), DEAD);
+    cast_at_self(&shard);
+    let live = live_pet(&shard).expect("Revive Pet builds the dead pet");
+    assert_eq!(live["owner_guid"], HUNTER);
+    assert_eq!(live["entry"], BOAR);
+    let max_health: u32 = number(&live, "max_health");
+    assert_eq!(
+        number::<u32>(&live, "health"),
+        (max_health * REVIVE_PERCENT / 100).max(1)
+    );
+    assert_eq!(presence(&shard), OUT);
+
+    bind_session(&shard);
+    relog(&shard);
+    assert!(live_pet(&shard).is_some(), "a revived pet is out at login");
+
+    shard.assert_call("debug_pet_command", &[HUNTER, DISMISS, "0"]);
+    assert_cast_refused(&shard, "pet is not dead");
+    assert!(live_pet(&shard).is_none());
+    shard.assert_sql("DELETE FROM game_hunter_pet WHERE owner_guid = 1");
+    assert_cast_refused(&shard, "has no pet");
+    assert!(live_pet(&shard).is_none());
 }
 
 fn identity(shard: &Standalone) -> Row {

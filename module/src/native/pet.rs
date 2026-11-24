@@ -1,4 +1,4 @@
-use crate::creatures::{pet_guid_for, CallPetRefusal, PET_NAME_INVALID};
+use crate::creatures::{pet_guid_for, PetSummonRefusal, PET_NAME_INVALID};
 use lyracore_protocol::{
     codec,
     messages::vanilla::{
@@ -30,22 +30,27 @@ pub(super) fn rename(
     })
 }
 
-// vmangos refuses an out pet in `Spell::CheckCast` with a cast result, not a tame failure.
-fn call_failure(refusal: CallPetRefusal) -> Option<ServerOpcodeMessage> {
+fn tame_failure(refusal: PetSummonRefusal) -> ServerOpcodeMessage {
     let reason = match refusal {
-        CallPetRefusal::AnotherPetOut => return None,
-        CallPetRefusal::NoPet => PetTameFailureReason::NoPetAvailable,
-        CallPetRefusal::Dead => PetTameFailureReason::Dead,
+        PetSummonRefusal::AnotherPetOut => PetTameFailureReason::AnotherSummonActive,
+        PetSummonRefusal::NoPet => PetTameFailureReason::NoPetAvailable,
+        PetSummonRefusal::Dead => PetTameFailureReason::Dead,
+        PetSummonRefusal::NotDead => PetTameFailureReason::NotDead,
     };
-    Some(ServerOpcodeMessage::SMSG_PET_TAME_FAILURE(
-        SMSG_PET_TAME_FAILURE { reason },
-    ))
+    ServerOpcodeMessage::SMSG_PET_TAME_FAILURE(SMSG_PET_TAME_FAILURE { reason })
 }
 
-pub(crate) fn call_refused(ctx: &ReducerContext, owner: u64, refusal: CallPetRefusal) {
-    if let Some(message) = call_failure(refusal) {
-        super::send_to_character(ctx, owner, message, super::EncodeFailure::Panic);
-    }
+pub(super) fn tame_failure_packet(refusal: PetSummonRefusal) -> lyracore_protocol::world::Packet {
+    super::bounded(tame_failure(refusal))
+}
+
+pub(crate) fn pet_refused(ctx: &ReducerContext, owner: u64, refusal: PetSummonRefusal) {
+    super::send_to_character(
+        ctx,
+        owner,
+        tame_failure(refusal),
+        super::EncodeFailure::Panic,
+    );
 }
 
 fn values(row: &HunterPetProtocol, owner: bool) -> ServerOpcodeMessage {
@@ -184,11 +189,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn call_pet_refusals_send_the_1_12_1_tame_failure_reason() {
-        for (refusal, body) in [(CallPetRefusal::NoPet, 0x07), (CallPetRefusal::Dead, 0x0A)] {
-            let packet = lyracore_protocol::world::encode(&call_failure(refusal).unwrap()).unwrap();
+    fn pet_refusals_send_the_1_12_1_tame_failure_reason() {
+        for (refusal, body) in [
+            (PetSummonRefusal::AnotherPetOut, 0x05),
+            (PetSummonRefusal::NoPet, 0x07),
+            (PetSummonRefusal::Dead, 0x0A),
+            (PetSummonRefusal::NotDead, 0x0B),
+        ] {
+            let packet = tame_failure_packet(refusal);
             assert_eq!((packet.opcode, packet.body), (0x0173, vec![body]));
         }
-        assert!(call_failure(CallPetRefusal::AnotherPetOut).is_none());
     }
 }

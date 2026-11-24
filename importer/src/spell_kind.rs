@@ -31,6 +31,7 @@ pub fn instant_effect_to_kind(effect_id: i32) -> u8 {
         85 => E_SUMMON_PLAYER,
         100 => E_INEBRIATE,
         36 => E_LEARN_SPELL,
+        109 => E_REVIVE_PET,
         _ => E_SCRIPTED,
     }
 }

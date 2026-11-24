@@ -1,8 +1,9 @@
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
+use super::catalogue::game_creature_display;
 use crate::{
-    game_creature_display, game_creature_family, game_creature_spawn, game_creature_template,
-    game_world_entity, CreatureTemplate, WorldEntity,
+    game_creature_family, game_creature_spawn, game_creature_template, game_world_entity,
+    CreatureTemplate, WorldEntity,
 };
 
 const CLASS_HUNTER: u8 = 3;
@@ -396,27 +397,59 @@ pub(crate) fn tame_creature(
         &template,
         hunter_pet,
         [target.x, target.y, target.z, target.orientation],
+        FULL_HEALTH_PERCENT,
     );
     Ok(())
 }
 
-/// Why Call Pet brings no pet; vmangos `Unit::EffectSummonPet` and `Spell::CheckCast`.
+/// Why Call Pet or Revive Pet brings no pet; vmangos `Spell::CheckCast` and `EffectSummonPet`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CallPetRefusal {
+pub(crate) enum PetSummonRefusal {
     AnotherPetOut,
     NoPet,
     Dead,
+    NotDead,
 }
 
-fn check_call(live_pet_out: bool, durable: Option<PetPresence>) -> Result<(), CallPetRefusal> {
+impl std::fmt::Display for PetSummonRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::AnotherPetOut => "the Hunter already has a pet out",
+            Self::NoPet => "the Hunter has no pet",
+            Self::Dead => "the Hunter's pet is dead",
+            Self::NotDead => "the Hunter's pet is not dead",
+        })
+    }
+}
+
+fn check_call(live_pet_out: bool, durable: Option<PetPresence>) -> Result<(), PetSummonRefusal> {
     if live_pet_out {
-        return Err(CallPetRefusal::AnotherPetOut);
+        return Err(PetSummonRefusal::AnotherPetOut);
     }
     match durable {
-        None => Err(CallPetRefusal::NoPet),
-        Some(PetPresence::Dead) => Err(CallPetRefusal::Dead),
+        None => Err(PetSummonRefusal::NoPet),
+        Some(PetPresence::Dead) => Err(PetSummonRefusal::Dead),
         Some(PetPresence::Dismissed | PetPresence::Out) => Ok(()),
     }
+}
+
+// LyraCore removes a pet at death, so a live pet is never a corpse that Revive Pet could replace.
+fn check_revive(live_pet_out: bool, durable: Option<PetPresence>) -> Result<(), PetSummonRefusal> {
+    if live_pet_out {
+        return Err(PetSummonRefusal::AnotherPetOut);
+    }
+    match durable {
+        None => Err(PetSummonRefusal::NoPet),
+        Some(PetPresence::Dead) => Ok(()),
+        Some(PetPresence::Dismissed | PetPresence::Out) => Err(PetSummonRefusal::NotDead),
+    }
+}
+
+fn owner_pets(ctx: &ReducerContext, owner_guid: u64) -> (bool, Option<HunterPet>) {
+    (
+        super::pet_of(ctx, owner_guid).is_some(),
+        hunter_pet_for_owner(ctx, owner_guid),
+    )
 }
 
 /// Call Pet: builds the owner's durable Hunter pet beside it, or tells the owner why it cannot.
@@ -430,15 +463,51 @@ pub(crate) fn call_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     else {
         return;
     };
-    let durable = hunter_pet_for_owner(ctx, owner_guid);
+    let (live_pet_out, durable) = owner_pets(ctx, owner_guid);
     let checked = check_call(
-        super::pet_of(ctx, owner_guid).is_some(),
+        live_pet_out,
         durable.as_ref().map(|pet| PetPresence::of(pet.presence)),
     );
     match (checked, durable) {
-        (Ok(()), Some(pet)) => materialize_beside(ctx, &owner, pet),
-        (Err(refusal), _) => crate::native::pet::call_refused(ctx, owner_guid, refusal),
+        (Ok(()), Some(pet)) => materialize_beside(ctx, &owner, pet, FULL_HEALTH_PERCENT),
+        // vmangos refuses this in `Spell::CheckCast` with a cast result, not a tame failure.
+        (Err(PetSummonRefusal::AnotherPetOut), _) => {}
+        (Err(refusal), _) => crate::native::pet::pet_refused(ctx, owner_guid, refusal),
         (Ok(()), None) => {}
+    }
+}
+
+/// The Revive Pet Gate: the caster's durable Hunter pet must exist, be dead and not be out.
+pub(crate) fn validate_revive_pet(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+) -> Result<(), PetSummonRefusal> {
+    if !caster.is_player() {
+        return Err(PetSummonRefusal::NoPet);
+    }
+    let (live_pet_out, durable) = owner_pets(ctx, caster.guid);
+    check_revive(
+        live_pet_out,
+        durable.map(|pet| PetPresence::of(pet.presence)),
+    )
+}
+
+/// Revive Pet: builds the dead pet beside its owner with `health_percent` of its maximum health.
+pub(crate) fn revive_hunter_pet(ctx: &ReducerContext, owner_guid: u64, health_percent: i32) {
+    let Some(owner) = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(owner_guid)
+        .filter(WorldEntity::is_player)
+    else {
+        return;
+    };
+    if validate_revive_pet(ctx, &owner).is_err() {
+        return;
+    }
+    if let Some(pet) = hunter_pet_for_owner(ctx, owner_guid) {
+        materialize_beside(ctx, &owner, pet, health_percent.max(0) as u32);
     }
 }
 
@@ -459,7 +528,7 @@ pub(crate) fn restore_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     if let Some(pet) = hunter_pet_for_owner(ctx, owner_guid)
         .filter(|pet| PetPresence::of(pet.presence) == PetPresence::Out)
     {
-        materialize_beside(ctx, &owner, pet);
+        materialize_beside(ctx, &owner, pet, FULL_HEALTH_PERCENT);
     }
 }
 
@@ -472,7 +541,14 @@ pub(super) fn dismiss_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     }
 }
 
-fn materialize_beside(ctx: &ReducerContext, owner: &WorldEntity, pet: HunterPet) {
+const FULL_HEALTH_PERCENT: u32 = 100;
+
+fn materialize_beside(
+    ctx: &ReducerContext,
+    owner: &WorldEntity,
+    pet: HunterPet,
+    health_percent: u32,
+) {
     let Some(template) = ctx
         .db
         .game_creature_template()
@@ -488,7 +564,7 @@ fn materialize_beside(ctx: &ReducerContext, owner: &WorldEntity, pet: HunterPet)
         return;
     };
     let at = [owner.x, owner.y, owner.z, owner.orientation];
-    materialize(ctx, owner, &template, pet, at);
+    materialize(ctx, owner, &template, pet, at, health_percent);
 }
 
 /// The one builder of a live Hunter pet: tame, Call Pet and world entry all pass through it.
@@ -498,15 +574,16 @@ fn materialize(
     template: &CreatureTemplate,
     mut pet: HunterPet,
     at: [f32; 4],
+    health_percent: u32,
 ) {
     let mut live = super::pet::build_pet_entity(ctx, owner, template, at);
     live.level = pet.level;
     if let Some(max_health) =
         super::pet_progression::hunter_pet_max_health(ctx, template, pet.level)
     {
-        live.health = max_health;
         live.max_health = max_health;
     }
+    live.health = health_at_percent(live.max_health, health_percent);
     if pet.display_id != 0 {
         live.display_id = pet.display_id;
         live.native_display_id = pet.display_id;
@@ -522,6 +599,11 @@ fn materialize(
     pet.presence = PetPresence::Out.code();
     let pet = ctx.db.game_hunter_pet().pet_id().update(pet);
     publish_hunter_pet_protocol(ctx, &pet, pet_guid);
+}
+
+fn health_at_percent(max_health: u32, percent: u32) -> u32 {
+    ((u64::from(max_health) * u64::from(percent.min(FULL_HEALTH_PERCENT))) / 100)
+        .clamp(1, u64::from(max_health.max(1))) as u32
 }
 
 fn model_scale(ctx: &ReducerContext, template: &CreatureTemplate, display_id: u32) -> f32 {
@@ -708,13 +790,41 @@ mod tests {
         use PetPresence::*;
         assert_eq!(check_call(false, Some(Dismissed)), Ok(()));
         assert_eq!(check_call(false, Some(Out)), Ok(()));
-        assert_eq!(check_call(false, None), Err(CallPetRefusal::NoPet));
-        assert_eq!(check_call(false, Some(Dead)), Err(CallPetRefusal::Dead));
+        assert_eq!(check_call(false, None), Err(PetSummonRefusal::NoPet));
+        assert_eq!(check_call(false, Some(Dead)), Err(PetSummonRefusal::Dead));
         assert_eq!(
             check_call(true, Some(Dismissed)),
-            Err(CallPetRefusal::AnotherPetOut)
+            Err(PetSummonRefusal::AnotherPetOut)
         );
-        assert_eq!(check_call(true, None), Err(CallPetRefusal::AnotherPetOut));
+        assert_eq!(check_call(true, None), Err(PetSummonRefusal::AnotherPetOut));
+    }
+
+    #[test]
+    fn revive_pet_refuses_an_out_pet_no_pet_and_a_living_pet() {
+        use PetPresence::*;
+        assert_eq!(check_revive(false, Some(Dead)), Ok(()));
+        assert_eq!(check_revive(false, None), Err(PetSummonRefusal::NoPet));
+        assert_eq!(
+            check_revive(false, Some(Dismissed)),
+            Err(PetSummonRefusal::NotDead)
+        );
+        assert_eq!(
+            check_revive(false, Some(Out)),
+            Err(PetSummonRefusal::NotDead)
+        );
+        assert_eq!(
+            check_revive(true, Some(Dead)),
+            Err(PetSummonRefusal::AnotherPetOut)
+        );
+    }
+
+    #[test]
+    fn a_revived_pet_gets_the_effect_percent_of_its_maximum_health_and_at_least_one() {
+        assert_eq!(health_at_percent(1_000, 15), 150);
+        assert_eq!(health_at_percent(1_000, 100), 1_000);
+        assert_eq!(health_at_percent(1_000, 250), 1_000);
+        assert_eq!(health_at_percent(5, 15), 1);
+        assert_eq!(health_at_percent(1_000, 0), 1);
     }
 
     #[test]
