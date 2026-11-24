@@ -6,8 +6,8 @@ use spacetimedb::{table, Table};
 use super::mobility::game_creature_ai_summon_origin;
 use super::{EventAiRequest, EventCondition, EventContext, EventKind};
 use crate::{
-    game_creature_ai_rule_state, game_creature_ai_state, game_melee_attack, game_world_entity,
-    WorldEntity,
+    game_creature_ai_rule_state, game_creature_ai_state, game_creature_spawn, game_melee_attack,
+    game_world_entity, WorldEntity,
 };
 
 pub(crate) fn runs_eventai(ctx: &ReducerContext, creature: &WorldEntity) -> bool {
@@ -236,8 +236,14 @@ pub(crate) fn eventai_on_evade(ctx: &ReducerContext, creature_guid: u64) {
         (creature.target_guid != 0).then_some(creature.target_guid),
         false,
     );
+    let has_home = ctx
+        .db
+        .game_creature_spawn()
+        .guid()
+        .find(creature_guid)
+        .is_some();
     let returning = ctx.db.game_creature_ai_returning_home();
-    if returning.creature_guid().find(creature_guid).is_none() {
+    if has_home && returning.creature_guid().find(creature_guid).is_none() {
         returning.insert(CreatureAiReturningHome { creature_guid });
     }
 }

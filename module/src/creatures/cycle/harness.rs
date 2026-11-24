@@ -1947,7 +1947,7 @@ impl EventAiWorld for Scenario {
                     .borrow_mut()
                     .retain(|fight| fight.attacker != creature_guid);
                 self.engaged.borrow_mut().remove(&creature_guid);
-                if !evade.combat_only {
+                if !evade.combat_only && self.homes.borrow().contains_key(&creature_guid) {
                     self.eventai_returning_home
                         .borrow_mut()
                         .insert(creature_guid);
@@ -2114,6 +2114,9 @@ impl EventAiWorld for Scenario {
     }
 
     fn eventai_start_attack(&mut self, creature_guid: u64, target_guid: u64) -> bool {
+        self.eventai_returning_home
+            .borrow_mut()
+            .remove(&creature_guid);
         if let Some(fight) = self
             .fights
             .borrow_mut()
@@ -2492,6 +2495,10 @@ impl IdleSink for Scenario {
             c.wp_target = waypoint_id;
         }
     }
+    fn teleport(&mut self, guid: u64, at: Point) {
+        self.place(guid, at, None, None);
+        self.drop_leg(guid);
+    }
     fn reached_home(&mut self, guid: u64) {
         if !self.eventai_returning_home.borrow_mut().remove(&guid) {
             return;
@@ -2570,7 +2577,6 @@ impl EngageSink for Scenario {
             .iter()
             .filter_map(|guid| creatures.get(guid).map(|c| (*guid, c)))
             .filter(|(guid, _)| !fights.iter().any(|f| f.attacker == *guid))
-            .filter(|(guid, _)| !self.eventai_returning_home.borrow().contains(guid))
             .map(|(guid, c)| Sensor {
                 guid,
                 at: c.at,
@@ -2915,6 +2921,9 @@ impl ThreatSink for Scenario {
         self.standings.borrow().get(&target) != Some(&SourceStanding::Unattackable)
     }
     fn evade(&mut self, creature: u64) {
+        if self.homes.borrow().contains_key(&creature) {
+            self.eventai_returning_home.borrow_mut().insert(creature);
+        }
         self.fights.borrow_mut().retain(|f| f.attacker != creature);
         self.threat
             .borrow_mut()
@@ -3913,6 +3922,84 @@ fn a_creature_returning_home_notices_nobody() {
         w.pulls().is_empty(),
         "an evading creature ignores players until it reaches its home point"
     );
+}
+
+fn returning_wolf(at: Point, home: Point) -> Scenario {
+    let w = Scenario::new(SETTLED)
+        .creature(WOLF, at)
+        .awake([WOLF])
+        .home(WOLF, home, false);
+    w.eventai_returning_home.borrow_mut().insert(WOLF);
+    w
+}
+
+fn run_once(w: &mut Scenario) {
+    let tick = w.tick(true, catch_all());
+    run_cycle(w, tick);
+}
+
+#[test]
+fn a_creature_that_evades_ignores_the_player_it_fled_from_until_it_is_home() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .awake([WOLF])
+        .home(WOLF, p(-40.0, 0.0, 10.0), false)
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 1000)
+        .standing(HUNTER, SourceStanding::Unattackable);
+    run_once(&mut w);
+    run_once(&mut w);
+
+    assert!(
+        w.eventai_returning_home.borrow().contains(&WOLF) && w.pulls().is_empty(),
+        "the wolf returns home and does not pull the player beside it"
+    );
+}
+
+#[test]
+fn a_creature_returning_home_keeps_walking_while_a_unit_attacks_it() {
+    let mut w = returning_wolf(p(0.0, 20.0, 10.0), p(0.0, 0.0, 10.0))
+        .player(HUNTER, p(0.0, 22.0, 10.0))
+        .attacking(HUNTER, WOLF);
+    run_once(&mut w);
+
+    let legs = w.effects();
+    assert!(
+        legs.len() == 1 && legs[0].run && legs[0].dest.y < 20.0,
+        "the wolf runs home despite the melee row aimed at it: {legs:?}"
+    );
+}
+
+#[test]
+fn a_returning_creature_with_no_home_point_ends_its_return() {
+    let mut w = Scenario::new(SETTLED)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .awake([WOLF]);
+    w.eventai_returning_home.borrow_mut().insert(WOLF);
+    run_once(&mut w);
+
+    assert!(w.eventai_returning_home.borrow().is_empty());
+}
+
+#[test]
+fn a_creature_that_cannot_move_ends_its_return_where_it_stands() {
+    let mut w = returning_wolf(p(0.0, 20.0, 10.0), p(0.0, 0.0, 10.0)).rooted(WOLF);
+    run_once(&mut w);
+
+    assert!(
+        w.eventai_returning_home.borrow().is_empty() && w.effects().is_empty(),
+        "a rooted wolf neither walks nor stays in evade"
+    );
+}
+
+#[test]
+fn a_creature_with_no_path_home_teleports_there_and_ends_its_return() {
+    let home = p(0.0, 0.0, 10.0);
+    let mut w = returning_wolf(p(0.0, 20.0, 10.0), home).detour(WOLF, (0.0, 20.0));
+    run_once(&mut w);
+    assert_eq!(w.at(WOLF).at, home, "no step toward home means a teleport");
+
+    run_once(&mut w);
+    assert!(w.eventai_returning_home.borrow().is_empty());
 }
 
 #[test]

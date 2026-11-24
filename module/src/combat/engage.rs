@@ -163,7 +163,7 @@ fn join_fight(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) {
     );
 }
 
-// A creature returning home is in vmangos `IsInEvadeMode`: it neither notices nor fights.
+// No unscripted engagement starts during a return home; `start_attack` ends the return first.
 fn start_creature_attack(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) -> bool {
     if returning_home(ctx, creature_guid)
         || crate::creatures::react_state(ctx, creature_guid)
@@ -742,6 +742,10 @@ fn attack_target(
     if ctx.db.game_faction_template().count() > 0 && !may_harm(ctx, attacker, &target) {
         return Err(AttackRefusal::FriendlyTarget);
     }
+    // vmangos `Unit::Attack` refuses an evading victim.
+    if returning_home(ctx, target_guid) {
+        return Err(ActionRefusal::new(ActionRefusalKind::Other, "target is evading").into());
+    }
     Ok(target)
 }
 
@@ -872,6 +876,7 @@ fn start_attack(
     }
 
     if !attacker.is_player() {
+        crate::creatures::eventai::movement::end_return(ctx, attacker.guid);
         if arm_creature_engagement(ctx, attacker.guid, target_guid, false) {
             return Ok(AttackStart::Armed);
         }

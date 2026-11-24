@@ -572,6 +572,11 @@ impl IdleSink for CtxWorld<'_> {
             e.update(self.ctx);
         }
     }
+    fn teleport(&mut self, guid: u64, at: Point) {
+        if let Some(e) = self.place(guid, at, None, None) {
+            leg::halt(self.ctx, &e);
+        }
+    }
     fn reached_home(&mut self, guid: u64) {
         crate::creatures::eventai_on_reached_home(self.ctx, guid);
     }
@@ -614,7 +619,6 @@ impl EngageSink for CtxWorld<'_> {
                     && !c.dead
                     && c.owner_guid == 0
                     && melee.attacker_guid().find(c.guid).is_none()
-                    && !eventai::movement::returning_home(self.ctx, c.guid)
             })
             .map(|c| Sensor {
                 guid: c.guid,
@@ -1264,6 +1268,9 @@ impl PetSink for CtxWorld<'_> {
         pet::cancel_attack_order(self.ctx, owner);
     }
     fn take_victim(&mut self, guid: u64, victim: u64) {
+        if eventai::movement::returning_home(self.ctx, victim) {
+            return;
+        }
         if crate::creatures::guardian::is_guardian(self.ctx, guid)
             && crate::combat::arm_creature_engagement(self.ctx, guid, victim, true)
         {

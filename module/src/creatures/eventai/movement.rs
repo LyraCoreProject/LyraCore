@@ -454,6 +454,14 @@ pub(crate) fn drop_lifecycle(ctx: &ReducerContext, creature_guid: u64) {
     reset_revision(ctx, creature_guid);
 }
 
+/// Ends a return home without its reached-home event, as a new vmangos movement generator does.
+pub(crate) fn end_return(ctx: &ReducerContext, creature_guid: u64) {
+    ctx.db
+        .game_creature_ai_returning_home()
+        .creature_guid()
+        .delete(creature_guid);
+}
+
 pub(crate) fn returning_home(ctx: &ReducerContext, creature_guid: u64) -> bool {
     ctx.db
         .game_creature_ai_returning_home()

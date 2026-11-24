@@ -465,6 +465,27 @@ fn failed_command_aborts_its_list_and_retry_leaves_the_other_list_effects() {
 }
 
 #[test]
+fn a_scripted_attack_start_ends_the_return_home() {
+    let definition = definition(
+        EventAiSubject::Entry(ENTRY),
+        91,
+        InstructionSelection::All,
+        vec![CreatureInstruction::AttackStart(
+            InstructionTarget::ProvidedTarget,
+        )],
+    );
+    let mut scenario = world().eventai_native_definition(definition);
+    scenario
+        .eventai_returning_home
+        .borrow_mut()
+        .insert(CREATURE);
+    dispatch(&mut scenario, CREATURE);
+
+    assert!(scenario.eventai_returning_home.borrow().is_empty());
+    assert_eq!(scenario.victims(), [(CREATURE, TARGET)]);
+}
+
+#[test]
 fn command_failure_without_abort_continues_and_spends_the_opportunity() {
     let mut definition = command_list_definition(false, vec![]);
     definition.rules[0].instructions[0] =
