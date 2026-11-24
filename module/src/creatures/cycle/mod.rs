@@ -208,6 +208,7 @@ pub(crate) trait IdleSink {
     fn aim_at_waypoint(&mut self, guid: u64, waypoint_id: u64);
     fn reached_home(&mut self, guid: u64);
     fn teleport(&mut self, guid: u64, at: Point);
+    fn leg_parked(&self, guid: u64) -> bool;
     fn commit_leg(&mut self, guid: u64, leg: Leg);
 }
 
@@ -1409,6 +1410,8 @@ fn return_home<W: IdleSink + MotionSink>(w: &mut W, tick: &TickContext, c: &Idle
     let (hdx, hdy) = (home.at.x - c.at.x, home.at.y - c.at.y);
     if hdx * hdx + hdy * hdy <= RETURN_LEASH_SQ || w.movement_suppressed(c.guid) {
         w.reached_home(c.guid);
+    } else if w.leg_parked(c.guid) {
+        // A stop written earlier this firing is the creature's one movement row.
     } else if !walk_home(w, tick, c, home) {
         w.teleport(c.guid, home.at);
     }

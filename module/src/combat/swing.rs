@@ -986,6 +986,19 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     if !crate::combat::may_harm(ctx, &attacker, &target) {
         return;
     }
+    // vmangos Spell::CheckAtDelay tests evade again when the shot lands.
+    if crate::creatures::eventai::movement::returning_home(ctx, shot.target_guid) {
+        if shot.ranged_spell_id != 0 {
+            crate::native::combat::spell_log_miss(
+                ctx,
+                shot.attacker_guid,
+                shot.target_guid,
+                shot.ranged_spell_id,
+                crate::spell::CAST_MISS_EVADE,
+            );
+        }
+        return;
+    }
     // An auto-repeat shot lands as a white hit; a Weapon Strike also keeps its spell.
     let strike = ctx
         .db

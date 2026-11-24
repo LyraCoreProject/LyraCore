@@ -2496,8 +2496,30 @@ impl IdleSink for Scenario {
         }
     }
     fn teleport(&mut self, guid: u64, at: Point) {
-        self.place(guid, at, None, None);
-        self.drop_leg(guid);
+        let Some(c) = self.place(guid, at, None, None) else {
+            return;
+        };
+        self.record(MoveEffect {
+            guid,
+            start: at,
+            dest: at,
+            dur_ms: 0,
+            spline_id: self.next_spline_id(guid),
+            run: false,
+            map_id: c.map_id,
+            instance_id: c.instance_id,
+            grid: c.grid,
+            cell: c.cell,
+            facing: false,
+            facing_angle: 0.0,
+        });
+        self.park_leg(guid, at, c.map_id, c.instance_id);
+    }
+    fn leg_parked(&self, guid: u64) -> bool {
+        self.legs
+            .borrow()
+            .iter()
+            .any(|leg| leg.guid == guid && leg.dur_ms == 0)
     }
     fn reached_home(&mut self, guid: u64) {
         if !self.eventai_returning_home.borrow_mut().remove(&guid) {
@@ -3998,10 +4020,35 @@ fn a_creature_with_no_path_home_teleports_there_and_ends_its_return() {
     let mut w = returning_wolf(p(0.0, 20.0, 10.0), home).detour(WOLF, (0.0, 20.0));
     run_once(&mut w);
     assert_eq!(w.at(WOLF).at, home, "no step toward home means a teleport");
+    assert!(
+        w.effects().len() == 1 && w.effects()[0].dest == home && w.effects()[0].dur_ms == 0,
+        "the teleport tells observers with one zero-length leg at home: {:?}",
+        w.effects()
+    );
 
     w.advance_clock(1_000_000);
     run_once(&mut w);
     assert!(w.eventai_returning_home.borrow().is_empty());
+}
+
+#[test]
+fn a_stop_written_this_firing_defers_the_teleport_home_to_the_next_firing() {
+    let (start, home) = (p(0.0, 20.0, 10.0), p(0.0, 0.0, 10.0));
+    let mut w = returning_wolf(start, home)
+        .flying(WOLF, start, p(0.0, 10.0, 10.0), 0, 7_500)
+        .detour(WOLF, (0.0, 20.0));
+    w.legs.borrow_mut()[0].waypoints = vec![(0.0, 15.0, 10.0), (0.0, 10.0, 10.0)];
+    w.obstructed_paths.borrow_mut().insert(WOLF);
+    run_once(&mut w);
+    assert!(
+        w.effects().len() == 1 && w.at(WOLF).at == start,
+        "the obstruction stop is the one row of the firing: {:?}",
+        w.effects()
+    );
+
+    w.advance_clock(1_000_000);
+    run_once(&mut w);
+    assert_eq!(w.at(WOLF).at, home, "the next firing teleports");
 }
 
 #[test]

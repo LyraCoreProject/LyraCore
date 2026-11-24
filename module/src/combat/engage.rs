@@ -936,20 +936,25 @@ pub(crate) fn apply_start_ranged_attack(
 
     let ranged_weapon = equipped_ranged_weapon(ctx, attacker.guid)
         .ok_or_else(|| "no ranged weapon equipped".to_string())?;
-    let target = attack_target(ctx, &attacker, target_guid).map_err(|refusal| {
-        let reason = match &refusal {
-            AttackRefusal::DeadTarget => Reason::TargetDead,
-            AttackRefusal::Refused(refusal)
-                if refusal.kind == ActionRefusalKind::OtherPartition =>
-            {
-                Reason::OutOfRange
-            }
-            AttackRefusal::FriendlyTarget | AttackRefusal::Evading | AttackRefusal::Refused(_) => {
-                Reason::Unreported
-            }
-        };
-        CastGateRefusal::other(reason, ActionRefusal::from(refusal).detail)
-    })?;
+    let target = match attack_target(ctx, &attacker, target_guid) {
+        // vmangos lets a shot go at an evading creature and shows the evade.
+        Err(AttackRefusal::Evading) => crate::helpers::live_entity(ctx, target_guid)
+            .map_err(|_| "no such target".to_string())?,
+        result => result.map_err(|refusal| {
+            let reason = match &refusal {
+                AttackRefusal::DeadTarget => Reason::TargetDead,
+                AttackRefusal::Refused(refusal)
+                    if refusal.kind == ActionRefusalKind::OtherPartition =>
+                {
+                    Reason::OutOfRange
+                }
+                AttackRefusal::FriendlyTarget
+                | AttackRefusal::Evading
+                | AttackRefusal::Refused(_) => Reason::Unreported,
+            };
+            CastGateRefusal::other(reason, ActionRefusal::from(refusal).detail)
+        })?,
+    };
     {
         let (dx, dy, dz) = (
             target.x - attacker.x,

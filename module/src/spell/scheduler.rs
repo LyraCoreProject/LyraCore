@@ -68,6 +68,17 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
     if !crate::time::scheduler_authorized(ctx) {
         return;
     }
+    // vmangos Spell::CheckAtDelay tests evade again when the spell lands.
+    if crate::creatures::eventai::movement::returning_home(ctx, sched.target_guid) {
+        crate::native::combat::spell_log_miss(
+            ctx,
+            sched.caster_guid,
+            sched.target_guid,
+            sched.spell_id,
+            crate::spell::CAST_MISS_EVADE,
+        );
+        return;
+    }
     // vmangos deals spell damage only when it is non-zero before absorb and resist.
     let (dealt, absorbed) = if sched.after_resist > 0 || sched.resisted > 0 {
         crate::combat::deal_damage(

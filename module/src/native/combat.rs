@@ -10,14 +10,12 @@ use crate::{game_melee_attack, CombatEvent, MeleeAttack};
 
 pub(super) fn attack(ctx: &ReducerContext, guid: u64, target: u64) -> Result<(), Rollback> {
     super::actor(ctx, guid)?;
-    let already_armed = ctx
-        .db
-        .game_melee_attack()
-        .attacker_guid()
-        .find(guid)
+    let current = ctx.db.game_melee_attack().attacker_guid().find(guid);
+    let already_armed = current
+        .as_ref()
         .is_some_and(|row| row.target_guid == target && row.ranged_spell_id == 0);
     crate::combat::start_melee_attack(ctx, guid, target)
-        .map_err(|refusal| attack_rollback(refusal, guid, target))?;
+        .map_err(|refusal| attack_rollback(refusal, guid, target, current.is_some()))?;
     if already_armed {
         emit(
             ctx,
@@ -31,7 +29,7 @@ pub(super) fn attack(ctx: &ReducerContext, guid: u64, target: u64) -> Result<(),
     Ok(())
 }
 
-fn attack_rollback(refusal: AttackRefusal, guid: u64, target: u64) -> Rollback {
+fn attack_rollback(refusal: AttackRefusal, guid: u64, target: u64, has_victim: bool) -> Rollback {
     match refusal {
         AttackRefusal::DeadTarget => Rollback::reply(
             ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET,
@@ -41,7 +39,8 @@ fn attack_rollback(refusal: AttackRefusal, guid: u64, target: u64) -> Rollback {
             ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK,
             "target is friendly",
         ),
-        // vmangos HandleAttackSwingOpcode answers a refused attack with an attack stop.
+        // vmangos HandleAttackSwingOpcode stops the client's attack only when there is no victim.
+        AttackRefusal::Evading if has_victim => Rollback::silent("target is evading"),
         AttackRefusal::Evading => Rollback::reply(
             ServerOpcodeMessage::SMSG_ATTACKSTOP(Box::new(codec::build_attack_stop(guid, target))),
             "target is evading",
@@ -297,7 +296,8 @@ mod tests {
 
     #[test]
     fn an_attack_on_a_returning_creature_is_answered_with_an_attack_stop() {
-        let Rollback::Refusal { replies, .. } = attack_rollback(AttackRefusal::Evading, 1, 2)
+        let Rollback::Refusal { replies, .. } =
+            attack_rollback(AttackRefusal::Evading, 1, 2, false)
         else {
             panic!("an evading target is a refusal, not a failure");
         };
@@ -310,5 +310,14 @@ mod tests {
             (replies[0].opcode, &replies[0].body),
             (stop.opcode, &stop.body)
         );
+    }
+
+    #[test]
+    fn an_attack_on_a_returning_creature_keeps_the_current_victim_without_a_stop() {
+        let Rollback::Refusal { replies, .. } = attack_rollback(AttackRefusal::Evading, 1, 2, true)
+        else {
+            panic!("an evading target is a refusal, not a failure");
+        };
+        assert!(replies.is_empty());
     }
 }

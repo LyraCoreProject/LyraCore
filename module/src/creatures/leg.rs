@@ -189,6 +189,12 @@ pub(crate) fn stop_facing(ctx: &ReducerContext, mover: &mut WorldEntity, point: 
     face(ctx, mover, (point.1 - mover.y).atan2(point.0 - mover.x));
 }
 
+/// Writes a zero-length spline at the mover's stored position, which tells observers where it is.
+pub(crate) fn park(ctx: &ReducerContext, mover: &WorldEntity) {
+    let at = (mover.x, mover.y, mover.z);
+    Origin::of(mover).row(ctx, at, 0).replace(ctx);
+}
+
 /// Replaces a leg the mover has with a zero-length spline at its stored position.
 pub(crate) fn halt(ctx: &ReducerContext, mover: &WorldEntity) {
     halt_at(

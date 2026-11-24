@@ -572,10 +572,19 @@ impl IdleSink for CtxWorld<'_> {
             e.update(self.ctx);
         }
     }
-    // Deletes the leg instead of halting it, so a stop `advance_legs` wrote this firing is not doubled.
     fn teleport(&mut self, guid: u64, at: Point) {
-        self.place(guid, at, None, None);
-        self.drop_leg(guid);
+        if let Some(e) = self.place(guid, at, None, None) {
+            leg::park(self.ctx, &e);
+        }
+    }
+    // `advance_legs` drops a zero-length leg next firing, so one here was written this firing.
+    fn leg_parked(&self, guid: u64) -> bool {
+        self.ctx
+            .db
+            .game_creature_spline()
+            .guid()
+            .find(guid)
+            .is_some_and(|leg| leg.dur_ms == 0)
     }
     fn reached_home(&mut self, guid: u64) {
         crate::creatures::eventai_on_reached_home(self.ctx, guid);
