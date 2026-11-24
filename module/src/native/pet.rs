@@ -1,5 +1,10 @@
-use crate::creatures::{pet_guid_for, PET_NAME_INVALID};
-use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage};
+use crate::creatures::{pet_guid_for, PetSummonRefusal, PET_NAME_INVALID};
+use lyracore_protocol::{
+    codec,
+    messages::vanilla::{
+        opcodes::ServerOpcodeMessage, PetTameFailureReason, SMSG_PET_TAME_FAILURE,
+    },
+};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{game_native_player, NativeAoi, Rollback};
@@ -23,6 +28,35 @@ pub(super) fn rename(
         }
         PetRenameRefusal::Refused(refusal) => refusal.into(),
     })
+}
+
+// vmangos `WorldSession::HandlePetAbandon` sends no reply; the removal clears the pet bar.
+pub(super) fn abandon(ctx: &ReducerContext, owner: u64, pet: u64) -> Result<(), Rollback> {
+    super::actor(ctx, owner)?;
+    Ok(crate::creatures::abandon_pet(ctx, owner, pet)?)
+}
+
+fn tame_failure(refusal: PetSummonRefusal) -> ServerOpcodeMessage {
+    let reason = match refusal {
+        PetSummonRefusal::AnotherPetOut => PetTameFailureReason::AnotherSummonActive,
+        PetSummonRefusal::NoPet => PetTameFailureReason::NoPetAvailable,
+        PetSummonRefusal::Dead => PetTameFailureReason::Dead,
+        PetSummonRefusal::NotDead => PetTameFailureReason::NotDead,
+    };
+    ServerOpcodeMessage::SMSG_PET_TAME_FAILURE(SMSG_PET_TAME_FAILURE { reason })
+}
+
+pub(super) fn tame_failure_packet(refusal: PetSummonRefusal) -> lyracore_protocol::world::Packet {
+    super::bounded(tame_failure(refusal))
+}
+
+pub(crate) fn pet_refused(ctx: &ReducerContext, owner: u64, refusal: PetSummonRefusal) {
+    super::send_to_character(
+        ctx,
+        owner,
+        tame_failure(refusal),
+        super::EncodeFailure::Panic,
+    );
 }
 
 fn values(row: &HunterPetProtocol, owner: bool) -> ServerOpcodeMessage {
@@ -153,5 +187,23 @@ pub(crate) fn changed(
             packet.opcode,
             packet.body,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pet_refusals_send_the_1_12_1_tame_failure_reason() {
+        for (refusal, body) in [
+            (PetSummonRefusal::AnotherPetOut, 0x05),
+            (PetSummonRefusal::NoPet, 0x07),
+            (PetSummonRefusal::Dead, 0x0A),
+            (PetSummonRefusal::NotDead, 0x0B),
+        ] {
+            let packet = tame_failure_packet(refusal);
+            assert_eq!((packet.opcode, packet.body), (0x0173, vec![body]));
+        }
     }
 }

@@ -573,6 +573,9 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_PET_RENAME(request) => {
             return super::pet::rename(ctx, guid, request.pet.guid(), &request.name);
         }
+        ClientOpcodeMessage::CMSG_PET_ABANDON(request) => {
+            return super::pet::abandon(ctx, guid, request.pet.guid());
+        }
         ClientOpcodeMessage::CMSG_PET_ACTION(request) => {
             return Ok(crate::creatures::apply_pet_command(
                 ctx,

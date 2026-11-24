@@ -122,6 +122,8 @@ pub(crate) struct CastGateRefusal {
     pub(crate) refusal: CastRefusal,
     /// The equip error the caster also gets, as vmangos `Spell::CheckItems` sends one.
     pub(crate) item_refusal: Option<lyracore_shared::item::ItemRefusal>,
+    /// The tame failure the caster also gets, as vmangos `Spell::CheckCast` sends one for pets.
+    pub(crate) pet_refusal: Option<crate::creatures::PetSummonRefusal>,
 }
 
 impl CastGateRefusal {
@@ -134,11 +136,22 @@ impl CastGateRefusal {
             reason,
             refusal: CastRefusal::new(kind, message.into()),
             item_refusal: None,
+            pet_refusal: None,
         }
     }
 
     pub(crate) fn other(reason: CastRefusalReason, message: impl Into<String>) -> Self {
         Self::new(CastRefusalKind::Other, reason, message)
+    }
+}
+
+// vmangos answers a pet Refusal with SPELL_FAILED_DONT_REPORT after the tame failure.
+impl From<crate::creatures::PetSummonRefusal> for CastGateRefusal {
+    fn from(refusal: crate::creatures::PetSummonRefusal) -> Self {
+        Self {
+            pet_refusal: Some(refusal),
+            ..Self::other(CastRefusalReason::Unreported, refusal.to_string())
+        }
     }
 }
 

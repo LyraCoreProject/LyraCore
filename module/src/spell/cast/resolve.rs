@@ -1,4 +1,4 @@
-use lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
+use lyracore_shared::spell::taxonomy::{CAST_FLAG_RANGED_AUTO_REPEAT, E_REVIVE_PET};
 use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
@@ -1853,6 +1853,9 @@ impl GateCheck<'_> {
             CastGate::Tame => {
                 if has_effect(E_TAME_CREATURE) {
                     crate::creatures::validate_tame(ctx, caster, target_guid)?;
+                }
+                if has_effect(E_REVIVE_PET) {
+                    crate::creatures::validate_revive_pet(ctx, caster)?;
                 }
                 Ok(())
             }

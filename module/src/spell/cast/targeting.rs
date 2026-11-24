@@ -1,5 +1,6 @@
 use crate::spell::source_behavior;
 use lyracore_shared::constants::tracer_spell;
+use lyracore_shared::spell::taxonomy::E_REVIVE_PET;
 use lyracore_shared::spell_custom as custom;
 
 use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
@@ -780,6 +781,7 @@ pub(crate) fn apply_effect(
         }
         EffectKind::Resurrect
         | EffectKind::SummonPet
+        | EffectKind::RevivePet
         | EffectKind::TameCreature
         | EffectKind::SummonObject
         | EffectKind::SummonPlayer
@@ -1486,8 +1488,15 @@ fn apply_character_effect(
             EffectHit::none()
         }
         E_SUMMON_PET => {
-            let entry = e.p0.max(0) as u32;
-            crate::creatures::summon_pet(ctx, caster_guid, entry);
+            // Call Pet (883) is SPELL_EFFECT_SUMMON_PET with no creature entry.
+            match e.p0.max(0) as u32 {
+                0 => crate::creatures::call_hunter_pet(ctx, caster_guid),
+                entry => crate::creatures::summon_pet(ctx, caster_guid, entry),
+            }
+            EffectHit::none()
+        }
+        E_REVIVE_PET => {
+            crate::creatures::revive_hunter_pet(ctx, caster_guid, points);
             EffectHit::none()
         }
         E_TAME_CREATURE => {

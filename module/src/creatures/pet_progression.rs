@@ -1,6 +1,8 @@
 use spacetimedb::ReducerContext;
 
-use crate::{game_creature_template, game_hunter_pet, game_world_entity, HunterPet};
+use crate::{
+    game_creature_template, game_hunter_pet, game_world_entity, CreatureTemplate, HunterPet,
+};
 
 const MAX_LOYALTY_LEVEL: u8 = 6;
 const LOYALTY_LEVEL_UP: [u32; 6] = [5_500, 11_500, 17_000, 23_500, 31_000, 39_500];
@@ -118,20 +120,33 @@ pub(crate) fn update_pet_loyalty_from_care(
     true
 }
 
+fn scaled_max_health(base_level: u32, base_health: u32, level: u32) -> Option<u32> {
+    (base_level != 0).then(|| {
+        ((u64::from(base_health.max(1)) * u64::from(level.max(1))) / u64::from(base_level))
+            .clamp(1, u64::from(u32::MAX)) as u32
+    })
+}
+
+/// A Hunter pet's maximum health at `level`; `None` when the template has no base level.
+pub(super) fn hunter_pet_max_health(
+    ctx: &ReducerContext,
+    template: &CreatureTemplate,
+    level: u32,
+) -> Option<u32> {
+    let base_health = super::catalogue::level_stats(ctx, template, template.level).map_or_else(
+        || super::scale_health_for_rank(template.health, template.rank),
+        |stats| stats.health,
+    );
+    scaled_max_health(template.level, base_health, level)
+}
+
 fn refreshed_pet_health(
     current_health: u32,
     current_max_health: u32,
-    base_level: u32,
-    base_health: u32,
-    level: u32,
+    new_max_health: Option<u32>,
 ) -> (u32, u32) {
     let old_max = current_max_health.max(1);
-    let new_max = if base_level == 0 {
-        old_max
-    } else {
-        ((u64::from(base_health.max(1)) * u64::from(level.max(1))) / u64::from(base_level))
-            .clamp(1, u64::from(u32::MAX)) as u32
-    };
+    let new_max = new_max_health.unwrap_or(old_max);
     let health = (u64::from(current_health) * u64::from(new_max))
         .div_ceil(u64::from(old_max))
         .clamp(1, u64::from(new_max)) as u32;
@@ -155,16 +170,10 @@ fn refresh_live_level(ctx: &ReducerContext, pet: &HunterPet, level: u32) {
         live.update(ctx);
         return;
     };
-    let base_health = super::catalogue::level_stats(ctx, &template, template.level).map_or_else(
-        || super::scale_health_for_rank(template.health, template.rank),
-        |stats| stats.health,
-    );
     let (health, max_health) = refreshed_pet_health(
         live.health,
         live.max_health,
-        template.level,
-        base_health,
-        level,
+        hunter_pet_max_health(ctx, &template, level),
     );
     live.level = level;
     live.health = health;
@@ -295,6 +304,13 @@ mod tests {
 
     #[test]
     fn level_refresh_preserves_health_proportion_and_grows_maximum() {
-        assert_eq!(refreshed_pet_health(50, 100, 10, 100, 12), (60, 120));
+        assert_eq!(
+            refreshed_pet_health(50, 100, scaled_max_health(10, 100, 12)),
+            (60, 120)
+        );
+        assert_eq!(
+            refreshed_pet_health(50, 100, scaled_max_health(0, 100, 12)),
+            (50, 100)
+        );
     }
 }

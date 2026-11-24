@@ -455,7 +455,20 @@ percentage, energy full and rage to 0.
 Hunter pets keep a durable identity in `game_hunter_pet`. A materialized pet is an ordinary owned
 `game_world_entity`, classified by `game_live_pet_kind`; summoned demons have no Hunter identity or
 care state. Taming retires the wild entity and arms its authored `game_creature_spawn` for a later
-respawn, so the spawn point never moves into the pet identity.
+respawn, so the spawn point never moves into the pet identity. Tame, Call Pet, Revive Pet and world
+entry build the live pet from the durable row through one builder: Revive Pet at its effect's
+percent of maximum health, the others with the saved health and power, or at full health when none
+are saved.
+
+`game_hunter_pet` end-appends `presence`, `display_id`, `saved_health` and `saved_power`, each with
+default 0. `presence` is 1 while the pet is out, including across logout and Transfer, so world
+entry rebuilds it; 0 after a dismiss, a spirit release or the owner's death, so only Call Pet brings
+it back; 2 once it dies, so only Revive Pet does. Abandon, and a summon with a creature entry over a
+live Hunter pet, delete the row. `display_id` is the pet's model; 0 until the first build, which
+stores the model it chose. `saved_health` and `saved_power` hold the vitals of a living pet that
+left the world; 0 health means none are saved, and each build clears them. A Transfer carries all
+four columns under the `game_hunter_pet@presence-1` tag; see the
+[Hunter pet presence migration](danger-zones.md#hunter-pet-presence-migration).
 
 ### Forms (`module/src/form/`)
 

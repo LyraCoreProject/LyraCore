@@ -282,6 +282,15 @@ Setup. A Hunter who knows Tame Beast and has no pet, next to a tameable boar at 
 - White swing damage follows 75%, 100% and 125% of one base range while unhappy, content and happy.
   A Warlock Imp keeps its shared bar and shows no Hunter care data. The wild boar returns after the
   spawn delay.
+- Dismiss the pet from its bar, then cast Call Pet. The same pet returns beside the Hunter with its
+  name, model, level, loyalty, happiness and pet bar. Tame Beast is refused while the pet exists.
+- Log out with the pet out and log back in: the pet is out with its bar. After a dismiss, the next
+  login brings no pet.
+- Call Pet with no pet, or after the pet dies, shows the client's tame-failure text and brings none.
+- After the pet dies, Revive Pet brings it back beside the Hunter at 15% health with its bar. With
+  the pet out, dismissed or absent, Revive Pet shows the tame-failure text and costs no mana.
+- Wound the pet, dismiss it and cast Call Pet: it returns with the same health, not full.
+- Abandon Pet from the pet portrait: the pet and its bar disappear, and Tame Beast works again.
 
 ## Mount
 

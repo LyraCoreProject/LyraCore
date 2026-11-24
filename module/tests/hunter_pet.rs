@@ -12,11 +12,11 @@ const PET_NAME_INVALID: &str = "PET_NAME_INVALID";
 /// A player's hunter pet keeps the owner's low guid under the unit high part.
 const HUNTER_PET: u64 = guid::compose(guid::UNIT, 1);
 
-fn wild_boar(shard: &Standalone) -> String {
+fn wild_boar(shard: &Standalone, owner: &str) -> String {
     let before = shard.query_rows(&format!(
         "SELECT guid FROM game_world_entity WHERE entry = {BOAR} AND owner_guid = 0"
     ));
-    shard.assert_call("debug_spawn_at_feet", &[HUNTER, BOAR, "5"]);
+    shard.assert_call("debug_spawn_at_feet", &[owner, BOAR, "5"]);
     let rows = shard.query_rows(&format!(
         "SELECT guid FROM game_world_entity WHERE entry = {BOAR} AND owner_guid = 0"
     ));
@@ -26,6 +26,108 @@ fn wild_boar(shard: &Standalone) -> String {
         .collect();
     assert_eq!(added.len(), 1);
     added[0]["guid"].clone()
+}
+
+// `PetPresence` codes in `game_hunter_pet.presence`.
+const DISMISSED: &str = "0";
+const OUT: &str = "1";
+const DEAD: &str = "2";
+/// CMSG_PET_ACTION data 0x07000003: a command action carrying COMMAND_DISMISS.
+const DISMISS: &str = "117440515";
+/// CMSG_PET_ACTION data 0x07000000: a command action carrying COMMAND_STAY.
+const STAY: &str = "117440512";
+
+fn presence(shard: &Standalone) -> String {
+    shard
+        .query_rows("SELECT presence FROM game_hunter_pet WHERE owner_guid = 1")
+        .remove(0)["presence"]
+        .clone()
+}
+
+fn live_pet(shard: &Standalone) -> Option<Row> {
+    shard
+        .query_rows(&format!(
+            "SELECT owner_guid, entry, level, health, max_health, display_id FROM game_world_entity WHERE guid = {HUNTER_PET}"
+        ))
+        .pop()
+}
+
+/// Rewrites the fixture Tame Beast into an instant self-cast of `kind` with `points` as its amount.
+fn rewrite_tame(shard: &Standalone, kind: u8, points: i32) {
+    use lyracore_shared::spell::taxonomy::T_SELF;
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET cast_flags = 0, duration_ms = 0 WHERE spell_id = {TAME}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_spell_effect SET kind = {kind}, target = {T_SELF}, p0 = 0, base_points = {points}, die_sides = 0 WHERE spell_id = {TAME}"
+    ));
+}
+
+/// Call Pet is SPELL_EFFECT_SUMMON_PET with no creature entry.
+fn make_tame_call_pet(shard: &Standalone) {
+    rewrite_tame(shard, lyracore_shared::spell::taxonomy::E_SUMMON_PET, 0);
+}
+
+/// Revive Pet (982) returns the pet with 15 percent of its maximum health.
+const REVIVE_PERCENT: u32 = 15;
+const REVIVE_PET_SPELL: u64 = 982;
+
+fn make_tame_revive_pet(shard: &Standalone) {
+    rewrite_tame(
+        shard,
+        lyracore_shared::spell::taxonomy::E_REVIVE_PET,
+        REVIVE_PERCENT as i32,
+    );
+}
+
+fn cast_at_self(shard: &Standalone) {
+    assert!(
+        poll_until(POLL_TIMEOUT, || shard
+            .call("debug_force_cast_at", &[HUNTER, TAME, HUNTER])
+            .status
+            .success()),
+        "the cast must resolve after the global cooldown"
+    );
+}
+
+fn assert_cast_refused(shard: &Standalone, reason: &str) {
+    assert!(
+        poll_until(POLL_TIMEOUT, || {
+            let output = shard.call("debug_force_cast_at", &[HUNTER, TAME, HUNTER]);
+            !output.status.success() && String::from_utf8_lossy(&output.stderr).contains(reason)
+        }),
+        "the cast must be refused because {reason}"
+    );
+}
+
+fn saved_vitals(shard: &Standalone) -> (u32, u32) {
+    let row = shard
+        .query_rows("SELECT saved_health, saved_power FROM game_hunter_pet WHERE owner_guid = 1")
+        .remove(0);
+    (number(&row, "saved_health"), number(&row, "saved_power"))
+}
+
+/// Regeneration may add a little health between the build and the read, never a full heal.
+fn assert_wounded(live: &Row, at_least: u32) {
+    let health: u32 = number(live, "health");
+    assert!(
+        (at_least..number::<u32>(live, "max_health")).contains(&health),
+        "health {health} is below {at_least} or a full heal in {live:?}"
+    );
+}
+
+fn bind_session(shard: &Standalone) {
+    let key = serde_json::to_string(&vec![7u8; 40]).unwrap();
+    shard.assert_call(
+        "establish_session",
+        &[HUNTER, &key, r#"{"__identity__":"0x1"}"#],
+    );
+}
+
+fn relog(shard: &Standalone) {
+    shard.assert_call("debug_logout_character", &[HUNTER]);
+    assert!(live_pet(shard).is_none(), "logout removes the live pet");
+    shard.assert_call("gw_player_login", &[HUNTER, &actor(HUNTER)]);
 }
 
 fn hunter(name: &str) -> Standalone {
@@ -42,9 +144,9 @@ fn hunter(name: &str) -> Standalone {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn tame_dismiss_and_retame_preserve_one_durable_identity_and_clean_live_state() {
+fn tame_and_dismiss_keep_one_durable_identity_and_a_second_tame_is_refused() {
     let shard = hunter("hunter-pet-lifetime");
-    let wild = wild_boar(&shard);
+    let wild = wild_boar(&shard, HUNTER);
     shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
     let pet = HUNTER_PET.to_string();
     assert!(shard
@@ -88,7 +190,7 @@ fn tame_dismiss_and_retame_preserve_one_durable_identity_and_clean_live_state() 
         shard.query_rows("SELECT live_pet_guid FROM game_hunter_pet_protocol WHERE owner_guid = 1");
     assert_eq!(number::<u64>(&protocol[0], "live_pet_guid"), HUNTER_PET);
 
-    shard.assert_call("debug_pet_command", &[HUNTER, "117440515", "0"]);
+    shard.assert_call("debug_pet_command", &[HUNTER, DISMISS, "0"]);
     for table in [
         "game_world_entity",
         "game_entity_motion",
@@ -114,25 +216,339 @@ fn tame_dismiss_and_retame_preserve_one_durable_identity_and_clean_live_state() 
         identities
     );
 
-    let replacement = wild_boar(&shard);
+    assert_eq!(presence(&shard), DISMISSED);
+
+    let replacement = wild_boar(&shard, HUNTER);
+    assert!(
+        poll_until(POLL_TIMEOUT, || {
+            let output = shard.call("debug_force_cast_at", &[HUNTER, TAME, &replacement]);
+            !output.status.success()
+                && String::from_utf8_lossy(&output.stderr).contains("already has a pet")
+        }),
+        "a Hunter with a durable pet cannot tame another"
+    );
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT owner_guid FROM game_world_entity WHERE guid = {replacement}"
+        ))[0]["owner_guid"],
+        "0"
+    );
+    assert!(live_pet(&shard).is_none());
+    assert_eq!(
+        shard.query_rows("SELECT pet_id, creature_entry FROM game_hunter_pet WHERE owner_guid = 1"),
+        identities
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn call_pet_builds_the_dismissed_pet_from_its_durable_identity() {
+    let shard = hunter("hunter-pet-call");
+    let wild = wild_boar(&shard, HUNTER);
+    shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
+    let tamed_display = live_pet(&shard).expect("tamed pet")["display_id"].clone();
+    assert!(rename(&shard, HUNTER, HUNTER_PET, "Fang").status.success());
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = 7 WHERE guid = {HUNTER_PET}"
+    ));
+    shard.assert_call("debug_pet_command", &[HUNTER, DISMISS, "0"]);
+    let saved_health = saved_vitals(&shard).0;
+    assert!(
+        saved_health >= 7,
+        "a dismiss saves the wounded pet's health"
+    );
+    shard.assert_sql(
+        "UPDATE game_hunter_pet SET level = 12, loyalty_level = 3, happiness = 700000 WHERE owner_guid = 1",
+    );
+
+    make_tame_call_pet(&shard);
+    cast_at_self(&shard);
+    let live = live_pet(&shard).expect("Call Pet builds the live pet");
+    assert_eq!(live["owner_guid"], HUNTER);
+    assert_eq!(live["entry"], BOAR);
+    assert_eq!(live["level"], "12");
+    assert_wounded(&live, saved_health);
+    assert_eq!(
+        saved_vitals(&shard),
+        (0, 0),
+        "the built pet holds its vitals"
+    );
+    assert_eq!(live["display_id"], tamed_display);
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT hunter_pet_id FROM game_live_pet_kind WHERE pet_guid = {HUNTER_PET}"
+        ))[0]["hunter_pet_id"],
+        HUNTER
+    );
+    let protocol = shard
+        .query_rows(
+            "SELECT live_pet_guid, name, level, loyalty_level, happiness FROM game_hunter_pet_protocol WHERE owner_guid = 1",
+        )
+        .remove(0);
+    assert_eq!(number::<u64>(&protocol, "live_pet_guid"), HUNTER_PET);
+    assert_eq!(protocol["name"], "Fang");
+    assert_eq!(protocol["level"], "12");
+    assert_eq!(protocol["loyalty_level"], "3");
+    assert_eq!(protocol["happiness"], "700000");
+    assert_eq!(live_pet_flags(&shard) & PET_RENAME_FLAG, 0);
+    assert_eq!(presence(&shard), OUT);
+
+    cast_at_self(&shard);
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT guid FROM game_world_entity WHERE owner_guid = {HUNTER}"
+            ))
+            .len(),
+        1,
+        "Call Pet with the pet out adds nothing"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_out_pet_returns_at_world_entry_and_a_dismissed_pet_stays_away() {
+    let shard = hunter("hunter-pet-world-entry");
+    let wild = wild_boar(&shard, HUNTER);
+    shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
+    let tamed = live_pet(&shard).expect("tamed pet");
+    bind_session(&shard);
+
+    relog(&shard);
+    assert_eq!(live_pet(&shard), Some(tamed));
+    assert_eq!(presence(&shard), OUT);
+    shard.assert_call("gw_player_world_port", &[HUNTER, &actor(HUNTER)]);
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT guid FROM game_world_entity WHERE owner_guid = {HUNTER}"
+            ))
+            .len(),
+        1,
+        "a world port keeps the one live pet"
+    );
+
+    shard.assert_call("debug_pet_command", &[HUNTER, DISMISS, "0"]);
+    assert_eq!(presence(&shard), DISMISSED);
+    relog(&shard);
+    assert!(live_pet(&shard).is_none());
+    assert_eq!(presence(&shard), DISMISSED);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_dead_pet_answers_neither_call_pet_nor_world_entry() {
+    let shard = hunter("hunter-pet-dead");
+    let wild = wild_boar(&shard, HUNTER);
+    shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
+    shard.assert_call("debug_kill_creature", &[HUNTER, &HUNTER_PET.to_string()]);
+    assert!(live_pet(&shard).is_none());
+    assert_eq!(presence(&shard), DEAD);
+    bind_session(&shard);
+    relog(&shard);
+    assert!(live_pet(&shard).is_none());
+
+    make_tame_call_pet(&shard);
+    cast_at_self(&shard);
+    assert!(
+        live_pet(&shard).is_none(),
+        "a dead pet waits for Revive Pet"
+    );
+    assert_eq!(presence(&shard), DEAD);
+
+    shard.assert_sql("DELETE FROM game_hunter_pet WHERE owner_guid = 1");
+    cast_at_self(&shard);
+    assert!(
+        live_pet(&shard).is_none(),
+        "Call Pet without a pet brings none"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn revive_pet_returns_only_a_dead_pet_and_it_stays_out_across_login() {
+    let shard = hunter("hunter-pet-revive");
+    let wild = wild_boar(&shard, HUNTER);
+    shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
+    make_tame_revive_pet(&shard);
+    assert_cast_refused(&shard, "already has a pet out");
+    assert_eq!(presence(&shard), OUT);
+
+    shard.assert_call("debug_kill_creature", &[HUNTER, &HUNTER_PET.to_string()]);
+    assert_eq!(presence(&shard), DEAD);
+    cast_at_self(&shard);
+    let live = live_pet(&shard).expect("Revive Pet builds the dead pet");
+    assert_eq!(live["owner_guid"], HUNTER);
+    assert_eq!(live["entry"], BOAR);
+    let max_health: u32 = number(&live, "max_health");
+    assert_wounded(&live, (max_health * REVIVE_PERCENT / 100).max(1));
+    assert_eq!(presence(&shard), OUT);
+
+    bind_session(&shard);
+    shard.assert_call("debug_logout_character", &[HUNTER]);
+    let saved_health = saved_vitals(&shard).0;
+    shard.assert_call("gw_player_login", &[HUNTER, &actor(HUNTER)]);
+    let relogged = live_pet(&shard).expect("a revived pet is out at login");
+    assert_wounded(&relogged, saved_health);
+
+    shard.assert_call("debug_pet_command", &[HUNTER, DISMISS, "0"]);
+    assert_cast_refused(&shard, "pet is not dead");
+    assert!(live_pet(&shard).is_none());
+    shard.assert_sql("DELETE FROM game_hunter_pet WHERE owner_guid = 1");
+    assert_cast_refused(&shard, "has no pet");
+    assert!(live_pet(&shard).is_none());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_tame_replaces_a_dead_pet_only_while_revive_pet_is_not_imported() {
+    use lyracore_shared::spell::taxonomy::E_REVIVE_PET;
+
+    let shard = hunter("hunter-pet-dead-retame");
+    let wild = wild_boar(&shard, HUNTER);
+    shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
+    assert!(rename(&shard, HUNTER, HUNTER_PET, "Fang").status.success());
+    shard.assert_call("debug_kill_creature", &[HUNTER, &HUNTER_PET.to_string()]);
+    assert_eq!(presence(&shard), DEAD);
+
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &(REVIVE_PET_SPELL << 2)),
+            ("spell_id", &REVIVE_PET_SPELL),
+            ("kind", &E_REVIVE_PET),
+        ],
+    );
+    let replacement = wild_boar(&shard, HUNTER);
+    assert!(
+        poll_until(POLL_TIMEOUT, || {
+            let output = shard.call("debug_force_cast_at", &[HUNTER, TAME, &replacement]);
+            !output.status.success()
+                && String::from_utf8_lossy(&output.stderr).contains("already has a pet")
+        }),
+        "with Revive Pet imported, a dead pet still blocks a tame"
+    );
+    assert_eq!(identity(&shard)["name"], "Fang");
+    assert_eq!(presence(&shard), DEAD);
+
+    shard.assert_sql(&format!(
+        "DELETE FROM game_spell_effect WHERE spell_id = {REVIVE_PET_SPELL}"
+    ));
     assert!(
         poll_until(POLL_TIMEOUT, || shard
             .call("debug_force_cast_at", &[HUNTER, TAME, &replacement])
             .status
             .success()),
-        "retaming must succeed after the global cooldown"
+        "without Revive Pet imported, a tame replaces the dead pet"
+    );
+    let replaced = identity(&shard);
+    assert_ne!(replaced["name"], "Fang");
+    assert_eq!(replaced["rename_allowed"], "true");
+    assert_eq!(presence(&shard), OUT);
+    assert!(live_pet(&shard).is_some());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn abandon_removes_the_hunter_pet_for_good_and_a_new_tame_succeeds() {
+    use std::io::Cursor;
+    use wow_world_messages::vanilla::{ClientMessage, CMSG_PET_ABANDON};
+
+    let mut shard = Standalone::start("hunter-pet-abandon");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
+    shard.assert_call(
+        "provision_account",
+        &["\"ABANDON\"", &credentials, &credentials],
+    );
+    let account =
+        shard.query_rows("SELECT id FROM game_account WHERE username = 'ABANDON'")[0]["id"].clone();
+    // Race 3 (Dwarf) with class 3 (Hunter); the remaining arguments are appearance.
+    shard.assert_call(
+        "create_character",
+        &[
+            &account,
+            "\"Abandoner\"",
+            "3",
+            "3",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+    );
+    let hunter: u64 = number(
+        &shard.query_rows("SELECT guid FROM game_character WHERE name = 'Abandoner'")[0],
+        "guid",
+    );
+    let owner = hunter.to_string();
+    let pet = guid::compose(guid::UNIT, guid::low(hunter));
+    let mut connection = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    connection
+        .call("native_world_open", serde_json::json!([42]))
+        .unwrap();
+    connection
+        .call("debug_native_enter_world", serde_json::json!([hunter]))
+        .unwrap();
+    shard.assert_call("debug_set_level", &[&owner, "60"]);
+    let wild = wild_boar(&shard, &owner);
+    shard.assert_call("debug_force_cast_at", &[&owner, TAME, &wild]);
+    shard.assert_call("debug_pet_command", &[&owner, STAY, "0"]);
+    assert!(!shard
+        .query_rows(&format!(
+            "SELECT * FROM game_pet_command WHERE owner_guid = {hunter}"
+        ))
+        .is_empty());
+
+    let mut frame = Vec::new();
+    CMSG_PET_ABANDON {
+        pet: wow_world_messages::Guid::new(pet),
+    }
+    .write_unencrypted_client(&mut Cursor::new(&mut frame))
+    .unwrap();
+    // A client frame is a two-byte size and a four-byte opcode before the body.
+    connection
+        .call(
+            "native_world_receive",
+            serde_json::json!([0x0176u32, &frame[6..]]),
+        )
+        .unwrap();
+    for (table, key, value) in [
+        ("game_world_entity", "guid", pet),
+        ("game_live_pet_kind", "pet_guid", pet),
+        ("game_hunter_pet", "owner_guid", hunter),
+        ("game_hunter_pet_protocol", "owner_guid", hunter),
+        ("game_pet_command", "owner_guid", hunter),
+    ] {
+        assert!(
+            shard
+                .query_rows(&format!("SELECT * FROM {table} WHERE {key} = {value}"))
+                .is_empty(),
+            "{table} keeps the abandoned pet"
+        );
+    }
+
+    let replacement = wild_boar(&shard, &owner);
+    assert!(
+        poll_until(POLL_TIMEOUT, || shard
+            .call("debug_force_cast_at", &[&owner, TAME, &replacement])
+            .status
+            .success()),
+        "a Hunter tames again after abandoning its pet"
     );
     assert_eq!(
-        shard.query_rows("SELECT pet_id, creature_entry FROM game_hunter_pet WHERE owner_guid = 1"),
-        identities
+        shard
+            .query_rows(&format!(
+                "SELECT presence FROM game_hunter_pet WHERE owner_guid = {hunter}"
+            ))
+            .remove(0)["presence"],
+        OUT
     );
-    assert_eq!(
-        shard.query_rows("SELECT * FROM game_live_pet_kind").len(),
-        1
-    );
-    let protocol =
-        shard.query_rows("SELECT live_pet_guid FROM game_hunter_pet_protocol WHERE owner_guid = 1");
-    assert_eq!(number::<u64>(&protocol[0], "live_pet_guid"), HUNTER_PET);
 }
 
 fn identity(shard: &Standalone) -> Row {
@@ -183,7 +599,7 @@ fn assert_refused(output: std::process::Output, reason: &str) {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_hunter_renames_its_own_pet_once_and_the_name_outlives_logout() {
     let shard = hunter("hunter-pet-rename");
-    let wild = wild_boar(&shard);
+    let wild = wild_boar(&shard, HUNTER);
     shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
     let pet = HUNTER_PET;
     let template_name = shard
@@ -278,7 +694,7 @@ fn a_summoned_pet_cannot_be_renamed_as_a_hunter_pet() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn existing_live_pet_recovers_rename_eligibility_without_losing_other_flags() {
     let shard = hunter("hunter-pet-name-upgrade");
-    let wild = wild_boar(&shard);
+    let wild = wild_boar(&shard, HUNTER);
     shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
     let pet = HUNTER_PET;
     let original_name = protocol_name(&shard);

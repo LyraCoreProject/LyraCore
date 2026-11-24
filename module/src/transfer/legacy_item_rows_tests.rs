@@ -506,6 +506,68 @@ fn game_item_instance_has_the_shape_its_transfer_tag_names() {
 }
 
 #[test]
+fn game_hunter_pet_has_the_shape_its_transfer_tag_names() {
+    let tag = FORMATS
+        .iter()
+        .find(|(table, _)| *table == "game_hunter_pet")
+        .map(|(_, tag)| *tag);
+    let previous = field_names::<LegacyHunterPet>();
+    let mut current = previous.clone();
+    current.extend(["presence", "display_id", "saved_health", "saved_power"].map(String::from));
+    assert_eq!(
+        (tag, field_names::<HunterPet>()),
+        (Some("game_hunter_pet@presence-1"), current),
+        "game_hunter_pet changed shape; add a FORMATS tag that decodes the old shape, then update this pin"
+    );
+}
+
+#[test]
+fn a_hunter_pet_that_travelled_before_presence_arrives_dismissed_with_its_identity() {
+    let at = Timestamp::from_micros_since_unix_epoch(1234);
+    let arrived: Vec<HunterPet> = arrive(entry(
+        "game_hunter_pet",
+        vec![LegacyHunterPet {
+            pet_id: 73,
+            owner_guid: 73,
+            creature_entry: 51008,
+            creature_family: 5,
+            name: "Fang".to_owned(),
+            rename_allowed: false,
+            level: 12,
+            pet_xp: 40,
+            loyalty_level: 3,
+            loyalty_progress: 900,
+            happiness: 700_000,
+            created_at: at,
+            care_updated_at: at,
+            loyalty_updated_at: at,
+            name_timestamp: 99,
+        }],
+    ));
+    let row = &arrived[0];
+    assert_eq!(
+        (
+            row.pet_id,
+            &*row.name,
+            row.level,
+            row.loyalty_level,
+            row.happiness,
+            row.name_timestamp
+        ),
+        (73, "Fang", 12, 3, 700_000, 99)
+    );
+    assert_eq!(
+        (
+            row.presence,
+            row.display_id,
+            row.saved_health,
+            row.saved_power
+        ),
+        (0, 0, 0, 0)
+    );
+}
+
+#[test]
 fn current_item_formats_preserve_the_exact_encoded_values() {
     for (table, _) in FORMATS {
         let mut payload = vec![TableRows {

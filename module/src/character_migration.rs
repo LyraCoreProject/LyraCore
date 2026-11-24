@@ -1169,7 +1169,7 @@ impl Arrival<'_> {
         Ok(())
     }
 
-    // A Hunter pet's identity is keyed by its owner's guid; calling the pet materializes it.
+    // A Hunter pet's identity is keyed by its owner's guid; it arrives dismissed until Call Pet.
     fn hunter_pet(&self, pet: &MigratedHunterPet, class: u8, level: u8) -> Result<(), String> {
         if class != HUNTER_CLASS {
             return Err("only a Hunter arrives with a Hunter pet".to_string());
@@ -1211,6 +1211,10 @@ impl Arrival<'_> {
             care_updated_at: self.ctx.timestamp,
             loyalty_updated_at: self.ctx.timestamp,
             name_timestamp: 0,
+            presence: crate::creatures::hunter_pet::PetPresence::Dismissed.code(),
+            display_id: 0,
+            saved_health: 0,
+            saved_power: 0,
         });
         Ok(())
     }

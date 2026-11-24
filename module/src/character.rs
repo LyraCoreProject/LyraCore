@@ -670,6 +670,7 @@ pub(crate) fn apply_player_login(
         }
     }
     crate::instance::reconcile_instance_removal(ctx, character_guid);
+    crate::creatures::restore_hunter_pet(ctx, character_guid);
     crate::hooks::fire_on_login(ctx, &crate::hooks::LoginPayload { character_guid });
     Ok(())
 }
@@ -863,7 +864,7 @@ fn finish_logout(
     }
     crate::spell::clear_resurrect_request_and_option(ctx, guid);
     crate::spell::break_stealth(ctx, guid);
-    crate::creatures::despawn_pets(ctx, guid);
+    crate::creatures::despawn_pets_on_departure(ctx, guid);
     if departure == CharacterDeparture::Logout {
         crate::items::clear_buyback(ctx, guid);
     }
