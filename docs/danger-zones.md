@@ -318,6 +318,19 @@ spent charges, as they refuse an opened item, until their rows can carry the cha
 and imports with no rows; an older Shard has spent no charges. An older destination refuses the new
 manifest, so update both Shards before moving active World Sessions.
 
+### Pet learn migration
+
+Spell effect 36 aimed at the caster's pet (implicit target 5: grimoires and the pet spells of Dash,
+Dive and Prowl) imports as `E_SCRIPTED` with target `T_CASTER_PET` (8), a value only the importer
+writes. Like vmangos, trainers and the `--trainer` import offer the wrapper and resolve its level,
+known state and previous rank from its trigger spell. Trainers read an `E_SCRIPTED` effect with a
+trigger spell as a learn effect only when its target is `T_SCRIPTED` (rows imported before
+`E_LEARN_SPELL`) or `T_CASTER_PET`; any other `E_SCRIPTED` effect is no longer a learn effect. A
+spell row imported before `E_LEARN_SPELL` whose effect 36 had implicit target 1 stored `T_SELF` and
+stops teaching until the `spell` reimport. No publish or repair is needed. Buying a pet-learn wrapper
+still teaches the Character the trigger spell, where vmangos teaches the pet and the Character learns
+nothing.
+
 ### Queued strike report migration
 
 `game_spell_cast_event` and `game_spell_cast_event_live` gain `blocked_amount` and

@@ -66,7 +66,7 @@ use lyracore_shared::spell::taxonomy::{
     P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
     SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
-    T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    T_AREA_ENEMY, T_CASTER_PET, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 
 // AttributesEx1 bits 0x04 and 0x40 both mark a channeled spell.
@@ -449,6 +449,10 @@ fn resolve_target(target: i32, is_negative: bool) -> u8 {
 }
 
 const TARGET_UNIT_CASTER_PET: i32 = 5;
+
+fn teaches_caster_pet(effect_id: i32, target_a: i32) -> bool {
+    effect_id == 36 && target_a == TARGET_UNIT_CASTER_PET
+}
 
 const LOCATION_TARGET_CODES: [i32; 19] = [
     9, 10, 17, 18, 22, 32, 39, 41, 42, 43, 44, 46, 47, 48, 49, 50, 53, 55, 63,
@@ -1046,7 +1050,11 @@ fn push_spell_effect_rows(
             Some(entry) => (E_SUMMON_HOSTILE, entry, P_ENTRY),
             None => (kind, p0, p0_kind),
         };
-        let target = resolve_effect_target(s, i, kind, header);
+        let target = if teaches_caster_pet(effect_id, s.implicit_target_a[i]) {
+            T_CASTER_PET
+        } else {
+            resolve_effect_target(s, i, kind, header)
+        };
         let radius_yd = if s.effect_radius[i] > 0 {
             dbc.radii
                 .get(SpellRadiusKey::new(s.effect_radius[i]))
@@ -1060,7 +1068,8 @@ fn push_spell_effect_rows(
             Some(next) if kind == A_SHAPESHIFT => next,
             _ => s.effect_trigger_spell[i],
         };
-        if lyracore_shared::trainer::learn_target_trigger(kind, trigger_spell).is_some() {
+        let learn_kind = lyracore_shared::trainer::learn_kind(kind, target);
+        if lyracore_shared::trainer::learn_target_trigger(learn_kind, trigger_spell).is_some() {
             wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
         }
         let effect_mechanic = s.effect_mechanic[i] as u8;
@@ -1315,7 +1324,7 @@ fn resolve_effect_kind(
             E_SUMMON_GUARDIANS
         } else if effect_id == 5 && (s.implicit_target_a[i] == 9 || s.implicit_target_b[i] == 9) {
             E_RECALL_HOME
-        } else if effect_id == 36 && s.implicit_target_a[i] == TARGET_UNIT_CASTER_PET {
+        } else if teaches_caster_pet(effect_id, s.implicit_target_a[i]) {
             // vmangos teaches a grimoire's spell to the caster's pet, which LyraCore cannot do.
             E_SCRIPTED
         } else {
@@ -2316,7 +2325,7 @@ mod tests {
         );
         // vmangos spell 20270 of Grimoire of Firebolt (Rank 2) 16302 teaches 7799 to the pet.
         let grimoire = temporary_enchantment_effect("UPDATE spell_template SET effect1=36, effectApplyAuraName1=0, effectTriggerSpell1=7799, effectImplicitTargetA1=5, effectImplicitTargetB1=0, targets=0, spellFamilyName=0, effect2=0 WHERE build=5875");
-        assert_eq!(grimoire.kind, E_SCRIPTED);
+        assert_eq!((grimoire.kind, grimoire.target), (E_SCRIPTED, T_CASTER_PET));
     }
 
     #[test]

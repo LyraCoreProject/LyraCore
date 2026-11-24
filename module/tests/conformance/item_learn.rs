@@ -1,6 +1,6 @@
 // Behavior checks for items that teach a spell against vmangos d9173eca Player::CanUseItem.
 use lyracore_package_delta::packed_spell_effect_id;
-use lyracore_shared::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED, T_SCRIPTED, T_TARGET_ALLY};
+use lyracore_shared::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED, T_CASTER_PET, T_TARGET_ALLY};
 use lyracore_test_support::{Field, Standalone};
 
 use super::fixture;
@@ -124,7 +124,7 @@ fn a_warrior_can_never_use_a_mage_tome() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_grimoire_teaches_its_user_nothing() {
     // The importer keeps a learn effect aimed at the caster's pet as E_SCRIPTED.
-    let stage = stage("item-learn-grimoire", E_SCRIPTED, T_SCRIPTED);
+    let stage = stage("item-learn-grimoire", E_SCRIPTED, T_CASTER_PET);
     let slot = stage.book(&[]);
 
     let _ = stage.use_book(&slot);
