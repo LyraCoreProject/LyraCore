@@ -7,6 +7,7 @@ replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
+deliberate_deviations = []
 prerequisites = []
 tests = []
 
@@ -17,9 +18,3 @@ symbol = "WorldSession::HandleSendMail"
 
 [real_client]
 status = "unverified"
-
-[[deliberate_deviations]]
-id = "mail_takes_only_bag_items"
-result = "Mail answers MAIL_ERR_INTERNAL_ERROR for any attachment outside an unequipped bag slot. The Reference Server also refuses a bank item and an equipped bag, but mails an unbound equipped item the Character can unequip and unequips it."
-reason = "The 1.12 client attaches only bag items, so only a modified client sends an equipped item. Refusing it keeps the Module from deleting equipped gear without recomputing the Character's stats."
-source = "https://raw.githubusercontent.com/vmangos/core/c13b2217fd9f2d1f4af8e37767cdc93f30307a2c/src/game/Handlers/MailHandler.cpp"

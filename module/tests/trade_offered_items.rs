@@ -2,6 +2,7 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY};
 use lyracore_shared::item::ItemRefusal;
+use lyracore_shared::mail::SENDER_IS_TRADING;
 use lyracore_shared::trade::event_kind;
 use support::{refused, Standalone};
 
@@ -83,6 +84,19 @@ impl Fixture {
             .len()
     }
 
+    fn mail_args<'a>(&'a self, money: &'a str, item_guid: &'a str) -> [&'a str; 8] {
+        [
+            ACTOR,
+            self.other.as_str(),
+            "\"trading\"",
+            "\"\"",
+            money,
+            "0",
+            item_guid,
+            "true",
+        ]
+    }
+
     fn offer_for_gold(&self, inv_slot: u8) {
         self.shard
             .assert_call("gw_initiate_trade", &[ACTOR, &self.other]);
@@ -98,35 +112,52 @@ impl Fixture {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn an_offered_item_cannot_be_mailed_and_the_trade_still_moves_it_for_the_gold() {
-    let f = fixture("trade-offered-mail");
+fn a_character_in_a_trade_cannot_send_any_mail_until_it_ends() {
+    let f = fixture("trade-mail-refused");
     let jerky = f.grant_at(FIXTURE_JERKY, 23);
-    f.offer_for_gold(23);
-    f.shard.assert_call("gw_accept_trade", &[&f.partner]);
+    let blade = f.grant_at(FIXTURE_BLADE, 24);
 
+    f.shard.assert_call("gw_initiate_trade", &[ACTOR, &f.other]);
     refused(
         &f.shard,
         "realm_mail_send",
-        &[
-            ACTOR,
-            &f.other,
-            "\"offered\"",
-            "\"\"",
-            "0",
-            "0",
-            &jerky,
-            "true",
-        ],
-        lyracore_shared::mail::ITEM_IS_OFFERED,
+        &f.mail_args("0", "0"),
+        SENDER_IS_TRADING,
     );
-    assert!(f.shard.query_rows("SELECT id FROM game_mail").is_empty());
 
-    f.shard.assert_call("gw_accept_trade", &[ACTOR]);
-    let moved = f.item(FIXTURE_JERKY);
-    assert_eq!(moved.len(), 1);
-    assert_eq!(moved[0]["owner_guid"], f.other);
-    assert_eq!(f.money("1"), PURSE + PARTNER_GOLD);
-    assert_eq!(f.money(&f.other), PURSE - PARTNER_GOLD);
+    f.shard.assert_call("gw_begin_trade", &[&f.partner]);
+    f.shard
+        .assert_call("gw_set_trade_item", &[ACTOR, "0", "23"]);
+    for (money, item) in [
+        ("0", jerky.as_str()),
+        ("0", blade.as_str()),
+        ("0", "0"),
+        ("100", "0"),
+    ] {
+        refused(
+            &f.shard,
+            "realm_mail_send",
+            &f.mail_args(money, item),
+            SENDER_IS_TRADING,
+        );
+    }
+    assert!(f.shard.query_rows("SELECT id FROM game_mail").is_empty());
+    assert_eq!(f.money("1"), PURSE);
+
+    f.shard.assert_call("gw_cancel_trade", &[ACTOR]);
+    f.shard
+        .assert_call("realm_mail_send", &f.mail_args("100", &jerky));
+    let mailed = f
+        .shard
+        .query_rows("SELECT item_entry, money FROM game_mail");
+    assert_eq!(mailed.len(), 1);
+    assert_eq!(
+        (
+            mailed[0]["item_entry"].as_str(),
+            mailed[0]["money"].as_str()
+        ),
+        (FIXTURE_JERKY.to_string().as_str(), "100")
+    );
 }
 
 #[test]

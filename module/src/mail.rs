@@ -124,11 +124,6 @@ impl Mail {
         }
     }
 }
-// Excludes the equipped bag slots, so a bag that holds contents never passes.
-pub(crate) fn is_unequipped_carried_slot(slot: u8) -> bool {
-    slot >= lyracore_shared::constants::starter_item::BACKPACK_SLOT_0
-        && crate::items::is_carried_slot(slot)
-}
 pub(crate) fn detach_item(
     ctx: &ReducerContext,
     sender_guid: u64,
@@ -144,13 +139,20 @@ pub(crate) fn detach_item(
         .find(item_guid)
         .filter(|item| item.owner_guid == sender_guid)
         .ok_or(MailRefusal::NotYourItem)?;
-    if !is_unequipped_carried_slot(inst.slot)
-        || crate::items::validate_bag_dest_slot(ctx, sender_guid, inst.slot).is_err()
+    let equipped = inst.slot <= crate::items::equip_slot::END;
+    // vmangos HandleSendMail refuses a bank position and Item::CanBeTraded an equipped bag.
+    if !equipped
+        && (!crate::items::is_unequipped_carried_slot(inst.slot)
+            || crate::items::validate_bag_dest_slot(ctx, sender_guid, inst.slot).is_err())
     {
-        return Err(lyracore_shared::mail::ITEM_NOT_IN_BAGS.to_string().into());
+        return Err(lyracore_shared::mail::ITEM_IN_BANK_OR_BAG_SLOT
+            .to_string()
+            .into());
     }
-    if crate::trade::item_is_offered(ctx, sender_guid, inst.guid) {
-        return Err(lyracore_shared::mail::ITEM_IS_OFFERED.to_string().into());
+    if equipped && !can_unequip_now(ctx, sender_guid, &inst) {
+        return Err(lyracore_shared::mail::ITEM_CANNOT_BE_UNEQUIPPED
+            .to_string()
+            .into());
     }
     if inst.soulbound {
         return Err(MailRefusal::ItemIsSoulbound);
@@ -181,7 +183,28 @@ pub(crate) fn detach_item(
         }
     }
     crate::ItemInstance::delete(ctx, item_guid);
+    if equipped {
+        crate::spell::recompute_vitals(ctx, sender_guid);
+        crate::spell::recompute_sheet(ctx, sender_guid);
+    }
     Ok(snapshot)
+}
+// vmangos Player::CanUnequipItem; the Module has no logout countdown to check.
+fn can_unequip_now(ctx: &ReducerContext, character_guid: u64, item: &crate::ItemInstance) -> bool {
+    if item.slot == crate::items::equip_slot::MAINHAND
+        && crate::spell::is_disarmed(ctx, character_guid)
+    {
+        return false;
+    }
+    let in_combat = crate::helpers::acting_entity_by_guid(ctx, character_guid)
+        .is_some_and(|character| character.combat_active);
+    !in_combat
+        || ctx
+            .db
+            .game_item_template()
+            .entry()
+            .find(item.entry)
+            .is_some_and(|template| crate::items::changes_equip_state_in_combat(&template))
 }
 pub(crate) fn grant_snapshot(
     ctx: &ReducerContext,
@@ -488,6 +511,10 @@ fn send(
     mail: OutgoingMail,
     same_account: bool,
 ) -> Result<(), MailRefusal> {
+    // vmangos HandleSendMail refuses any send while the sender has a trade, even a proposed one.
+    if crate::trade::session_involving(ctx, sender_guid).is_some() {
+        return Err(lyracore_shared::mail::SENDER_IS_TRADING.to_string().into());
+    }
     let item = detach_item(ctx, sender_guid, mail.item_guid)?;
     debit_purse(
         ctx,

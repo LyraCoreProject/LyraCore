@@ -1663,7 +1663,7 @@ fn prepare_listing(
         return Err(AuctionRefusal::ItemNotFound);
     };
     if item.owner_guid != seller_guid
-        || !crate::mail::is_unequipped_carried_slot(item.slot)
+        || !crate::items::is_unequipped_carried_slot(item.slot)
         || !item.mailable
         || item.snapshot.stack_count == 0
         || item.snapshot.soulbound

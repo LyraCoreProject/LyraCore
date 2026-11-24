@@ -1,0 +1,120 @@
+use lyracore_test_support::actor;
+
+use super::buy_in_slot::request;
+use super::{enter, fixture};
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, SCENARIO_VENDOR_ENTRY};
+
+const CMSG_AUCTION_SELL_ITEM: u32 = 0x256;
+const AUCTIONEER_AND_VENDOR: u32 = 4100;
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_item_offered_in_a_trade_cannot_be_listed_until_the_trade_ends() {
+    let (shard, guid, account) = fixture("auction-offered-item");
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid.to_string(), &SCENARIO_VENDOR_ENTRY.to_string(), "2.0"],
+    );
+    let auctioneer: u64 = shard
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
+        .iter()
+        .map(|row| row["guid"].parse::<u64>().unwrap())
+        .max()
+        .unwrap();
+    shard.insert_row("game_faction_template", &[("id", &5090001)]);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET npc_flags = {AUCTIONEER_AND_VENDOR}, \
+         faction_template = 5090001 WHERE guid = {auctioneer}"
+    ));
+    if shard
+        .query_rows("SELECT * FROM game_auction_house WHERE id = 7")
+        .is_empty()
+    {
+        shard.insert_row(
+            "game_auction_house",
+            &[
+                ("id", &7),
+                ("deposit_rate", &15),
+                ("consignment_rate", &5),
+                ("name", &"Offered item auction"),
+            ],
+        );
+    }
+
+    shard.assert_call(
+        "create_character",
+        &[
+            &account,
+            "\"Partner\"",
+            "1",
+            "1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+    );
+    let partner = shard.query_rows("SELECT guid FROM game_character WHERE name = 'Partner'")[0]
+        ["guid"]
+        .clone();
+    shard.assert_call("debug_spawn_player_entity", &[&partner]);
+    let position = shard.query_rows(&format!(
+        "SELECT x, y, z FROM game_world_entity WHERE guid = {guid}"
+    ));
+    let at = &position[0];
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = {}, y = {}, z = {} WHERE guid = {partner}",
+        at["x"], at["y"], at["z"]
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET money = 50000 WHERE guid = {guid}"
+    ));
+
+    let mut connection = enter(&shard, guid);
+    shard.assert_sql(&format!(
+        "DELETE FROM game_item_instance WHERE owner_guid = {guid}"
+    ));
+    connection.drain_packets();
+    shard.assert_call(
+        "debug_grant_item",
+        &[&guid.to_string(), &FIXTURE_BLADE.to_string(), "1"],
+    );
+    let carried = shard.query_rows(&format!(
+        "SELECT guid, slot FROM game_item_instance WHERE owner_guid = {guid}"
+    ));
+    let blade = &carried[0];
+    let (item, slot): (u64, String) = (blade["guid"].parse().unwrap(), blade["slot"].clone());
+
+    shard.assert_call("gw_initiate_trade", &[&actor(guid), &partner]);
+    shard.assert_call("gw_begin_trade", &[&actor(&partner)]);
+    shard.assert_call("gw_set_trade_item", &[&actor(guid), "0", &slot]);
+
+    let mut sell = auctioneer.to_le_bytes().to_vec();
+    sell.extend(item.to_le_bytes());
+    sell.extend(1u32.to_le_bytes());
+    sell.extend(2u32.to_le_bytes());
+    sell.extend(120u32.to_le_bytes());
+    request(&mut connection, CMSG_AUCTION_SELL_ITEM, sell.clone());
+    assert!(shard.query_rows("SELECT * FROM game_auction").is_empty());
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT guid FROM game_item_instance WHERE guid = {item} AND owner_guid = {guid}"
+            ))
+            .len(),
+        1,
+        "the offered item stays with the seller"
+    );
+
+    shard.assert_call("gw_cancel_trade", &[&actor(guid)]);
+    request(&mut connection, CMSG_AUCTION_SELL_ITEM, sell);
+    let listed = shard.query_rows("SELECT item_guid FROM game_auction");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["item_guid"], item.to_string());
+}

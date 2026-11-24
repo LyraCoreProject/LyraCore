@@ -8,6 +8,8 @@ use lyracore_test_support::{
 use serde_json::json;
 use wow_world_messages::vanilla::{ClientMessage, CMSG_AUTH_SESSION};
 
+#[path = "conformance/auction_offered_item.rs"]
+mod auction_offered_item;
 #[path = "conformance/buy_in_slot.rs"]
 mod buy_in_slot;
 #[path = "conformance/buyback.rs"]
