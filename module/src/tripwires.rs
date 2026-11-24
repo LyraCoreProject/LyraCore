@@ -1928,7 +1928,20 @@ pub(crate) mod grid_address_writes {
 pub(crate) mod package_name_tripwire {
     use lyracore_test_support::source_scan::files_under;
 
-    const OFFICIAL_PACKAGES: &[&str] = &["playerbots"];
+    /// Each official Package and the lowercase spellings that name it. A Package whose name is also
+    /// an ordinary word lists strict forms, so the vanilla dungeon content Core keeps still passes.
+    const OFFICIAL_PACKAGES: &[(&str, &[&str])] = &[
+        ("playerbots", &["playerbots"]),
+        (
+            "dungeons",
+            &[
+                "packages/dungeons",
+                "pkg_dungeons_",
+                "\"dungeons\"",
+                "dungeons package",
+            ],
+        ),
+    ];
 
     const CORE_TREES: &[&str] = &["module", "native-host", "crates", "importer"];
 
@@ -1943,8 +1956,8 @@ pub(crate) mod package_name_tripwire {
         let content = content.to_ascii_lowercase();
         let mut found = Vec::new();
         for (index, line) in content.lines().enumerate() {
-            for name in OFFICIAL_PACKAGES {
-                if line.contains(name) {
+            for (name, spellings) in OFFICIAL_PACKAGES {
+                if spellings.iter().any(|spelling| line.contains(spelling)) {
                     found.push((index + 1, *name));
                 }
             }
@@ -1986,6 +1999,12 @@ pub(crate) mod package_name_tripwire {
         assert_eq!(
             named_packages(source),
             vec![(2, "playerbots"), (3, "playerbots")]
+        );
+        let source = "// dungeons are instanced\nconst BOOTSTRAP_DUNGEONS: u8 = 0;\n\
+                      // the dungeons Package\nlet p = \"packages/dungeons/src\";\nlet n = \"dungeons\";\n";
+        assert_eq!(
+            named_packages(source),
+            vec![(3, "dungeons"), (4, "dungeons"), (5, "dungeons")]
         );
         assert!(!is_exempt("native-host/src/feed.rs"));
         assert!(is_exempt("module/src/group_tests.rs"));

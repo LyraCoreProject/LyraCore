@@ -475,7 +475,7 @@ symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 598 Defias Miner: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 598 Defias Miner: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
@@ -493,31 +493,31 @@ symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 622 Goblin Engineer: missing movement or combat controls, speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 622 Goblin Engineer: missing movement or combat controls, speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 634 Defias Overseer: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 634 Defias Overseer: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 636 Defias Blackguard: missing casts; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 636 Defias Blackguard: missing casts; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 641 Goblin Woodcarver: missing phase or HP rules; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 641 Goblin Woodcarver: missing phase or HP rules; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 645 Cookie: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 645 Cookie: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
@@ -1627,7 +1627,7 @@ symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 1725 Defias Watchman: missing movement or combat controls, speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 1725 Defias Watchman: missing movement or combat controls, speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
@@ -1645,19 +1645,19 @@ symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 1729 Defias Evoker: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 1729 Defias Evoker: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 1731 Goblin Craftsman: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 1731 Goblin Craftsman: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 1732 Defias Squallshaper: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 1732 Defias Squallshaper: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
@@ -4375,7 +4375,7 @@ symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 3586 Miner Johnson: missing flee or help, phase or HP rules, speech; No vmangos EventAI. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 3586 Miner Johnson: missing flee or help, phase or HP rules, speech; No vmangos EventAI. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
@@ -4897,7 +4897,7 @@ symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 3947 Goblin Shipbuilder: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 3947 Goblin Shipbuilder: missing speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
@@ -5731,13 +5731,13 @@ symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 4417 Defias Taskmaster: missing movement or combat controls; Refused translation: `eventai.command-condition:2428`. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 4417 Defias Taskmaster: missing movement or combat controls; Refused translation: `eventai.command-condition:2428`. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."
 
 [[known_gaps]]
-description = "Creature 4418 Defias Wizard: missing movement or combat controls, speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with dungeons Package; Alliance starter profile."
+description = "Creature 4418 Defias Wizard: missing movement or combat controls, speech; No vmangos EventAI for the missing behavior categories. Deadmines, playable with the encounter-owning Package; Alliance starter profile."
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"
 evidence = "importer/scripts/creature-behavior-ledger.py; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70; previous imported EventAI compared with vmangos production import plans."

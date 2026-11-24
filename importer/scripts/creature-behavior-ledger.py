@@ -128,7 +128,7 @@ def ledger(connection, before, after, scoped, manifest):
                 cause = 'No vmangos EventAI for the missing behavior categories'
         content = []
         if 36 in maps[entry]:
-            content.append('Deadmines, playable with dungeons Package')
+            content.append('Deadmines, playable with the encounter-owning Package')
         dungeon_maps = maps[entry] - {0, 1, 30, 36, 369, 449, 450, 489, 529}
         if dungeon_maps:
             content.append('Instance population ' + ', '.join(map(str, sorted(dungeon_maps))) + ', encounter support unverified')
