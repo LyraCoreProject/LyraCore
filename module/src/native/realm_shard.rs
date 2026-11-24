@@ -315,18 +315,23 @@ pub fn idc_selection_request(
 ) -> Result<(), String> {
     require_sender(ctx, realm_shard(ctx))?;
     let account = store_account(ctx, &account)?;
-    let before: Vec<u64> = ctx
-        .db
-        .game_character()
-        .by_account()
-        .filter(account.id)
-        .map(|character| character.guid)
-        .collect();
+    let listed = || -> Vec<u64> {
+        ctx.db
+            .game_character()
+            .by_account()
+            .filter(account.id)
+            .map(|character| character.guid)
+            .collect()
+    };
+    let before = listed();
     let reply = super::selection_reply(ctx, account.id, opcode, &body)
         .map_err(Rollback::into_reducer_error)?;
     if let Some(message) = reply {
         let packet =
             lyracore_protocol::world::encode(&message).map_err(|error| error.to_string())?;
+        let changes = selection_directory_changes(opcode, &before, &listed(), |guid| {
+            crate::transfer::is_in_transit(ctx, guid)
+        });
         ctx.db.game_selection_result().insert(SelectionResult {
             id: 0,
             database: remote::Identity(ctx.sender()),
@@ -335,32 +340,31 @@ pub fn idc_selection_request(
             body: packet.body,
             selection_id,
             account_id: account.id,
-            directory_changes: {
-                let after: Vec<u64> = ctx
-                    .db
-                    .game_character()
-                    .by_account()
-                    .filter(account.id)
-                    .map(|character| character.guid)
-                    .collect();
-                let mut changes: Vec<(u64, bool)> = before
-                    .iter()
-                    .copied()
-                    .filter(|guid| !after.contains(guid))
-                    .map(|guid| (guid, false))
-                    .collect();
-                changes.extend(
-                    after
-                        .into_iter()
-                        .filter(|guid| opcode != CMSG_CHAR_CREATE_OPCODE || !before.contains(guid))
-                        .map(|guid| (guid, true)),
-                );
-                blob(&changes)
-            },
+            directory_changes: blob(&changes),
             revision: directory::revision(ctx),
         });
     }
     Ok(())
+}
+
+fn selection_directory_changes(
+    opcode: u32,
+    before: &[u64],
+    after: &[u64],
+    in_transit: impl Fn(u64) -> bool,
+) -> Vec<(u64, bool)> {
+    let deleted = before
+        .iter()
+        .filter(|guid| !after.contains(guid))
+        .map(|&guid| (guid, false));
+    let present = after
+        .iter()
+        .filter(|guid| opcode != CMSG_CHAR_CREATE_OPCODE || !before.contains(guid))
+        .map(|&guid| (guid, true));
+    deleted
+        .chain(present)
+        .filter(|&(guid, _)| !in_transit(guid))
+        .collect()
 }
 
 #[reducer]
@@ -914,6 +918,22 @@ mod tests {
         ] {
             assert!(merge_enumerations(&bodies).is_err());
         }
+    }
+
+    #[test]
+    fn a_character_list_leaves_a_character_in_transit_out_of_its_directory_changes() {
+        assert_eq!(
+            selection_directory_changes(CMSG_CHAR_ENUM_OPCODE, &[1, 2], &[1, 2], |guid| guid == 1),
+            vec![(2, true)]
+        );
+    }
+
+    #[test]
+    fn a_character_delete_reports_the_deleted_character_absent() {
+        assert_eq!(
+            selection_directory_changes(CMSG_CHAR_DELETE_OPCODE, &[1, 2], &[2], |_| false),
+            vec![(1, false), (2, true)]
+        );
     }
 }
 
