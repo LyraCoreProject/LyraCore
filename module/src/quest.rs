@@ -1343,9 +1343,10 @@ pub(crate) fn request_turn_in_quest(
     )?;
     grant_reputation_rewards(ctx, player_guid, &tmpl);
     // Consuming worn items updated the Character row, so read it again before paying.
-    let mut player = entities.guid().find(player_guid).ok_or_else(|| {
-        ActionRefusal::new(ActionRefusalKind::MissingActor, "player not in world")
-    })?;
+    let mut player = entities
+        .guid()
+        .find(player_guid)
+        .expect("the exchange kept the Character in the world");
     player.money = player
         .money
         .saturating_sub(tmpl.required_money)

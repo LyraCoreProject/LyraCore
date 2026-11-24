@@ -18,7 +18,7 @@ pub(crate) fn exchange_items(
         .map_err(|_| "player not in world".to_string())?;
     let mut plan = ItemStoragePlan::read(ctx, character_guid, character.owner_identity);
     for &(entry, count) in consumed {
-        plan.consume(entry, count)?;
+        plan.consume_untraded(ctx, entry, count)?;
     }
     for &(entry, count) in granted {
         let template = ctx
