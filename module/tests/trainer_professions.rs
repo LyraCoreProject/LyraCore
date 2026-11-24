@@ -317,8 +317,6 @@ fn a_pet_learn_wrapper_is_refused_without_charging_or_teaching_the_character() {
 
     refused_buy(&shard, &npc, WRAPPER, TrainerRefusal::Unavailable.as_tag());
 
-    assert!(!knows(&shard, WRAPPER));
-    assert!(!knows(&shard, TRIGGER));
     assert_eq!(
         shard.query_rows("SELECT spell_id FROM game_player_spell WHERE character_guid = 1"),
         spells_before

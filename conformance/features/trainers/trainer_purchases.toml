@@ -38,9 +38,3 @@ description = "game_spell_chain.req_spell is never checked: vmangos shows an off
 path = "module/src/trainer.rs"
 symbol = "assess"
 evidence = "vmangos Player::GetTrainerSpellState at d9173eca3ea08dd985c52dabbcc826898d1d0b77, Player.cpp:4263-4268."
-
-[[known_gaps]]
-description = "A buy of a pet-learn offer, such as Dash (23100), is refused with Unavailable. vmangos casts the wrapper and teaches its trigger spell to the living pet; LyraCore has no per-pet spell storage, so nothing can learn it. The offer stays listed with the state of its trigger spell."
-path = "module/src/trainer.rs"
-symbol = "apply_trainer_buy"
-evidence = "vmangos WorldSession::HandleTrainerBuySpellOpcode, NPCHandler.cpp:286-342, and Spell::EffectLearnPetSpell at d9173eca3ea08dd985c52dabbcc826898d1d0b77. Missing piece: pet spell storage (issue #1223)."

@@ -328,8 +328,12 @@ trigger spell as a learn effect only when its target is `T_SCRIPTED` (rows impor
 `E_LEARN_SPELL`) or `T_CASTER_PET`; any other `E_SCRIPTED` effect is no longer a learn effect. A
 spell row imported before `E_LEARN_SPELL` whose effect 36 had implicit target 1 stored `T_SELF` and
 stops teaching until the `spell` reimport. No publish or repair is needed. Buying a pet-learn wrapper
-is refused with `TrainerRefusal::Unavailable` and takes no money, where vmangos teaches the pet,
-until pets have spell storage (#1223); the offer stays listed.
+is refused with `TrainerRefusal::Unavailable` and takes no money: vmangos casts the wrapper from the
+trainer NPC, which has no pet, so the cast fails and the buy takes no money (the Spell.dbc
+SpellVisual of every trainer pet wrapper is 107, not the 222 that makes the Character the caster).
+The offer stays listed. The refusal needs the `spell` reimport: a row imported before #1222 stores
+the wrapper as `E_SCRIPTED` with `T_SCRIPTED`, which looks like an ordinary learn row, so on a Shard
+that is not reimported the buy still teaches the Character the trigger spell.
 
 ### Queued strike report migration
 
