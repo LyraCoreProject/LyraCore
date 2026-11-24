@@ -7,7 +7,6 @@ replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
-deliberate_deviations = []
 prerequisites = []
 tests = []
 
@@ -36,3 +35,9 @@ description = "Nothing lets the partner enchant the item in the Will-Not-Be-Trad
 path = "module/src/trade.rs"
 symbol = "apply_set_trade_item"
 evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/TradeHandler.cpp#L700-L705"
+
+[[deliberate_deviations]]
+id = "offered_item_stays_in_the_trade"
+result = "The Auction House, destroy, vendor sale and permanent enchanting refuse an item offered in a Trade Session, and a Trade Commit whose offered item is gone or has another owner cancels the trade for both Characters. The Reference Server lets the Auction House, destroy and vendor sale take an offered item and lets a permanent enchant overwrite one without resetting the accepts. Its HandleAcceptTradeOpcode then skips the slot, because TradeData::GetItem finds no item for it, so the partner pays for nothing."
+reason = "The partner accepted a specific item. An offered item that leaves or changes must not let the trade complete without it."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/TradeHandler.cpp#L308-L338"

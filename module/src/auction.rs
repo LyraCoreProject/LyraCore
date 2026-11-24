@@ -305,6 +305,7 @@ struct ListingItem {
     owner_guid: u64,
     slot: u8,
     mailable: bool,
+    offered: bool,
     has_generated_loot: bool,
     has_spent_charges: bool,
     snapshot: crate::items::ItemSnapshot,
@@ -318,7 +319,6 @@ pub(crate) struct ListingTerms {
     pub(crate) duration_minutes: u32,
 }
 
-const FIRST_BACKPACK_SLOT: u8 = 23;
 const MICROS_PER_MINUTE: i64 = 60_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1068,6 +1068,7 @@ impl ListingSource for CtxSource<'_> {
             slot: item.slot,
             mailable: crate::items::validate_bag_dest_slot(self.ctx, item.owner_guid, item.slot)
                 .is_ok(),
+            offered: crate::trade::item_is_offered(self.ctx, item.owner_guid, item.guid),
             has_generated_loot: crate::loot::has_generated_loot(self.ctx, item.guid),
             has_spent_charges: crate::items::has_spent_charges(self.ctx, item.guid),
             snapshot: crate::items::ItemSnapshot::from(&item),
@@ -1662,8 +1663,7 @@ fn prepare_listing(
         return Err(AuctionRefusal::ItemNotFound);
     };
     if item.owner_guid != seller_guid
-        || item.slot < FIRST_BACKPACK_SLOT
-        || !crate::items::is_carried_slot(item.slot)
+        || !crate::items::is_unequipped_carried_slot(item.slot)
         || !item.mailable
         || item.snapshot.stack_count == 0
         || item.snapshot.soulbound
@@ -1671,7 +1671,7 @@ fn prepare_listing(
         return Err(AuctionRefusal::ItemNotFound);
     }
     // A Listing cannot carry spent charges; see the item_use Feature Ledger deviation.
-    if item.has_generated_loot || item.has_spent_charges {
+    if item.offered || item.has_generated_loot || item.has_spent_charges {
         return Err(AuctionRefusal::ItemNotTradeable);
     }
     if terms.start_bid == 0 || (terms.buyout != 0 && terms.buyout < terms.start_bid) {

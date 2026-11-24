@@ -285,6 +285,7 @@ fn item(slot: u8) -> ListingItem {
         owner_guid: 7,
         slot,
         mailable: true,
+        offered: false,
         has_generated_loot: false,
         has_spent_charges: false,
         snapshot: crate::items::ItemSnapshot {
@@ -549,6 +550,21 @@ fn local_listing_refusals_leave_item_purse_and_market_unchanged() {
         assert_eq!(store.next_auction_id, before.next_auction_id);
         assert!(store.committed.is_none());
     }
+}
+
+#[test]
+fn an_item_offered_in_a_trade_is_refused_and_stays_with_the_seller() {
+    let mut store = local();
+    store.item.as_mut().expect("a listing item").offered = true;
+    let before = store.clone();
+
+    assert_eq!(
+        create_local_listing(&mut store, request()),
+        Err(AuctionRefusal::ItemNotTradeable)
+    );
+    assert_eq!(store.money, before.money);
+    assert_eq!(store.item, before.item);
+    assert!(store.committed.is_none());
 }
 
 #[test]

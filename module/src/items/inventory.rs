@@ -528,6 +528,15 @@ pub(crate) fn is_bank_slot(slot: u8) -> bool {
 
 pub(crate) use lyracore_shared::item::is_carried_slot;
 
+pub(crate) fn is_unequipped_carried_slot(slot: u8) -> bool {
+    slot > BAG_SLOT_END_INCL && is_carried_slot(slot)
+}
+
+// vmangos CanChangeEquipStateInCombat: weapon or projectile class; shield, holdable or relic.
+pub(crate) fn changes_equip_state_in_combat(template: &crate::ItemTemplate) -> bool {
+    matches!(template.class, 2 | 6) || matches!(template.inventory_type, 14 | 23 | 28)
+}
+
 pub(crate) fn valid_split_dest_slot(to_slot: u8) -> bool {
     valid_dest_slot(to_slot) && to_slot > BAG_SLOT_END_INCL
 }

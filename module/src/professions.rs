@@ -194,6 +194,9 @@ pub(crate) fn apply_enchant_item(
     }
     let mut inst = crate::items::item_in_slot(ctx, guid, target_slot)
         .ok_or_else(|| format!("no item in slot {target_slot}"))?;
+    if crate::trade::item_is_offered(ctx, guid, inst.guid) {
+        return Err(crate::items::refused(lyracore_shared::item::ItemRefusal::NotRightNow).into());
+    }
     require_gear(ctx, inst.entry)?;
     crate::items::remove_items(ctx, guid, DISENCHANT_MATS_ENTRY, DISENCHANT_MATS_COUNT)?;
 
