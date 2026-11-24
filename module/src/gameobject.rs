@@ -3,9 +3,11 @@ use std::collections::HashSet;
 use lyracore_shared::constants::go_type;
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
+use crate::game_corpse_loot;
 use crate::game_creature_spawn_map;
 use crate::game_gameobject_loot;
 use crate::game_world_entity;
+use crate::native::game_native_player;
 use crate::nav::game_nav_chunk;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
 use crate::terrain::game_terrain_chunk;
@@ -510,19 +512,40 @@ fn now_micros(ctx: &ReducerContext) -> u64 {
     crate::time::now(ctx).to_micros_since_unix_epoch() as u64
 }
 
-// vmangos GameObject::Update restocks a chest its respawn delay after it despawns.
-pub(crate) fn chest_respawn_at(now: u64, respawn_secs: u32, fully_looted: bool) -> u64 {
+/// When a chest opened at `now` respawns. `None` for a chest that never respawns: one in an
+/// Instance, or one whose template has no respawn time (vmangos `spawntimesecs` of 0 or less).
+/// vmangos GameObject::Update restocks a chest its respawn delay after it despawns.
+pub(crate) fn chest_respawn_at(
+    now: u64,
+    respawn_secs: u32,
+    instance_id: u64,
+    fully_looted: bool,
+) -> Option<u64> {
+    if instance_id != 0 || respawn_secs == 0 {
+        return None;
+    }
     let despawn_delay = if fully_looted {
         0
     } else {
         PARTLY_LOOTED_CHEST_MICROS
     };
-    now + despawn_delay + respawn_window_micros(respawn_secs)
+    Some(now + despawn_delay + u64::from(respawn_secs) * 1_000_000)
 }
 
-/// A Loot Release on a fully looted chest starts its respawn delay now; a partly looted chest
-/// keeps the later time its opening gave it.
-pub(crate) fn chest_loot_released(ctx: &ReducerContext, go_guid: u64) {
+fn chest_is_looted_for(ctx: &ReducerContext, chest_guid: u64, looter_guid: u64) -> bool {
+    crate::loot::purse(ctx, chest_guid) == 0
+        && !ctx
+            .db
+            .game_corpse_loot()
+            .by_corpse()
+            .filter(&chest_guid)
+            .any(|row| row.takeable_by(ctx, looter_guid))
+}
+
+/// A Loot Release starts the respawn timing of the chest `looter_guid` closed. A chest the looter
+/// emptied respawns its delay from now, never later than before. A chest with loot the looter
+/// can still take despawns 5 minutes from now, so a chest held open waits for its release.
+pub(crate) fn chest_loot_released(ctx: &ReducerContext, looter_guid: u64, go_guid: u64) {
     let Some(mut chest) = ctx.db.game_gameobject().guid().find(go_guid) else {
         return;
     };
@@ -537,14 +560,71 @@ pub(crate) fn chest_loot_released(ctx: &ReducerContext, go_guid: u64) {
     if template.type_id != go_type::CHEST || chest.state != 1 {
         return;
     }
-    if !crate::loot::corpse_is_looted(ctx, go_guid, crate::loot::purse(ctx, go_guid)) {
+    let looted = chest_is_looted_for(ctx, go_guid, looter_guid);
+    let Some(respawn_at) = chest_respawn_at(
+        now_micros(ctx),
+        template.respawn_secs,
+        chest.instance_id,
+        looted,
+    ) else {
         return;
-    }
-    let respawn_at = chest_respawn_at(now_micros(ctx), template.respawn_secs, true);
-    if chest.respawn_at_micros == 0 || respawn_at < chest.respawn_at_micros {
-        chest.respawn_at_micros = respawn_at;
+    };
+    let stamped = match (looted, chest.respawn_at_micros) {
+        (true, 0) => respawn_at,
+        (true, opened_at) => opened_at.min(respawn_at),
+        (false, opened_at) => opened_at.max(respawn_at),
+    };
+    if stamped != chest.respawn_at_micros {
+        chest.respawn_at_micros = stamped;
         chest.update(ctx);
     }
+}
+
+pub(crate) fn loot_window_open(ctx: &ReducerContext, go_guid: u64) -> bool {
+    ctx.db
+        .game_native_player()
+        .by_open_loot()
+        .filter(go_guid)
+        .next()
+        .is_some()
+}
+
+/// Clears what a use left on an object that is about to respawn: its Loot rows, purse and rolls,
+/// and its picked lock.
+pub(crate) fn clear_use_state(ctx: &ReducerContext, go_guid: u64) {
+    crate::loot::reap_corpse_loot_family(ctx, go_guid);
+    ctx.db.game_gameobject_unlocked().go_guid().delete(go_guid);
+}
+
+/// Stamps a chest opened before chests respawned, so the respawn pass can reach it. Returns the
+/// number stamped. Idempotent: a stamped chest no longer matches.
+pub(crate) fn stamp_opened_chests(ctx: &ReducerContext) -> u64 {
+    let chest_entries: Vec<u32> = ctx
+        .db
+        .game_gameobject_template()
+        .iter()
+        .filter(|template| template.type_id == go_type::CHEST && template.respawn_secs != 0)
+        .map(|template| template.entry)
+        .collect();
+    let now = now_micros(ctx);
+    let mut stamped = 0;
+    for entry in chest_entries {
+        let opened: Vec<GameObject> = ctx
+            .db
+            .game_gameobject()
+            .by_template_scope()
+            .filter(entry)
+            .filter(|chest| {
+                chest.state == 1 && chest.respawn_at_micros == 0 && chest.instance_id == 0
+            })
+            .collect();
+        for mut chest in opened {
+            chest.respawn_at_micros = now;
+            chest.update(ctx);
+            stamped += 1;
+        }
+    }
+    stamped
 }
 
 fn lock_requires_opening(ctx: &ReducerContext, lock_id: u32) -> bool {
@@ -766,10 +846,11 @@ fn use_resolved_gameobject(
                 crate::loot::UnneededQuestDrop::KeepShared,
             );
             crate::loot::stock_purse(ctx, go.guid, 0, (tmpl.money_min, tmpl.money_max));
-            let looted =
-                crate::loot::corpse_is_looted(ctx, go.guid, crate::loot::purse(ctx, go.guid));
+            let looted = chest_is_looted_for(ctx, go.guid, caster_guid);
             go.state = 1;
-            go.respawn_at_micros = chest_respawn_at(now_micros(ctx), tmpl.respawn_secs, looted);
+            go.respawn_at_micros =
+                chest_respawn_at(now_micros(ctx), tmpl.respawn_secs, go.instance_id, looted)
+                    .unwrap_or(0);
             go.update(ctx);
         }
         go_type::GOOBER => {
@@ -1150,18 +1231,29 @@ mod tests {
 
     #[test]
     fn a_fully_looted_chest_respawns_its_delay_after_release() {
-        assert_eq!(chest_respawn_at(1_000, 600, true), 600_001_000);
-        assert_eq!(chest_respawn_at(1_000, 0, true), 180_001_000);
+        assert_eq!(chest_respawn_at(1_000, 600, 0, true), Some(600_001_000));
     }
 
     #[test]
     fn a_partly_looted_chest_despawns_five_minutes_before_its_delay_starts() {
-        assert_eq!(chest_respawn_at(1_000, 600, false), 900_001_000);
+        assert_eq!(chest_respawn_at(1_000, 600, 0, false), Some(900_001_000));
+    }
+
+    #[test]
+    fn a_chest_without_a_respawn_time_never_respawns() {
+        assert_eq!(chest_respawn_at(1_000, 0, 0, true), None);
+        assert_eq!(chest_respawn_at(1_000, 0, 0, false), None);
+    }
+
+    #[test]
+    fn a_chest_in_an_instance_never_respawns() {
+        assert_eq!(chest_respawn_at(1_000, 600, 7, true), None);
+        assert_eq!(chest_respawn_at(1_000, 600, 7, false), None);
     }
 
     #[test]
     fn an_opened_chest_is_due_at_its_respawn_time_and_not_before() {
-        let respawn_at = chest_respawn_at(1_000, 600, true);
+        let respawn_at = chest_respawn_at(1_000, 600, 0, true).unwrap();
 
         assert!(!respawn_due(1, respawn_at, respawn_at - 1));
         assert!(respawn_due(1, respawn_at, respawn_at));

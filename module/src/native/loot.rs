@@ -199,7 +199,7 @@ fn release(
     if guid::is_item(current) {
         crate::loot::release_item(ctx, guid, current);
     } else if guid::is_gameobject(current) {
-        crate::gameobject::chest_loot_released(ctx, current);
+        crate::gameobject::chest_loot_released(ctx, guid, current);
     }
     Ok(super::send(
         ctx,

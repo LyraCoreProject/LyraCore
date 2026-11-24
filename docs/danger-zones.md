@@ -100,8 +100,12 @@ melee, pet care, aura, breath, duel, ground area and motion publish schedules on
 a Transport crossing for each Transport without one. It also re-freezes Proc profiles, restores
 missing Auction expiries, re-tags legacy auction mail as Auction Mail before the Mail Timer pass
 (so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each Mail that has
-none, moves each legacy Character GM level onto its Account and re-seeds the curated content and
-fixtures `init` seeds. `packages apply` calls it for each Shard it publishes.
+none, moves each legacy Character GM level onto its Account, stamps the current time as the
+respawn time of each opened world chest that has none (so the respawn pass reaches a chest opened
+before chests respawned) and re-seeds the curated content and fixtures `init` seeds. A chest
+respawns only when its template has a `respawn_secs` above 0, so reimport the `gameobjects` Import
+Family with the updated importer first: it fills that value from the smallest positive vmangos
+`spawntimesecs` of the entry. `packages apply` calls it for each Shard it publishes.
 A skipped call looks like a mid-session hang, not an error.
 
 Imported content wins over that re-seed. A seed that writes real ids skips once the importer has
