@@ -1928,16 +1928,16 @@ pub(crate) mod grid_address_writes {
 pub(crate) mod package_name_tripwire {
     use lyracore_test_support::source_scan::files_under;
 
-    /// Each official Package and the lowercase spellings that name it. A Package whose name is also
-    /// an ordinary word lists strict forms, so the vanilla dungeon content Core keeps still passes.
+    /// Each official Package and the lowercase spellings that name it; an ordinary word lists strict forms.
     const OFFICIAL_PACKAGES: &[(&str, &[&str])] = &[
         ("playerbots", &["playerbots"]),
         (
             "dungeons",
             &[
                 "packages/dungeons",
-                "pkg_dungeons_",
+                "pkg_dungeons",
                 "\"dungeons\"",
+                "`dungeons`",
                 "dungeons package",
             ],
         ),
@@ -2000,15 +2000,27 @@ pub(crate) mod package_name_tripwire {
             named_packages(source),
             vec![(2, "playerbots"), (3, "playerbots")]
         );
-        let source = "// dungeons are instanced\nconst BOOTSTRAP_DUNGEONS: u8 = 0;\n\
-                      // the dungeons Package\nlet p = \"packages/dungeons/src\";\nlet n = \"dungeons\";\n";
-        assert_eq!(
-            named_packages(source),
-            vec![(3, "dungeons"), (4, "dungeons"), (5, "dungeons")]
-        );
         assert!(!is_exempt("native-host/src/feed.rs"));
         assert!(is_exempt("module/src/group_tests.rs"));
         assert!(is_exempt("module/tests/package_account.rs"));
+    }
+
+    #[test]
+    fn dungeons_matches_only_its_strict_spellings() {
+        let source = "// dungeons are instanced\nconst BOOTSTRAP_DUNGEONS: u8 = 0;\n\
+                      // the dungeons Package\nlet p = \"packages/dungeons/src\";\n\
+                      let n = \"dungeons\";\nuse crate::pkg_dungeons::x;\n\
+                      // the `dungeons` Package\n";
+        assert_eq!(
+            named_packages(source),
+            vec![
+                (3, "dungeons"),
+                (4, "dungeons"),
+                (5, "dungeons"),
+                (6, "dungeons"),
+                (7, "dungeons")
+            ]
+        );
     }
 }
 
