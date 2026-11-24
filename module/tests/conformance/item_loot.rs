@@ -23,6 +23,10 @@ const CLAM: u32 = 900_501;
 const LOCKBOX: u32 = 900_502;
 const LOCKBOX_LOCK: u32 = 900_503;
 const COIN_CHEST: u32 = 900_601;
+const RESPAWNING_CHEST: u32 = 900_602;
+const CHEST_RESPAWN_SECS: u32 = 600;
+const PARTLY_LOOTED_CHEST_MICROS: u64 = 300_000_000;
+const VIRTUAL_START_MICROS: &str = "1800000000000000";
 const CLAM_COPPER: u32 = 37;
 const CHEST_COPPER: u32 = 25;
 
@@ -98,6 +102,81 @@ impl Stage {
                 self.character
             ))
             .len()
+    }
+
+    fn spawn_chest_with_jerky(&self, entry: u32) -> u64 {
+        self.shard.insert_row(
+            "game_gameobject_template",
+            &[
+                ("entry", &entry),
+                ("type_id", &3),
+                ("name", &"Fixture respawning chest"),
+                ("data0", &FIXTURE_JERKY),
+                ("respawn_secs", &CHEST_RESPAWN_SECS),
+            ],
+        );
+        let at = self.shard.query_rows(&format!(
+            "SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {}",
+            self.character
+        ))[0]
+            .clone();
+        self.shard.assert_call(
+            "debug_spawn_gameobject",
+            &[
+                &entry.to_string(),
+                "3",
+                "0",
+                "0",
+                &at["map_id"],
+                &at["x"],
+                &at["y"],
+                &at["z"],
+                "0",
+                "0",
+                "0",
+                "0",
+            ],
+        );
+        self.shard.query_rows(&format!(
+            "SELECT guid FROM game_gameobject WHERE template_entry = {entry}"
+        ))[0]["guid"]
+            .parse()
+            .unwrap()
+    }
+
+    fn chest_row(&self, chest: u64) -> (String, u64) {
+        let row = self.shard.query_rows(&format!(
+            "SELECT state, respawn_at_micros FROM game_gameobject WHERE guid = {chest}"
+        ))[0]
+            .clone();
+        (
+            row["state"].clone(),
+            row["respawn_at_micros"].parse().unwrap(),
+        )
+    }
+
+    fn loot_rows(&self, source: u64) -> usize {
+        self.shard
+            .query_rows(&format!(
+                "SELECT id FROM game_corpse_loot WHERE corpse_guid = {source}"
+            ))
+            .len()
+    }
+
+    fn use_chest(&mut self, chest: u64) -> Vec<(u16, Vec<u8>)> {
+        request(
+            &mut self.connection,
+            CMSG_GAMEOBJ_USE,
+            chest.to_le_bytes().into(),
+        )
+    }
+
+    fn release(&mut self, source: u64) {
+        request(
+            &mut self.connection,
+            CMSG_LOOT_RELEASE,
+            source.to_le_bytes().into(),
+        );
     }
 
     fn open_loot(&self) -> String {
@@ -281,4 +360,55 @@ fn a_chest_with_a_fixed_money_range_shows_that_money() {
 
     request(&mut stage.connection, CMSG_LOOT_MONEY, Vec::new());
     assert_eq!(stage.money(), money_before + CHEST_COPPER);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_chest_released_with_loot_left_respawns_with_fresh_loot() {
+    let mut stage = stage("item-loot-chest-restock");
+    stage
+        .shard
+        .assert_call("debug_start_virtual_clock", &[VIRTUAL_START_MICROS]);
+    let chest = stage.spawn_chest_with_jerky(RESPAWNING_CHEST);
+
+    let opened = window(&stage.use_chest(chest), chest);
+    assert_eq!(opened[13], 1, "the chest holds its item");
+    stage.release(chest);
+
+    let (state, respawn_at) = stage.chest_row(chest);
+    assert_eq!(state, "1");
+    assert_ne!(respawn_at, 0, "an opened chest has a respawn time");
+    assert_eq!(stage.loot_rows(chest), 1);
+
+    stage.shard.assert_sql(&format!(
+        "UPDATE game_gameobject SET respawn_at_micros = 1 WHERE guid = {chest}"
+    ));
+    stage
+        .shard
+        .assert_call("debug_advance_roll_batch", &["1000"]);
+
+    assert_eq!(stage.chest_row(chest), ("0".to_string(), 0));
+    assert_eq!(stage.loot_rows(chest), 0, "the old loot rows are gone");
+    let reopened = window(&stage.use_chest(chest), chest);
+    assert_eq!(reopened[13], 1, "the chest rolls one fresh item");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_fully_looted_chest_released_respawns_sooner_than_one_left_with_loot() {
+    let mut stage = stage("item-loot-chest-looted");
+    stage
+        .shard
+        .assert_call("debug_start_virtual_clock", &[VIRTUAL_START_MICROS]);
+    let chest = stage.spawn_chest_with_jerky(RESPAWNING_CHEST);
+    window(&stage.use_chest(chest), chest);
+    let (_, partly_looted_at) = stage.chest_row(chest);
+
+    request(&mut stage.connection, CMSG_AUTOSTORE_LOOT_ITEM, vec![0]);
+    stage.release(chest);
+
+    let (state, looted_at) = stage.chest_row(chest);
+    assert_eq!(state, "1");
+    assert_eq!(partly_looted_at - looted_at, PARTLY_LOOTED_CHEST_MICROS);
+    assert_eq!(stage.held(FIXTURE_JERKY), 1);
 }

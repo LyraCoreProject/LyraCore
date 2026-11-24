@@ -499,8 +499,52 @@ pub(crate) fn respawn_window_micros(respawn_secs: u32) -> u64 {
     }
 }
 
+// vmangos DoLootRelease sets a partly looted chest to despawn 5 minutes after its Loot Release.
+const PARTLY_LOOTED_CHEST_MICROS: u64 = 300_000_000;
+
 pub(crate) fn respawn_due(state: u8, respawn_at_micros: u64, now: u64) -> bool {
     state == 1 && respawn_at_micros != 0 && now >= respawn_at_micros
+}
+
+fn now_micros(ctx: &ReducerContext) -> u64 {
+    crate::time::now(ctx).to_micros_since_unix_epoch() as u64
+}
+
+// vmangos GameObject::Update restocks a chest its respawn delay after it despawns.
+pub(crate) fn chest_respawn_at(now: u64, respawn_secs: u32, fully_looted: bool) -> u64 {
+    let despawn_delay = if fully_looted {
+        0
+    } else {
+        PARTLY_LOOTED_CHEST_MICROS
+    };
+    now + despawn_delay + respawn_window_micros(respawn_secs)
+}
+
+/// A Loot Release on a fully looted chest starts its respawn delay now; a partly looted chest
+/// keeps the later time its opening gave it.
+pub(crate) fn chest_loot_released(ctx: &ReducerContext, go_guid: u64) {
+    let Some(mut chest) = ctx.db.game_gameobject().guid().find(go_guid) else {
+        return;
+    };
+    let Some(template) = ctx
+        .db
+        .game_gameobject_template()
+        .entry()
+        .find(chest.template_entry)
+    else {
+        return;
+    };
+    if template.type_id != go_type::CHEST || chest.state != 1 {
+        return;
+    }
+    if !crate::loot::corpse_is_looted(ctx, go_guid, crate::loot::purse(ctx, go_guid)) {
+        return;
+    }
+    let respawn_at = chest_respawn_at(now_micros(ctx), template.respawn_secs, true);
+    if chest.respawn_at_micros == 0 || respawn_at < chest.respawn_at_micros {
+        chest.respawn_at_micros = respawn_at;
+        chest.update(ctx);
+    }
 }
 
 fn lock_requires_opening(ctx: &ReducerContext, lock_id: u32) -> bool {
@@ -722,7 +766,10 @@ fn use_resolved_gameobject(
                 crate::loot::UnneededQuestDrop::KeepShared,
             );
             crate::loot::stock_purse(ctx, go.guid, 0, (tmpl.money_min, tmpl.money_max));
+            let looted =
+                crate::loot::corpse_is_looted(ctx, go.guid, crate::loot::purse(ctx, go.guid));
             go.state = 1;
+            go.respawn_at_micros = chest_respawn_at(now_micros(ctx), tmpl.respawn_secs, looted);
             go.update(ctx);
         }
         go_type::GOOBER => {
@@ -763,9 +810,8 @@ fn use_resolved_gameobject(
                 }
                 _ => {
                     go.state = 1;
-                    go.respawn_at_micros = (crate::time::now(ctx).to_micros_since_unix_epoch()
-                        as u64)
-                        + respawn_window_micros(tmpl.respawn_secs);
+                    go.respawn_at_micros =
+                        now_micros(ctx) + respawn_window_micros(tmpl.respawn_secs);
                     go.update(ctx);
                 }
             }
@@ -1100,6 +1146,26 @@ mod tests {
         assert_eq!(respawn_window_micros(30), 30_000_000);
         assert_eq!(respawn_window_micros(1), 1_000_000);
         assert_eq!(respawn_window_micros(180), RESPAWN_WINDOW_MICROS);
+    }
+
+    #[test]
+    fn a_fully_looted_chest_respawns_its_delay_after_release() {
+        assert_eq!(chest_respawn_at(1_000, 600, true), 600_001_000);
+        assert_eq!(chest_respawn_at(1_000, 0, true), 180_001_000);
+    }
+
+    #[test]
+    fn a_partly_looted_chest_despawns_five_minutes_before_its_delay_starts() {
+        assert_eq!(chest_respawn_at(1_000, 600, false), 900_001_000);
+    }
+
+    #[test]
+    fn an_opened_chest_is_due_at_its_respawn_time_and_not_before() {
+        let respawn_at = chest_respawn_at(1_000, 600, true);
+
+        assert!(!respawn_due(1, respawn_at, respawn_at - 1));
+        assert!(respawn_due(1, respawn_at, respawn_at));
+        assert!(!respawn_due(0, respawn_at, respawn_at));
     }
 
     #[test]

@@ -181,6 +181,7 @@ pub(crate) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {
         .map(|g| g.guid)
         .collect();
     for guid in due {
+        crate::loot::reap_corpse_loot_family(ctx, guid);
         match crate::gameobject::pool_point_id_of(guid).and_then(|pid| members.point_id().find(pid))
         {
             Some(member) => crate::gameobject::reroll_pool(ctx, member.pool_id, guid),
