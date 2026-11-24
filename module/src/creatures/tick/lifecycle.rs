@@ -178,9 +178,11 @@ pub(crate) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {
         .filter(1..=now)
         .inspect(|_| visited += 1)
         .filter(|g| crate::gameobject::respawn_due(g.state, g.respawn_at_micros, now))
+        .filter(|g| !crate::gameobject::loot_window_open(ctx, g.guid))
         .map(|g| g.guid)
         .collect();
     for guid in due {
+        crate::gameobject::clear_use_state(ctx, guid);
         match crate::gameobject::pool_point_id_of(guid).and_then(|pid| members.point_id().find(pid))
         {
             Some(member) => crate::gameobject::reroll_pool(ctx, member.pool_id, guid),

@@ -97,7 +97,7 @@ pub(crate) fn classify_go_type(entry: u64, raw_type: u32) -> Option<u8> {
     }
 }
 
-fn go_template_row(entry: u64, meta: &GoMeta) -> (String, Option<u32>) {
+fn go_template_row(entry: u64, meta: &GoMeta, chest_respawn_secs: u32) -> (String, Option<u32>) {
     let GoMeta {
         stored_type,
         disp,
@@ -117,7 +117,7 @@ fn go_template_row(entry: u64, meta: &GoMeta) -> (String, Option<u32>) {
         GO_CHEST => {
             let loot_id = data1;
             (
-                format!("({entry},{GO_CHEST},{disp},{n},0,{loot_id},0,0,0,{data0},{size}"),
+                format!("({entry},{GO_CHEST},{disp},{n},0,{loot_id},0,{chest_respawn_secs},0,{data0},{size}"),
                 (loot_id != 0).then_some(loot_id),
             )
         }
@@ -1476,6 +1476,8 @@ struct GameobjectSpawns {
     goober_entries: std::collections::HashSet<u64>,
     go_packed_rows: Vec<String>,
     used_go: std::collections::HashSet<u64>,
+    // An entry's smallest positive vmangos spawntimesecsmin; absent when none is positive.
+    respawn_secs: std::collections::HashMap<u64, u32>,
 }
 
 fn build_packed_spawn_payload(spawns: &[CreatureSpawnRow]) -> String {
@@ -1581,6 +1583,7 @@ fn collect_gameobject_spawns(
         .collect();
     let mut go_packed_rows: Vec<String> = Vec::new();
     let mut used_go: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut respawn_secs: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
     let mut go_slice_counts = vec![0usize; scope.bounded_slices.len()];
     let mut go_whole_map_counts: std::collections::BTreeMap<i64, usize> =
         std::collections::BTreeMap::new();
@@ -1629,6 +1632,14 @@ fn collect_gameobject_spawns(
             *go_whole_map_counts.entry(map).or_insert(0) += 1;
         }
         used_go.insert(id);
+        let spawn_secs = row.number::<i64>(go::SPAWN_TIME_SECS_MIN)?;
+        if spawn_secs > 0 {
+            let spawn_secs = u32::try_from(spawn_secs).unwrap_or(u32::MAX);
+            respawn_secs
+                .entry(id)
+                .and_modify(|secs| *secs = (*secs).min(spawn_secs))
+                .or_insert(spawn_secs);
+        }
     }
     for (slice, count) in scope.bounded_slices.iter().zip(go_slice_counts) {
         eprintln!(
@@ -1647,6 +1658,7 @@ fn collect_gameobject_spawns(
         goober_entries,
         go_packed_rows,
         used_go,
+        respawn_secs,
     })
 }
 
@@ -1658,6 +1670,7 @@ fn gameobject_template_rows(
         go_meta,
         dropped_type25,
         go_packed_rows,
+        respawn_secs,
         ..
     } = spawns;
     let mut go_template_rows: Vec<String> = Vec::new();
@@ -1676,7 +1689,8 @@ fn gameobject_template_rows(
     for entry in entries {
         let meta = &go_meta[&entry];
         *go_type_histogram.entry(meta.stored_type).or_insert(0) += 1;
-        let (row, _loot_id_used) = go_template_row(entry, meta);
+        let chest_respawn_secs = respawn_secs.get(&entry).copied().unwrap_or(0);
+        let (row, _loot_id_used) = go_template_row(entry, meta, chest_respawn_secs);
         go_template_rows.push(row);
         if meta.trap_spell_id != 0 {
             go_trap_rows.push(format!(

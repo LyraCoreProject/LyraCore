@@ -253,6 +253,7 @@ pub(crate) mod go {
     pub const ROT1: &str = "rotation1";
     pub const ROT2: &str = "rotation2";
     pub const ROT3: &str = "rotation3";
+    pub const SPAWN_TIME_SECS_MIN: &str = "spawntimesecsmin";
 }
 
 pub(crate) mod ai {

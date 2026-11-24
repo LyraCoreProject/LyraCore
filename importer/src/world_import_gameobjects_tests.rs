@@ -180,7 +180,57 @@ fn vmangos_gameobjects_select_versions_and_ranges_skip_disabled_and_translate_st
     assert!(!sql.contains("Fishing hole"));
     assert!(sql.contains("(5090043,10,1,'Fixture goober',0,0,0,0,0,0,1,0,0)"));
     assert!(sql.contains("(1731,25,1,'Copper node',2770,1,186,300,100,0,1,0,0)"));
-    assert!(sql.contains("(5090042,3,1,'Fixture mug',0,5090042,0,0,0,0,1,40,40)"));
+    assert!(sql.contains("(5090042,3,1,'Fixture mug',0,5090042,0,300,0,0,1,40,40)"));
+}
+
+fn chest_template_row(source: &WorldSource) -> String {
+    let scope =
+        WorldImportScope::canonical(WorldImportProfile::parse("full-world").unwrap()).unwrap();
+    let spawns = collect_gameobject_spawns(source, &scope).unwrap();
+    gameobject_template_rows(&spawns, &Default::default())
+        .unwrap()
+        .templates
+        .into_iter()
+        .find(|row| row.starts_with("(5090042,"))
+        .unwrap()
+}
+
+fn edit_gameobject_source(source: &WorldSource, sql: &str) {
+    let connection = source.fixture_connection();
+    connection.pragma_update(None, "query_only", false).unwrap();
+    connection.execute_batch(sql).unwrap();
+    connection.pragma_update(None, "query_only", true).unwrap();
+}
+
+#[test]
+fn a_chest_template_takes_the_smallest_positive_spawn_time_of_its_entry() {
+    let source = gameobject_source();
+    edit_gameobject_source(
+        &source,
+        "INSERT INTO gameobject (guid,id,map,position_x,position_y,position_z,orientation,rotation0,rotation1,rotation2,rotation3,state,spawn_flags,patch_min,patch_max,visibility_mod,spawntimesecsmin,spawntimesecsmax,animprogress)
+         SELECT 5090041,id,map,position_x,position_y,position_z,orientation,rotation0,rotation1,rotation2,rotation3,state,spawn_flags,patch_min,patch_max,visibility_mod,120,120,animprogress FROM gameobject WHERE guid = 5090040;
+         INSERT INTO gameobject (guid,id,map,position_x,position_y,position_z,orientation,rotation0,rotation1,rotation2,rotation3,state,spawn_flags,patch_min,patch_max,visibility_mod,spawntimesecsmin,spawntimesecsmax,animprogress)
+         SELECT 5090039,id,map,position_x,position_y,position_z,orientation,rotation0,rotation1,rotation2,rotation3,state,spawn_flags,patch_min,patch_max,visibility_mod,-1,-1,animprogress FROM gameobject WHERE guid = 5090040",
+    );
+
+    assert_eq!(
+        chest_template_row(&source),
+        "(5090042,3,1,'Fixture mug',0,5090042,0,120,0,0,1,40,40)"
+    );
+}
+
+#[test]
+fn a_chest_template_with_no_positive_spawn_time_never_respawns() {
+    let source = gameobject_source();
+    edit_gameobject_source(
+        &source,
+        "UPDATE gameobject SET spawntimesecsmin = -1, spawntimesecsmax = -1 WHERE guid = 5090040",
+    );
+
+    assert_eq!(
+        chest_template_row(&source),
+        "(5090042,3,1,'Fixture mug',0,5090042,0,0,0,0,1,40,40)"
+    );
 }
 
 #[test]
