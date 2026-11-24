@@ -261,7 +261,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     let mut pending_reserve_power: std::collections::HashMap<u64, u32> =
         std::collections::HashMap::new();
     let mut dot_damaged: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    let mut dying: std::collections::HashMap<u64, Option<u64>> = std::collections::HashMap::new();
+    let mut dying: std::collections::HashMap<u64, PeriodicDeath> = std::collections::HashMap::new();
     let mut finishing_duels: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut duel_losers: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut duel_finishes: Vec<(u64, u64, u64)> = Vec::new();
@@ -289,12 +289,10 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 {
                     continue;
                 }
-                let active_duel =
-                    crate::duel::active_duel_between(ctx, a.caster_guid, a.target_guid);
-                if active_duel
+                let duel_finish = caster
                     .as_ref()
-                    .is_some_and(|duel| finishing_duels.contains(&duel.id))
-                {
+                    .and_then(|caster| crate::combat::duel_finished_by(ctx, caster, &target));
+                if duel_finish.is_some_and(|finish| finishing_duels.contains(&finish.duel_id)) {
                     continue;
                 }
                 if dying.contains_key(&a.target_guid) {
@@ -332,7 +330,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                         );
                         bonuses::round_damage(ctx, a.target_guid, damage)
                     });
-                let amount = resist_magic_damage(
+                let after_resist = resist_magic_damage(
                     ctx,
                     a.target_guid,
                     school,
@@ -341,12 +339,13 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     a.spell_id,
                     true,
                 );
+                let amount = if target.godmode { 0 } else { after_resist };
                 crate::SpellCastEvent::insert(
                     ctx,
                     SpellCastEvent {
                         damage: amount.max(0) as u32,
                         school: crate::spell::school_index(school),
-                        resisted: points.saturating_sub(amount).max(0) as u32,
+                        resisted: points.saturating_sub(after_resist).max(0) as u32,
                         ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
                     },
                 );
@@ -367,30 +366,46 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                         );
                     }
                 }
-                if target.is_player() && amount > 0 && (amount as u32) >= cur {
-                    if let Some(duel) = active_duel {
+                let result = crate::combat::damage_result(
+                    cur,
+                    amount.max(0) as u32,
+                    duel_finish.is_some(),
+                    || crate::combat::lethal_floor_protects(ctx, a.target_guid),
+                );
+                match (result, duel_finish) {
+                    (crate::combat::DamageResult::EndsDuel, Some(finish)) => {
                         pending.insert(a.target_guid, 1);
-                        finishing_duels.insert(duel.id);
+                        finishing_duels.insert(finish.duel_id);
                         duel_losers.insert(a.target_guid);
-                        duel_finishes.push((duel.id, a.caster_guid, a.target_guid));
-                    } else {
-                        pending.insert(a.target_guid, damaged_value(cur, amount));
+                        duel_finishes.push((finish.duel_id, finish.winner_guid, a.target_guid));
                     }
-                } else if !target.is_player() && amount > 0 && (amount as u32) >= cur {
-                    if crate::combat::lethal_floor_protects(ctx, a.target_guid) {
+                    (crate::combat::DamageResult::Floored, _) => {
                         pending.insert(a.target_guid, 1);
                         crate::combat::commit_death_prevention(ctx, a.target_guid, a.caster_guid);
-                    } else {
-                        let killer = entities
-                            .guid()
-                            .find(a.caster_guid)
-                            .filter(|c| c.is_player())
-                            .map(|_| a.caster_guid);
-                        dying.insert(a.target_guid, killer);
+                    }
+                    (crate::combat::DamageResult::Dies, _) => {
+                        let death = if target.is_player() {
+                            PeriodicDeath::Character {
+                                killer_guid: a.caster_guid,
+                                spell_id: a.spell_id,
+                            }
+                        } else {
+                            PeriodicDeath::Creature {
+                                killer: caster
+                                    .as_ref()
+                                    .filter(|c| c.is_player())
+                                    .map(|_| a.caster_guid),
+                            }
+                        };
+                        dying.insert(a.target_guid, death);
                         pending.remove(&a.target_guid);
                     }
-                } else {
-                    pending.insert(a.target_guid, damaged_value(cur, amount));
+                    (crate::combat::DamageResult::EndsDuel, None) => {
+                        pending.insert(a.target_guid, 1);
+                    }
+                    (crate::combat::DamageResult::Survives, _) => {
+                        pending.insert(a.target_guid, damaged_value(cur, amount));
+                    }
                 }
                 let lost = pending
                     .get(&a.target_guid)
@@ -514,8 +529,18 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
             loser_guid,
         );
     }
-    for (guid, killer) in &dying {
-        crate::combat::kill_creature(ctx, *guid, *killer);
+    for (&guid, &death) in &dying {
+        match death {
+            PeriodicDeath::Character {
+                killer_guid,
+                spell_id,
+            } => {
+                crate::combat::kill_player_by_hit(ctx, guid, killer_guid, spell_id);
+            }
+            PeriodicDeath::Creature { killer } => {
+                crate::combat::kill_creature(ctx, guid, killer);
+            }
+        }
     }
     // Death handling may delete or change due auras; advance only surviving rows.
     for a in due {
@@ -532,7 +557,8 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         .collect();
     shed_auras(ctx, ended);
     for (source_spell, caster_guid, trigger_spell, level, channel_target) in channel_fires {
-        if trigger_spell == 0 {
+        // A death earlier in this pass may have ended the channel.
+        if trigger_spell == 0 || !entities.guid().find(caster_guid).is_some_and(|c| !c.dead) {
             continue;
         }
         let result = cast_aura_triggered(
@@ -566,6 +592,12 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     for target_guid in dot_damaged {
         break_auras_on_damage(ctx, target_guid, 0, true);
     }
+}
+
+#[derive(Clone, Copy)]
+enum PeriodicDeath {
+    Character { killer_guid: u64, spell_id: u32 },
+    Creature { killer: Option<u64> },
 }
 
 // Re-read each entity so flushing power preserves the earlier health flush.

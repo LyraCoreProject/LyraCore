@@ -180,11 +180,10 @@ fn magic_hit_uses_signed_levels_and_caps_base_full_resistance() {
 }
 
 #[test]
-fn damaged_value_floors_at_one() {
+fn damaged_value_subtracts_damage_down_to_zero() {
     assert_eq!(damaged_value(42, 20), 22);
-    assert_eq!(damaged_value(10, 50), 1);
+    assert_eq!(damaged_value(10, 50), 0);
     assert_eq!(damaged_value(42, -5), 42);
-    assert_eq!(damaged_value(1, 100), 1);
 }
 
 #[test]
