@@ -4,7 +4,9 @@ use lyracore_shared::guid;
 use spacetimedb::reducer;
 use spacetimedb::{table, ReducerContext, Table};
 
-use crate::{game_creature_template, game_melee_attack, game_world_entity, WorldEntity};
+use crate::{
+    game_creature_template, game_melee_attack, game_world_entity, CreatureTemplate, WorldEntity,
+};
 
 use super::spawn::{build_creature_entity, CreatureSpawn};
 
@@ -181,24 +183,35 @@ pub(crate) fn pet_of(ctx: &ReducerContext, owner_guid: u64) -> Option<WorldEntit
         .filter(|pet| pet.owner_guid == owner_guid)
 }
 
+/// Removes the owner's live pet; a Hunter pet that was out stays dismissed until Call Pet.
 pub(crate) fn despawn_pets(ctx: &ReducerContext, owner_guid: u64) {
+    despawn_pets_on_departure(ctx, owner_guid);
+    super::hunter_pet::dismiss_hunter_pet(ctx, owner_guid);
+}
+
+/// Removes the live pet at logout or Transfer; a Hunter pet that was out returns at world entry.
+pub(crate) fn despawn_pets_on_departure(ctx: &ReducerContext, owner_guid: u64) {
     if let Some(pet) = pet_of(ctx, owner_guid) {
         super::despawn_creature_entity(ctx, pet.guid);
     }
     ctx.db.game_pet_command().owner_guid().delete(owner_guid);
 }
 
-fn build_pet_entity(ctx: &ReducerContext, owner: &WorldEntity, entry: u32) -> Option<WorldEntity> {
-    let tmpl = ctx.db.game_creature_template().entry().find(entry)?;
+pub(super) fn build_pet_entity(
+    ctx: &ReducerContext,
+    owner: &WorldEntity,
+    tmpl: &CreatureTemplate,
+    [x, y, z, orientation]: [f32; 4],
+) -> WorldEntity {
     let pet_guid = pet_guid_for(owner.guid);
     let spawn = CreatureSpawn {
         guid: pet_guid,
-        entry,
+        entry: tmpl.entry,
         map_id: owner.map_id,
-        x: owner.x,
-        y: owner.y,
-        z: owner.z,
-        orientation: owner.orientation,
+        x,
+        y,
+        z,
+        orientation,
         respawn_at: crate::time::now(ctx),
         despawn_at: crate::time::now(ctx),
         movement_type: 0,
@@ -207,25 +220,21 @@ fn build_pet_entity(ctx: &ReducerContext, owner: &WorldEntity, entry: u32) -> Op
         source_guid: 0,
         instance_id: owner.instance_id,
     };
-    let mut pet = build_creature_entity(ctx, &spawn, &tmpl, ctx.random(), owner.instance_id);
+    let mut pet = build_creature_entity(ctx, &spawn, tmpl, ctx.random(), owner.instance_id);
     pet.owner_guid = owner.guid;
-    Some(pet)
+    pet
 }
 
 pub(crate) fn summon_pet(ctx: &ReducerContext, caster_guid: u64, entry: u32) {
-    if entry == 0 {
-        spacetimedb::log::info!(
-            "E_SUMMON_PET with no creature entry (p0=0) for {caster_guid} — skipped"
-        );
-        return;
-    }
     let entities = ctx.db.game_world_entity();
     let Some(caster) = entities.guid().find(caster_guid) else {
         return;
     };
     despawn_pets(ctx, caster_guid);
-    match build_pet_entity(ctx, &caster, entry) {
-        Some(pet) => {
+    match ctx.db.game_creature_template().entry().find(entry) {
+        Some(tmpl) => {
+            let at = [caster.x, caster.y, caster.z, caster.orientation];
+            let pet = build_pet_entity(ctx, &caster, &tmpl, at);
             let pet_guid = pet.guid;
             super::spawn::insert_creature_entity(ctx, pet);
             super::mark_summoned_pet(ctx, pet_guid);

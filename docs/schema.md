@@ -455,7 +455,15 @@ percentage, energy full and rage to 0.
 Hunter pets keep a durable identity in `game_hunter_pet`. A materialized pet is an ordinary owned
 `game_world_entity`, classified by `game_live_pet_kind`; summoned demons have no Hunter identity or
 care state. Taming retires the wild entity and arms its authored `game_creature_spawn` for a later
-respawn, so the spawn point never moves into the pet identity.
+respawn, so the spawn point never moves into the pet identity. Tame, Call Pet and world entry build
+the live pet from the durable row through one builder, at full health for its level.
+
+`game_hunter_pet.presence` and `display_id` are end-appended with default 0. `presence` is 1 while
+the pet is out, including across logout and Transfer, so world entry rebuilds it; 0 after a dismiss,
+a summon over it or a spirit release, so only Call Pet brings it back; 2 once it dies, so neither
+does. Rows written before the column read as dismissed: a pet out at the publish stays out, but does
+not return at its owner's next login until Call Pet. `display_id` is the model the tamed creature
+wore; 0 takes the template's model.
 
 ### Forms (`module/src/form/`)
 

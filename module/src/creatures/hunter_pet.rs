@@ -1,11 +1,9 @@
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::{
-    game_creature_family, game_creature_spawn, game_creature_template, game_world_entity,
-    WorldEntity,
+    game_creature_display, game_creature_family, game_creature_spawn, game_creature_template,
+    game_world_entity, CreatureTemplate, WorldEntity,
 };
-
-use super::pet_guid_for;
 
 const CLASS_HUNTER: u8 = 3;
 const INITIAL_HAPPINESS: u32 = 166_500;
@@ -51,6 +49,38 @@ pub struct HunterPet {
     /// Name-cache stamp in Unix seconds; zero falls back to `created_at` for existing rows.
     #[default(0u32)]
     pub name_timestamp: u32,
+    /// A `PetPresence` code; rows written before it read as dismissed.
+    #[default(0u8)]
+    pub presence: u8,
+    /// The model the tamed creature wore; zero takes the template's model.
+    #[default(0u32)]
+    pub display_id: u32,
+}
+
+/// vmangos: an out pet holds the current slot, a dismissed one no slot, a dead one zero health.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PetPresence {
+    Dismissed,
+    Out,
+    Dead,
+}
+
+impl PetPresence {
+    pub(crate) const fn code(self) -> u8 {
+        match self {
+            Self::Dismissed => 0,
+            Self::Out => 1,
+            Self::Dead => 2,
+        }
+    }
+
+    fn of(code: u8) -> Self {
+        match code {
+            1 => Self::Out,
+            2 => Self::Dead,
+            _ => Self::Dismissed,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -185,11 +215,15 @@ pub(crate) fn live_pet_kind(ctx: &ReducerContext, pet_guid: u64) -> PetKind {
 }
 
 pub(crate) fn mark_summoned_pet(ctx: &ReducerContext, pet_guid: u64) {
+    mark_live_pet_kind(ctx, pet_guid, 0);
+}
+
+fn mark_live_pet_kind(ctx: &ReducerContext, pet_guid: u64, hunter_pet_id: u64) {
     let table = ctx.db.game_live_pet_kind();
     table.pet_guid().delete(pet_guid);
     table.insert(LivePetKind {
         pet_guid,
-        hunter_pet_id: 0,
+        hunter_pet_id,
     });
 }
 
@@ -209,7 +243,7 @@ struct TameEligibility {
     target_owned: bool,
     target_level: u32,
     owner_level: u32,
-    has_live_pet: bool,
+    has_pet: bool,
     family_present: bool,
     family_tameable: bool,
 }
@@ -240,8 +274,8 @@ impl TameEligibility {
         if self.target_level > self.owner_level {
             return Err("the creature is higher level than the Hunter");
         }
-        if self.has_live_pet {
-            return Err("the Hunter already has an active pet");
+        if self.has_pet {
+            return Err("the Hunter already has a pet");
         }
         if !self.family_present {
             return Err("the creature has no pet family");
@@ -280,7 +314,8 @@ fn eligibility(
         target_owned: target.is_some_and(|row| row.owner_guid != 0),
         target_level: target.map_or(0, |row| row.level),
         owner_level: caster.level,
-        has_live_pet: super::pet_of(ctx, caster.guid).is_some(),
+        has_pet: super::pet_of(ctx, caster.guid).is_some()
+            || hunter_pet_for_owner(ctx, caster.guid).is_some(),
         family_present: family.is_some(),
         family_tameable: family.is_some_and(|row| row.pet_talent_type >= 0),
     }
@@ -307,7 +342,7 @@ pub(crate) fn tame_creature(
         .guid()
         .find(caster_guid)
         .ok_or_else(|| "tame caster is not in world".to_string())?;
-    let mut target = entities
+    let target = entities
         .guid()
         .find(target_guid)
         .ok_or_else(|| "tame target is not in world".to_string())?;
@@ -319,26 +354,10 @@ pub(crate) fn tame_creature(
         .entry()
         .find(target.entry)
         .ok_or_else(|| "tame target has no creature template".to_string())?;
-    let family_id = template.creature_family as u32;
-    let pet_id = caster.guid;
-
-    target.owner_guid = caster.guid;
-    target.faction_template = caster.faction_template;
-    target.target_guid = 0;
-    target.movement_flags = 0;
-    target.leg_ends_ms = 0;
-    target.wp_target = 0;
-    target.combat_until_ms = 0;
-    target.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
-    target.unit_flags |= UNIT_FLAG_PET_RENAME;
 
     // Taming retires this wild life; preserve its authored spawn and arm its future appearance.
-    let wild_guid = target.guid;
-    let pet_guid = pet_guid_for(caster.guid);
-    let creature_entry = target.entry;
-    let level = target.level;
-    super::despawn_creature_entity(ctx, wild_guid);
-    if let Some(mut spawn) = ctx.db.game_creature_spawn().guid().find(wild_guid) {
+    super::despawn_creature_entity(ctx, target.guid);
+    if let Some(mut spawn) = ctx.db.game_creature_spawn().guid().find(target.guid) {
         let delay_micros = if spawn.respawn_secs == 0 {
             crate::combat::RESPAWN_MICROS
         } else {
@@ -350,18 +369,16 @@ pub(crate) fn tame_creature(
         spawn.despawn_at = crate::time::timer_never(ctx);
         ctx.db.game_creature_spawn().guid().update(spawn);
     }
-    target.guid = pet_guid;
-    super::spawn::insert_creature_entity(ctx, target);
 
     let now = crate::time::now(ctx);
-    let hunter_pet = HunterPet {
-        pet_id,
+    let hunter_pet = ctx.db.game_hunter_pet().insert(HunterPet {
+        pet_id: caster.guid,
         owner_guid: caster.guid,
-        creature_entry,
-        creature_family: family_id,
-        name: template.name,
+        creature_entry: target.entry,
+        creature_family: template.creature_family as u32,
+        name: template.name.clone(),
         rename_allowed: true,
-        level,
+        level: target.level,
         pet_xp: 0,
         loyalty_level: 1,
         loyalty_progress: 0,
@@ -370,15 +387,150 @@ pub(crate) fn tame_creature(
         care_updated_at: now,
         loyalty_updated_at: now,
         name_timestamp: unix_seconds(now),
-    };
-    ctx.db.game_hunter_pet().pet_id().delete(pet_id);
-    let hunter_pet = ctx.db.game_hunter_pet().insert(hunter_pet);
-    ctx.db.game_live_pet_kind().insert(LivePetKind {
-        pet_guid,
-        hunter_pet_id: pet_id,
+        presence: PetPresence::Out.code(),
+        display_id: target.display_id,
     });
-    publish_hunter_pet_protocol(ctx, &hunter_pet, pet_guid);
+    materialize(
+        ctx,
+        &caster,
+        &template,
+        hunter_pet,
+        [target.x, target.y, target.z, target.orientation],
+    );
     Ok(())
+}
+
+/// Why Call Pet brings no pet; vmangos `Unit::EffectSummonPet` and `Spell::CheckCast`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CallPetRefusal {
+    AnotherPetOut,
+    NoPet,
+    Dead,
+}
+
+fn check_call(live_pet_out: bool, durable: Option<PetPresence>) -> Result<(), CallPetRefusal> {
+    if live_pet_out {
+        return Err(CallPetRefusal::AnotherPetOut);
+    }
+    match durable {
+        None => Err(CallPetRefusal::NoPet),
+        Some(PetPresence::Dead) => Err(CallPetRefusal::Dead),
+        Some(PetPresence::Dismissed | PetPresence::Out) => Ok(()),
+    }
+}
+
+/// Call Pet: builds the owner's durable Hunter pet beside it, or tells the owner why it cannot.
+pub(crate) fn call_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
+    let Some(owner) = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(owner_guid)
+        .filter(WorldEntity::is_player)
+    else {
+        return;
+    };
+    let durable = hunter_pet_for_owner(ctx, owner_guid);
+    let checked = check_call(
+        super::pet_of(ctx, owner_guid).is_some(),
+        durable.as_ref().map(|pet| PetPresence::of(pet.presence)),
+    );
+    match (checked, durable) {
+        (Ok(()), Some(pet)) => materialize_beside(ctx, &owner, pet),
+        (Err(refusal), _) => crate::native::pet::call_refused(ctx, owner_guid, refusal),
+        (Ok(()), None) => {}
+    }
+}
+
+/// World entry: a living owner whose Hunter pet was out at departure gets it back.
+pub(crate) fn restore_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
+    let Some(owner) = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(owner_guid)
+        .filter(|owner| owner.is_player() && !owner.dead)
+    else {
+        return;
+    };
+    if super::pet_of(ctx, owner_guid).is_some() {
+        return;
+    }
+    if let Some(pet) = hunter_pet_for_owner(ctx, owner_guid)
+        .filter(|pet| PetPresence::of(pet.presence) == PetPresence::Out)
+    {
+        materialize_beside(ctx, &owner, pet);
+    }
+}
+
+pub(super) fn dismiss_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
+    if let Some(mut pet) = hunter_pet_for_owner(ctx, owner_guid)
+        .filter(|pet| PetPresence::of(pet.presence) == PetPresence::Out)
+    {
+        pet.presence = PetPresence::Dismissed.code();
+        ctx.db.game_hunter_pet().pet_id().update(pet);
+    }
+}
+
+fn materialize_beside(ctx: &ReducerContext, owner: &WorldEntity, pet: HunterPet) {
+    let Some(template) = ctx
+        .db
+        .game_creature_template()
+        .entry()
+        .find(pet.creature_entry)
+    else {
+        spacetimedb::log::warn!(
+            "Hunter pet {} of {} has no creature template {}",
+            pet.pet_id,
+            owner.guid,
+            pet.creature_entry
+        );
+        return;
+    };
+    let at = [owner.x, owner.y, owner.z, owner.orientation];
+    materialize(ctx, owner, &template, pet, at);
+}
+
+/// The one builder of a live Hunter pet: tame, Call Pet and world entry all pass through it.
+fn materialize(
+    ctx: &ReducerContext,
+    owner: &WorldEntity,
+    template: &CreatureTemplate,
+    mut pet: HunterPet,
+    at: [f32; 4],
+) {
+    let mut live = super::pet::build_pet_entity(ctx, owner, template, at);
+    live.level = pet.level;
+    if let Some(max_health) =
+        super::pet_progression::hunter_pet_max_health(ctx, template, pet.level)
+    {
+        live.health = max_health;
+        live.max_health = max_health;
+    }
+    if pet.display_id != 0 {
+        live.display_id = pet.display_id;
+        live.native_display_id = pet.display_id;
+        live.scale_x = model_scale(ctx, template, pet.display_id);
+    }
+    live.faction_template = owner.faction_template;
+    let pet_guid = live.guid;
+    super::spawn::insert_creature_entity(ctx, live);
+    mark_live_pet_kind(ctx, pet_guid, pet.pet_id);
+
+    // Care pauses while the pet is away; vmangos saves no happiness loss for a dismissed pet.
+    pet.care_updated_at = crate::time::now(ctx);
+    pet.presence = PetPresence::Out.code();
+    let pet = ctx.db.game_hunter_pet().pet_id().update(pet);
+    publish_hunter_pet_protocol(ctx, &pet, pet_guid);
+}
+
+fn model_scale(ctx: &ReducerContext, template: &CreatureTemplate, display_id: u32) -> f32 {
+    ctx.db
+        .game_creature_display()
+        .by_entry()
+        .filter(template.entry)
+        .find(|display| display.display_id == display_id)
+        .map_or(template.scale, |display| display.scale)
 }
 
 fn unix_seconds(at: Timestamp) -> u32 {
@@ -512,7 +664,7 @@ mod tests {
             target_owned: false,
             target_level: 9,
             owner_level: 10,
-            has_live_pet: false,
+            has_pet: false,
             family_present: true,
             family_tameable: true,
         }
@@ -537,7 +689,7 @@ mod tests {
             Box::new(|v| v.target_dead = true),
             Box::new(|v| v.target_owned = true),
             Box::new(|v| v.target_level = v.owner_level + 1),
-            Box::new(|v| v.has_live_pet = true),
+            Box::new(|v| v.has_pet = true),
             Box::new(|v| v.family_present = false),
             Box::new(|v| v.family_tameable = false),
         ];
@@ -549,6 +701,29 @@ mod tests {
                 "invalid tame unexpectedly passed: {value:?}"
             );
         }
+    }
+
+    #[test]
+    fn call_pet_refuses_an_out_pet_no_pet_and_a_dead_pet() {
+        use PetPresence::*;
+        assert_eq!(check_call(false, Some(Dismissed)), Ok(()));
+        assert_eq!(check_call(false, Some(Out)), Ok(()));
+        assert_eq!(check_call(false, None), Err(CallPetRefusal::NoPet));
+        assert_eq!(check_call(false, Some(Dead)), Err(CallPetRefusal::Dead));
+        assert_eq!(
+            check_call(true, Some(Dismissed)),
+            Err(CallPetRefusal::AnotherPetOut)
+        );
+        assert_eq!(check_call(true, None), Err(CallPetRefusal::AnotherPetOut));
+    }
+
+    #[test]
+    fn presence_codes_round_trip_and_unknown_codes_read_as_dismissed() {
+        for presence in [PetPresence::Dismissed, PetPresence::Out, PetPresence::Dead] {
+            assert_eq!(PetPresence::of(presence.code()), presence);
+        }
+        assert_eq!(PetPresence::of(0), PetPresence::Dismissed);
+        assert_eq!(PetPresence::of(9), PetPresence::Dismissed);
     }
 
     #[test]

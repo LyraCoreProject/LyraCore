@@ -1486,8 +1486,11 @@ fn apply_character_effect(
             EffectHit::none()
         }
         E_SUMMON_PET => {
-            let entry = e.p0.max(0) as u32;
-            crate::creatures::summon_pet(ctx, caster_guid, entry);
+            // Call Pet (883) is SPELL_EFFECT_SUMMON_PET with no creature entry.
+            match e.p0.max(0) as u32 {
+                0 => crate::creatures::call_hunter_pet(ctx, caster_guid),
+                entry => crate::creatures::summon_pet(ctx, caster_guid, entry),
+            }
             EffectHit::none()
         }
         E_TAME_CREATURE => {

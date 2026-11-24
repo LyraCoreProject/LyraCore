@@ -1,9 +1,9 @@
 schema_version = 1
 id = "hunter_pet_lifecycle"
 system = "pets"
-scope = "A Hunter tames an eligible creature and commands, dismisses or abandons the pet with the corresponding ownership and persistence rules. Stables and action-bar editing are separate Behaviors."
-requests = ["0x0175", "0x0176"]
-replies = ["0x0179"]
+scope = "A Hunter tames an eligible creature and commands, dismisses or abandons the pet with the corresponding ownership and persistence rules. Taming is refused while the Hunter has a pet, live or durable. Call Pet brings a dismissed pet back with its level, loyalty, happiness, name and spells, and refuses with a tame failure when the Hunter has no pet or the pet is dead. A pet that was out at logout is out again at world entry. Stables and action-bar editing are separate Behaviors."
+requests = ["0x012E", "0x0175", "0x0176"]
+replies = ["0x0173", "0x0179"]
 dependencies = []
 required_rungs = ["durable_module", "tier1", "conformance_audit", "real_client"]
 scenarios = []
@@ -24,7 +24,62 @@ path = "module/src/native/unavailable.rs"
 symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
 
+[[known_gaps]]
+description = "Revive Pet (982, SPELL_EFFECT_SUMMON_DEAD_PET) imports as a scripted effect that does nothing, so a dead pet stays dead and its Hunter can neither call nor tame a pet."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "apply_effect"
+evidence = "importer/src/spell_kind.rs maps effect 109 to E_SCRIPTED; https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEffects.cpp Spell::EffectSummonDeadPet"
+
+[[known_gaps]]
+description = "Dismiss Pet (2641, SPELL_EFFECT_DISMISS_PET) imports as a scripted effect that does nothing; only the pet bar's dismiss command dismisses the pet."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "apply_effect"
+evidence = "importer/src/spell_kind.rs maps effect 102 to E_SCRIPTED; https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEffects.cpp Spell::EffectDismissPet"
+
+[[known_gaps]]
+description = "Call Pet with a pet already out resolves and adds nothing; vmangos refuses the cast with SPELL_FAILED_ALREADY_HAVE_SUMMON."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "check_cast_gates"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp Spell::CheckCast"
+
+[[known_gaps]]
+description = "A refused tame reports SPELL_FAILED_DONT_REPORT without the SMSG_PET_TAME_FAILURE reason vmangos sends first."
+path = "module/src/creatures/hunter_pet.rs"
+symbol = "validate_tame"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp Spell::CheckTamingSpell"
+
+[[known_gaps]]
+description = "The durable pet keeps no health or mana, so Call Pet and world entry build it at full health; vmangos restores the saved health and mana."
+path = "module/src/creatures/hunter_pet.rs"
+symbol = "HunterPet"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Pet.cpp Pet::LoadPetFromDB"
+
 [[tests]]
 path = "module/tests/hunter_pet.rs"
-function = "tame_dismiss_and_retame_preserve_one_durable_identity_and_clean_live_state"
+function = "tame_and_dismiss_keep_one_durable_identity_and_a_second_tame_is_refused"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/hunter_pet.rs"
+function = "call_pet_builds_the_dismissed_pet_from_its_durable_identity"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/hunter_pet.rs"
+function = "an_out_pet_returns_at_world_entry_and_a_dismissed_pet_stays_away"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/hunter_pet.rs"
+function = "a_dead_pet_answers_neither_call_pet_nor_world_entry"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/creatures/hunter_pet.rs"
+function = "call_pet_refuses_an_out_pet_no_pet_and_a_dead_pet"
+rung = "unit"
+
+[[tests]]
+path = "module/src/native/pet.rs"
+function = "call_pet_refusals_send_the_1_12_1_tame_failure_reason"
+rung = "codec"
