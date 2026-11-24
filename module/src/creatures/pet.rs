@@ -298,7 +298,7 @@ pub(crate) fn despawn_pet(ctx: &ReducerContext, pet_guid: u64) {
         spacetimedb::log::info!("despawn_pet: refusing malformed pet row guid={pet_guid}");
         return;
     }
-    // Called for a dead pet, or one whose owner died or left; vmangos saves a living one out of slot.
+    // For a dead pet, or one whose owner died or left; vmangos saves a living pet out of slot.
     despawn_pets(ctx, pet.owner_guid);
 }
 
