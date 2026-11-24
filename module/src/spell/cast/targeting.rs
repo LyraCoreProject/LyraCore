@@ -1745,10 +1745,31 @@ fn create_ground_area(
         cell: 0,
     }
     .insert(ctx);
+    if hdr.cast_flags & CAST_FLAG_CHANNELED != 0 {
+        crate::native::aura::channel_started(ctx, caster_guid, e.spell_id, hdr.duration_ms);
+    }
 }
 
-pub(crate) fn dynamic_object_guid(area_id: u64) -> u64 {
+fn dynamic_object_guid(area_id: u64) -> u64 {
     lyracore_shared::guid::compose(lyracore_shared::guid::DYNAMIC_OBJECT, area_id)
+}
+
+/// A channelled ground area lasts only as long as its caster's channel (vmangos `Spell::cancel`).
+pub(crate) fn is_channelled_area(ctx: &ReducerContext, area: &GroundArea) -> bool {
+    ctx.db
+        .game_spell()
+        .spell_id()
+        .find(area.spell_id)
+        .is_some_and(|spell| spell.cast_flags & CAST_FLAG_CHANNELED != 0)
+}
+
+/// Removes the area and its DynamicObject; the caster of a channelled area leaves its channel.
+pub(crate) fn end_ground_area(ctx: &ReducerContext, area: &GroundArea) {
+    ctx.db.game_ground_area().id().delete(area.id);
+    crate::DynamicObject::delete(ctx, dynamic_object_guid(area.id));
+    if is_channelled_area(ctx, area) {
+        crate::native::aura::channel_ended(ctx, area.caster_guid);
+    }
 }
 
 fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {

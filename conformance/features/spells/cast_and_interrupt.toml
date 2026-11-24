@@ -55,6 +55,31 @@ path = "module/tests/forms.rs"
 function = "moonkin_form_keeps_its_unit_from_mounting"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_channelled_ground_area_ends_when_its_caster_moves"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_channelled_ground_area_ends_when_its_caster_dies"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_new_cast_replaces_the_casters_channelled_ground_area"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_ground_area_without_a_channel_keeps_ticking_after_its_caster_casts_and_moves"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_channelled_ground_area_deals_its_last_tick_and_removes_its_dynamic_object_at_expiry"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/SpellHandler.cpp"
@@ -140,3 +165,21 @@ description = "A creature never pays a spell cost and is never refused for one. 
 path = "module/src/spell/cast/resolve.rs"
 symbol = "check_power"
 evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::CheckPower returns SPELL_CAST_OK only for a non-pet creature whose power type is not mana or whose create mana is 0, and Spell::TakePower spends health or power for every caster unit."
+
+[[known_gaps]]
+description = "Blizzard, Rain of Fire, Volley and Hurricane place no ground area. Their one SPELL_EFFECT_PERSISTENT_AREA_AURA (27) imports as a channel periodic damage Aura on each enemy inside the radius at the cast, so an enemy that walks in takes no damage, one that walks out keeps taking it while in the spell's range, and no DynamicObject draws the ground effect. The channel still ends on a move, death, control effect or new cast."
+path = "importer/src/spell.rs"
+symbol = "resolve_effect_kind"
+evidence = "Source reading, not measured. vmangos reference world rows 10, 5740, 1510 and 16914 carry effect 27 with aura 3 at implicit target 28 and SPELL_ATTR_EX_CHANNELED_1, and no other channel effect. At d9173eca, SpellEffects.cpp Spell::EffectPersistentAA creates a DynamicObject, and DynamicObject::Update applies the Aura to the units inside its radius on every update. Only Consecration and Flamestrike set periodic_damage_as_persistent_area."
+
+[[known_gaps]]
+description = "Damage taken neither shortens nor cancels a channel. vmangos delays a channel on a hit, shortening its Auras and its DynamicObject, interrupts it when no time remains, and cancels it outright when its ChannelInterruptFlags say so; the Module pushes back only a cast in progress and does not import ChannelInterruptFlags."
+path = "module/src/spell/control.rs"
+symbol = "pushback_cast"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::DelayedChannel subtracts the delay from the channel timer, calls DelaySpellAuraHolder on each target and DynamicObject::Delay on each of the caster's DynamicObjects for the spell, and sends MSG_CHANNEL_UPDATE with the remaining time."
+
+[[known_gaps]]
+description = "Kick, Counterspell and other interrupt effects end no channel. vmangos interrupts a channel whose spell has PreventionType SILENCE and AURA_INTERRUPT_ACTION_CANCELS in its channel interrupt flags, and locks its school; the Module interrupts only a cast in progress."
+path = "module/src/spell/control.rs"
+symbol = "interrupt_cast_and_lock"
+evidence = "Source reading, not measured. At d9173eca, SpellEffects.cpp Spell::EffectInterruptCast walks every current spell slot, including CURRENT_CHANNELED_SPELL, and calls LockOutSpells and InterruptSpell for an interruptible one."

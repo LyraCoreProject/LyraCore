@@ -1,4 +1,10 @@
-use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage, world::Packet};
+use lyracore_protocol::{
+    codec,
+    messages::vanilla::{
+        opcodes::ServerOpcodeMessage, MSG_CHANNEL_START_Server, MSG_CHANNEL_UPDATE_Server,
+    },
+    world::Packet,
+};
 use lyracore_shared::spell::taxonomy::*;
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
@@ -100,29 +106,50 @@ fn channel(ctx: &ReducerContext, aura: &Aura, removed: bool) {
         .filter(aura.caster_guid)
         .filter(is_channel)
         .min_by_key(|row| row.id);
-    use lyracore_protocol::messages::vanilla::{
-        MSG_CHANNEL_START_Server, MSG_CHANNEL_UPDATE_Server,
-    };
-    let message = if removed {
-        if active.is_some() {
-            return;
+    if removed {
+        if active.is_none() {
+            channel_ended(ctx, aura.caster_guid);
         }
-        ServerOpcodeMessage::MSG_CHANNEL_UPDATE(MSG_CHANNEL_UPDATE_Server { time: 0 })
-    } else {
-        if active.is_none_or(|row| row.id != aura.id) {
-            return;
-        }
+    } else if active.is_some_and(|row| row.id == aura.id) {
         let duration = aura
             .expires_at
             .to_micros_since_unix_epoch()
             .saturating_sub(crate::time::now(ctx).to_micros_since_unix_epoch())
             / 1_000;
+        channel_started(
+            ctx,
+            aura.caster_guid,
+            aura.spell_id,
+            duration.clamp(0, u32::MAX as i64) as u32,
+        );
+    }
+}
+
+pub(crate) fn channel_started(ctx: &ReducerContext, guid: u64, spell_id: u32, duration_ms: u32) {
+    if !super::has_world_session(ctx, guid) {
+        return;
+    }
+    super::send_to_character(
+        ctx,
+        guid,
         ServerOpcodeMessage::MSG_CHANNEL_START(MSG_CHANNEL_START_Server {
-            spell: aura.spell_id,
-            duration: duration.clamp(0, u32::MAX as i64) as u32,
-        })
-    };
-    super::send_to_character(ctx, aura.caster_guid, message, super::EncodeFailure::Panic);
+            spell: spell_id,
+            duration: duration_ms,
+        }),
+        super::EncodeFailure::Panic,
+    );
+}
+
+pub(crate) fn channel_ended(ctx: &ReducerContext, guid: u64) {
+    if !super::has_world_session(ctx, guid) {
+        return;
+    }
+    super::send_to_character(
+        ctx,
+        guid,
+        ServerOpcodeMessage::MSG_CHANNEL_UPDATE(MSG_CHANNEL_UPDATE_Server { time: 0 }),
+        super::EncodeFailure::Panic,
+    );
 }
 
 fn movement(

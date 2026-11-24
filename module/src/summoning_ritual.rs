@@ -216,7 +216,7 @@ fn join(ctx: &ReducerContext, ritual: &SummoningRitual, character_guid: u64, cha
     let duration_ms = spell_duration_micros(ctx, channel_spell).map_or(u32::MAX, |us| {
         (us / 1_000).clamp(0, i64::from(u32::MAX)) as u32
     });
-    crate::native::summon::channel_started(ctx, character_guid, channel_spell, duration_ms);
+    crate::native::aura::channel_started(ctx, character_guid, channel_spell, duration_ms);
 }
 
 fn participants(ctx: &ReducerContext, ritual_id: u64) -> Vec<RitualParticipant> {
@@ -318,7 +318,7 @@ pub(crate) fn leave(ctx: &ReducerContext, character_guid: u64) -> bool {
         return false;
     };
     participants.character_guid().delete(character_guid);
-    crate::native::summon::channel_ended(ctx, character_guid);
+    crate::native::aura::channel_ended(ctx, character_guid);
     let Some(ritual) = ctx.db.game_summoning_ritual().id().find(row.ritual_id) else {
         return true;
     };
@@ -370,7 +370,7 @@ fn end(ctx: &ReducerContext, ritual: SummoningRitual) {
             .game_summoning_ritual_participant()
             .character_guid()
             .delete(row.character_guid);
-        crate::native::summon::channel_ended(ctx, row.character_guid);
+        crate::native::aura::channel_ended(ctx, row.character_guid);
     }
     let schedules = ctx.db.game_summoning_ritual_schedule();
     for row in schedules.by_ritual().filter(ritual.id).collect::<Vec<_>>() {

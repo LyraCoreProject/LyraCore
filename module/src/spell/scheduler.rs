@@ -626,22 +626,25 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
     let areas = ctx.db.game_ground_area();
     let entities = ctx.db.game_world_entity();
 
-    let mut expired: Vec<u64> = Vec::new();
+    let mut expired: Vec<GroundArea> = Vec::new();
     let mut due: Vec<GroundArea> = Vec::new();
     for a in areas.iter() {
         let expires_micros = a.expires_at.to_micros_since_unix_epoch();
         match classify_ground_tick(a.next_tick_micros, a.period_ms, expires_micros, now_micros) {
             GroundTickStatus::Fire => due.push(a),
-            GroundTickStatus::Reap => expired.push(a.id),
+            GroundTickStatus::Reap => expired.push(a),
             GroundTickStatus::Wait => {}
         }
     }
-    for id in expired {
-        areas.id().delete(id);
-        crate::DynamicObject::delete(ctx, crate::spell::cast::dynamic_object_guid(id));
+    for area in &expired {
+        crate::spell::cast::end_ground_area(ctx, area);
     }
 
     for a in &due {
+        // A death earlier in this pass may have ended the channel.
+        if areas.id().find(a.id).is_none() {
+            continue;
+        }
         let caster = entities.guid().find(a.caster_guid);
         let r2 = a.radius_yd * a.radius_yd;
         let targets: Vec<WorldEntity> =
