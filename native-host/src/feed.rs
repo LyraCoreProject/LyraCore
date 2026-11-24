@@ -563,6 +563,13 @@ impl Feed {
             .flush_relays();
     }
 
+    fn closed(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed
+    }
+
     pub(super) fn register(
         self: &Arc<Self>,
         connection_id: ConnectionId,
@@ -679,28 +686,48 @@ impl Feed {
     }
 }
 
+type FeedSlot = Arc<tokio::sync::Mutex<Option<Arc<Feed>>>>;
+
+/// Each Shard's Feed; while one Shard's Feed is created, only attaches to that Shard wait.
+#[derive(Default)]
+struct Feeds(Mutex<BTreeMap<Identity, FeedSlot>>);
+
+impl Feeds {
+    /// The Shard's open Feed, made by `create` when it has none; a cancelled open drops `create`.
+    async fn open<F>(&self, database: Identity, create: impl FnOnce() -> F) -> Result<Arc<Feed>>
+    where
+        F: std::future::Future<Output = Result<Arc<Feed>>>,
+    {
+        let slot = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(database)
+            .or_default()
+            .clone();
+        let mut current = slot.lock().await;
+        if let Some(feed) = current.as_ref().filter(|feed| !feed.closed()) {
+            return Ok(feed.clone());
+        }
+        let feed = create().await?;
+        *current = Some(feed.clone());
+        Ok(feed)
+    }
+}
+
 pub(super) async fn shared(
     ctx: Arc<StandaloneEnv>,
     database: Identity,
     owner: Identity,
 ) -> Result<Arc<Feed>> {
-    static FEEDS: tokio::sync::Mutex<BTreeMap<Identity, Arc<Feed>>> =
-        tokio::sync::Mutex::const_new(BTreeMap::new());
-    let mut feeds = FEEDS.lock().await;
-    if let Some(feed) = feeds.get(&database) {
-        if !feed
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .closed
-        {
-            return Ok(feed.clone());
-        }
-    }
-    let feed =
-        tokio::time::timeout(Duration::from_secs(10), create(ctx, database, owner)).await??;
-    feeds.insert(database, feed.clone());
-    Ok(feed)
+    static FEEDS: Feeds = Feeds(Mutex::new(BTreeMap::new()));
+    FEEDS
+        .open(database, move || async move {
+            tokio::time::timeout(Duration::from_secs(10), create(ctx, database, owner))
+                .await
+                .context("native output subscription timed out")?
+        })
+        .await
 }
 
 async fn create(ctx: Arc<StandaloneEnv>, database: Identity, owner: Identity) -> Result<Arc<Feed>> {
@@ -725,6 +752,7 @@ async fn create(ctx: Arc<StandaloneEnv>, database: Identity, owner: Identity) ->
     let feed = Arc::new(Feed::default());
     let actor_feed = feed.clone();
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let (keep, kept) = tokio::sync::oneshot::channel::<()>();
     let client = ClientConnection::spawn(
         id,
         auth,
@@ -756,7 +784,12 @@ async fn create(ctx: Arc<StandaloneEnv>, database: Identity, owner: Identity) ->
                     tokio::task::yield_now().await;
                 }
             };
-            tokio::select! { _ = process => {}, _ = client.watch_module_host() => {} }
+            tokio::select! {
+                _ = process => {},
+                // `create` drops `keep` unsent when it does not hand back this Feed.
+                Err(_) = kept => {},
+                _ = client.watch_module_host() => {},
+            }
         },
         connected,
     )
@@ -777,6 +810,7 @@ async fn create(ctx: Arc<StandaloneEnv>, database: Identity, owner: Identity) ->
         )
         .await?;
     ready_rx.await?;
+    ensure!(keep.send(()).is_ok(), "native output subscription stopped");
     let flushing = Arc::downgrade(&feed);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(RELAY_FLUSH);
@@ -1413,5 +1447,112 @@ mod tests {
             assert_eq!(bsatn::from_slice::<Packet>(fixture).unwrap(), expected);
             assert_eq!(bsatn::to_vec(&expected).unwrap(), fixture);
         }
+    }
+
+    fn shard(byte: u8) -> Identity {
+        Identity::from_byte_array([byte; 32])
+    }
+
+    fn created() -> Result<Arc<Feed>> {
+        Ok(Arc::new(Feed::default()))
+    }
+
+    fn not_created() -> Result<Arc<Feed>> {
+        bail!("the Shard's Feed was created again")
+    }
+
+    #[tokio::test]
+    async fn attaches_to_one_shard_wait_for_its_feed_and_share_it() {
+        let feeds = Arc::new(Feeds::default());
+        let (started, creating) = tokio::sync::oneshot::channel();
+        let (finish, finished) = tokio::sync::oneshot::channel::<()>();
+        let first = tokio::spawn({
+            let feeds = feeds.clone();
+            async move {
+                feeds
+                    .open(shard(1), || async move {
+                        started.send(()).unwrap();
+                        finished.await.unwrap();
+                        created()
+                    })
+                    .await
+            }
+        });
+        creating.await.unwrap();
+        let second = tokio::spawn({
+            let feeds = feeds.clone();
+            async move { feeds.open(shard(1), || async { not_created() }).await }
+        });
+        tokio::task::yield_now().await;
+        finish.send(()).unwrap();
+        let first = first.await.unwrap().unwrap();
+        let second = second.await.unwrap().unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn a_shard_creating_its_feed_does_not_delay_attaches_to_another() {
+        let feeds = Arc::new(Feeds::default());
+        let (started, creating) = tokio::sync::oneshot::channel();
+        let slow = tokio::spawn({
+            let feeds = feeds.clone();
+            async move {
+                feeds
+                    .open(shard(1), || async move {
+                        started.send(()).unwrap();
+                        std::future::pending::<Result<Arc<Feed>>>().await
+                    })
+                    .await
+            }
+        });
+        creating.await.unwrap();
+        let other = tokio::time::timeout(
+            Duration::from_secs(5),
+            feeds.open(shard(2), || async { created() }),
+        )
+        .await;
+        assert!(other.is_ok_and(|feed| feed.is_ok()));
+        slow.abort();
+    }
+
+    #[tokio::test]
+    async fn a_failed_or_abandoned_creation_leaves_nothing_and_the_next_attach_creates() {
+        let feeds = Feeds::default();
+        let failed = feeds.open(shard(1), || async { not_created() }).await;
+        assert!(failed.is_err());
+        let (attempt, abandoned) = tokio::sync::oneshot::channel::<()>();
+        let timed_out = tokio::time::timeout(
+            Duration::from_millis(10),
+            feeds.open(shard(1), || async move {
+                let _attempt = attempt;
+                std::future::pending::<Result<Arc<Feed>>>().await
+            }),
+        )
+        .await;
+        assert!(timed_out.is_err());
+        assert!(abandoned.await.is_err());
+        let feed = Arc::new(Feed::default());
+        let opened = feeds
+            .open(shard(1), {
+                let feed = feed.clone();
+                || async move { Ok::<_, anyhow::Error>(feed) }
+            })
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&opened, &feed));
+    }
+
+    #[tokio::test]
+    async fn a_closed_feed_is_replaced_once() {
+        let feeds = Feeds::default();
+        let stopped = feeds.open(shard(1), || async { created() }).await.unwrap();
+        drop(FeedLifetime(stopped.clone()));
+        let replaced = feeds.open(shard(1), || async { created() }).await.unwrap();
+        assert!(!Arc::ptr_eq(&stopped, &replaced));
+        let kept = feeds
+            .open(shard(1), || async { not_created() })
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&replaced, &kept));
     }
 }

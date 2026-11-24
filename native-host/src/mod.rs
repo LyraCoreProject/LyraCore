@@ -196,7 +196,12 @@ async fn connect(
         .await?
         .context("native database missing")?;
     let connection_id = new_connection_id();
-    let shard = attach(&ctx, database, connection_id).await?;
+    let shard = tokio::time::timeout(
+        Duration::from_secs(10),
+        attach(&ctx, database, connection_id),
+    )
+    .await
+    .context("native Shard attach timed out")??;
     let served = match kind {
         Listener::World => serve(&ctx, shard, connection_id, socket).await,
         Listener::Logon => serve_logon(shard, socket).await,

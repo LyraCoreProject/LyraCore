@@ -53,6 +53,11 @@ packets can use it. Logout clears every delivery permission of the connection be
 Character selection. The Host applies these instructions in order. A failed output subscription
 closes its native clients, because the Host cannot continue from a missed instruction.
 
+The first connection to attach to a Shard creates its output subscription, and the next one after
+a failure replaces it. Only attaches to that Shard wait while it is created. An attempt that fails
+or takes more than 10 seconds leaves nothing subscribed. A new connection that has not attached to
+its Shard within 10 seconds closes.
+
 A Handoff marker moves a World Session to another Shard on the same Host. The Host writes the
 connection's packets before the marker and drops the rest of the source Shard's output for it. It
 attaches the connection to the target Shard under the same connection id and calls
