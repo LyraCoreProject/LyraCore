@@ -200,7 +200,9 @@ that transaction. A missing request or a different Package name returns an error
 retain at most 64 requests on a Shard, including unread results.
 
 A restart or delayed reply does not release the name or discard pending work. A confirmed creation
-Refusal releases the name. Result delivery retries until the Realm and World can accept it.
+Refusal releases the name. Result delivery retries while its target is a Peer Shard. When the
+Operator removes the Realm from a World's Peer Shards, that World settles the request as `Created`,
+because the Character already exists there.
 The Package must wait for `Created` before placing or activating the Character. Creation does not
 move Package tables, activate Group presence, or enable guild or cross-Shard relocation operations.
 

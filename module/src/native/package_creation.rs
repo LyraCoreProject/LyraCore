@@ -397,11 +397,17 @@ pub fn package_creation_answered(
     call: PackageCreationDelivery,
     result: Result<(), String>,
 ) {
-    let Err(error) = result else {
-        return;
-    };
     let message: Message =
         bsatn::from_slice(&call.message).expect("stored Package creation message decodes");
+    let error = match result {
+        Ok(()) => {
+            if let Message::Created(created) = message {
+                settle_created(ctx, &created);
+            }
+            return;
+        }
+        Err(error) => error,
+    };
     // IDC reports a durable receiver refusal here; Transport Loss keeps the call pending.
     match message {
         Message::Request(request) => {
@@ -437,16 +443,89 @@ pub fn package_creation_answered(
     }
 }
 
+// The Character already exists here, so Created settles when the Realm accepts or is removed.
+fn settle_created(ctx: &ReducerContext, created: &Created) {
+    let result = CharacterCreation::Created(created.profile.guid);
+    if let Err(error) = finish(ctx, created.request.id, result) {
+        spacetimedb::log::warn!(
+            "Package Character request {} not settled: {error}",
+            created.request.id
+        );
+    }
+}
+
 #[reducer]
 pub fn retry_package_creation(ctx: &ReducerContext, retry: PackageCreationRetry) {
-    if crate::time::scheduler_authorized(ctx) {
-        ctx.db
-            .game_package_creation_delivery()
-            .insert(PackageCreationDelivery {
-                id: 0,
-                ..retry.call
-            });
+    if !crate::time::scheduler_authorized(ctx) {
+        return;
     }
+    if !crate::peer::is_peer(ctx, retry.call.database.0) {
+        spacetimedb::log::warn!(
+            "Package creation result retry to {} dropped: not a Peer Shard",
+            retry.call.database.0
+        );
+        let message: Message = bsatn::from_slice(&retry.call.message)
+            .expect("stored Package creation message decodes");
+        if let Message::Created(created) = message {
+            settle_created(ctx, &created);
+        }
+        return;
+    }
+    ctx.db
+        .game_package_creation_delivery()
+        .insert(PackageCreationDelivery {
+            id: 0,
+            ..retry.call
+        });
+}
+
+/// Queues a creation result for a new Pending request to `target`, which a test makes refuse it.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_queue_package_creation_result(
+    ctx: &ReducerContext,
+    target: Identity,
+    guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let (package, name, race, class) = ("fixture.creation".to_string(), "Retry".to_string(), 1, 1);
+    let row = ctx
+        .db
+        .game_package_character_request()
+        .insert(PackageCharacterRequest {
+            id: 0,
+            package_name: package.clone(),
+            name: name.clone(),
+            race,
+            class,
+            result: CharacterCreation::Pending,
+        });
+    let profile = directory::CharacterProfile {
+        guid,
+        account_id: 0,
+        world: ctx.database_identity(),
+        revision: directory::revision(ctx),
+        name: name.clone(),
+        race,
+        class,
+        gender: 0,
+        deleted: false,
+    };
+    send(
+        ctx,
+        target,
+        Message::Created(Created {
+            request: Request {
+                id: row.id,
+                package,
+                name,
+                race,
+                class,
+            },
+            profile,
+        }),
+    );
+    Ok(())
 }
 
 #[cfg(feature = "debug_reducers")]

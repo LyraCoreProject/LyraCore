@@ -138,3 +138,64 @@ fn a_package_guild_retry_stops_when_its_target_leaves_the_peer_shards() {
         assert!(idle(&shard), "the dropped retry was queued again");
     }
 }
+
+// A Package Character creation result that the Realm refuses is retried every second. Once the
+// Operator removes the Realm from `game_peer_shard`, the retry stops and the request settles as
+// created, because the Character already exists on the World Shard.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_package_creation_retry_stops_and_settles_when_its_target_leaves_the_peer_shards() {
+    let mut shard = Standalone::start_persistent("package-creation-retry-peer");
+    shard.publish_module();
+    let first = shard.shard_name().to_owned();
+    let second = format!("{first}-second");
+    shard.publish_named_module_bytes(&second, module_bytes());
+    for database in [&first, &second] {
+        shard.assert_call_database(database, "claim_operator", &[]);
+    }
+    // Only the first Shard lists the second, so the second refuses everything the first sends.
+    shard.assert_call_database(
+        &first,
+        "operator_add_peer_shard",
+        &[&identity(&shard, &second), r#""second""#],
+    );
+
+    shard.assert_call_database(
+        &first,
+        "debug_queue_package_creation_result",
+        &[&identity(&shard, &second), "9"],
+    );
+    assert!(
+        poll_until(Duration::from_secs(20), || count(
+            &shard,
+            &first,
+            "game_package_creation_retry"
+        ) == 1),
+        "the refused creation result was not scheduled for retry"
+    );
+    let result = |shard: &Standalone| {
+        shard.query_database_rows(&first, "SELECT result FROM game_package_character_request")[0]
+            ["result"]
+            .clone()
+    };
+    assert_eq!(result(&shard), "(pending = ())");
+
+    shard.assert_call_database(
+        &first,
+        "operator_remove_peer_shard",
+        &[&identity(&shard, &second)],
+    );
+    let idle = |shard: &Standalone| {
+        count(shard, &first, "game_package_creation_retry") == 0
+            && count(shard, &first, "game_package_creation_delivery") == 0
+    };
+    assert!(
+        poll_until(Duration::from_secs(20), || idle(&shard)),
+        "the retry kept sending to a Shard that is no longer a Peer Shard"
+    );
+    assert_eq!(result(&shard), "(created = 9)");
+    for _ in 0..12 {
+        std::thread::sleep(Duration::from_millis(250));
+        assert!(idle(&shard), "the dropped retry was queued again");
+    }
+}
