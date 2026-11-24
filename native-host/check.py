@@ -5304,7 +5304,9 @@ def check_handoff(host):
 
 def check_realm_shard(host):
     """Logon and Sessions stay on the Realm Shard; Character selection and the world run on its World
-    Shard, and a World Session moves between them by Handoff."""
+    Shard, and a World Session moves between them by Handoff. A second connection for the Account
+    replaces the World Session that is away on the World Shard, and a late end for the replaced
+    connection leaves the new World Session alone."""
     world = host.add_database()
     host.call('debug_seed_scenario_fixtures', database=world)
     host.call('operator_add_peer_shard', [host.identity(world), 'world'])
@@ -5359,6 +5361,29 @@ def check_realm_shard(host):
     opcode, body = client.read()
     assert opcode == 0x3b and body[0] == 1, (hex(opcode), body.hex())
     enter()
+
+    away = host.rows('SELECT connection_id FROM game_native_away')
+    replacement = host.connect('SPLIT')
+    host.wait_until(lambda: not host.rows('SELECT character_guid FROM game_native_player', world),
+        'a second connection for the Account did not end its World Session on the World Shard')
+    client.read_until_closed(timeout=15)
+    opcode, body = replacement.read()
+    while (opcode, body[:1]) != (0x1ee, b'\x0c'):
+        opcode, body = replacement.read()
+    client = replacement
+    enter()
+    replaced = host.rows('SELECT connection_id FROM game_native_away')
+    assert len(replaced) == 1 and replaced != away
+    account = host.rows("SELECT id FROM game_account WHERE username = 'SPLIT'")[0][0]
+    host.call('debug_end_world_session', [away[0][0], account])
+    time.sleep(1)
+    sequence = secrets.randbits(32)
+    client.send(0x1dc, struct.pack('<II', sequence, 0))
+    while client.read() != (0x1dd, struct.pack('<I', sequence)):
+        pass
+    assert host.rows('SELECT character_guid FROM game_native_player', world) == [[guid]], \
+        'a late end for the replaced connection ended the new World Session'
+    assert host.rows('SELECT connection_id FROM game_native_away') == replaced
 
 
 def check_continent_shards(host):

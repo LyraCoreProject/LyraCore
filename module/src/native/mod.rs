@@ -54,6 +54,7 @@ pub(crate) mod realm_mail;
 pub(crate) mod realm_party;
 pub(crate) mod realm_petition;
 pub(crate) mod realm_shard;
+mod replacement;
 pub(crate) mod reputation;
 mod rollback;
 mod social;
@@ -170,6 +171,17 @@ pub enum NativeWorldState {
     Queued { account_id: u64 },
     CharacterSelection { account_id: u64 },
     InWorld(NativeActive),
+}
+
+impl NativeWorldState {
+    pub(crate) fn account_id(&self) -> Option<u64> {
+        match self {
+            NativeWorldState::AwaitingProof => None,
+            NativeWorldState::Queued { account_id }
+            | NativeWorldState::CharacterSelection { account_id }
+            | NativeWorldState::InWorld(NativeActive { account_id, .. }) => Some(*account_id),
+        }
+    }
 }
 
 #[table(accessor = game_native_world_connection)]
@@ -384,6 +396,12 @@ enum ConnectionEnd {
 }
 
 fn end_connection(ctx: &ReducerContext, connection_id: ConnectionId, end: ConnectionEnd) {
+    let open = ctx
+        .db
+        .game_native_world_connection()
+        .connection_id()
+        .find(connection_id)
+        .is_some();
     realm_shard::closing(ctx, connection_id);
     realm_shard::clear_return(ctx, connection_id);
     realm_shard::cancel_selection(ctx, connection_id);
@@ -421,6 +439,10 @@ fn end_connection(ctx: &ReducerContext, connection_id: ConnectionId, end: Connec
         .game_native_world_connection()
         .connection_id()
         .delete(connection_id);
+    // A connection that ends before this Shard adopts it leaves its Handoff unused.
+    if !open {
+        handoff::abandon(ctx, connection_id);
+    }
 }
 
 fn clear_audience(ctx: &ReducerContext, connection_id: ConnectionId) {
@@ -533,13 +555,7 @@ fn receive(
         .connection_id()
         .find(connection_id)
         .ok_or("native connection is not open")?;
-    let account_id = match &connection.state {
-        NativeWorldState::AwaitingProof => None,
-        NativeWorldState::Queued { account_id }
-        | NativeWorldState::CharacterSelection { account_id }
-        | NativeWorldState::InWorld(NativeActive { account_id, .. }) => Some(*account_id),
-    };
-    if let Some(account_id) = account_id {
+    if let Some(account_id) = connection.state.account_id() {
         current_account(ctx, &connection, account_id)?;
     }
     if transfer::pending(ctx, connection_id)
@@ -854,12 +870,7 @@ fn local_session_accounts(ctx: &ReducerContext) -> std::collections::HashSet<u64
         .game_native_world_connection()
         .iter()
         .filter_map(|connection| {
-            let account_id = match connection.state {
-                NativeWorldState::AwaitingProof => return None,
-                NativeWorldState::Queued { account_id }
-                | NativeWorldState::CharacterSelection { account_id }
-                | NativeWorldState::InWorld(NativeActive { account_id, .. }) => account_id,
-            };
+            let account_id = connection.state.account_id()?;
             current_account(ctx, &connection, account_id)
                 .is_ok()
                 .then_some(account_id)

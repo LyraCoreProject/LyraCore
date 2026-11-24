@@ -533,6 +533,20 @@ pub fn idc_native_transfer_release(
         .game_native_handoff()
         .connection_id()
         .find(ConnectionId::from_u128(connection));
+    // A released Handoff that this Shard abandoned has already reported its World Session closed.
+    if handoff.is_none()
+        && ctx
+            .db
+            .game_transfer_in()
+            .transfer_id()
+            .find(transfer_id)
+            .is_none()
+    {
+        if !connected && !super::has_world_session(ctx, character_guid) {
+            clear_pending_playtest(ctx, character_guid);
+        }
+        return Ok(());
+    }
     let handoff = handoff
         .filter(|handoff| {
             handoff.transfer_id == transfer_id

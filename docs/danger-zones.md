@@ -940,6 +940,15 @@ families after the publish; until then every drop still gives its largest stack.
 Content API loot rows and the Package Delta loot tables carry `min_count` too; a Package Delta
 that omits it inserts zero.
 
+### World Session end migration
+
+A split Realm adds the `idc_end_world_session` reducer, the `game_world_session_end` outbox and the
+`game_world_session_end_retry` schedule. Both tables start empty. Publish the World Shards before
+the Realm Shard. A World Shard on the old Module refuses the new call. A newer connection for an
+Account with a World Session on that Shard then waits the full 90-second bound before the Realm
+Shard admits it, and the older World Session continues until its next request fails or it closes.
+A Realm Shard on the old Module never sends the call, so the World Shards may go first.
+
 ## 2. Tooling gotchas
 
 - **`spacetime sql` (2.5):** no `ORDER BY`, no `IN` or subqueries, no `Timestamp` or `Identity`
