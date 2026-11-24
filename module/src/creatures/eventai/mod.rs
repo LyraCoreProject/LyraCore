@@ -28,8 +28,8 @@ pub(crate) use edges::{
     reset_engagement, runs_eventai,
 };
 pub(crate) use edges::{
-    eventai_on_evade, eventai_on_reached_home, eventai_on_receive_emote, eventai_on_spell_hit,
-    eventai_on_target_not_reachable,
+    eventai_arrived_home, eventai_on_evade, eventai_on_reached_home, eventai_on_receive_emote,
+    eventai_on_spell_hit, eventai_on_target_not_reachable,
 };
 #[cfg(test)]
 pub(crate) use engine::{evaluate, EventAiWorld};

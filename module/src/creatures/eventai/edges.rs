@@ -219,13 +219,14 @@ pub(crate) fn eventai_on_receive_emote(
     super::evaluate_context(ctx, EventAiRequest::Edge(context));
 }
 
-pub(crate) fn eventai_on_evade(ctx: &ReducerContext, creature_guid: u64) {
+/// True when the creature evaded at home: the caller fires `eventai_arrived_home` once it is reset.
+pub(crate) fn eventai_on_evade(ctx: &ReducerContext, creature_guid: u64) -> bool {
     crate::spell::source_behavior::remove_auras_on_evade(ctx, creature_guid);
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
-        return;
+        return false;
     };
     if creature.dead || !runs_eventai(ctx, &creature) {
-        return;
+        return false;
     }
     evaluate_edge(
         ctx,
@@ -237,18 +238,22 @@ pub(crate) fn eventai_on_evade(ctx: &ReducerContext, creature_guid: u64) {
         false,
     );
     let Some(home) = ctx.db.game_creature_spawn().guid().find(creature_guid) else {
-        return;
+        return false;
     };
     let (dx, dy) = (home.x - creature.x, home.y - creature.y);
     // vmangos HomeMovementGenerator arrives next update; within the leash this arrives at once.
     if dx * dx + dy * dy <= crate::creatures::ai::RETURN_LEASH_SQ {
-        fire_reached_home(ctx, creature_guid);
-        return;
+        return true;
     }
     let returning = ctx.db.game_creature_ai_returning_home();
     if returning.creature_guid().find(creature_guid).is_none() {
         returning.insert(CreatureAiReturningHome { creature_guid });
     }
+    false
+}
+
+pub(crate) fn eventai_arrived_home(ctx: &ReducerContext, creature_guid: u64) {
+    fire_reached_home(ctx, creature_guid);
 }
 
 pub(crate) fn eventai_on_reached_home(ctx: &ReducerContext, creature_guid: u64) {
