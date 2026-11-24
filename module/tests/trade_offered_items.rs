@@ -107,6 +107,31 @@ impl Fixture {
             "gw_set_trade_gold",
             &[&self.partner, &PARTNER_GOLD.to_string()],
         );
+        let sessions = self.sessions();
+        assert_eq!(sessions.len(), 1, "the trade opened: {sessions:?}");
+        assert_eq!(
+            (
+                sessions[0]["open"].as_str(),
+                sessions[0]["target_gold"].as_str()
+            ),
+            ("true", PARTNER_GOLD.to_string().as_str())
+        );
+        let slots = self
+            .shard
+            .query_rows("SELECT owner_guid, trade_slot FROM game_trade_slot");
+        assert_eq!(slots.len(), 1, "one item is offered: {slots:?}");
+        assert_eq!(
+            (
+                slots[0]["owner_guid"].as_str(),
+                slots[0]["trade_slot"].as_str()
+            ),
+            ("1", "0")
+        );
+    }
+
+    fn sessions(&self) -> Vec<support::Row> {
+        self.shard
+            .query_rows("SELECT open, target_gold FROM game_trade_session")
     }
 }
 
@@ -118,6 +143,9 @@ fn a_character_in_a_trade_cannot_send_any_mail_until_it_ends() {
     let blade = f.grant_at(FIXTURE_BLADE, 24);
 
     f.shard.assert_call("gw_initiate_trade", &[ACTOR, &f.other]);
+    let proposed = f.sessions();
+    assert_eq!(proposed.len(), 1, "the trade is proposed: {proposed:?}");
+    assert_eq!(proposed[0]["open"], "false");
     refused(
         &f.shard,
         "realm_mail_send",
@@ -128,6 +156,16 @@ fn a_character_in_a_trade_cannot_send_any_mail_until_it_ends() {
     f.shard.assert_call("gw_begin_trade", &[&f.partner]);
     f.shard
         .assert_call("gw_set_trade_item", &[ACTOR, "0", "23"]);
+    assert_eq!(f.sessions()[0]["open"], "true");
+    assert_eq!(
+        f.shard
+            .query_rows(&format!(
+                "SELECT id FROM game_trade_slot WHERE item_guid = {jerky}"
+            ))
+            .len(),
+        1,
+        "the jerky is offered"
+    );
     for (money, item) in [
         ("0", jerky.as_str()),
         ("0", blade.as_str()),
