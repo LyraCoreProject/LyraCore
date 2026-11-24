@@ -110,11 +110,15 @@ new ticket waits. The Realm Shard asks the World Shard that holds the older one,
 connection (`idc_end_world_session`). The World Shard ends only that connection or its Handoff and
 always reports the World Session closed, also when it holds nothing of it. The report removes the
 away record and the Login Queue admits the ticket. A refused request is sent again after 30 seconds.
-The ticket waits at most 90 seconds, which covers the 30-second Handoff deadline and two resends.
-It does not wait when the away record names a Shard that is not a Peer Shard. At the bound the
-Realm Shard drops the away record and admits the ticket. An older World Session that still exists
-then ends when the World Shard receives the request, or on its next request if a new logon replaced
-the Session key. Until then the Account can have two World Sessions.
+The ticket waits at most 90 seconds, which covers two resends of a refused request and bounds a
+request that is never delivered. It does not wait when the away record names a Shard that is not a
+Peer Shard. At the bound the Realm Shard drops the away record and admits the ticket. An older World
+Session that still exists then ends when the World Shard receives a request that was only delayed,
+or on its next request if a new logon replaced the Session key. When the World Shard refused every
+request (an older Module, or a Transfer that fenced the Handoff past the bound) and the Session key
+was reused, nothing ends the older World Session and later Account changes no longer reach its
+Shard. It lasts until it closes, tries to log out, or the newer connection enters the same World
+Shard, and until then the Account has two World Sessions.
 
 Session revocation Gates run before admission and before every authenticated request, including
 ignored controls. The one-hour Session expiry limits new world authentication only. An established
@@ -485,8 +489,8 @@ before new creation opens. Old creation replies and profile outboxes must drain 
 Login and deletion route by Character guid and Account. Login sends the owning World Shard Account
 and Session copies, then hands the World Session over by Handoff. Logout hands it back. The Realm
 Shard records which World Shard holds the away World Session, so changed Accounts and Sessions, and
-a request to end that World Session, go to that Shard. The Handoff row retains the Character guid for arrival. The Login Queue counts away
-World Sessions toward its session limit. From `CMSG_PLAYER_LOGIN` until the Handoff, the Realm Shard
+a request to end that World Session, go to that Shard. The Handoff row retains the Character guid
+for arrival. The Login Queue counts away World Sessions toward its session limit. From `CMSG_PLAYER_LOGIN` until the Handoff, the Realm Shard
 refuses further selection requests of that connection. If the World Shard does not answer within
 ten seconds, the Realm Shard closes the World Session.
 

@@ -12,8 +12,7 @@ use super::{game_native_world_connection, NativeActive, NativeWorldState};
 use crate::peer::{is_peer, realm_shard as realm, require_sender, world_shard};
 use crate::remote_bindings::peer as remote;
 
-/// How long a newer ticket waits for the World Shard to end the away World Session. It covers the
-/// 30-second Handoff deadline and two resends of a refused end.
+/// How long a newer ticket waits for the away World Session to end: two resends of a refused end.
 const END_MICROS: i64 = 90_000_000;
 /// A refused end waits before it is sent again, as a refused Transfer release does.
 const RESEND_MICROS: i64 = 30_000_000;
