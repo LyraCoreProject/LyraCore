@@ -327,13 +327,15 @@ known state and previous rank from its trigger spell. Trainers read an `E_SCRIPT
 trigger spell as a learn effect only when its target is `T_SCRIPTED` (rows imported before
 `E_LEARN_SPELL`) or `T_CASTER_PET`; any other `E_SCRIPTED` effect is no longer a learn effect. A
 spell row imported before `E_LEARN_SPELL` whose effect 36 had implicit target 1 stored `T_SELF` and
-stops teaching until the `spell` reimport. No publish or repair is needed. Buying a pet-learn wrapper
-is refused with `TrainerRefusal::Unavailable` and takes no money: vmangos casts the wrapper from the
-trainer NPC, which has no pet, so the cast fails and the buy takes no money (the Spell.dbc
-SpellVisual of every trainer pet wrapper is 107, not the 222 that makes the Character the caster).
-The offer stays listed. The refusal needs the `spell` reimport: a row imported before #1222 stores
-the wrapper as `E_SCRIPTED` with `T_SCRIPTED`, which looks like an ordinary learn row, so on a Shard
-that is not reimported the buy still teaches the Character the trigger spell.
+stops teaching until the `spell` reimport. No publish or repair is needed.
+
+No vmangos trainer offers a pet-learn wrapper. A pet trainer offers a wrapper such as 15147 (Growl
+Rank 3) whose effect 36 aims at the buyer, so the Character learns 14923, the Beast Training spell
+that later teaches the pet; that buy is unchanged. A trainer row that offers a pet-learn wrapper
+directly, such as one a Package adds, is refused with `TrainerRefusal::Unavailable` and takes no
+money: vmangos casts a wrapper whose SpellVisual is not 222 from the trainer NPC, which has no pet,
+so the cast fails. The refusal needs the `spell` reimport: a row imported before #1222 stores the
+wrapper as `E_SCRIPTED` with `T_SCRIPTED`, which looks like an ordinary learn row.
 
 ### Queued strike report migration
 
