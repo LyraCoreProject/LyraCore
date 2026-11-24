@@ -196,19 +196,22 @@ async fn connect(
     kind: Listener,
     slot: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<()> {
-    let _slot = slot;
     socket.set_nodelay(true)?;
     let database = ctx
         .lookup_database_identity(database)
         .await?
         .context("native database missing")?;
     let connection_id = new_connection_id();
-    let shard = tokio::time::timeout(
-        Duration::from_secs(10),
-        attach(&ctx, database, connection_id),
-    )
-    .await
-    .context("native Shard attach timed out")??;
+    // An attach its caller gave up on keeps the listener slot until its Core client disconnects.
+    let attaching = tokio::spawn({
+        let ctx = ctx.clone();
+        async move { (attach(&ctx, database, connection_id).await, slot) }
+    });
+    let (shard, _slot) = tokio::time::timeout(Duration::from_secs(10), attaching)
+        .await
+        .context("native Shard attach timed out")?
+        .context("native Shard attach stopped")?;
+    let shard = shard?;
     let served = match kind {
         Listener::World => serve(&ctx, shard, connection_id, socket).await,
         Listener::Logon => serve_logon(shard, socket).await,
