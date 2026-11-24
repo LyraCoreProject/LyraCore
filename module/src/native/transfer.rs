@@ -3,7 +3,10 @@ use spacetimedb::{
     reducer, table, ConnectionId, Identity, ReducerContext, ScheduleAt, Table, TimeDuration,
 };
 
-use super::directory::{self, game_character_directory, game_character_directory_version};
+use super::directory::{
+    self, game_character_directory, game_character_directory_version, CharacterDirectory,
+    CharacterDirectoryVersion,
+};
 use super::handoff::{game_native_handoff, NativeHandoff};
 use super::realm_shard::{
     game_native_away, game_world_session_closed, store_account, store_session, WorldSessionClosed,
@@ -319,19 +322,34 @@ pub fn native_transfer_answered(
     Ok(())
 }
 
-fn move_is_current(
-    owner: Identity,
-    current_revision: u64,
+#[derive(Debug, PartialEq, Eq)]
+enum MovePlan {
+    Apply,
+    AlreadyApplied,
+}
+
+/// Ok means the directory names `target` afterwards: the source then releases the Character.
+fn plan_move(
+    entry: &CharacterDirectory,
+    version: &CharacterDirectoryVersion,
     sender: Identity,
+    target: Identity,
+    account_id: u64,
     revision: u64,
-) -> Result<bool, String> {
-    if revision <= current_revision {
-        return Ok(false);
+) -> Result<MovePlan, String> {
+    if entry.account_id != account_id {
+        return Err("Character directory Account cannot change".into());
     }
-    if owner != sender {
+    if entry.world == target && version.world == target {
+        return Ok(MovePlan::AlreadyApplied);
+    }
+    if version.world != sender {
         return Err("only the current World Shard can Transfer a Character directory entry".into());
     }
-    Ok(true)
+    if revision <= version.revision {
+        return Err("Character directory holds a newer revision than this Transfer".into());
+    }
+    Ok(MovePlan::Apply)
 }
 
 #[reducer]
@@ -358,11 +376,10 @@ pub fn idc_native_transfer_moved(
         .guid()
         .find(character_guid)
         .ok_or("Character directory revision is missing")?;
-    if !move_is_current(version.world, version.revision, ctx.sender(), revision)? {
+    if plan_move(&entry, &version, ctx.sender(), world, account_id, revision)?
+        == MovePlan::AlreadyApplied
+    {
         return Ok(());
-    }
-    if entry.account_id != account_id {
-        return Err("Character directory Account cannot change".into());
     }
     entry.world = world;
     version.world = world;
@@ -413,6 +430,8 @@ pub fn retry_native_transfer_moved(
         .game_native_transfer_moved()
         .insert(NativeTransferMoved {
             id: 0,
+            // A fresh revision lets the retry pass a newer revision its source reported meanwhile.
+            revision: directory::revision(ctx),
             ..retry.call
         });
     Ok(())
@@ -603,13 +622,73 @@ pub fn native_transfer_release_answered(
 mod tests {
     use super::*;
 
+    const GUID: u64 = 42;
+    const ACCOUNT: u64 = 7;
+
+    fn source() -> Identity {
+        Identity::from_byte_array([1; 32])
+    }
+
+    fn target() -> Identity {
+        Identity::from_byte_array([2; 32])
+    }
+
+    fn directory_at(
+        world: Identity,
+        revision: u64,
+    ) -> (CharacterDirectory, CharacterDirectoryVersion) {
+        (
+            CharacterDirectory {
+                guid: GUID,
+                account_id: ACCOUNT,
+                world,
+            },
+            CharacterDirectoryVersion {
+                guid: GUID,
+                revision,
+                world,
+            },
+        )
+    }
+
+    fn plan(
+        world: Identity,
+        current: u64,
+        sender: Identity,
+        revision: u64,
+    ) -> Result<MovePlan, String> {
+        let (entry, version) = directory_at(world, current);
+        plan_move(&entry, &version, sender, target(), ACCOUNT, revision)
+    }
+
     #[test]
-    fn directory_transfer_requires_current_owner_and_ignores_old_moves() {
-        let source = Identity::from_byte_array([1; 32]);
-        let target = Identity::ZERO;
-        assert_eq!(move_is_current(source, 10, source, 11), Ok(true));
-        assert_eq!(move_is_current(target, 11, source, 11), Ok(false));
-        assert_eq!(move_is_current(source, 13, target, 12), Ok(false));
-        assert!(move_is_current(target, 11, source, 12).is_err());
+    fn a_newer_move_from_the_current_owner_applies() {
+        assert_eq!(plan(source(), 10, source(), 11), Ok(MovePlan::Apply));
+    }
+
+    #[test]
+    fn a_move_the_directory_already_shows_is_accepted_without_change() {
+        assert_eq!(
+            plan(target(), 11, source(), 11),
+            Ok(MovePlan::AlreadyApplied)
+        );
+    }
+
+    #[test]
+    fn an_older_move_from_the_owner_is_refused_while_the_directory_names_the_source() {
+        assert!(plan(source(), 12, source(), 11).is_err());
+        assert!(plan(source(), 11, source(), 11).is_err());
+    }
+
+    #[test]
+    fn a_move_from_a_world_shard_that_does_not_own_the_entry_is_refused() {
+        let other = Identity::from_byte_array([3; 32]);
+        assert!(plan(other, 10, source(), 11).is_err());
+    }
+
+    #[test]
+    fn a_move_for_another_account_is_refused_even_when_the_directory_names_the_target() {
+        let (entry, version) = directory_at(target(), 11);
+        assert!(plan_move(&entry, &version, source(), target(), ACCOUNT + 1, 11).is_err());
     }
 }

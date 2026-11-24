@@ -38,9 +38,11 @@ outboxes and results resume on restart. A timeout alone never releases cross-Sha
    that the target failed.
 5. The Realm Shard accepts an owner change only from the current directory owner, with a newer
    revision and the same Account. It updates the directory and the matching away World Session's
-   `world` together. Old and duplicate revisions do nothing. Each World Shard observes the arriving
-   revision and advances its directory clock, so a round trip remains ordered even across different
-   wall clocks. A closed or replaced World Session is not restored by a late update.
+   `world` together. A move that the directory already shows succeeds without change. It refuses
+   every other move, so the source keeps the target fenced and retries with a fresh revision.
+   Each World Shard observes the arriving revision and advances its directory clock, so a round
+   trip remains ordered even across different wall clocks. A closed or replaced World Session is
+   not restored by a late update.
 6. After the Realm Shard accepts, the source queues a target release. The target checks the exact
    Transfer, source and connection against its Handoff before clearing the arrival fence. The source
    writes the Handoff marker only after this release succeeds. Directory and release refusals retain
@@ -127,7 +129,8 @@ when the Character has already left its source. Terminal results survive restart
 ## Manifest discipline
 
 - `transfer::is_in_transit` hides a Character with an Escrow row from by-guid lookups and refuses
-  world entry. The rest and quest passes also skip it.
+  world entry. The rest and quest passes also skip it. Selection replies and profile reports
+  leave it out of their directory changes, so only its Transfer moves its directory entry.
 - Current manifests carry both buyback tables. Older manifests may omit them through the existing
   empty-table compatibility path; a fresh login then starts an empty ring. A World Port import
   requires buyback session state and refuses atomically when the source cannot provide it. An
