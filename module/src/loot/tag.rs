@@ -149,7 +149,13 @@ pub(crate) fn death_entitlement(
         .by_creature()
         .filter(&creature_guid)
         .filter_map(|member| {
-            if !keeps_tag_rights(ctx, group_id, tag.character_guid, member.character_guid) {
+            let member_group_id = current_group_id(ctx, member.character_guid);
+            if !has_tag_rights(
+                tag.character_guid,
+                member.character_guid,
+                group_id,
+                member_group_id,
+            ) {
                 return None;
             }
             let character = entities.guid().find(member.character_guid)?;
@@ -184,17 +190,31 @@ fn living_tag_group(ctx: &ReducerContext, creature_guid: u64) -> Option<u64> {
 }
 
 // vmangos `Creature::IsTappedBy` and `Unit::Kill`: the tagger keeps credit after leaving a Group.
-fn keeps_tag_rights(
-    ctx: &ReducerContext,
-    living_group_id: Option<u64>,
+fn has_tag_rights(
     tagger_guid: u64,
     member_guid: u64,
+    living_group_id: Option<u64>,
+    member_group_id: Option<u64>,
 ) -> bool {
     member_guid == tagger_guid
-        || living_group_id.is_some_and(|group_id| {
-            crate::group::group_of(ctx, member_guid)
-                .is_some_and(|membership| membership.group_id == group_id)
-        })
+        || living_group_id.is_some_and(|group_id| member_group_id == Some(group_id))
+}
+
+// vmangos loots to the living tagging Group: a tagger who left it gets rewards but no loot.
+fn has_loot_rights(
+    tagger_guid: u64,
+    member_guid: u64,
+    living_group_id: Option<u64>,
+    member_group_id: Option<u64>,
+) -> bool {
+    if member_guid == tagger_guid {
+        return living_group_id.is_none_or(|group_id| member_group_id == Some(group_id));
+    }
+    has_tag_rights(tagger_guid, member_guid, living_group_id, member_group_id)
+}
+
+fn current_group_id(ctx: &ReducerContext, character_guid: u64) -> Option<u64> {
+    crate::group::group_of(ctx, character_guid).map(|membership| membership.group_id)
 }
 
 pub(crate) fn live_loot_tag_eligibility(
@@ -224,7 +244,12 @@ pub(crate) fn live_loot_tag_eligibility(
     if members
         .iter()
         .any(|member| member.character_guid == character_guid)
-        && keeps_tag_rights(ctx, group_id, tag.character_guid, character_guid)
+        && has_tag_rights(
+            tag.character_guid,
+            character_guid,
+            group_id,
+            current_group_id(ctx, character_guid),
+        )
     {
         LiveLootTagEligibility::Available
     } else {
@@ -266,26 +291,27 @@ pub(crate) fn revoke_group_member(ctx: &ReducerContext, group_id: u64, character
     }
 }
 
-// vmangos loots to the living tagging Group: a tagger who left it gets rewards but no loot.
 fn loot_recipients(ctx: &ReducerContext, corpse_guid: u64, recipients: &[u64]) -> Vec<u64> {
-    let tagger_guid = ctx
+    let Some(tag) = ctx
         .db
         .game_creature_quest_tap()
         .creature_guid()
         .find(corpse_guid)
-        .map(|tag| tag.character_guid);
-    let tagger_left_living_group = tagger_guid
-        .zip(living_tag_group(ctx, corpse_guid))
-        .is_some_and(|(tagger, group_id)| {
-            crate::group::group_of(ctx, tagger).is_none_or(|member| member.group_id != group_id)
-        });
-    if !tagger_left_living_group || recipients.iter().all(|guid| Some(*guid) == tagger_guid) {
+    else {
         return recipients.to_vec();
-    }
+    };
+    let living_group_id = living_tag_group(ctx, corpse_guid);
     recipients
         .iter()
         .copied()
-        .filter(|guid| Some(*guid) != tagger_guid)
+        .filter(|guid| {
+            has_loot_rights(
+                tag.character_guid,
+                *guid,
+                living_group_id,
+                current_group_id(ctx, *guid),
+            )
+        })
         .collect()
 }
 
@@ -407,6 +433,8 @@ const LOOT_TAG_FIXTURE_CHARACTER_F: u64 = 5_093_856;
 const LOOT_TAG_FIXTURE_DISBAND_GROUP: u64 = 5_093_860;
 #[cfg(feature = "debug_reducers")]
 const LOOT_TAG_FIXTURE_DEPARTURE_GROUP: u64 = 5_093_861;
+#[cfg(feature = "debug_reducers")]
+const LOOT_TAG_FIXTURE_ABSENT_GROUP: u64 = 5_093_862;
 
 #[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
@@ -772,6 +800,20 @@ fn verify_tagger_departures(
         &[A, B, E],
     )?;
     kill_and_expect_rewards(ctx, tagger_left, B, &[A, B, E], &[], &[B, E])?;
+
+    // The tagger leaves a Group whose other members are out of range: nobody may loot the corpse.
+    const C: u64 = LOOT_TAG_FIXTURE_CHARACTER_C;
+    const D: u64 = LOOT_TAG_FIXTURE_CHARACTER_D;
+    move_fixture_entity(ctx, C, x + 100.0)?;
+    insert_fixture_group(ctx, LOOT_TAG_FIXTURE_ABSENT_GROUP, A, &[A, C, D]);
+    let alone = tagged_fixture_creature(ctx, origin, 18, x, A)?;
+    crate::group::remove_member(ctx, A, crate::group::Departure::Left);
+    expect_entitlement(ctx, alone, Some(LOOT_TAG_FIXTURE_ABSENT_GROUP), &[A])?;
+    kill_and_expect_rewards(ctx, alone, A, &[A], &[], &[])?;
+
+    // Leave no Group behind: later checks tag with B and E.
+    crate::group::remove_member(ctx, B, crate::group::Departure::Left);
+    crate::group::remove_member(ctx, C, crate::group::Departure::Left);
     Ok(())
 }
 
@@ -1160,4 +1202,43 @@ fn entity_xp(ctx: &ReducerContext, guid: u64) -> Result<u32, String> {
         .find(guid)
         .map(|entity| entity.xp)
         .ok_or_else(|| format!("Loot Tag fixture Character {guid} is missing"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{has_loot_rights, has_tag_rights};
+
+    const TAGGER: u64 = 1;
+    const OTHER: u64 = 2;
+    const GROUP: u64 = 10;
+
+    #[test]
+    fn tagger_keeps_rights_when_the_tagging_group_disbands() {
+        assert!(has_tag_rights(TAGGER, TAGGER, None, None));
+        assert!(has_loot_rights(TAGGER, TAGGER, None, None));
+        assert!(!has_tag_rights(TAGGER, OTHER, None, None));
+        assert!(!has_loot_rights(TAGGER, OTHER, None, None));
+    }
+
+    #[test]
+    fn tagger_who_left_a_living_group_is_rewarded_but_not_given_loot() {
+        assert!(has_tag_rights(TAGGER, TAGGER, Some(GROUP), None));
+        assert!(!has_loot_rights(TAGGER, TAGGER, Some(GROUP), None));
+        assert!(!has_loot_rights(
+            TAGGER,
+            TAGGER,
+            Some(GROUP),
+            Some(GROUP + 1)
+        ));
+        assert!(has_loot_rights(TAGGER, TAGGER, Some(GROUP), Some(GROUP)));
+    }
+
+    #[test]
+    fn member_keeps_rights_only_while_in_the_living_tagging_group() {
+        assert!(has_tag_rights(TAGGER, OTHER, Some(GROUP), Some(GROUP)));
+        assert!(has_loot_rights(TAGGER, OTHER, Some(GROUP), Some(GROUP)));
+        assert!(!has_tag_rights(TAGGER, OTHER, Some(GROUP), None));
+        assert!(!has_tag_rights(TAGGER, OTHER, Some(GROUP), Some(GROUP + 1)));
+        assert!(!has_loot_rights(TAGGER, OTHER, Some(GROUP), None));
+    }
 }
