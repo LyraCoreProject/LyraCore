@@ -28,12 +28,12 @@ pub(crate) use attack_table::{
 pub(crate) use damage::{apply_hit, final_damage, fold_incoming_damage};
 pub(crate) use damage::{
     clear_lethal_damage_floor, clear_stale_lethal_damage_floor, commit_death_prevention,
-    deal_damage, is_killing_blow, lethal_floor_protects, resolve_damage, set_lethal_damage_floor,
-    FrozenDamage, Hit, HitSource,
+    damage_result, deal_damage, duel_finished_by, is_killing_blow, lethal_floor_protects,
+    resolve_damage, set_lethal_damage_floor, DamageResult, FrozenDamage, Hit, HitSource,
 };
 pub(crate) use death::{
-    force_creature_death, kill_creature, kill_player, DRAIN_SOUL_SPELL_ID, RESPAWN_MICROS,
-    SOUL_SHARD_ENTRY,
+    force_creature_death, kill_creature, kill_player, kill_player_by_hit, DRAIN_SOUL_SPELL_ID,
+    RESPAWN_MICROS, SOUL_SHARD_ENTRY,
 };
 pub(crate) use leash::{beyond_combat_backstop, pursuit_deadline_ms, should_evade};
 #[cfg(test)]

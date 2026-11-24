@@ -235,13 +235,53 @@ pub(crate) fn is_lethal(health: u32, dmg: u32) -> bool {
     dmg > 0 && health <= dmg
 }
 
-/// A lethal hit between active Duel opponents ends the Duel instead: `apply_hit` floors the loser.
-pub(crate) fn duel_takes_lethal_hit(
+/// The active Duel that a lethal hit ends, with its winner.
+#[derive(Clone, Copy)]
+pub(crate) struct DuelFinish {
+    pub(crate) duel_id: u64,
+    pub(crate) winner_guid: u64,
+}
+
+/// vmangos `Unit::DealDamage` floors a duelist that its opponent, or a unit the opponent owns, hits.
+pub(crate) fn duel_finished_by(
     ctx: &ReducerContext,
-    attacker_guid: u64,
+    attacker: &WorldEntity,
     target: &WorldEntity,
-) -> bool {
-    target.is_player() && crate::duel::active_opponents(ctx, attacker_guid, target.guid)
+) -> Option<DuelFinish> {
+    if !target.is_player() {
+        return None;
+    }
+    let opponent = crate::pvp::affecting_character(ctx, attacker)?;
+    crate::duel::active_duel_between(ctx, opponent.guid, target.guid).map(|duel| DuelFinish {
+        duel_id: duel.id,
+        winner_guid: opponent.guid,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DamageResult {
+    Survives,
+    EndsDuel,
+    Floored,
+    Dies,
+}
+
+/// What `dmg` does to a unit at `health`; `floored` is asked only for a lethal hit outside a Duel.
+pub(crate) fn damage_result(
+    health: u32,
+    dmg: u32,
+    ends_duel: bool,
+    floored: impl FnOnce() -> bool,
+) -> DamageResult {
+    if !is_lethal(health, dmg) {
+        DamageResult::Survives
+    } else if ends_duel {
+        DamageResult::EndsDuel
+    } else if floored() {
+        DamageResult::Floored
+    } else {
+        DamageResult::Dies
+    }
 }
 
 pub(crate) fn is_killing_blow(
@@ -250,7 +290,10 @@ pub(crate) fn is_killing_blow(
     target: &WorldEntity,
     dmg: u32,
 ) -> bool {
-    is_lethal(target.health, dmg) && !duel_takes_lethal_hit(ctx, attacker_guid, target)
+    let attacker = ctx.db.game_world_entity().guid().find(attacker_guid);
+    let ends_duel =
+        attacker.is_some_and(|attacker| duel_finished_by(ctx, &attacker, target).is_some());
+    damage_result(target.health, dmg, ends_duel, || false) == DamageResult::Dies
 }
 
 // Absorb before lethal checks and godmode so even a zeroed hit drains shields.
@@ -355,22 +398,24 @@ pub(crate) fn apply_hit(
         }
     }
 
-    let lethal = is_lethal(target.health, dmg);
-    if lethal && duel_takes_lethal_hit(ctx, attacker_guid, &target) {
+    let duel_finish = attacker
+        .as_ref()
+        .and_then(|attacker| duel_finished_by(ctx, attacker, &target));
+    // resolve_damage has already applied the Lethal Damage Floor.
+    let result = damage_result(target.health, dmg, duel_finish.is_some(), || false);
+    if let (DamageResult::EndsDuel, Some(finish)) = (result, duel_finish) {
         let before = target.health;
         target.health = 1;
         reward_taken_rage(&mut target, attacker_guid, before);
         target.update(ctx);
         super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), target_guid, target_is_player);
-        if let Some(duel) = crate::duel::active_duel_between(ctx, attacker_guid, target_guid) {
-            crate::duel::complete_duel(
-                ctx,
-                duel.id,
-                crate::duel::completion_kind::WON,
-                attacker_guid,
-                target_guid,
-            );
-        }
+        crate::duel::complete_duel(
+            ctx,
+            finish.duel_id,
+            crate::duel::completion_kind::WON,
+            finish.winner_guid,
+            target_guid,
+        );
         crate::spell::proc::run_proc_pass(
             ctx,
             attacker_guid,
@@ -385,9 +430,9 @@ pub(crate) fn apply_hit(
         };
     }
     let shield = matches!(hit.source, HitSource::DamageShield);
-    if lethal {
+    if result == DamageResult::Dies {
         if target_is_player {
-            kill_player(ctx, target_guid, attacker_guid);
+            super::death::kill_player_by_hit(ctx, target_guid, attacker_guid, hit.spell_id);
         } else {
             super::death::kill_creature_by(
                 ctx,
@@ -590,7 +635,7 @@ mod fixtures;
 
 #[cfg(test)]
 mod lethality_tests {
-    use super::lethal_floor_amount;
+    use super::{damage_result, lethal_floor_amount, DamageResult};
 
     #[test]
     fn lethal_floor_changes_only_protected_lethal_damage() {
@@ -598,5 +643,35 @@ mod lethality_tests {
         assert_eq!(lethal_floor_amount(10, 10, false).amount, 10);
         assert_eq!(lethal_floor_amount(10, 10, true).amount, 9);
         assert_eq!(lethal_floor_amount(1, 20, true).amount, 0);
+    }
+
+    #[test]
+    fn damage_below_health_or_zero_leaves_the_unit_alive() {
+        assert_eq!(damage_result(10, 9, true, || true), DamageResult::Survives);
+        assert_eq!(
+            damage_result(10, 0, false, || false),
+            DamageResult::Survives
+        );
+    }
+
+    #[test]
+    fn a_lethal_hit_from_a_duel_opponent_ends_the_duel_before_any_floor() {
+        assert_eq!(damage_result(10, 10, true, || true), DamageResult::EndsDuel);
+    }
+
+    #[test]
+    fn a_lethal_hit_outside_a_duel_is_floored_or_kills() {
+        assert_eq!(damage_result(10, 50, false, || true), DamageResult::Floored);
+        assert_eq!(damage_result(10, 10, false, || false), DamageResult::Dies);
+    }
+
+    #[test]
+    fn the_floor_is_not_asked_for_a_hit_that_does_not_kill() {
+        let asked = std::cell::Cell::new(false);
+        damage_result(10, 9, false, || {
+            asked.set(true);
+            true
+        });
+        assert!(!asked.get());
     }
 }

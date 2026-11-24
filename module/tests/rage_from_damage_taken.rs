@@ -135,8 +135,9 @@ fn a_warrior_gains_rage_from_spell_and_periodic_damage_taken() {
         "a 7 damage physical tick grants 21 tenths of rage"
     );
 
+    let health_before = number::<u32>(&warrior(&standalone), "health");
     standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET health = 1, power = 0 WHERE guid = {WARRIOR}"
+        "UPDATE game_world_entity SET godmode = true, power = 0 WHERE guid = {WARRIOR}"
     ));
     make_due(&standalone, "");
     assert!(
@@ -148,10 +149,10 @@ fn a_warrior_gains_rage_from_spell_and_periodic_damage_taken() {
             == 2),
         "the periodic damage must tick again"
     );
-    let floored = warrior(&standalone);
-    assert_eq!(number::<u32>(&floored, "health"), 1);
+    let unharmed = warrior(&standalone);
+    assert_eq!(number::<u32>(&unharmed, "health"), health_before);
     assert_eq!(
-        number::<u32>(&floored, "power"),
+        number::<u32>(&unharmed, "power"),
         0,
         "a tick that takes no health grants no rage"
     );

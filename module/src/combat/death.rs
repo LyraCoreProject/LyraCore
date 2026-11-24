@@ -1,8 +1,8 @@
 use spacetimedb::{ReducerContext, Table, TimeDuration};
 
 use crate::{
-    game_aura, game_creature_spawn, game_creature_template, game_threat, game_world_entity,
-    WorldEntity,
+    game_aura, game_creature_spawn, game_creature_template, game_spell, game_threat,
+    game_world_entity, WorldEntity,
 };
 
 pub(crate) const RESPAWN_MICROS: i64 = 15_000_000;
@@ -302,7 +302,55 @@ fn roll_corpse_loot(
     }
 }
 
+// vmangos SPELL_ATTR_EX3_NO_DURABILITY_LOSS, kept in `attributes_ex_3`.
+const SPELL_ATTR_EX3_NO_DURABILITY_LOSS: u32 = 0x0000_0020;
+
+/// A Character dies to a hit. vmangos `Unit::Kill` spares the death durability loss when a Character
+/// dealt or controls the hit, the victim included, or the spell has NO_DURABILITY_LOSS.
+pub(crate) fn kill_player_by_hit(
+    ctx: &ReducerContext,
+    victim_guid: u64,
+    attacker_guid: u64,
+    spell_id: u32,
+) -> bool {
+    let character_hit = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(attacker_guid)
+        .is_some_and(|attacker| crate::pvp::affecting_character(ctx, &attacker).is_some());
+    let spell_spares = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .is_some_and(|spell| spell.attributes_ex_3 & SPELL_ATTR_EX3_NO_DURABILITY_LOSS != 0);
+    let durability_loss = if character_hit || spell_spares {
+        DurabilityLoss::Spared
+    } else {
+        DurabilityLoss::Applied
+    };
+    kill_character(ctx, victim_guid, attacker_guid, durability_loss)
+}
+
+/// A Character dies to the environment or without a killer, and loses durability, as vmangos
+/// `Player::EnvironmentalDamage` adds the loss that `Unit::Kill` spares a self-inflicted death.
 pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u64) -> bool {
+    kill_character(ctx, victim_guid, killer_guid, DurabilityLoss::Applied)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DurabilityLoss {
+    Applied,
+    Spared,
+}
+
+fn kill_character(
+    ctx: &ReducerContext,
+    victim_guid: u64,
+    killer_guid: u64,
+    durability_loss: DurabilityLoss,
+) -> bool {
     let entities = ctx.db.game_world_entity();
     let Some(mut victim) = entities.guid().find(victim_guid) else {
         return false;
@@ -325,7 +373,9 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     crate::spell::record_self_resurrect_option(ctx, victim_guid);
     crate::spell::remove_auras_on_death(ctx, victim_guid);
     crate::trade::cancel_trade_for(ctx, victim_guid);
-    if crate::items::apply_death_durability_loss(ctx, victim_guid) {
+    if durability_loss == DurabilityLoss::Applied
+        && crate::items::apply_death_durability_loss(ctx, victim_guid)
+    {
         crate::group::push_event(
             ctx,
             victim_guid,

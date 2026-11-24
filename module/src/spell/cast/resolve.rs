@@ -870,6 +870,7 @@ fn run_spell_effects(
     let mut item_grants = 0;
     let mut item_refused = false;
     let mut shield_targets = std::collections::BTreeSet::new();
+    let mut slain = std::collections::BTreeSet::new();
     for e in effects {
         let draw = crate::conformance_rolls::draw(
             ctx,
@@ -885,7 +886,8 @@ fn run_spell_effects(
             draw,
         );
         for t in select_targets(ctx, caster_guid, target_guid, e, dest) {
-            if !targets.may_reach(t) {
+            // vmangos lands a cast's other effects before its damage, and the death strips them.
+            if !targets.may_reach(t) || slain.contains(&t) {
                 continue;
             }
             // After the GO and cost, so a miss counts; vmangos skips a cast an aura triggers.
@@ -910,6 +912,7 @@ fn run_spell_effects(
             if e.kind == E_CREATE_ITEM {
                 created_items.push(e.p0.max(0) as u32);
             }
+            let alive = is_alive(ctx, t);
             let hit = if let (E_CREATE_ITEM, Some(craft)) = (e.kind, craft.as_mut()) {
                 grant_crafted_item(ctx, &mut craft.plan, e, hdr, points)
             } else {
@@ -929,6 +932,9 @@ fn run_spell_effects(
                     request.item_target,
                 )
             };
+            if alive && !is_alive(ctx, t) {
+                slain.insert(t);
+            }
             match hit.item {
                 ItemGrantOutcome::None => {}
                 ItemGrantOutcome::Granted => item_grants += 1,
