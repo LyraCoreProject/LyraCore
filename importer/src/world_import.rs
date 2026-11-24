@@ -1476,7 +1476,7 @@ struct GameobjectSpawns {
     goober_entries: std::collections::HashSet<u64>,
     go_packed_rows: Vec<String>,
     used_go: std::collections::HashSet<u64>,
-    // An entry's smallest positive vmangos spawntimesecs; absent when none is positive.
+    // An entry's smallest positive vmangos spawntimesecsmin; absent when none is positive.
     respawn_secs: std::collections::HashMap<u64, u32>,
 }
 

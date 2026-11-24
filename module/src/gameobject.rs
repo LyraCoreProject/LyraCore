@@ -512,9 +512,9 @@ fn now_micros(ctx: &ReducerContext) -> u64 {
     crate::time::now(ctx).to_micros_since_unix_epoch() as u64
 }
 
-/// When a chest opened at `now` respawns. `None` for a chest that never respawns: one in an
-/// Instance, or one whose template has no respawn time (vmangos `spawntimesecs` of 0 or less).
-/// vmangos GameObject::Update restocks a chest its respawn delay after it despawns.
+/// When a chest opened or released at `now` respawns. `None` for a chest that never respawns: one
+/// in an Instance, or one whose template has no respawn time (vmangos `spawntimesecsmin` of 0 or
+/// less). vmangos GameObject::Update restocks a chest its respawn delay after it despawns.
 pub(crate) fn chest_respawn_at(
     now: u64,
     respawn_secs: u32,
@@ -542,9 +542,7 @@ fn chest_is_looted_for(ctx: &ReducerContext, chest_guid: u64, looter_guid: u64) 
             .any(|row| row.takeable_by(ctx, looter_guid))
 }
 
-/// A Loot Release starts the respawn timing of the chest `looter_guid` closed. A chest the looter
-/// emptied respawns its delay from now, never later than before. A chest with loot the looter
-/// can still take despawns 5 minutes from now, so a chest held open waits for its release.
+/// A Loot Release restamps the closed chest: earlier if emptied, later if loot is left.
 pub(crate) fn chest_loot_released(ctx: &ReducerContext, looter_guid: u64, go_guid: u64) {
     let Some(mut chest) = ctx.db.game_gameobject().guid().find(go_guid) else {
         return;
@@ -589,8 +587,8 @@ pub(crate) fn loot_window_open(ctx: &ReducerContext, go_guid: u64) -> bool {
         .is_some()
 }
 
-/// Clears what a use left on an object that is about to respawn: its Loot rows, purse and rolls,
-/// and its picked lock.
+/// Clears what a use left on an object about to respawn: Loot rows not under a live Loot Roll,
+/// purse, rolls and picked lock.
 pub(crate) fn clear_use_state(ctx: &ReducerContext, go_guid: u64) {
     crate::loot::reap_corpse_loot_family(ctx, go_guid);
     ctx.db.game_gameobject_unlocked().go_guid().delete(go_guid);
@@ -819,6 +817,7 @@ fn use_resolved_gameobject(
             if go.state != 0 {
                 return Err("chest already looted".to_string());
             }
+            crate::loot::reap_corpse_loot_family(ctx, go.guid);
 
             let rows: Vec<crate::loot::LootRow> = if tmpl.data1 != 0 {
                 ctx.db
@@ -1058,6 +1057,11 @@ pub fn import_gameobjects(ctx: &ReducerContext, packed: String) -> Result<(), St
     let guids: Vec<u64> = gos.iter().map(|g| g.guid).collect();
     for g in guids {
         crate::GameObject::delete(ctx, g);
+    }
+    let unlocked = ctx.db.game_gameobject_unlocked();
+    let picked: Vec<u64> = unlocked.iter().map(|row| row.go_guid).collect();
+    for go_guid in picked {
+        unlocked.go_guid().delete(go_guid);
     }
     if load_go_batch(ctx, &packed)? == 0 {
         return Err("import payload was empty".to_string());

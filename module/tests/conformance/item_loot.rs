@@ -355,9 +355,9 @@ fn a_chest_released_with_loot_left_respawns_with_fresh_loot_and_its_lock_picked_
     assert_ne!(respawn_at, 0, "an opened chest has a respawn time");
     assert_eq!(stage.loot_rows(chest), 1);
 
-    stage.shard.assert_sql(&format!(
-        "INSERT INTO game_gameobject_unlocked (go_guid) VALUES ({chest})"
-    ));
+    stage
+        .shard
+        .insert_row("game_gameobject_unlocked", &[("go_guid", &chest)]);
     stage.force_due(chest);
 
     assert_eq!(stage.chest_row(chest), ("0".to_string(), 0));
@@ -474,4 +474,47 @@ fn the_publish_repair_stamps_a_chest_opened_before_chests_respawned() {
         stamped_at,
         "a second repair keeps it"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_closed_chest_with_stale_loot_rows_rolls_one_fresh_set() {
+    let mut stage = stage("item-loot-chest-stale-rows");
+    let chest = stage.spawn_chest_with_jerky(RESPAWNING_CHEST);
+    stage.shard.insert_row(
+        "game_corpse_loot",
+        &[
+            ("corpse_guid", &chest),
+            ("slot", &0),
+            ("item_entry", &FIXTURE_JERKY),
+            ("count", &1),
+        ],
+    );
+
+    let opened = window(&stage.use_chest(chest), chest);
+
+    assert_eq!(opened[13], 1, "the stale row does not join the fresh roll");
+    assert_eq!(stage.loot_rows(chest), 1);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_gameobject_reimport_clears_every_picked_lock() {
+    let stage = stage("item-loot-reimport-locks");
+    let chest = stage.spawn_chest_with_jerky(RESPAWNING_CHEST);
+    stage
+        .shard
+        .insert_row("game_gameobject_unlocked", &[("go_guid", &chest)]);
+
+    stage.shard.assert_call(
+        "import_gameobjects",
+        &[&format!(
+            "\"{chest},{RESPAWNING_CHEST},0,0,0,0,0,0,0,0,0,0\""
+        )],
+    );
+
+    assert!(stage
+        .shard
+        .query_rows("SELECT go_guid FROM game_gameobject_unlocked")
+        .is_empty());
 }
