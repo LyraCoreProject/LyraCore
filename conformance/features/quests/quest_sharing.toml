@@ -34,7 +34,7 @@ source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52da
 
 [[deliberate_deviations]]
 id = "unshareable_push_refused"
-result = "A push of a quest without QUEST_FLAGS_SHARABLE is refused and nobody hears anything. The Reference Server tells the sharer SHARING_QUEST for every member and shows each member the quest details; the later accept then fails CanShareQuest."
+result = "A push of a quest without QUEST_FLAGS_SHARABLE is refused and nobody hears anything. The Reference Server tells the sharer SHARING_QUEST for every member and shows each eligible member the quest details; the later accept then fails CanShareQuest."
 reason = "The stock client disables the share button for such a quest, and refusing the push keeps a Quest Share that no accept can use out of the receiver's way."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/QuestHandler.cpp"
 
@@ -45,7 +45,7 @@ symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
 
 [[known_gaps]]
-description = "A push reaches members within the group XP range of 74 yards; the Reference Server's QUEST_SHARE_DISTANCE is 14 yards. Push results follow LyraCore's own check order for a member on, finished with or unable to take the quest. A member on another World Shard hears nothing; the Reference Server answers TOO_FAR for an online member on another map."
+description = "A push reaches members within the group XP range of 74 yards; the Reference Server's QUEST_SHARE_DISTANCE is 14 yards. Push results follow LyraCore's own check order for a member on, finished with or unable to take the quest. A member on another World Shard hears nothing; the Reference Server answers TOO_FAR for an online member on another map. At accept the Reference Server sends TOO_FAR only after the take check passes, sends ACCEPT_QUEST before the log and source item checks, and refuses an NPC accept of the shared quest more than 14 yards from the sharer; LyraCore sends TOO_FAR on any refusal of the shared quest when the two are apart, sends ACCEPT_QUEST only on success, and lets that NPC accept through."
 path = "module/src/quest/share.rs"
 symbol = "evaluate_share"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.h; src/game/Handlers/QuestHandler.cpp WorldSession::HandlePushQuestToParty"

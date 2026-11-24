@@ -143,7 +143,7 @@ pub(super) fn settle_on_accept(ctx: &ReducerContext, receiver_guid: u64, quest_e
     }
 }
 
-/// Ends a Quest Share after a refused accept, which writes nothing; true means the caller commits.
+/// Ends a Quest Share after a refused accept left quest log and bags unchanged; true: commit.
 pub(crate) fn end_after_refused_accept(
     ctx: &ReducerContext,
     receiver_guid: u64,
