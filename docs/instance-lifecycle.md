@@ -27,9 +27,11 @@ bindings, and finally the lease.
 `loot::reap_corpse_loot_family` removes a Loot Source's loot. It first resolves the source's open
 Loot Rolls as if their deadline had passed, so a missing vote counts as Pass. A winner who is in the
 world gets the item. A passed item, or one the winner cannot carry, goes with the rest of the loot.
-Teardown, encounter reset and creature corpse decay all remove loot this way; corpse decay still
-waits for open rolls to end. vmangos `Group::CountTheRoll` drops a roll without a result once its
-loot is gone, so this is a deliberate deviation in the `loot_collection` Feature Ledger entry.
+Instance teardown, encounter reset and every creature or GameObject despawn remove loot this way;
+creature corpse decay waits for open rolls to end first. On a despawn vmangos does the same:
+`Creature::RemoveCorpse` stops group loot before it clears the loot. When a map unloads, vmangos
+`Group::CountTheRoll` drops the roll without a result, so resolving it at Instance teardown is a
+deliberate deviation in the `loot_collection` Feature Ledger entry.
 
 Teardown keeps player corpses. vmangos keeps a resurrectable corpse when its map unloads:
 `Map::UnloadAll` removes only corpses already queued for removal. `Player::TeleportTo` then revives

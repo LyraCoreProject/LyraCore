@@ -449,7 +449,7 @@ pub(crate) fn purge_corpse_residue(ctx: &ReducerContext, guid: u64) {
     }
 }
 
-/// Removes a Loot Source's loot. Open Loot Rolls resolve first, so a winner still gets the item.
+/// Removes a Loot Source's loot. Open Loot Rolls resolve first, as at their deadline.
 pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
     rolls::close_open_rolls(ctx, corpse_guid);
     ctx.db.game_loot_money().source_guid().delete(corpse_guid);

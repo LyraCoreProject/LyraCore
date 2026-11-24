@@ -8,7 +8,7 @@ dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = [
-  { id = "open_rolls_resolve_when_loot_is_removed", result = "Removing a Loot Source's loot, as Instance teardown, encounter reset and corpse decay do, first resolves its open Loot Rolls with missing votes as Pass. vmangos drops such a roll without a result.", reason = "A group's item under roll goes to its winner instead of disappearing with no roll result.", source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp" },
+  { id = "open_rolls_resolve_when_loot_is_removed", result = "Instance teardown resolves a Loot Source's open Loot Rolls, with missing votes as Pass, before it removes the loot. The roll result is sent even when the winner cannot take the item. vmangos resolves rolls this way on a despawn (Creature::RemoveCorpse) but drops them without a result when a map unloads (Group::CountTheRoll).", reason = "A group's item under roll goes to its winner instead of disappearing with no roll result.", source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp" },
 ]
 prerequisites = []
 tests = [

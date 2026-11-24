@@ -74,6 +74,7 @@ fn instance_teardown_settles_open_loot_rolls_before_it_removes_their_items() {
                 ("slot", &slot),
                 ("item_entry", &FIXTURE_JERKY),
                 ("deadline_micros", &i64::MAX),
+                ("promotion_source", &format!("0x{}", "00".repeat(32))),
             ],
         );
     }
