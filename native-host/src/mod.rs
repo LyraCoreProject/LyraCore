@@ -127,59 +127,66 @@ async fn attach(
     let feed = feed::shared(ctx.clone(), database, db.owner_identity).await?;
     let leader = ctx.leader(db.id).await?;
     let mut module_rx = leader.module_watcher().await?;
+    let replica_id = leader.replica_id;
     let id = ClientActorId {
         identity: db.owner_identity,
         connection_id,
         name: ctx.client_actor_index().next_client_name(),
     };
-    let (registration, deliveries) = feed.register(connection_id)?;
-    let auth = ConnectionAuthCtx {
-        identity: id.identity,
-        jwt_payload: None,
-    };
-    let connected =
-        ClientConnection::call_client_connected_maybe_reject(&mut module_rx, id, auth.clone())
-            .await?;
-    let (stop, stopped) = oneshot::channel::<()>();
-    let (closing, closed) = oneshot::channel::<()>();
-    let client = ClientConnection::spawn(
-        id,
-        auth,
-        AuthCtx::new(db.owner_identity, db.owner_identity),
-        config(),
-        leader.replica_id,
-        module_rx,
-        move |mut client, mut receiver| async move {
-            let _closing = closing;
-            let _lifetime = ClientLifetime(client.clone());
-            let drain = async move {
-                let mut messages = Vec::with_capacity(32);
-                while receiver.recv_many(&mut messages, 32).await != 0 {
-                    messages.clear();
-                    tokio::task::yield_now().await;
+    // Runs past a caller that gives up, so the Shard it makes drops and disconnects from Core.
+    let connecting = async move {
+        let (registration, deliveries) = feed.register(connection_id)?;
+        let auth = ConnectionAuthCtx {
+            identity: id.identity,
+            jwt_payload: None,
+        };
+        let connected =
+            ClientConnection::call_client_connected_maybe_reject(&mut module_rx, id, auth.clone())
+                .await?;
+        let (stop, stopped) = oneshot::channel::<()>();
+        let (closing, closed) = oneshot::channel::<()>();
+        let client = ClientConnection::spawn(
+            id,
+            auth,
+            AuthCtx::new(id.identity, id.identity),
+            config(),
+            replica_id,
+            module_rx,
+            move |mut client, mut receiver| async move {
+                let _closing = closing;
+                let _lifetime = ClientLifetime(client.clone());
+                let drain = async move {
+                    let mut messages = Vec::with_capacity(32);
+                    while receiver.recv_many(&mut messages, 32).await != 0 {
+                        messages.clear();
+                        tokio::task::yield_now().await;
+                    }
+                };
+                tokio::select! {
+                    _ = drain => {},
+                    _ = stopped => {},
+                    _ = client.watch_module_host() => {},
                 }
-            };
-            tokio::select! {
-                _ = drain => {},
-                _ = stopped => {},
-                _ = client.watch_module_host() => {},
-            }
-        },
-        connected,
-    )
-    .await;
-    static RUNTIME_ID: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
-    let runtime_id = *RUNTIME_ID.get_or_init(|| u128::from_le_bytes(entropy()));
-    call(&client, "native_vendor_stock_runtime", &(runtime_id,))
-        .await?
-        .into_result()?;
-    Ok(Shard {
-        client,
-        deliveries,
-        closed,
-        _stop: stop,
-        feed: Arc::new(registration),
-    })
+            },
+            connected,
+        )
+        .await;
+        static RUNTIME_ID: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+        let runtime_id = *RUNTIME_ID.get_or_init(|| u128::from_le_bytes(entropy()));
+        call(&client, "native_vendor_stock_runtime", &(runtime_id,))
+            .await?
+            .into_result()?;
+        Ok::<_, anyhow::Error>(Shard {
+            client,
+            deliveries,
+            closed,
+            _stop: stop,
+            feed: Arc::new(registration),
+        })
+    };
+    tokio::spawn(connecting)
+        .await
+        .context("native Shard attach stopped")?
 }
 
 async fn connect(
@@ -189,14 +196,22 @@ async fn connect(
     kind: Listener,
     slot: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<()> {
-    let _slot = slot;
     socket.set_nodelay(true)?;
     let database = ctx
         .lookup_database_identity(database)
         .await?
         .context("native database missing")?;
     let connection_id = new_connection_id();
-    let shard = attach(&ctx, database, connection_id).await?;
+    // An attach its caller gave up on keeps the listener slot until its Core client disconnects.
+    let attaching = tokio::spawn({
+        let ctx = ctx.clone();
+        async move { (attach(&ctx, database, connection_id).await, slot) }
+    });
+    let (shard, _slot) = tokio::time::timeout(Duration::from_secs(10), attaching)
+        .await
+        .context("native Shard attach timed out")?
+        .context("native Shard attach stopped")?;
+    let shard = shard?;
     let served = match kind {
         Listener::World => serve(&ctx, shard, connection_id, socket).await,
         Listener::Logon => serve_logon(shard, socket).await,
