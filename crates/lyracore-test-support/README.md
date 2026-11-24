@@ -23,9 +23,17 @@ this way; an Architecture Test in `module/src/tripwires.rs` refuses a raw `INSER
 `Standalone::connect_reducers` opens one Operator WebSocket and installs its subscriptions before
 returning. `ReducerConnection::call` waits for that connection's reducer result and returns only
 its transaction's subscribed inserts, as positional JSON rows. `drain_inserts(table)` takes buffered
-inserts across received transactions; `drain_packets()` takes only `game_native_packet` inserts.
+inserts across received transactions. `game_native_packet` rows arrive only decoded, as
+`NativePacket`: `ReducerRows::packets()` for one call, `drain_packets()` across transactions.
 These methods do not read pending socket messages. A subsequent reducer call acts as a barrier;
 `wait_for_packets` reads until packets arrive or its deadline expires.
+
+`WorldSessionObserver` answers which packets one World Session received. It routes `NativePacket`s
+as the Native Host does: direct and Handoff packets by connection, AOI packets by the AOI Grants it
+has seen, which Revoke and Clear withdraw. Feed it every packet from World Session entry onward. It
+judges nothing; a test checks `close_after`, `not_before_micros` and `authentication_complete`
+itself. The Host's own router in `native-host/src/feed.rs` cannot be linked by tests, so the two
+must change together.
 
 This uses SpacetimeDB 2.7.1's `v1.json.spacetimedb` protocol. The CLI subscription process cannot
 submit reducer calls on its existing connection. The SDK needs generated Module bindings; this

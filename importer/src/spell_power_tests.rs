@@ -368,16 +368,10 @@ fn damage_values(
 ) -> std::collections::BTreeMap<u16, u32> {
     let mut fields = std::collections::BTreeMap::new();
     for packet in connection.drain_packets() {
-        let packet: serde_json::Value = serde_json::from_str(packet.get()).unwrap();
-        if packet[2][1].as_u64() != Some(0xa9) {
+        if packet.opcode != Some(0xa9) {
             continue;
         }
-        let encoded = packet[3].as_str().unwrap();
-        let body: Vec<_> = (0..encoded.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16).unwrap())
-            .collect();
-        for update in lyracore_protocol::codec::values_mask::parse_values_updates(&body) {
+        for update in lyracore_protocol::codec::values_mask::parse_values_updates(&packet.body) {
             if update.guid == 1 && update.fields.iter().any(|(index, _)| *index == 1201) {
                 assert!(!update.fields.iter().any(|(index, _)| *index == 2));
                 fields.extend(update.fields);
@@ -454,15 +448,10 @@ fn spell_hits(
 ) -> Vec<(u32, u8, bool)> {
     let mut hits = Vec::new();
     for packet in connection.drain_packets() {
-        let packet: serde_json::Value = serde_json::from_str(packet.get()).unwrap();
-        if packet[2][1].as_u64() != Some(0x250) {
+        if packet.opcode != Some(0x250) {
             continue;
         }
-        let encoded = packet[3].as_str().unwrap();
-        let body: Vec<_> = (0..encoded.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16).unwrap())
-            .collect();
+        let body = packet.body;
         let mut offset = 0;
         for _ in 0..2 {
             offset += 1 + body[offset].count_ones() as usize;

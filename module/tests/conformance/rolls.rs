@@ -177,7 +177,7 @@ fn prepare(
         .map_err(anyhow::Error::msg)?;
     let opening = collector.drain_packets();
     for delivery in deliveries.values_mut() {
-        delivery.route_rows(opening.clone())?;
+        delivery.route_rows(&opening)?;
     }
     Ok(RollFixture {
         collector,

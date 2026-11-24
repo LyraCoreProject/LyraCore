@@ -380,13 +380,7 @@ fn send(wire: &mut ReducerConnection, opcode: u32, body: Vec<u8>) -> Vec<u16> {
         .unwrap();
     wire.drain_packets()
         .into_iter()
-        .filter_map(|row| {
-            let row: serde_json::Value = serde_json::from_str(row.get()).unwrap();
-            let [tag, opcode] = &row[2].as_array().unwrap()[..] else {
-                panic!("game_native_packet opcode is a sum value: {row}");
-            };
-            (tag == 0).then(|| opcode.as_u64().unwrap() as u16)
-        })
+        .filter_map(|packet| packet.opcode)
         .collect()
 }
 

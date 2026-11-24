@@ -3,12 +3,14 @@ pub use rng::Rng;
 
 mod fixture_rows;
 mod module_wasm;
+mod native_packet;
 mod reducer_connection;
 pub mod source_scan;
 mod subscription;
 
 pub use fixture_rows::Field;
 pub use module_wasm::{module_bytes, module_bytes_with_features};
+pub use native_packet::{NativeAudience, NativePacket, NativeRecipient, WorldSessionObserver};
 pub use reducer_connection::{ReducerConnection, ReducerRows};
 pub use subscription::TableSubscription;
 

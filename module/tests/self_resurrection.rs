@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::constants::{player_flags, unit_flags, unit_vis_flags};
-use serde_json::{json, value::RawValue};
+use lyracore_test_support::{NativeAudience, NativePacket};
+use serde_json::json;
 use support::{ReducerConnection, Standalone};
 
 type SqlRow = BTreeMap<String, String>;
@@ -300,10 +301,7 @@ fn native_reincarnation_reports_the_configured_cooldown() {
             .call("native_world_receive", json!([0x2b3u32, Vec::<u8>::new()]))
             .unwrap();
         assert_alive_in_place(&entity(&shard));
-        let cooldowns = cooldown_packets(
-            result.inserts("game_native_packet"),
-            connection.connection_id(),
-        );
+        let cooldowns = cooldown_packets(result.packets(), connection.connection_id());
         let expected = if duration_ms == 0 {
             vec![]
         } else {
@@ -355,11 +353,7 @@ fn soulstone_takes_priority_without_spending_reincarnation() {
     let result = connection
         .call("native_world_receive", json!([0x2b3u32, Vec::<u8>::new()]))
         .unwrap();
-    assert!(cooldown_packets(
-        result.inserts("game_native_packet"),
-        connection.connection_id(),
-    )
-    .is_empty());
+    assert!(cooldown_packets(result.packets(), connection.connection_id()).is_empty());
     assert_eq!(
         shard
             .query_rows(
@@ -476,38 +470,19 @@ fn enter_native(shard: &Standalone) -> ReducerConnection {
     connection
 }
 
-fn cooldown_packets(rows: &[Box<RawValue>], connection_id: u128) -> Vec<(u64, u32, u32)> {
-    #[derive(serde::Deserialize)]
-    struct Packet(
-        u64,
-        (u8, Box<RawValue>),
-        (u8, Box<RawValue>),
-        String,
-        bool,
-        i64,
-        bool,
-    );
-
-    rows.iter()
-        .filter_map(|row| {
-            let Packet(id, (audience, recipient), (option, opcode), body, close, delay, auth) =
-                serde_json::from_str(row.get()).unwrap();
-            if option != 0 || opcode.get() != "308" {
+fn cooldown_packets(packets: &[NativePacket], connection_id: u128) -> Vec<(u64, u32, u32)> {
+    packets
+        .iter()
+        .filter_map(|packet| {
+            if packet.opcode != Some(308) {
                 return None;
             }
-            assert_ne!(id, 0);
-            assert_eq!(audience, 0);
-            assert_eq!(
-                serde_json::from_str::<(u128,)>(recipient.get()).unwrap().0,
-                connection_id
-            );
-            assert!(!close);
-            assert_eq!(delay, 0);
-            assert!(!auth);
-            let body: Vec<u8> = (0..body.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
-                .collect();
+            assert_ne!(packet.id, 0);
+            assert_eq!(packet.audience, NativeAudience::Connection(connection_id));
+            assert!(!packet.close_after);
+            assert_eq!(packet.not_before_micros, 0);
+            assert!(!packet.authentication_complete);
+            let body = &packet.body;
             assert_eq!(body.len(), 16);
             Some((
                 u64::from_le_bytes(body[0..8].try_into().unwrap()),

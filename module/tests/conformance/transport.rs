@@ -2,9 +2,11 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
-use lyracore_test_support::{ReducerConnection, Standalone};
+use lyracore_test_support::{
+    NativeAudience, NativePacket, ReducerConnection, Standalone, WorldSessionObserver,
+};
 use serde::Deserialize;
-use serde_json::{json, value::RawValue};
+use serde_json::json;
 use wire_client::runner::{MultiTransport, Transport};
 use wire_client::scenario::{FixtureVerb, Observation, QuestState, Scenario};
 
@@ -132,7 +134,7 @@ impl OperatorTransport {
         self.connection
             .drain_inserts("game_native_conformance_projection");
         let rows = self.connection.drain_packets();
-        let packets = self.delivery.route_rows(rows)?;
+        let packets = self.delivery.route_rows(&rows)?;
         let mut projections = BTreeMap::new();
         for row in projected.inserts("game_native_conformance_projection") {
             let (guid, object_type, owner_guid, same_raid, body, extra): (
@@ -933,147 +935,89 @@ impl MultiTransport for MultiOperatorTransport<'_> {
     }
 }
 
-#[derive(Clone, Deserialize)]
-struct Row(
-    u64,
-    (u8, Box<RawValue>),
-    (u8, Box<RawValue>),
-    String,
-    bool,
-    i64,
-    bool,
-);
-
+// Tier 1 fails on a delivery it cannot replay; the observer only routes.
 pub(super) struct Delivery {
-    connection: u128,
-    grants: BTreeSet<(u8, u64)>,
+    session: WorldSessionObserver,
 }
 
 impl Delivery {
     pub(super) fn new(connection: u128) -> Self {
         Self {
-            connection,
-            grants: BTreeSet::new(),
+            session: WorldSessionObserver::new(connection),
         }
     }
 
-    pub(super) fn route_rows(&mut self, rows: Vec<Box<RawValue>>) -> Result<Vec<Packet>> {
-        let mut rows = rows
-            .iter()
-            .map(|row| serde_json::from_str::<Row>(row.get()))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        rows.sort_by_key(|row| row.0);
-        let mut packets = Vec::new();
-        for row in rows {
-            if let Some(packet) = self.route(row)? {
-                packets.push(packet);
-            }
+    pub(super) fn route_rows(&mut self, packets: &[NativePacket]) -> Result<Vec<Packet>> {
+        let mut routed = Vec::new();
+        for packet in self.session.received(packets) {
+            routed.extend(tier1_packet(&packet)?);
         }
-        Ok(packets)
+        Ok(routed)
     }
 
-    fn route(&mut self, row: Row) -> Result<Option<Packet>> {
-        let Row(
-            id,
-            (audience, recipient),
-            (option, opcode),
-            body,
-            close,
-            not_before,
-            authenticated,
-        ) = row;
-        let addressed = match audience {
-            0 => serde_json::from_str::<(u128,)>(recipient.get())?.0 == self.connection,
-            1 => {
-                let (layer, guid, (tag, excluded)): (u8, u64, (u8, Box<RawValue>)) =
-                    serde_json::from_str(recipient.get())?;
-                let excluded = match tag {
-                    0 => Some(serde_json::from_str::<(u128,)>(excluded.get())?.0),
-                    1 => None,
-                    _ => bail!("invalid excluded connection option {tag}"),
-                };
-                self.grants.contains(&(layer, guid)) && excluded != Some(self.connection)
-            }
-            2 | 3 => {
-                let ((connection,), layer, guid): ((u128,), u8, u64) =
-                    serde_json::from_str(recipient.get())?;
-                if connection != self.connection {
-                    return Ok(None);
-                }
-                if audience == 2 {
-                    self.grants.insert((layer, guid));
-                } else {
-                    self.grants.remove(&(layer, guid));
-                }
-                true
-            }
-            4 => {
-                if serde_json::from_str::<(u128,)>(recipient.get())?.0 == self.connection {
-                    self.grants.clear();
-                }
-                false
-            }
-            _ => bail!("unknown native delivery audience {audience}"),
-        };
-        if !addressed {
+    fn route(&mut self, packet: &NativePacket) -> Result<Option<Packet>> {
+        if !self.session.receives(packet) {
             return Ok(None);
         }
-        ensure!(!close, "native connection closed during the scenario");
-        ensure!(
-            !authenticated,
-            "unexpected cipher transition on a fixture connection"
-        );
-        ensure!(
-            not_before == 0,
-            "tier 1 does not support delayed Host delivery"
-        );
-        match option {
-            0 => {
-                let bytes = decode_hex(&body)?;
-                Ok(Some(Packet {
-                    id,
-                    opcode: serde_json::from_str(opcode.get())?,
-                    body: bytes,
-                }))
-            }
-            1 => Ok(None),
-            _ => bail!("invalid opcode option {option}"),
-        }
+        tier1_packet(packet)
     }
 }
 
+fn tier1_packet(packet: &NativePacket) -> Result<Option<Packet>> {
+    ensure!(
+        !packet.close_after,
+        "native connection closed during the scenario"
+    );
+    ensure!(
+        !packet.authentication_complete,
+        "unexpected cipher transition on a fixture connection"
+    );
+    ensure!(
+        packet.not_before_micros == 0,
+        "tier 1 does not support delayed Host delivery"
+    );
+    ensure!(
+        !matches!(packet.audience, NativeAudience::Handoff(_)),
+        "tier 1 does not support Handoff"
+    );
+    Ok(packet.opcode.map(|opcode| Packet {
+        id: packet.id,
+        opcode,
+        body: packet.body.clone(),
+    }))
+}
+
 pub(super) fn roll_packets(
-    rows: Vec<Box<RawValue>>,
+    mut rows: Vec<NativePacket>,
     deliveries: &mut BTreeMap<u64, Delivery>,
 ) -> Result<Vec<(u64, Packet)>> {
-    let mut rows = rows
-        .iter()
-        .map(|row| serde_json::from_str::<Row>(row.get()))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    rows.sort_by_key(|row| row.0);
+    rows.sort_by_key(|row| row.id);
     let mut packets = Vec::new();
     for row in rows {
-        if matches!(row.1 .0, 2..=4) || row.4 {
+        if matches!(
+            row.audience,
+            NativeAudience::Grant(_) | NativeAudience::Revoke(_) | NativeAudience::Clear(_)
+        ) || row.close_after
+        {
             for delivery in deliveries.values_mut() {
-                delivery.route(row.clone())?;
+                delivery.route(&row)?;
             }
             continue;
         }
-        if row.2 .0 != 0 {
+        let Some(opcode) = row.opcode else {
             continue;
-        }
-        let opcode: u16 = serde_json::from_str(row.2 .1.get())?;
+        };
         if !matches!(opcode, 0x143 | 0x144 | 0x14a) {
             continue;
         }
-        let decoded = wire_client::decode::decode(opcode, &decode_hex(&row.3)?)?;
+        let decoded = wire_client::decode::decode(opcode, &row.body)?;
         let Some(wire_client::decode::Field::Guid(attacker)) = decoded.fields.get("attacker")
         else {
             bail!("combat packet has no attacker");
         };
         if let Some(delivery) = deliveries.get_mut(attacker) {
             let packet = delivery
-                .route(row)?
+                .route(&row)?
                 .context("combat packet was not delivered to its attacking Character")?;
             packets.push((*attacker, packet));
         }
@@ -1082,101 +1026,50 @@ pub(super) fn roll_packets(
 }
 
 #[test]
-fn delivery_follows_grants_revoke_clear_and_excluded_connections() {
-    let mut delivery = Delivery::new(u128::MAX);
-    let row = |audience: String| format!("[1,{audience},[0,477],\"07000000\",false,0,false]");
-    let broadcast = row("[1,[0,55,[1,[]]]]".into());
-    assert!(delivery
-        .route(serde_json::from_str(&broadcast).unwrap())
-        .unwrap()
-        .is_none());
-    let grant = row(format!("[2,[[{}],0,55]]", u128::MAX));
-    assert_eq!(
-        delivery
-            .route(serde_json::from_str(&grant).unwrap())
-            .unwrap(),
-        Some(Packet {
-            id: 1,
-            opcode: 477,
-            body: vec![7, 0, 0, 0]
-        })
-    );
-    assert!(delivery
-        .route(serde_json::from_str(&broadcast).unwrap())
-        .unwrap()
-        .is_some());
-    assert!(delivery
-        .route(serde_json::from_str(&row("[1,[1,55,[1,[]]]]".into())).unwrap())
-        .unwrap()
-        .is_none());
-    assert!(delivery
-        .route(serde_json::from_str(&row(format!("[1,[0,55,[0,[{}]]]]", u128::MAX))).unwrap())
-        .unwrap()
-        .is_none());
-    assert!(delivery
-        .route(serde_json::from_str(&row("[0,[1]]".into())).unwrap())
-        .unwrap()
-        .is_none());
-    delivery
-        .route(serde_json::from_str(&row(format!("[3,[[{}],0,55]]", u128::MAX))).unwrap())
-        .unwrap();
-    assert!(delivery
-        .route(serde_json::from_str(&broadcast).unwrap())
-        .unwrap()
-        .is_none());
-    delivery
-        .route(serde_json::from_str(&grant).unwrap())
-        .unwrap();
-    delivery
-        .route(serde_json::from_str(&row(format!("[4,[{}]]", u128::MAX))).unwrap())
-        .unwrap();
-    assert!(delivery
-        .route(serde_json::from_str(&broadcast).unwrap())
-        .unwrap()
-        .is_none());
-}
-
-#[test]
-fn unsupported_delivery_fails_instead_of_losing_evidence() {
-    let mut delivery = Delivery::new(1);
-    for source in [
-        "[1,[9,[]],[1,[]],\"\",false,0,false]",
-        "[1,[0,[1]],[0,477],\"00\",true,0,false]",
-        "[1,[0,[1]],[0,477],\"00\",false,1,false]",
-        "[1,[0,[1]],[0,477],\"xx\",false,0,false]",
+fn tier1_fails_on_close_cipher_transition_delay_and_handoff() {
+    let packet = NativePacket {
+        id: 1,
+        audience: NativeAudience::Connection(1),
+        opcode: Some(477),
+        body: vec![0],
+        close_after: false,
+        not_before_micros: 0,
+        authentication_complete: false,
+    };
+    assert!(Delivery::new(1).route(&packet).unwrap().is_some());
+    for refused in [
+        NativePacket {
+            close_after: true,
+            ..packet.clone()
+        },
+        NativePacket {
+            authentication_complete: true,
+            ..packet.clone()
+        },
+        NativePacket {
+            not_before_micros: 1,
+            ..packet.clone()
+        },
+        NativePacket {
+            audience: NativeAudience::Handoff(1),
+            opcode: None,
+            ..packet.clone()
+        },
     ] {
-        assert!(delivery
-            .route(serde_json::from_str(source).unwrap())
-            .is_err());
+        assert!(Delivery::new(1).route(&refused).is_err(), "{refused:?}");
     }
+    assert!(Delivery::new(2)
+        .route(&refused_close(packet))
+        .unwrap()
+        .is_none());
 }
 
-#[test]
-fn delivery_uses_packet_ids_before_applying_grants() {
-    let mut delivery = Delivery::new(1);
-    let rows = [
-        r#"[3,[1,[0,55,[1,[]]]],[0,477],"03",false,0,false]"#,
-        r#"[1,[1,[0,55,[1,[]]]],[0,477],"01",false,0,false]"#,
-        r#"[2,[2,[[1],0,55]],[0,169],"02",false,0,false]"#,
-    ]
-    .into_iter()
-    .map(|row| RawValue::from_string(row.into()).unwrap())
-    .collect();
-    assert_eq!(
-        delivery.route_rows(rows).unwrap(),
-        [
-            Packet {
-                id: 2,
-                opcode: 169,
-                body: vec![2]
-            },
-            Packet {
-                id: 3,
-                opcode: 477,
-                body: vec![3]
-            }
-        ]
-    );
+#[cfg(test)]
+fn refused_close(packet: NativePacket) -> NativePacket {
+    NativePacket {
+        close_after: true,
+        ..packet
+    }
 }
 
 #[test]

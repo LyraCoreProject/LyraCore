@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use anyhow::{ensure, Context, Result};
-use lyracore_test_support::{ReducerConnection, Standalone};
+use lyracore_test_support::{NativePacket, ReducerConnection, Standalone};
 use serde_json::json;
 use wire_client::compare::Difference;
 use wire_client::decode::{decode, Field, Packet};
@@ -40,13 +40,10 @@ fn queue_strike(character: &mut Character) -> std::result::Result<(), String> {
         .map(|_| ())
 }
 
-fn own_packets(
-    character: &mut Character,
-    rows: &[Box<serde_json::value::RawValue>],
-) -> Result<Vec<Packet>> {
+fn own_packets(character: &mut Character, rows: &[NativePacket]) -> Result<Vec<Packet>> {
     character
         .delivery
-        .route_rows(rows.to_vec())?
+        .route_rows(rows)?
         .into_iter()
         .filter(|packet| {
             matches!(
@@ -239,7 +236,7 @@ fn prepare(
         .map_err(anyhow::Error::msg)?;
     let opening = receiver.drain_packets();
     for character in &mut characters {
-        character.delivery.route_rows(opening.clone())?;
+        character.delivery.route_rows(&opening)?;
     }
     ready_strikes(shard, shard_name, &mut receiver, &mut characters)?;
     verify_context(shard, shard_name, &characters, level_index)?;

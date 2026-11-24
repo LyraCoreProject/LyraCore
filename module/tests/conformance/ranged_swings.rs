@@ -2,7 +2,7 @@ use std::sync::Barrier;
 use std::time::Instant;
 
 use anyhow::{ensure, Context, Result};
-use lyracore_test_support::{ReducerConnection, Standalone};
+use lyracore_test_support::{NativePacket, ReducerConnection, Standalone};
 use serde_json::json;
 use wire_client::compare::Difference;
 use wire_client::decode::{decode, Packet};
@@ -77,13 +77,10 @@ impl Character {
     }
 }
 
-fn own_packets(
-    character: &mut Character,
-    rows: &[Box<serde_json::value::RawValue>],
-) -> Result<Vec<Packet>> {
+fn own_packets(character: &mut Character, rows: &[NativePacket]) -> Result<Vec<Packet>> {
     character
         .delivery
-        .route_rows(rows.to_vec())?
+        .route_rows(rows)?
         .into_iter()
         .filter(|packet| matches!(packet.opcode, 0x132 | 0x14a | 0x24b | 0x250))
         .map(|packet| match packet.opcode {
@@ -93,10 +90,7 @@ fn own_packets(
         .collect()
 }
 
-fn advance_and_drain(
-    receiver: &mut ReducerConnection,
-    ticks: u32,
-) -> Result<Vec<Box<serde_json::value::RawValue>>> {
+fn advance_and_drain(receiver: &mut ReducerConnection, ticks: u32) -> Result<Vec<NativePacket>> {
     receiver
         .call("debug_advance_roll_batch", json!([ticks]))
         .map_err(anyhow::Error::msg)?;
@@ -249,7 +243,7 @@ fn prepare(
     }
     let opening = advance_and_drain(&mut receiver, 1)?;
     for character in &mut characters {
-        character.delivery.route_rows(opening.clone())?;
+        character.delivery.route_rows(&opening)?;
     }
     ready_shots(shooter, &mut receiver, &mut characters)?;
     verify_context(shooter, shard, shard_name, &characters, level_index)?;

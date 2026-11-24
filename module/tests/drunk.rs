@@ -6,6 +6,7 @@ use lyracore_package_delta::fixture_ids::FIXTURE_JERKY;
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage;
 use lyracore_shared::spell::taxonomy::{E_INEBRIATE, T_SCRIPTED, T_SELF};
+use lyracore_test_support::NativePacket;
 use serde_json::json;
 use support::{number, Standalone};
 
@@ -18,7 +19,7 @@ const DRUNK: u32 = 12_800;
 const SOBERING_STEP: u32 = 256;
 const TEN_SECONDS_TICKS: &str = "200";
 const HALF_SECOND_TICKS: &str = "10";
-const SMSG_UPDATE_OBJECT: u64 = 0xA9;
+const SMSG_UPDATE_OBJECT: u16 = 0xA9;
 const PACKET_WAIT: Duration = Duration::from_secs(10);
 
 #[test]
@@ -43,21 +44,17 @@ fn a_drink_makes_the_character_drunk_and_player_bytes_3_carries_it() {
             lyracore_protocol::codec::build_player_bytes_3_values(PLAYER, DRUNK),
         )))
         .unwrap()
-        .body
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let carries_drunk_value = |row: &str| {
-        let packet: serde_json::Value = serde_json::from_str(row).unwrap();
-        packet[2][1] == SMSG_UPDATE_OBJECT && packet[3].as_str() == Some(expected.as_str())
+        .body;
+    let carries_drunk_value = |packet: &NativePacket| {
+        packet.opcode == Some(SMSG_UPDATE_OBJECT) && packet.body == expected
     };
     let deadline = Instant::now() + PACKET_WAIT;
     let mut packets = wire.wait_for_packets(Duration::from_secs(1)).unwrap();
-    while !packets.iter().any(|row| carries_drunk_value(row.get())) && Instant::now() < deadline {
+    while !packets.iter().any(carries_drunk_value) && Instant::now() < deadline {
         packets.extend(wire.wait_for_packets(Duration::from_secs(1)).unwrap());
     }
     assert!(
-        packets.iter().any(|row| carries_drunk_value(row.get())),
+        packets.iter().any(carries_drunk_value),
         "the Character's VALUES update carries PLAYER_BYTES_3 with the drunk value"
     );
 }

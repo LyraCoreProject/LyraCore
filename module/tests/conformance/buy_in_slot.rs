@@ -1,7 +1,7 @@
 use lyracore_test_support::{ReducerConnection, Standalone};
 use serde_json::json;
 
-use super::{enter, fixture, Packet};
+use super::{enter, fixture};
 use lyracore_package_delta::fixture_ids::{
     FIXTURE_BLADE, FIXTURE_JERKY, FIXTURE_REINS, PROFESSION_TRAINER_ENTRY, SCENARIO_QUEST,
     SCENARIO_VENDOR_ENTRY, TEST_POWER_WORD_SHIELD_SPELL,
@@ -82,19 +82,7 @@ pub(super) fn delivered(connection: &mut ReducerConnection) -> Vec<(u16, Vec<u8>
     connection
         .drain_packets()
         .into_iter()
-        .filter_map(|row| {
-            let Packet(_, _, (tag, opcode), body, _, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            (tag == 0).then(|| {
-                (
-                    serde_json::from_str(opcode.get()).unwrap(),
-                    (0..body.len())
-                        .step_by(2)
-                        .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
-                        .collect(),
-                )
-            })
-        })
+        .filter_map(|packet| packet.opcode.map(|opcode| (opcode, packet.body)))
         .collect()
 }
 

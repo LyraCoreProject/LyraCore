@@ -195,10 +195,10 @@ fn natural_escape_from_passive_combat_restores_mounting_and_logout() {
         .call("native_world_receive", json!([0x4bu32, Vec::<u8>::new()]))
         .unwrap();
     assert!(
-        refused.inserts("game_native_packet").iter().any(|row| {
-            let packet: serde_json::Value = serde_json::from_str(row.get()).unwrap();
-            packet[2][1] == 0x4c && packet[3] == "0100000001"
-        }),
+        refused
+            .packets()
+            .iter()
+            .any(|packet| packet.opcode == Some(0x4c) && packet.body == [1, 0, 0, 0, 1]),
         "the wire refuses logout while the passive creature retains threat"
     );
     escape(&shard, 1000.0);
@@ -210,10 +210,10 @@ fn natural_escape_from_passive_combat_restores_mounting_and_logout() {
         .call("native_world_receive", json!([0x4bu32, Vec::<u8>::new()]))
         .unwrap();
     assert!(
-        accepted.inserts("game_native_packet").iter().any(|row| {
-            let packet: serde_json::Value = serde_json::from_str(row.get()).unwrap();
-            packet[2][1] == 0x4d
-        }),
+        accepted
+            .packets()
+            .iter()
+            .any(|packet| packet.opcode == Some(0x4d)),
         "the wire completes logout after natural evade"
     );
     assert!(shard

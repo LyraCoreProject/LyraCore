@@ -7,6 +7,7 @@ use lyracore_shared::spell::taxonomy::{
     A_IMMUNITY, A_MOD_DAMAGE_TAKEN, A_PERIODIC_DAMAGE, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE,
     E_HEAL, E_NEXT_SWING, P_SCHOOL_MASK, T_AREA_ENEMY, T_SELF, T_TARGET_ENEMY,
 };
+use lyracore_test_support::NativePacket;
 use serde_json::json;
 use std::time::{Duration, Instant};
 use support::{event_rows, fence_subscription, subscribe_with_fence, Field, Standalone};
@@ -40,7 +41,7 @@ const FROST_DOT_FIXTURE: u32 = 5_117_207;
 const DOT_PERIOD_MS: u32 = 3_000;
 // 50 ms scheduler ticks that pass one DoT period.
 const ONE_PERIOD_TICKS: &str = "61";
-const SMSG_SPELLORDAMAGE_IMMUNE: u64 = 0x263;
+const SMSG_SPELLORDAMAGE_IMMUNE: u16 = 0x263;
 const PLAYER_FACTION: u32 = 9_101;
 const WOLF_FACTION: u32 = 9_102;
 const PACKET_WAIT: Duration = Duration::from_secs(10);
@@ -179,21 +180,17 @@ fn a_periodic_damage_tick_on_a_creature_that_became_immune_deals_nothing() {
         next_tick(&standalone, wolf) > first_tick,
         "the refused tick still moves the Aura to its next period"
     );
-    let immune = format!("{:016x}", PLAYER.swap_bytes()) + &format!("{:016x}", wolf.swap_bytes());
-    let reports_immunity = |row: &str| {
-        let packet: serde_json::Value = serde_json::from_str(row).unwrap();
-        packet[2][1] == SMSG_SPELLORDAMAGE_IMMUNE
-            && packet[3]
-                .as_str()
-                .is_some_and(|body| body.to_ascii_lowercase().starts_with(&immune))
+    let immune = [PLAYER.to_le_bytes(), wolf.to_le_bytes()].concat();
+    let reports_immunity = |packet: &NativePacket| {
+        packet.opcode == Some(SMSG_SPELLORDAMAGE_IMMUNE) && packet.body.starts_with(&immune)
     };
     let deadline = Instant::now() + PACKET_WAIT;
     let mut packets = wire.wait_for_packets(Duration::from_secs(1)).unwrap();
-    while !packets.iter().any(|row| reports_immunity(row.get())) && Instant::now() < deadline {
+    while !packets.iter().any(reports_immunity) && Instant::now() < deadline {
         packets.extend(wire.wait_for_packets(Duration::from_secs(1)).unwrap());
     }
     assert!(
-        packets.iter().any(|row| reports_immunity(row.get())),
+        packets.iter().any(reports_immunity),
         "vmangos Aura::PeriodicTick reports the tick with SMSG_SPELLORDAMAGE_IMMUNE"
     );
 }

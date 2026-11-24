@@ -2,10 +2,10 @@ use std::io::Cursor;
 use std::time::Duration;
 
 use lyracore_package_delta::fixture_ids::{FIXTURE_JERKY, SCENARIO_VENDOR_ENTRY, TEST_WOLF_ENTRY};
-use lyracore_test_support::{Field, ReducerConnection, Standalone};
-use serde::Deserialize;
+use lyracore_test_support::{
+    Field, NativeAudience, NativePacket, ReducerConnection, Standalone, WorldSessionObserver,
+};
 use serde_json::json;
-use serde_json::value::RawValue;
 use wow_world_messages::vanilla::{ClientMessage, CMSG_AUTH_SESSION};
 
 #[path = "conformance/buy_in_slot.rs"]
@@ -250,18 +250,9 @@ fn vendor_purchases_acknowledge_the_offer_before_the_npc_receipt() {
         let packets: Vec<_> = connection
             .drain_packets()
             .into_iter()
-            .filter_map(|row| {
-                let Packet(_, _, (tag, opcode), body, _, _, _) =
-                    serde_json::from_str(row.get()).unwrap();
-                let opcode: u16 = serde_json::from_str(opcode.get()).unwrap();
-                if tag != 0 || !matches!(opcode, 0x1a4 | 0x166) {
-                    return None;
-                }
-                let bytes: Vec<_> = (0..body.len())
-                    .step_by(2)
-                    .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
-                    .collect();
-                Some((opcode, bytes))
+            .filter_map(|packet| {
+                let opcode = packet.opcode?;
+                matches!(opcode, 0x1a4 | 0x166).then_some((opcode, packet.body))
             })
             .collect();
         assert_eq!(
@@ -297,20 +288,13 @@ fn vendor_purchases_acknowledge_the_offer_before_the_npc_receipt() {
 fn quest_slots_survive_reconnect_and_reuse_only_the_abandoned_slot() {
     use std::collections::BTreeMap;
 
-    fn fields(rows: Vec<Box<RawValue>>, guid: u64) -> BTreeMap<u16, u32> {
+    fn fields(packets: Vec<NativePacket>, guid: u64) -> BTreeMap<u16, u32> {
         let mut fields = BTreeMap::new();
-        for row in rows {
-            let Packet(_, _, (option, opcode), body, _, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            if option != 0 {
+        for packet in packets {
+            let Some(opcode) = packet.opcode else {
                 continue;
-            }
-            let opcode = serde_json::from_str(opcode.get()).unwrap();
-            let bytes: Vec<_> = (0..body.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
-                .collect();
-            for update in properties::updates(opcode, &bytes).unwrap() {
+            };
+            for update in properties::updates(opcode, &packet.body).unwrap() {
                 if update.guid == guid {
                     fields.extend(update.fields);
                 }
@@ -391,47 +375,14 @@ fn quest_slots_survive_reconnect_and_reuse_only_the_abandoned_slot() {
     assert_eq!(rows[0]["entries"], "0433000000000000000000");
 }
 
-#[derive(Deserialize)]
-struct Packet(
-    u64,
-    (u8, Box<RawValue>),
-    (u8, Box<RawValue>),
-    String,
-    bool,
-    i64,
-    bool,
-);
-
-fn packet(row: &RawValue, connection_id: u128, opcode: u16) -> wire_client::decode::Packet {
-    let Packet(
-        id,
-        (audience, recipient),
-        (option, encoded_opcode),
-        encoded,
-        close,
-        not_before,
-        authenticated,
-    ) = serde_json::from_str(row.get()).unwrap();
-    assert_ne!(id, 0);
-    assert_eq!(audience, 0);
-    assert_eq!(
-        serde_json::from_str::<(u128,)>(recipient.get()).unwrap().0,
-        connection_id
-    );
-    assert_eq!(option, 0);
-    assert_eq!(
-        serde_json::from_str::<u16>(encoded_opcode.get()).unwrap(),
-        opcode
-    );
-    assert_eq!(encoded.len() % 2, 0);
-    let body: Vec<u8> = (0..encoded.len())
-        .step_by(2)
-        .map(|offset| u8::from_str_radix(&encoded[offset..offset + 2], 16).unwrap())
-        .collect();
-    assert!(!close);
-    assert_eq!(not_before, 0);
-    assert!(!authenticated);
-    wire_client::decode::decode(opcode, &body).unwrap()
+fn packet(packet: &NativePacket, connection_id: u128, opcode: u16) -> wire_client::decode::Packet {
+    assert_ne!(packet.id, 0);
+    assert_eq!(packet.audience, NativeAudience::Connection(connection_id));
+    assert_eq!(packet.opcode, Some(opcode));
+    assert!(!packet.close_after);
+    assert_eq!(packet.not_before_micros, 0);
+    assert!(!packet.authentication_complete);
+    wire_client::decode::decode(opcode, &packet.body).unwrap()
 }
 
 #[test]
@@ -471,7 +422,7 @@ fn operator_connection_enters_world_and_receives_pong() {
     let result = connection
         .call("native_world_receive", json!([0x1dcu32, body]))
         .unwrap();
-    let rows = result.inserts("game_native_packet");
+    let rows = result.packets();
     assert_eq!(rows.len(), 1, "{rows:?}");
     let pong = packet(&rows[0], connection.connection_id(), 0x1dd);
     assert_eq!(
@@ -500,26 +451,17 @@ fn a_missing_near_teleport_ack_expires_and_world_requests_resume() {
             .call("native_world_receive", json!([0x1ceu32, Vec::<u8>::new()]))
             .unwrap()
     };
-    assert!(query().inserts("game_native_packet").is_empty());
+    assert!(query().packets().is_empty());
     std::thread::sleep(Duration::from_secs(21));
     let response = query();
-    assert!(response.inserts("game_native_packet").iter().any(|row| {
-        let Packet(_, _, (_, opcode), _, _, _, _) = serde_json::from_str(row.get()).unwrap();
-        opcode.get() == "463"
-    }));
-    let has_heartbeat = |row: &RawValue| {
-        let Packet(_, _, (_, opcode), _, _, _, _) = serde_json::from_str(row.get()).unwrap();
-        opcode.get() == "238"
-    };
+    assert!(response
+        .packets()
+        .iter()
+        .any(|packet| packet.opcode == Some(463)));
+    let has_heartbeat = |packet: &NativePacket| packet.opcode == Some(238);
     assert!(
-        response
-            .inserts("game_native_packet")
-            .iter()
-            .any(|row| has_heartbeat(row))
-            || connection
-                .drain_packets()
-                .iter()
-                .any(|row| has_heartbeat(row))
+        response.packets().iter().any(has_heartbeat)
+            || connection.drain_packets().iter().any(has_heartbeat)
     );
     assert_eq!(
         shard.query_rows("SELECT teleport FROM game_native_player")[0]["teleport"],
@@ -564,17 +506,11 @@ fn fixture_entry_preserves_login_credentials_and_refuses_the_old_fixture_key() {
     let rows = wire
         .call("native_world_receive", json!([0x1edu32, &frame[6..]]))
         .unwrap();
-    let Packet(_, _, (option, opcode), body, close, _, _) =
-        serde_json::from_str(rows.inserts("game_native_packet")[0].get()).unwrap();
-    let bytes: Vec<u8> = (0..body.len())
-        .step_by(2)
-        .map(|offset| u8::from_str_radix(&body[offset..offset + 2], 16).unwrap())
-        .collect();
-    assert_eq!(option, 0);
-    assert_eq!(opcode.get(), "494");
+    let response = &rows.packets()[0];
+    assert_eq!(response.opcode, Some(494));
     // SMSG_AUTH_RESPONSE carries AUTH_FAILED as the single result byte 13.
-    assert_eq!(bytes, [13]);
-    assert!(close);
+    assert_eq!(response.body, [13]);
+    assert!(response.close_after);
     drop(connection);
     assert!(lyracore_test_support::poll_until(
         Duration::from_secs(5),
@@ -600,19 +536,14 @@ fn a_later_transaction_delivers_packets_without_another_client_request() {
         ),
     )
     .unwrap();
-    let expected_body = expected
-        .body
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let mut rows = Vec::new();
     while std::time::Instant::now() < deadline {
         rows.extend(connection.wait_for_packets(Duration::from_secs(1)).unwrap());
-        if rows.iter().any(|row| {
-            let Packet(_, (audience, _), (option, opcode), body, _, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            audience == 0 && option == 0 && opcode.get() == "169" && body == expected_body
+        if rows.iter().any(|packet| {
+            matches!(packet.audience, NativeAudience::Connection(_))
+                && packet.opcode == Some(169)
+                && packet.body == expected.body
         }) {
             return;
         }
@@ -994,18 +925,12 @@ fn applications_after(
     while std::time::Instant::now() < deadline {
         let rows = connection.wait_for_packets(Duration::from_secs(1)).unwrap();
         let mut sent = None;
-        for row in &rows {
-            let Packet(_, (audience, _), (option, opcode), body, _, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            if audience != 1 || option != 0 || opcode.get() != "169" {
+        for packet in &rows {
+            if !matches!(packet.audience, NativeAudience::Aoi { .. }) || packet.opcode != Some(169)
+            {
                 continue;
             }
-            let bytes: Vec<u8> = body
-                .as_bytes()
-                .chunks_exact(2)
-                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
-                .collect();
-            let decoded = wire_client::decode::decode(0x00a9, &bytes).unwrap();
+            let decoded = wire_client::decode::decode(0x00a9, &packet.body).unwrap();
             let Some(Field::List(objects)) = decoded.fields.get("objects") else {
                 continue;
             };
@@ -1125,7 +1050,7 @@ fn health_after(
 }
 
 fn decoded_health(
-    rows: &[Box<RawValue>],
+    packets: &[NativePacket],
     units: &[u64],
 ) -> Vec<(u64, u64, HealthDelivery, SentVitals)> {
     use wire_client::decode::Field;
@@ -1136,18 +1061,16 @@ fn decoded_health(
             _ => None,
         };
     let mut sent = Vec::new();
-    for row in rows {
-        let Packet(id, (audience, recipient), (option, opcode), body, _, _, _) =
-            serde_json::from_str(row.get()).unwrap();
-        if option != 0 || opcode.get() != "169" || !matches!(audience, 0 | 1) {
+    for packet in packets {
+        if packet.opcode != Some(169)
+            || !matches!(
+                packet.audience,
+                NativeAudience::Connection(_) | NativeAudience::Aoi { .. }
+            )
+        {
             continue;
         }
-        let bytes: Vec<u8> = body
-            .as_bytes()
-            .chunks_exact(2)
-            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
-            .collect();
-        let decoded = wire_client::decode::decode(0x00a9, &bytes).unwrap();
+        let decoded = wire_client::decode::decode(0x00a9, &packet.body).unwrap();
         let Some(Field::List(objects)) = decoded.fields.get("objects") else {
             continue;
         };
@@ -1168,20 +1091,21 @@ fn decoded_health(
             {
                 continue;
             }
-            let delivery = if audience == 0 {
-                HealthDelivery::Connection(
-                    serde_json::from_str::<(u128,)>(recipient.get()).unwrap().0,
-                )
-            } else {
-                let (_, guid, (none, excluded)): (u8, u64, (u8, Box<RawValue>)) =
-                    serde_json::from_str(recipient.get()).unwrap();
-                assert_eq!(guid, unit, "{recipient}");
-                HealthDelivery::Aoi {
-                    except: (none == 0)
-                        .then(|| serde_json::from_str::<(u128,)>(excluded.get()).unwrap().0),
+            let delivery = match packet.audience {
+                NativeAudience::Connection(connection) => HealthDelivery::Connection(connection),
+                NativeAudience::Aoi {
+                    entity_guid,
+                    exclude_connection,
+                    ..
+                } => {
+                    assert_eq!(entity_guid, unit, "{:?}", packet.audience);
+                    HealthDelivery::Aoi {
+                        except: exclude_connection,
+                    }
                 }
+                _ => unreachable!(),
             };
-            sent.push((id, unit, delivery, vitals));
+            sent.push((packet.id, unit, delivery, vitals));
         }
     }
     sent
@@ -1243,8 +1167,8 @@ fn add_observer(shard: &Standalone, x: i32, y: i32) -> u64 {
 }
 
 fn taxi_create(
-    rows: &[Box<RawValue>],
-    connection_id: u128,
+    observer: &mut WorldSessionObserver,
+    packets: &[NativePacket],
     passenger: u64,
 ) -> Option<(
     wow_world_messages::vanilla::MovementBlock_MovementFlags_SplineEnabled,
@@ -1253,26 +1177,11 @@ fn taxi_create(
     use wow_world_messages::vanilla::{
         opcodes::ServerOpcodeMessage, MovementBlock_UpdateFlag_Living, Object,
     };
-    rows.iter().find_map(|row| {
-        let Packet(_, (audience, recipient), (option, opcode), body, _, _, _) =
-            serde_json::from_str(row.get()).unwrap();
-        if option != 0 || opcode.get() != "169" {
+    observer.received(packets).iter().find_map(|packet| {
+        if packet.opcode != Some(169) {
             return None;
         }
-        let addressed = match audience {
-            0 => serde_json::from_str::<(u128,)>(recipient.get()).unwrap().0 == connection_id,
-            2 => serde_json::from_str::<((u128,), u8, u64)>(recipient.get())
-                .is_ok_and(|((id,), _, guid)| id == connection_id && guid == passenger),
-            _ => false,
-        };
-        if !addressed {
-            return None;
-        }
-        let mut bytes: Vec<u8> = body
-            .as_bytes()
-            .chunks_exact(2)
-            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
-            .collect();
+        let mut bytes = packet.body.clone();
         if !matches!(bytes.get(5), Some(2 | 3)) {
             return None;
         }
@@ -1379,15 +1288,16 @@ fn taxi_x(shard: &Standalone, guid: u64) -> f32 {
 fn a_new_viewer_receives_the_current_taxi_spline() {
     let (shard, passenger, observer) = taxi_flight("taxi-new-viewer", 200);
     let mut viewer = enter(&shard, observer);
-    viewer.drain_packets();
+    let mut session = WorldSessionObserver::new(viewer.connection_id());
+    session.received(&viewer.drain_packets());
 
     let mut spline = None;
     let mut observed = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(6);
     while spline.is_none() && std::time::Instant::now() < deadline {
-        let rows = viewer.wait_for_packets(Duration::from_secs(1)).unwrap();
-        spline = taxi_create(&rows, viewer.connection_id(), passenger);
-        observed.extend(rows);
+        let packets = viewer.wait_for_packets(Duration::from_secs(1)).unwrap();
+        spline = taxi_create(&mut session, &packets, passenger);
+        observed.extend(packets);
     }
     let (spline, position) = spline
         .unwrap_or_else(|| panic!("observer did not receive a taxi CREATE spline: {observed:?}"));
@@ -1397,10 +1307,8 @@ fn a_new_viewer_receives_the_current_taxi_spline() {
     assert_eq!((spline.nodes[1].x, spline.nodes[2].x), (0.0, 200.0));
     assert_eq!(spline.final_node.x, 200.0);
     assert!(spline.time_passed > 0);
-    assert!(!observed.iter().any(|row| {
-        let Packet(_, (audience, _), (option, opcode), _, _, _, _) =
-            serde_json::from_str(row.get()).unwrap();
-        audience == 0 && option == 0 && opcode.get() == "221"
+    assert!(!observed.iter().any(|packet| {
+        matches!(packet.audience, NativeAudience::Connection(_)) && packet.opcode == Some(221)
     }));
     assert_eq!(
         shard
@@ -1430,7 +1338,8 @@ fn a_late_viewers_create_follows_the_authoritative_curved_flight() {
     ];
     let (shard, passenger, observer) = taxi_flight_on_route("taxi-curved-replay", 1550, 40, &route);
     let mut viewer = enter(&shard, observer);
-    viewer.drain_packets();
+    let mut session = WorldSessionObserver::new(viewer.connection_id());
+    session.received(&viewer.drain_packets());
     let original_start: i64 = shard.query_rows(&format!(
         "SELECT started_micros FROM game_active_taxi_flight WHERE character_guid = {passenger}"
     ))[0]["started_micros"]
@@ -1450,8 +1359,8 @@ fn a_late_viewers_create_follows_the_authoritative_curved_flight() {
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     while replay.is_none() && std::time::Instant::now() < deadline {
         replay = taxi_create(
+            &mut session,
             &viewer.wait_for_packets(Duration::from_secs(1)).unwrap(),
-            viewer.connection_id(),
             passenger,
         );
     }
@@ -1512,9 +1421,9 @@ fn login_near_a_flyer_replays_its_current_spline() {
     ));
 
     let mut viewer = enter(&shard, observer);
-    let (spline, position) =
-        taxi_create(&viewer.drain_packets(), viewer.connection_id(), passenger)
-            .expect("login did not create the flyer with its spline");
+    let mut session = WorldSessionObserver::new(viewer.connection_id());
+    let (spline, position) = taxi_create(&mut session, &viewer.drain_packets(), passenger)
+        .expect("login did not create the flyer with its spline");
     assert!(
         position.x > 20.0,
         "login CREATE placed flyer at {}",
@@ -1551,7 +1460,8 @@ fn flyer_reconnect_resumes_from_its_saved_position() {
     let mut second = enter(&shard, passenger);
     let world_x = taxi_x(&shard, passenger);
     let rows = second.drain_packets();
-    assert!(taxi_create(&rows, second.connection_id(), passenger).is_none());
+    let mut session = WorldSessionObserver::new(second.connection_id());
+    assert!(taxi_create(&mut session, &rows, passenger).is_none());
     let packets = decoded_taxi_entry_packets(&rows);
     assert!(packets.iter().any(|packet| packet.opcode == 0x016e));
     assert!(packets.iter().any(|packet| packet.opcode == 0x00dd));
@@ -1578,10 +1488,10 @@ fn permanent_taxi_abort_sends_dismount_result() {
     ));
     let rows = connection.wait_for_packets(Duration::from_secs(5)).unwrap();
     assert!(
-        rows.iter().any(|row| {
-            let Packet(_, (audience, _), (option, opcode), body, _, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            audience == 0 && option == 0 && opcode.get() == "367" && body == "03000000"
+        rows.iter().any(|packet| {
+            matches!(packet.audience, NativeAudience::Connection(_))
+                && packet.opcode == Some(367)
+                && packet.body == [3, 0, 0, 0]
         }),
         "permanent abort sent no successful dismount result: {rows:?}"
     );
@@ -1602,10 +1512,7 @@ fn taxi_landing_sends_a_position_correction_after_dismount() {
     let deadline = std::time::Instant::now() + Duration::from_secs(8);
     while !direct.iter().any(|(opcode, _)| *opcode == 199) && std::time::Instant::now() < deadline {
         for row in connection.wait_for_packets(Duration::from_secs(1)).unwrap() {
-            let Packet(_, (audience, _), (option, opcode), _, _, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            if audience == 0 && option == 0 {
-                let opcode = serde_json::from_str::<u16>(opcode.get()).unwrap();
+            if let (NativeAudience::Connection(_), Some(opcode)) = (row.audience, row.opcode) {
                 let decoded =
                     (opcode == 199).then(|| packet(&row, connection.connection_id(), opcode));
                 direct.push((opcode, decoded));
@@ -1709,26 +1616,19 @@ fn taxi_crosses_capital_and_zone_boundaries_with_area_data() {
         && (zones.len() < 2 || weather < 2 || rest_flags.is_empty())
     {
         for row in connection.wait_for_packets(Duration::from_secs(1)).unwrap() {
-            let Packet(_, (audience, _), (option, opcode), body, _, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            if option != 0 {
+            let Some(opcode) = row.opcode else {
                 continue;
-            }
-            let opcode = serde_json::from_str::<u16>(opcode.get()).unwrap();
-            if audience == 0 && opcode == 706 {
+            };
+            let connection_bound = matches!(row.audience, NativeAudience::Connection(_));
+            if connection_bound && opcode == 706 {
                 let decoded = packet(&row, connection.connection_id(), opcode);
                 if let Some(Field::Unsigned(zone)) = decoded.fields.get("zone") {
                     zones.push(*zone);
                 }
-            } else if audience == 0 && opcode == 756 {
+            } else if connection_bound && opcode == 756 {
                 weather += 1;
             } else if opcode == 169 {
-                let bytes = body
-                    .as_bytes()
-                    .chunks_exact(2)
-                    .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
-                    .collect::<Vec<_>>();
-                let decoded = wire_client::decode::decode(opcode, &bytes).unwrap();
+                let decoded = wire_client::decode::decode(opcode, &row.body).unwrap();
                 if let Some(Field::List(objects)) = decoded.fields.get("objects") {
                     for object in objects {
                         if let Field::Object(object) = object {
@@ -2190,24 +2090,15 @@ fn a_reconnecting_passenger_keeps_both_taxi_flags() {
     assert_eq!(flags(&shard) & taxi_flags, taxi_flags);
 }
 
-fn decoded_taxi_entry_packets(rows: &[Box<RawValue>]) -> Vec<wire_client::decode::Packet> {
-    rows.iter()
-        .filter_map(|row| {
-            let Packet(_, _, (option, opcode), body, _, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            if option != 0 {
-                return None;
-            }
-            let opcode: u16 = serde_json::from_str(opcode.get()).unwrap();
+fn decoded_taxi_entry_packets(packets: &[NativePacket]) -> Vec<wire_client::decode::Packet> {
+    packets
+        .iter()
+        .filter_map(|packet| {
+            let opcode = packet.opcode?;
             if ![0x00a9, 0x00dd, 0x0143, 0x0144, 0x016e].contains(&opcode) {
                 return None;
             }
-            let bytes: Vec<u8> = body
-                .as_bytes()
-                .chunks_exact(2)
-                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
-                .collect();
-            Some(wire_client::decode::decode(opcode, &bytes).unwrap())
+            Some(wire_client::decode::decode(opcode, &packet.body).unwrap())
         })
         .collect()
 }

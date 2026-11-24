@@ -9,39 +9,51 @@ use tungstenite::client::IntoClientRequest;
 use tungstenite::http::HeaderValue;
 use tungstenite::{Message, WebSocket};
 
+use crate::native_packet::NativePacket;
 use crate::POLL_TIMEOUT;
+
+const PACKET_TABLE: &str = "game_native_packet";
 
 pub struct ReducerConnection {
     socket: WebSocket<TcpStream>,
     connection_id: ConnectionId,
     inserts: BTreeMap<String, Vec<Box<RawValue>>>,
+    packets: Vec<NativePacket>,
     next_request: u32,
 }
 
 #[derive(Debug, Default)]
 pub struct ReducerRows {
     inserts: BTreeMap<String, Vec<Box<RawValue>>>,
+    packets: Vec<NativePacket>,
 }
 
 impl ReducerRows {
     // Decode positional rows directly into typed fields to preserve integers wider than u64.
+    // `game_native_packet` rows decode only into `packets`.
     pub fn inserts(&self, table: &str) -> &[Box<RawValue>] {
         self.inserts.get(table).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub fn packets(&self) -> &[NativePacket] {
+        &self.packets
     }
 
     fn decode(update: &Value) -> Result<Self, String> {
         let mut rows = Self::default();
         for table in update["tables"].as_array().ok_or("missing update tables")? {
             let name = table["table_name"].as_str().ok_or("missing table name")?;
-            let inserts = rows.inserts.entry(name.to_owned()).or_default();
             for query in table["updates"].as_array().ok_or("missing query updates")? {
                 for row in query["inserts"].as_array().ok_or("missing inserted rows")? {
-                    inserts.push(
-                        RawValue::from_string(
-                            row.as_str().ok_or("row is not JSON text")?.to_owned(),
-                        )
-                        .map_err(|error| error.to_string())?,
-                    );
+                    let row = row.as_str().ok_or("row is not JSON text")?;
+                    if name == PACKET_TABLE {
+                        rows.packets.push(NativePacket::decode(row)?);
+                    } else {
+                        rows.inserts.entry(name.to_owned()).or_default().push(
+                            RawValue::from_string(row.to_owned())
+                                .map_err(|error| error.to_string())?,
+                        );
+                    }
                 }
             }
         }
@@ -122,6 +134,7 @@ impl ReducerConnection {
                 __connection_id__: 0,
             },
             inserts: BTreeMap::new(),
+            packets: Vec::new(),
             next_request: 1,
         };
         let Some(ServerMessage::IdentityToken { connection_id }) =
@@ -147,9 +160,9 @@ impl ReducerConnection {
         self.connection_id.__connection_id__
     }
 
-    // Drains received inserts; wait_for_packets reads transactions still pending on the socket.
-    pub fn drain_packets(&mut self) -> Vec<Box<RawValue>> {
-        self.drain_inserts("game_native_packet")
+    // Drains received packets; wait_for_packets reads transactions still pending on the socket.
+    pub fn drain_packets(&mut self) -> Vec<NativePacket> {
+        std::mem::take(&mut self.packets)
     }
 
     // Drains subscribed inserts through the last received transaction, including earlier calls.
@@ -158,15 +171,11 @@ impl ReducerConnection {
     }
 
     // Returns buffered packet rows or waits for the first batch; an empty result means timeout.
-    pub fn wait_for_packets(&mut self, timeout: Duration) -> Result<Vec<Box<RawValue>>, String> {
+    pub fn wait_for_packets(&mut self, timeout: Duration) -> Result<Vec<NativePacket>, String> {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or("invalid packet timeout")?;
-        while self
-            .inserts
-            .get("game_native_packet")
-            .is_none_or(Vec::is_empty)
-        {
+        while self.packets.is_empty() {
             if self.receive(deadline)?.is_none() {
                 break;
             }
@@ -256,9 +265,11 @@ impl ReducerConnection {
                         _ => None,
                     };
                     if let Some(update) = update {
-                        for (table, inserts) in ReducerRows::decode(update)?.inserts {
+                        let rows = ReducerRows::decode(update)?;
+                        for (table, inserts) in rows.inserts {
                             self.inserts.entry(table).or_default().extend(inserts);
                         }
+                        self.packets.extend(rows.packets);
                     }
                     return Ok(Some(message));
                 }
@@ -279,6 +290,7 @@ impl Drop for ReducerConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native_packet::NativeAudience;
 
     #[test]
     fn subscribed_rows_preserve_connection_ids_and_packet_bytes() {
@@ -288,11 +300,10 @@ mod tests {
                 "deletes": []
             }]
         }]})).unwrap();
-        type Packet = (u64, (u8, (u128,)), (u8, u16), String, bool, i64, bool);
-        let (_, (_, (connection_id,)), _, body, _, _, _): Packet =
-            serde_json::from_str(rows.inserts("game_native_packet")[0].get()).unwrap();
-        assert_eq!(connection_id, u128::MAX - 1);
-        assert_eq!(body, "78563412");
+        let packet = &rows.packets()[0];
+        assert_eq!(packet.audience, NativeAudience::Connection(u128::MAX - 1));
+        assert_eq!(packet.body, [0x78, 0x56, 0x34, 0x12]);
+        assert!(rows.inserts("game_native_packet").is_empty());
         assert!(rows.inserts("absent").is_empty());
     }
 
@@ -350,19 +361,21 @@ mod tests {
         (client, handle)
     }
 
-    fn update(row: &str) -> Value {
+    fn update(id: u64) -> Value {
+        let row = format!("[{id},[0,[1]],[0,477],\"\",false,0,false]");
         json!({"tables": [{"table_name": "game_native_packet", "updates": [{"inserts": [row]}]}]})
+    }
+
+    fn ids(packets: &[NativePacket]) -> Vec<u64> {
+        packets.iter().map(|packet| packet.id).collect()
     }
 
     #[test]
     fn calls_keep_other_transactions_and_their_own_packets_in_order() {
         let (mut client, handle) = peer(|mut socket| {
             socket.read().unwrap();
-            for (caller, row) in [
-                ("1", "[1]"),
-                ("340282366920938463463374607431768211454", "[2]"),
-            ] {
-                let update = update(row);
+            for (caller, id) in [("1", 1), ("340282366920938463463374607431768211454", 2)] {
+                let update = update(id);
                 socket.send(Message::text(format!(
                     r#"{{"TransactionUpdate":{{"caller_connection_id":{{"__connection_id__":{caller}}},"reducer_call":{{"request_id":1}},"status":{{"Committed":{update}}}}}}}"#
                 ))).unwrap();
@@ -370,12 +383,8 @@ mod tests {
         });
         assert_eq!(client.connection_id(), u128::MAX - 1);
         let rows = client.call("example", json!([])).unwrap();
-        assert_eq!(rows.inserts("game_native_packet")[0].get(), "[2]");
-        let packets = client.drain_packets();
-        assert_eq!(
-            packets.iter().map(|row| row.get()).collect::<Vec<_>>(),
-            ["[1]", "[2]"]
-        );
+        assert_eq!(ids(rows.packets()), [2]);
+        assert_eq!(ids(&client.drain_packets()), [1, 2]);
         assert!(client.drain_packets().is_empty());
         handle.join().unwrap();
     }
@@ -405,7 +414,7 @@ mod tests {
     #[test]
     fn waits_receive_later_transactions_without_a_reducer_call() {
         let (mut client, handle) = peer(|mut socket| {
-            let update = update("[3]");
+            let update = update(3);
             socket
                 .send(Message::text(format!(
                     r#"{{"TransactionUpdateLight":{{"request_id":0,"update":{update}}}}}"#
@@ -414,7 +423,7 @@ mod tests {
         });
         assert!(client.drain_packets().is_empty());
         let packets = client.wait_for_packets(Duration::from_secs(2)).unwrap();
-        assert_eq!(packets[0].get(), "[3]");
+        assert_eq!(ids(&packets), [3]);
         handle.join().unwrap();
     }
 
@@ -423,7 +432,7 @@ mod tests {
         let (send, receive) = std::sync::mpsc::channel();
         let (mut client, handle) = peer(move |mut socket| {
             receive.recv_timeout(POLL_TIMEOUT).unwrap();
-            let update = update("[4]");
+            let update = update(4);
             socket.send(Message::text(format!(
                 r#"{{"TransactionUpdate":{{"caller_connection_id":{{"__connection_id__":0}},"reducer_call":{{"request_id":0}},"status":{{"Committed":{update}}}}}}}"#
             ))).unwrap();
@@ -435,8 +444,8 @@ mod tests {
             .is_empty());
         send.send(()).unwrap();
         assert_eq!(
-            client.wait_for_packets(Duration::from_secs(2)).unwrap()[0].get(),
-            "[4]"
+            ids(&client.wait_for_packets(Duration::from_secs(2)).unwrap()),
+            [4]
         );
         handle.join().unwrap();
     }

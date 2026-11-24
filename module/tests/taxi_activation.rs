@@ -2,6 +2,7 @@ mod support;
 
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{A_CONTROL, A_INERT, M_STUN, P_MECHANIC, T_SELF};
+use lyracore_test_support::NativePacket;
 use serde_json::json;
 use support::{number, Standalone};
 
@@ -16,9 +17,9 @@ const FLIGHT_YARDS: f32 = 6400.0;
 const MISSING_MASTER: u64 = 0xf130_00ff_ffff_ffff;
 const ACTIVATE_TAXI: u32 = 0x1ad;
 const ACTIVATE_TAXI_EXPRESS: u32 = 0x312;
-const ACTIVATE_TAXI_REPLY: u64 = 0x1ae;
+const ACTIVATE_TAXI_REPLY: u16 = 0x1ae;
 const TAXI_NODE_STATUS_QUERY: u32 = 0x1aa;
-const TAXI_NODE_STATUS: u64 = 0x1ab;
+const TAXI_NODE_STATUS: u16 = 0x1ab;
 const REVERSE_PATH: u32 = 5_090_306;
 const UNCATALOGUED_CLIENT_NODE: u32 = 9_999;
 const UNVISITED_NODE: u32 = 5_090_307;
@@ -29,10 +30,10 @@ const ONE_TEAM_CLIENT_NODE: u32 = 251;
 const OFF_NETWORK_NODE: u32 = 5_090_310;
 const OFF_NETWORK_CLIENT_NODE: u32 = 250;
 const TAXI_QUERY_AVAILABLE_NODES: u32 = 0x1ac;
-const SHOW_TAXI_NODES: u64 = 0x1a9;
-const NEW_TAXI_PATH: u64 = 0x1af;
+const SHOW_TAXI_NODES: u16 = 0x1a9;
+const NEW_TAXI_PATH: u16 = 0x1af;
 const GOSSIP_HELLO: u32 = 0x17b;
-const GOSSIP_MESSAGE: u64 = 0x17d;
+const GOSSIP_MESSAGE: u16 = 0x17d;
 const TAXI_GOSSIP_OPTION: u32 = 5_090_393;
 const FIRST_VISIT_NODE: u32 = 5_090_311;
 const FIRST_VISIT_CLIENT_NODE: u32 = 249;
@@ -149,11 +150,11 @@ fn know(shard: &Standalone, node: u32) {
     );
 }
 
-fn activate(wire: &mut support::ReducerConnection, master: &str) -> Vec<serde_json::Value> {
+fn activate(wire: &mut support::ReducerConnection, master: &str) -> Vec<NativePacket> {
     activate_guid(wire, master.parse().unwrap())
 }
 
-fn activate_guid(wire: &mut support::ReducerConnection, master: u64) -> Vec<serde_json::Value> {
+fn activate_guid(wire: &mut support::ReducerConnection, master: u64) -> Vec<NativePacket> {
     activate_nodes(wire, master, SOURCE_CLIENT_NODE, DESTINATION_CLIENT_NODE)
 }
 
@@ -162,59 +163,47 @@ fn activate_nodes(
     master: u64,
     source: u32,
     destination: u32,
-) -> Vec<serde_json::Value> {
+) -> Vec<NativePacket> {
     let mut body = master.to_le_bytes().to_vec();
     body.extend(source.to_le_bytes());
     body.extend(destination.to_le_bytes());
     wire.call("native_world_receive", json!([ACTIVATE_TAXI, body]))
         .unwrap()
-        .inserts("game_native_packet")
-        .iter()
-        .map(|row| serde_json::from_str(row.get()).unwrap())
-        .collect()
+        .packets()
+        .to_vec()
 }
 
-fn express(
-    wire: &mut support::ReducerConnection,
-    master: u64,
-    nodes: &[u32],
-) -> Vec<serde_json::Value> {
+fn express(wire: &mut support::ReducerConnection, master: u64, nodes: &[u32]) -> Vec<NativePacket> {
     let mut body = master.to_le_bytes().to_vec();
     body.extend(0u32.to_le_bytes());
     body.extend((nodes.len() as u32).to_le_bytes());
     body.extend(nodes.iter().flat_map(|node| node.to_le_bytes()));
     wire.call("native_world_receive", json!([ACTIVATE_TAXI_EXPRESS, body]))
         .unwrap()
-        .inserts("game_native_packet")
-        .iter()
-        .map(|row| serde_json::from_str(row.get()).unwrap())
-        .collect()
+        .packets()
+        .to_vec()
 }
 
-fn node_status_replies(wire: &mut support::ReducerConnection, master: u64) -> Vec<String> {
+fn node_status_replies(wire: &mut support::ReducerConnection, master: u64) -> Vec<Vec<u8>> {
     wire.call(
         "native_world_receive",
         json!([TAXI_NODE_STATUS_QUERY, master.to_le_bytes().to_vec()]),
     )
     .unwrap()
-    .inserts("game_native_packet")
+    .packets()
     .iter()
-    .map(|row| serde_json::from_str::<serde_json::Value>(row.get()).unwrap())
-    .filter(|packet| packet[2][1] == TAXI_NODE_STATUS)
-    .map(|packet| packet[3].as_str().unwrap().to_owned())
+    .filter(|packet| packet.opcode == Some(TAXI_NODE_STATUS))
+    .map(|packet| packet.body.clone())
     .collect()
 }
 
-fn node_status(master: u64, known: bool) -> String {
-    let guid: String = master
-        .to_le_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    format!("{guid}{:02x}", u8::from(known))
+fn node_status(master: u64, known: bool) -> Vec<u8> {
+    let mut body = master.to_le_bytes().to_vec();
+    body.push(u8::from(known));
+    body
 }
 
-fn known_node_status(master: u64) -> String {
+fn known_node_status(master: u64) -> Vec<u8> {
     node_status(master, true)
 }
 
@@ -243,16 +232,16 @@ fn insert_reverse_path(shard: &Standalone) {
     );
 }
 
-fn replies(packets: &[serde_json::Value]) -> Vec<String> {
+fn replies(packets: &[NativePacket]) -> Vec<Vec<u8>> {
     packets
         .iter()
-        .filter(|packet| packet[2][1] == ACTIVATE_TAXI_REPLY)
-        .map(|packet| packet[3].as_str().unwrap().to_owned())
+        .filter(|packet| packet.opcode == Some(ACTIVATE_TAXI_REPLY))
+        .map(|packet| packet.body.clone())
         .collect()
 }
 
-fn status(code: u8) -> String {
-    format!("{code:02x}000000")
+fn status(code: u8) -> Vec<u8> {
+    vec![code, 0, 0, 0]
 }
 
 fn money(shard: &Standalone) -> u32 {
@@ -630,7 +619,7 @@ fn the_taxi_menu_marks_every_known_node_including_one_without_a_direct_path() {
         "DELETE FROM game_taxi_node WHERE id = {SOURCE_NODE}"
     ));
     let master: u64 = master.parse().unwrap();
-    let menus: Vec<String> = received_packets(&mut wire, TAXI_QUERY_AVAILABLE_NODES, master)
+    let menus: Vec<Vec<u8>> = received_packets(&mut wire, TAXI_QUERY_AVAILABLE_NODES, master)
         .into_iter()
         .filter(|(opcode, _)| *opcode == SHOW_TAXI_NODES)
         .map(|(_, body)| body)
@@ -640,10 +629,7 @@ fn the_taxi_menu_marks_every_known_node_including_one_without_a_direct_path() {
     };
     assert!(menu.starts_with(&taxi_menu(master, HOP_CLIENT_NODES[0])));
     // The mask follows the 16-byte header; client node n is bit n - 1.
-    let mask: Vec<u8> = (32..menu.len())
-        .step_by(2)
-        .map(|at| u8::from_str_radix(&menu[at..at + 2], 16).unwrap())
-        .collect();
+    let mask = &menu[16..];
     for client_node in HOP_CLIENT_NODES {
         let bit = (client_node - 1) as usize;
         assert_ne!(
@@ -1098,37 +1084,31 @@ fn received_packets(
     wire: &mut support::ReducerConnection,
     opcode: u32,
     master: u64,
-) -> Vec<(u64, String)> {
+) -> Vec<(u16, Vec<u8>)> {
     wire.call(
         "native_world_receive",
         json!([opcode, master.to_le_bytes().to_vec()]),
     )
     .unwrap()
-    .inserts("game_native_packet")
+    .packets()
     .iter()
-    .map(|row| serde_json::from_str::<serde_json::Value>(row.get()).unwrap())
-    .map(|packet| {
-        (
-            packet[2][1].as_u64().unwrap(),
-            packet[3].as_str().unwrap().to_owned(),
-        )
-    })
+    .map(|packet| (packet.opcode.unwrap(), packet.body.clone()))
     .collect()
 }
 
-fn taxi_menu_prefixes(wire: &mut support::ReducerConnection, master: u64) -> Vec<String> {
+fn taxi_menu_prefixes(wire: &mut support::ReducerConnection, master: u64) -> Vec<Vec<u8>> {
     received_packets(wire, TAXI_QUERY_AVAILABLE_NODES, master)
         .into_iter()
         .filter(|(opcode, _)| *opcode == SHOW_TAXI_NODES)
-        .map(|(_, body)| body[..32].to_owned())
+        .map(|(_, body)| body[..16].to_vec())
         .collect()
 }
 
-fn taxi_menu(master: u64, source_client_node: u32) -> String {
+fn taxi_menu(master: u64, source_client_node: u32) -> Vec<u8> {
     let mut prefix = 1u32.to_le_bytes().to_vec();
     prefix.extend(master.to_le_bytes());
     prefix.extend(source_client_node.to_le_bytes());
-    prefix.iter().map(|byte| format!("{byte:02x}")).collect()
+    prefix
 }
 
 fn learned(shard: &Standalone, node: u32) -> bool {
@@ -1266,7 +1246,7 @@ fn a_first_visit_teaches_the_node_and_announces_the_path_without_a_menu() {
     assert_eq!(
         received_packets(&mut wire, TAXI_QUERY_AVAILABLE_NODES, master),
         [
-            (NEW_TAXI_PATH, String::new()),
+            (NEW_TAXI_PATH, Vec::new()),
             (TAXI_NODE_STATUS, known_node_status(master)),
         ]
     );
@@ -1324,7 +1304,7 @@ fn a_first_gossip_hello_teaches_the_node_and_opens_no_gossip_menu() {
     assert_eq!(
         received_packets(&mut wire, GOSSIP_HELLO, master),
         [
-            (NEW_TAXI_PATH, String::new()),
+            (NEW_TAXI_PATH, Vec::new()),
             (TAXI_NODE_STATUS, known_node_status(master)),
         ]
     );
