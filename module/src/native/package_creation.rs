@@ -397,11 +397,17 @@ pub fn package_creation_answered(
     call: PackageCreationDelivery,
     result: Result<(), String>,
 ) {
-    let Err(error) = result else {
-        return;
-    };
     let message: Message =
         bsatn::from_slice(&call.message).expect("stored Package creation message decodes");
+    let error = match result {
+        Ok(()) => {
+            if let Message::Created(created) = message {
+                settle_created(ctx, &created);
+            }
+            return;
+        }
+        Err(error) => error,
+    };
     // IDC reports a durable receiver refusal here; Transport Loss keeps the call pending.
     match message {
         Message::Request(request) => {
@@ -437,16 +443,100 @@ pub fn package_creation_answered(
     }
 }
 
+// The Character already exists here, so Created settles when the Realm accepts or is removed.
+fn settle_created(ctx: &ReducerContext, created: &Created) {
+    let result = CharacterCreation::Created(created.profile.guid);
+    if let Err(error) = finish(ctx, created.request.id, result) {
+        spacetimedb::log::warn!(
+            "Package Character request {} not settled: {error}",
+            created.request.id
+        );
+    }
+}
+
+// A refused Complete is the only message that settles the World after a refused Grant.
+fn drops_without_peer(message: &Message) -> bool {
+    !matches!(
+        message,
+        Message::Complete(Completion {
+            result: CharacterCreation::Refused(_),
+            ..
+        })
+    )
+}
+
 #[reducer]
 pub fn retry_package_creation(ctx: &ReducerContext, retry: PackageCreationRetry) {
-    if crate::time::scheduler_authorized(ctx) {
-        ctx.db
-            .game_package_creation_delivery()
-            .insert(PackageCreationDelivery {
-                id: 0,
-                ..retry.call
-            });
+    if !crate::time::scheduler_authorized(ctx) {
+        return;
     }
+    let message: Message =
+        bsatn::from_slice(&retry.call.message).expect("stored Package creation message decodes");
+    if drops_without_peer(&message) && !crate::peer::is_peer(ctx, retry.call.database.0) {
+        spacetimedb::log::warn!(
+            "Package creation result retry to {} dropped: not a Peer Shard",
+            retry.call.database.0
+        );
+        if let Message::Created(created) = message {
+            settle_created(ctx, &created);
+        }
+        return;
+    }
+    ctx.db
+        .game_package_creation_delivery()
+        .insert(PackageCreationDelivery {
+            id: 0,
+            ..retry.call
+        });
+}
+
+/// Queues a creation result for a new Pending request to `target`, which a test makes refuse it.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_queue_package_creation_result(
+    ctx: &ReducerContext,
+    target: Identity,
+    guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let (package, name, race, class) = ("fixture.creation".to_string(), "Retry".to_string(), 1, 1);
+    let row = ctx
+        .db
+        .game_package_character_request()
+        .insert(PackageCharacterRequest {
+            id: 0,
+            package_name: package.clone(),
+            name: name.clone(),
+            race,
+            class,
+            result: CharacterCreation::Pending,
+        });
+    let profile = directory::CharacterProfile {
+        guid,
+        account_id: 0,
+        world: ctx.database_identity(),
+        revision: directory::revision(ctx),
+        name: name.clone(),
+        race,
+        class,
+        gender: 0,
+        deleted: false,
+    };
+    send(
+        ctx,
+        target,
+        Message::Created(Created {
+            request: Request {
+                id: row.id,
+                package,
+                name,
+                race,
+                class,
+            },
+            profile,
+        }),
+    );
+    Ok(())
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -473,4 +563,43 @@ pub fn debug_take_package_character_result(
     let result = crate::package::take_character_result(ctx, &package, request_id)?;
     spacetimedb::log::info!("Package Character request {request_id}: {result:?}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn complete(result: CharacterCreation) -> Message {
+        Message::Complete(Completion { id: 1, result })
+    }
+
+    #[test]
+    fn only_a_refused_completion_keeps_retrying_toward_a_removed_shard() {
+        let request = Request {
+            id: 1,
+            package: "fixture".into(),
+            name: "Retry".into(),
+            race: 1,
+            class: 1,
+        };
+        let created = Message::Created(Created {
+            request,
+            profile: directory::CharacterProfile {
+                guid: 9,
+                account_id: 2,
+                world: Identity::ZERO,
+                revision: 1,
+                name: "Retry".into(),
+                race: 1,
+                class: 1,
+                gender: 0,
+                deleted: false,
+            },
+        });
+        assert!(drops_without_peer(&created));
+        assert!(drops_without_peer(&complete(CharacterCreation::Created(9))));
+        assert!(!drops_without_peer(&complete(CharacterCreation::Refused(
+            "Package is stopped on the World Shard".into()
+        ))));
+    }
 }

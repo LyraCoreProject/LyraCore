@@ -266,8 +266,9 @@ All three tables start empty. See the
 `game_package_character_request` retains each World's Package request and its Pending, Created or
 Refused result until the Package consumes it. It has at most 64 rows per Package per Shard.
 `game_package_creation_delivery` carries request, grant, created-profile and completion messages.
-`game_package_creation_retry` retains refused result deliveries for retry; transport failures stay
-in the outbox. All three tables are private and new. Request ids are local to the requesting World.
+`game_package_creation_retry` retains refused result deliveries for retry while the target is a
+Peer Shard; a refused Grant's Refusal retries regardless. Transport failures stay in the outbox.
+All three tables are private and new. Request ids are local to the requesting World.
 A grant failure rolls back World creation before its Realm callback releases the pending name.
 Package Account allocation on the Realm includes both directory entries and pending reservations.
 See [the Package contract](package-api.md#asynchronous-package-character-creation) for result
