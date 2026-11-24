@@ -1124,6 +1124,27 @@ impl Scenario {
         entitled && rout_window_open(now_ms, self.rout_ends_ms(guid)) && !self.cc(guid).2
     }
 
+    // As production `eventai_on_evade`: a creature within the leash of home arrives at once.
+    fn begin_return(&mut self, guid: u64) {
+        let home = self.homes.borrow().get(&guid).map(|home| home.at);
+        let at = self.creatures.borrow().get(&guid).map(|c| c.at);
+        let (Some(home), Some(at)) = (home, at) else {
+            return;
+        };
+        if (home.x - at.x).powi(2) + (home.y - at.y).powi(2) > RETURN_LEASH_SQ {
+            self.eventai_returning_home.borrow_mut().insert(guid);
+            return;
+        }
+        eventai::evaluate(
+            self,
+            EventAiRequest::Edge(EventContext::empty(
+                EventKind::OnReachedHome,
+                guid,
+                self.now_micros.get() / 1_000,
+            )),
+        );
+    }
+
     fn place(
         &self,
         guid: u64,
@@ -1947,10 +1968,8 @@ impl EventAiWorld for Scenario {
                     .borrow_mut()
                     .retain(|fight| fight.attacker != creature_guid);
                 self.engaged.borrow_mut().remove(&creature_guid);
-                if !evade.combat_only && self.homes.borrow().contains_key(&creature_guid) {
-                    self.eventai_returning_home
-                        .borrow_mut()
-                        .insert(creature_guid);
+                if !evade.combat_only {
+                    self.begin_return(creature_guid);
                 }
                 return true;
             }
@@ -2943,9 +2962,7 @@ impl ThreatSink for Scenario {
         self.standings.borrow().get(&target) != Some(&SourceStanding::Unattackable)
     }
     fn evade(&mut self, creature: u64) {
-        if self.homes.borrow().contains_key(&creature) {
-            self.eventai_returning_home.borrow_mut().insert(creature);
-        }
+        self.begin_return(creature);
         self.fights.borrow_mut().retain(|f| f.attacker != creature);
         self.threat
             .borrow_mut()
@@ -3975,6 +3992,22 @@ fn a_creature_that_evades_ignores_the_player_it_fled_from_until_it_is_home() {
     assert!(
         w.eventai_returning_home.borrow().contains(&WOLF) && w.pulls().is_empty(),
         "the wolf returns home and does not pull the player beside it"
+    );
+}
+
+#[test]
+fn a_creature_that_evades_at_its_home_is_not_left_returning() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .awake([WOLF])
+        .home(WOLF, p(0.0, 0.0, 10.0), false)
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 1000)
+        .standing(HUNTER, SourceStanding::Unattackable);
+    run_once(&mut w);
+
+    assert!(
+        w.victims().is_empty() && w.eventai_returning_home.borrow().is_empty(),
+        "a creature that is already home has nothing to return to"
     );
 }
 

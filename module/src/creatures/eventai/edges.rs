@@ -236,14 +236,17 @@ pub(crate) fn eventai_on_evade(ctx: &ReducerContext, creature_guid: u64) {
         (creature.target_guid != 0).then_some(creature.target_guid),
         false,
     );
-    let has_home = ctx
-        .db
-        .game_creature_spawn()
-        .guid()
-        .find(creature_guid)
-        .is_some();
+    let Some(home) = ctx.db.game_creature_spawn().guid().find(creature_guid) else {
+        return;
+    };
+    let (dx, dy) = (home.x - creature.x, home.y - creature.y);
+    // vmangos HomeMovementGenerator arrives next update; within the leash this arrives at once.
+    if dx * dx + dy * dy <= crate::creatures::ai::RETURN_LEASH_SQ {
+        fire_reached_home(ctx, creature_guid);
+        return;
+    }
     let returning = ctx.db.game_creature_ai_returning_home();
-    if has_home && returning.creature_guid().find(creature_guid).is_none() {
+    if returning.creature_guid().find(creature_guid).is_none() {
         returning.insert(CreatureAiReturningHome { creature_guid });
     }
 }
@@ -257,6 +260,10 @@ pub(crate) fn eventai_on_reached_home(ctx: &ReducerContext, creature_guid: u64) 
     {
         return;
     }
+    fire_reached_home(ctx, creature_guid);
+}
+
+fn fire_reached_home(ctx: &ReducerContext, creature_guid: u64) {
     evaluate_edge(
         ctx,
         EventKind::OnReachedHome,
