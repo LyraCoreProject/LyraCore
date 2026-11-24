@@ -614,6 +614,7 @@ impl EngageSink for CtxWorld<'_> {
                     && !c.dead
                     && c.owner_guid == 0
                     && melee.attacker_guid().find(c.guid).is_none()
+                    && !eventai::movement::returning_home(self.ctx, c.guid)
             })
             .map(|c| Sensor {
                 guid: c.guid,

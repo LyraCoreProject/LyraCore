@@ -2570,6 +2570,7 @@ impl EngageSink for Scenario {
             .iter()
             .filter_map(|guid| creatures.get(guid).map(|c| (*guid, c)))
             .filter(|(guid, _)| !fights.iter().any(|f| f.attacker == *guid))
+            .filter(|(guid, _)| !self.eventai_returning_home.borrow().contains(guid))
             .map(|(guid, c)| Sensor {
                 guid,
                 at: c.at,
@@ -3899,6 +3900,19 @@ fn a_godmoded_or_dead_player_draws_no_aggro() {
             "a player who cannot die is never pulled"
         );
     }
+}
+
+#[test]
+fn a_creature_returning_home_notices_nobody() {
+    let mut w = wolf_and_player(p(5.0, 0.0, 10.0)).home(WOLF, p(-30.0, 0.0, 10.0), false);
+    w.eventai_returning_home.borrow_mut().insert(WOLF);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.pulls().is_empty(),
+        "an evading creature ignores players until it reaches its home point"
+    );
 }
 
 #[test]

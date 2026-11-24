@@ -352,6 +352,28 @@ fn a_creature_whose_only_source_turns_friendly_evades_with_full_health() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_returning_home_takes_no_threat() {
+    let fight = Fight::start("threat-returning-home", 3.0);
+    fight.shard.insert_row(
+        "game_creature_ai_returning_home",
+        &[("creature_guid", &fight.wolf)],
+    );
+    fight.set_threat(CHALLENGER, 1000);
+
+    assert!(
+        fight
+            .shard
+            .query_rows(&format!(
+                "SELECT id FROM game_threat WHERE creature_guid = {} AND source_guid = {CHALLENGER}",
+                fight.wolf
+            ))
+            .is_empty(),
+        "an evading creature ignores damage until it reaches its home point"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_creature_turns_from_a_victim_immune_to_its_melee_to_a_free_source() {
     let fight = Fight::start("threat-priority-physical-immunity", 3.0);
     fight.set_threat(CHALLENGER, 100);

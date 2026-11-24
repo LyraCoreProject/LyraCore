@@ -4,6 +4,7 @@ use crate::{game_faction_template, game_pending_cast, game_spell, game_world_ent
 
 use super::*;
 use crate::actor::{ActionRefusal, ActionRefusalKind};
+use crate::creatures::eventai::movement::returning_home;
 use crate::creatures::tick::game_creature_spline;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
 
@@ -59,7 +60,7 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     let Some(mut e) = entities.guid().find(guid) else {
         return;
     };
-    if e.dead || e.is_flying() {
+    if e.dead || e.is_flying() || returning_home(ctx, guid) {
         return;
     }
     let now_ms = crate::time::now_ms(ctx);
@@ -162,9 +163,11 @@ fn join_fight(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) {
     );
 }
 
+// A creature returning home is in vmangos `IsInEvadeMode`: it neither notices nor fights.
 fn start_creature_attack(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) -> bool {
-    if crate::creatures::react_state(ctx, creature_guid)
-        == crate::creatures::CreatureReactState::Passive
+    if returning_home(ctx, creature_guid)
+        || crate::creatures::react_state(ctx, creature_guid)
+            == crate::creatures::CreatureReactState::Passive
     {
         return false;
     }
@@ -224,6 +227,7 @@ pub(crate) fn engage_passive_creature(ctx: &ReducerContext, creature_guid: u64, 
         || source.dead
         || creature.map_id != source.map_id
         || creature.instance_id != source.instance_id
+        || returning_home(ctx, creature_guid)
         || !may_harm(ctx, &source, &creature)
     {
         return;

@@ -13,6 +13,7 @@ pub struct TauntLock {
     pub forced_until_ms: u64,
 }
 
+use crate::creatures::eventai::movement::returning_home;
 use crate::spell::tables::{game_spell_threat, SpellThreat};
 use crate::spell::SCHOOL_MASK_PHYSICAL;
 use crate::{game_melee_attack, game_spell, game_spell_effect, game_world_entity, WorldEntity};
@@ -126,6 +127,9 @@ pub(crate) fn threat_after_percent_scale(current: i64, percent: i32) -> i64 {
 }
 
 pub(crate) fn add_threat(ctx: &ReducerContext, creature_guid: u64, source_guid: u64, amount: i64) {
+    if returning_home(ctx, creature_guid) {
+        return;
+    }
     if amount < 0 {
         log::warn!("add_threat: negative amount {amount} for creature {creature_guid} source {source_guid} (upstream bug?)");
         return;
@@ -359,6 +363,9 @@ pub(crate) fn party_threat_facts(
 }
 
 pub(crate) fn taunt(ctx: &ReducerContext, creature_guid: u64, source_guid: u64) {
+    if returning_home(ctx, creature_guid) {
+        return;
+    }
     let max = ctx
         .db
         .game_threat()
@@ -585,6 +592,9 @@ pub fn debug_add_threat(
 }
 
 pub(crate) fn engage_without_threat(ctx: &ReducerContext, creature_guid: u64, source_guid: u64) {
+    if returning_home(ctx, creature_guid) {
+        return;
+    }
     let table = ctx.db.game_threat();
     if !table
         .by_creature()
