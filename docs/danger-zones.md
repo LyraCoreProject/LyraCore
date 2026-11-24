@@ -291,15 +291,19 @@ destination starts a new timer.
 
 ### Hunter pet presence migration
 
-`game_hunter_pet` gains the END-appended columns `presence` and `display_id` with default 0. Every
-existing pet reads as dismissed with its template's model: a pet out at the publish stays out, but
-returns at its owner's next login only after Call Pet. Spell effect 109 now imports as
-`E_REVIVE_PET` (code 0x2E); older spell rows keep Revive Pet as `E_SCRIPTED`, so a dead pet stays
-dead until a reimport of the `spell` family. No repair is needed.
+`game_hunter_pet` gains the END-appended columns `presence`, `display_id`, `saved_health` and
+`saved_power`, each with default 0. Every existing row reads as dismissed with no saved model or
+vitals. A pet live at the publish stays live; after its owner logs out it does not return at the
+next login, and Call Pet brings it back. Its first build stores the model it gets.
+
+Spell effect 109 (Revive Pet) now imports as `E_REVIVE_PET` (code 0x2E). Reimport the `spell`
+family straight after the publish. Until then Revive Pet stays a scripted no-op, so a tame replaces
+a dead pet instead of being refused; it is refused again once the reimport writes `E_REVIVE_PET`
+for spell 982.
 
 `game_hunter_pet` crosses in the Transfer blob under the `game_hunter_pet@presence-1` tag. An
-untagged row from an older source arrives dismissed with its template's model. An older destination
-refuses the tag before it applies any row, so update both Shards before moving Hunters.
+untagged row from an older source arrives dismissed with no saved model or vitals. An older
+destination refuses the tag before it applies any row, so update both Shards before moving Hunters.
 
 ### DynamicObject AOI migration
 

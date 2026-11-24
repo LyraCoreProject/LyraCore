@@ -1213,6 +1213,8 @@ impl Arrival<'_> {
             name_timestamp: 0,
             presence: crate::creatures::hunter_pet::PetPresence::Dismissed.code(),
             display_id: 0,
+            saved_health: 0,
+            saved_power: 0,
         });
         Ok(())
     }

@@ -1,13 +1,12 @@
 schema_version = 1
 id = "hunter_pet_lifecycle"
 system = "pets"
-scope = "A Hunter tames an eligible creature and commands, dismisses or abandons the pet with the corresponding ownership and persistence rules. Taming is refused while the Hunter has a pet, live or durable. Call Pet brings a dismissed pet back with its level, loyalty, happiness, name and spells, and refuses with a tame failure when the Hunter has no pet or the pet is dead. Revive Pet brings a dead pet back beside the Hunter with the effect's percent of its maximum health, and is refused with a tame failure when the Hunter has a pet out, has no pet or the pet is not dead. A pet that was out at logout is out again at world entry. Stables and action-bar editing are separate Behaviors."
+scope = "A Hunter tames an eligible creature and commands, dismisses or abandons the pet with the corresponding ownership and persistence rules. Taming is refused while the Hunter has a pet, live or durable. Abandon removes the live Hunter pet and its durable identity for good, so the Hunter can tame again. Call Pet brings a dismissed pet back with its level, loyalty, happiness, name, model, spells and the health and power it left with, and refuses with a tame failure when the Hunter has no pet or the pet is dead. Revive Pet brings a dead pet back beside the Hunter with the effect's percent of its maximum health, and is refused with a tame failure when the Hunter has a pet out, has no pet or the pet is not dead. A pet that was out at logout is out again at world entry. Stables and action-bar editing are separate Behaviors."
 requests = ["0x012E", "0x0175", "0x0176"]
 replies = ["0x0173", "0x0179"]
 dependencies = []
 required_rungs = ["durable_module", "tier1", "conformance_audit", "real_client"]
 scenarios = []
-deliberate_deviations = []
 prerequisites = ["A tameable creature, its template and the Hunter's spells are present.", "Revive Pet (982) is imported by an importer that maps SPELL_EFFECT_SUMMON_DEAD_PET to E_REVIVE_PET; older imports hold it as E_SCRIPTED until the spell family is reimported."]
 
 [vmangos]
@@ -18,11 +17,17 @@ symbol = "WorldSession::HandlePetAction"
 [real_client]
 status = "unverified"
 
+[[deliberate_deviations]]
+id = "tame_replaces_dead_pet_before_revive_import"
+result = "While the Realm's spell data has no E_REVIVE_PET effect for Revive Pet (982), a tame replaces a dead durable pet instead of refusing with PETTAME_ANOTHERSUMMONACTIVE."
+reason = "Before a spell reimport Revive Pet is a scripted no-op, so refusing would leave a Hunter whose pet died with no pet and no way to get one."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp"
+
 [[known_gaps]]
-description = "The Module returns an unavailable response for CMSG_PET_ABANDON."
-path = "module/src/native/unavailable.rs"
-symbol = "responses"
-evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
+description = "A dead pet cannot be abandoned: LyraCore removes the pet at death, while vmangos keeps its corpse, which CMSG_PET_ABANDON can delete until it decays."
+path = "module/src/creatures/hunter_pet.rs"
+symbol = "abandon_pet"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/PetHandler.cpp WorldSession::HandlePetAbandon"
 
 [[known_gaps]]
 description = "Dismiss Pet (2641, SPELL_EFFECT_DISMISS_PET) imports as a scripted effect that does nothing; only the pet bar's dismiss command dismisses the pet."
@@ -48,12 +53,6 @@ path = "module/src/creatures/hunter_pet.rs"
 symbol = "validate_tame"
 evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp Spell::CheckTamingSpell"
 
-[[known_gaps]]
-description = "The durable pet keeps no health or mana, so Call Pet and world entry build it at full health; vmangos restores the saved health and mana."
-path = "module/src/creatures/hunter_pet.rs"
-symbol = "HunterPet"
-evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Pet.cpp Pet::LoadPetFromDB"
-
 [[tests]]
 path = "module/tests/hunter_pet.rs"
 function = "tame_and_dismiss_keep_one_durable_identity_and_a_second_tame_is_refused"
@@ -78,6 +77,21 @@ rung = "durable_module"
 path = "module/tests/hunter_pet.rs"
 function = "revive_pet_returns_only_a_dead_pet_and_it_stays_out_across_login"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/hunter_pet.rs"
+function = "a_tame_replaces_a_dead_pet_only_while_revive_pet_is_not_imported"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/hunter_pet.rs"
+function = "abandon_removes_the_hunter_pet_for_good_and_a_new_tame_succeeds"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/creatures/hunter_pet.rs"
+function = "a_built_pet_gets_its_saved_vitals_clamped_or_full_health_when_none_were_saved"
+rung = "unit"
 
 [[tests]]
 path = "module/src/creatures/hunter_pet.rs"

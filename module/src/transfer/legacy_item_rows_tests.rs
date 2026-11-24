@@ -513,7 +513,7 @@ fn game_hunter_pet_has_the_shape_its_transfer_tag_names() {
         .map(|(_, tag)| *tag);
     let previous = field_names::<LegacyHunterPet>();
     let mut current = previous.clone();
-    current.extend(["presence", "display_id"].map(String::from));
+    current.extend(["presence", "display_id", "saved_health", "saved_power"].map(String::from));
     assert_eq!(
         (tag, field_names::<HunterPet>()),
         (Some("game_hunter_pet@presence-1"), current),
@@ -556,7 +556,15 @@ fn a_hunter_pet_that_travelled_before_presence_arrives_dismissed_with_its_identi
         ),
         (73, "Fang", 12, 3, 700_000, 99)
     );
-    assert_eq!((row.presence, row.display_id), (0, 0));
+    assert_eq!(
+        (
+            row.presence,
+            row.display_id,
+            row.saved_health,
+            row.saved_power
+        ),
+        (0, 0, 0, 0)
+    );
 }
 
 #[test]

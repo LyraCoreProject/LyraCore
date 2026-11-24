@@ -398,7 +398,7 @@ struct LegacyHunterPet {
     name_timestamp: u32,
 }
 
-// A pet that travelled before `presence` arrives dismissed, as the column default reads it.
+// A pet that travelled before `presence` arrives dismissed with no model or vitals saved.
 impl From<LegacyHunterPet> for HunterPet {
     fn from(row: LegacyHunterPet) -> Self {
         Self {
@@ -419,6 +419,8 @@ impl From<LegacyHunterPet> for HunterPet {
             name_timestamp: row.name_timestamp,
             presence: 0,
             display_id: 0,
+            saved_health: 0,
+            saved_power: 0,
         }
     }
 }

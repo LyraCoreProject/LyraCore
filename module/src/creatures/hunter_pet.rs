@@ -1,13 +1,16 @@
+use lyracore_shared::spell::taxonomy::E_REVIVE_PET;
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
 use super::catalogue::game_creature_display;
+use super::pet::game_pet_command;
 use crate::{
-    game_creature_family, game_creature_spawn, game_creature_template, game_world_entity,
-    CreatureTemplate, WorldEntity,
+    game_creature_family, game_creature_spawn, game_creature_template, game_spell_effect,
+    game_world_entity, CreatureTemplate, WorldEntity,
 };
 
 const CLASS_HUNTER: u8 = 3;
 const INITIAL_HAPPINESS: u32 = 166_500;
+const REVIVE_PET_SPELL: u32 = 982;
 // In 1.12, Rename Pet eligibility uses UNIT_FIELD_FLAGS rather than UNIT_FIELD_BYTES_2.
 const UNIT_FLAG_PET_RENAME: u32 = 0x0000_0010;
 
@@ -53,9 +56,15 @@ pub struct HunterPet {
     /// A `PetPresence` code; rows written before it read as dismissed.
     #[default(0u8)]
     pub presence: u8,
-    /// The model the tamed creature wore; zero takes the template's model.
+    /// The pet's model; zero until the first build stores the model it chose.
     #[default(0u32)]
     pub display_id: u32,
+    /// Health when the living pet last left the world; zero builds it at full health.
+    #[default(0u32)]
+    pub saved_health: u32,
+    /// Power saved with `saved_health`; read only when `saved_health` is not zero.
+    #[default(0u32)]
+    pub saved_power: u32,
 }
 
 /// vmangos: an out pet holds the current slot, a dismissed one no slot, a dead one zero health.
@@ -316,10 +325,36 @@ fn eligibility(
         target_level: target.map_or(0, |row| row.level),
         owner_level: caster.level,
         has_pet: super::pet_of(ctx, caster.guid).is_some()
-            || hunter_pet_for_owner(ctx, caster.guid).is_some(),
+            || hunter_pet_for_owner(ctx, caster.guid).is_some_and(|pet| !tame_replaces(ctx, &pet)),
         family_present: family.is_some(),
         family_tameable: family.is_some_and(|row| row.pet_talent_type >= 0),
     }
+}
+
+// Until a `spell` reimport writes Revive Pet as E_REVIVE_PET, a tame replaces a dead pet.
+fn tame_replaces(ctx: &ReducerContext, pet: &HunterPet) -> bool {
+    PetPresence::of(pet.presence) == PetPresence::Dead && !revive_pet_imported(ctx)
+}
+
+// One primary-key read: effect 0 of Revive Pet has id `982 << 2`.
+fn revive_pet_imported(ctx: &ReducerContext) -> bool {
+    ctx.db
+        .game_spell_effect()
+        .id()
+        .find(u64::from(REVIVE_PET_SPELL) << 2)
+        .is_some_and(|effect| effect.kind == E_REVIVE_PET)
+}
+
+/// Deletes the owner's Hunter pet identity and every row keyed to it; the live pet must be gone.
+fn forget_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
+    if let Some(pet) = hunter_pet_for_owner(ctx, owner_guid) {
+        ctx.db.game_hunter_pet().pet_id().delete(pet.pet_id);
+        ctx.db
+            .game_hunter_pet_protocol()
+            .pet_id()
+            .delete(pet.pet_id);
+    }
+    ctx.db.game_pet_command().owner_guid().delete(owner_guid);
 }
 
 pub(crate) fn validate_tame(
@@ -371,6 +406,8 @@ pub(crate) fn tame_creature(
         ctx.db.game_creature_spawn().guid().update(spawn);
     }
 
+    // Validation leaves a durable pet only when the tame replaces it.
+    forget_hunter_pet(ctx, caster.guid);
     let now = crate::time::now(ctx);
     let hunter_pet = ctx.db.game_hunter_pet().insert(HunterPet {
         pet_id: caster.guid,
@@ -390,6 +427,8 @@ pub(crate) fn tame_creature(
         name_timestamp: unix_seconds(now),
         presence: PetPresence::Out.code(),
         display_id: target.display_id,
+        saved_health: 0,
+        saved_power: 0,
     });
     materialize(
         ctx,
@@ -397,7 +436,7 @@ pub(crate) fn tame_creature(
         &template,
         hunter_pet,
         [target.x, target.y, target.z, target.orientation],
-        FULL_HEALTH_PERCENT,
+        None,
     );
     Ok(())
 }
@@ -452,7 +491,7 @@ fn owner_pets(ctx: &ReducerContext, owner_guid: u64) -> (bool, Option<HunterPet>
     )
 }
 
-/// Call Pet: builds the owner's durable Hunter pet beside it, or tells the owner why it cannot.
+/// Call Pet: builds the owner's durable Hunter pet beside it; a dead or missing pet is reported.
 pub(crate) fn call_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     let Some(owner) = ctx
         .db
@@ -469,7 +508,7 @@ pub(crate) fn call_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
         durable.as_ref().map(|pet| PetPresence::of(pet.presence)),
     );
     match (checked, durable) {
-        (Ok(()), Some(pet)) => materialize_beside(ctx, &owner, pet, FULL_HEALTH_PERCENT),
+        (Ok(()), Some(pet)) => materialize_beside(ctx, &owner, pet, None),
         // vmangos refuses this in `Spell::CheckCast` with a cast result, not a tame failure.
         (Err(PetSummonRefusal::AnotherPetOut), _) => {}
         (Err(refusal), _) => crate::native::pet::pet_refused(ctx, owner_guid, refusal),
@@ -507,7 +546,8 @@ pub(crate) fn revive_hunter_pet(ctx: &ReducerContext, owner_guid: u64, health_pe
         return;
     }
     if let Some(pet) = hunter_pet_for_owner(ctx, owner_guid) {
-        materialize_beside(ctx, &owner, pet, health_percent.max(0) as u32);
+        let percent = health_percent.max(0) as u32;
+        materialize_beside(ctx, &owner, pet, Some(percent));
     }
 }
 
@@ -528,7 +568,7 @@ pub(crate) fn restore_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     if let Some(pet) = hunter_pet_for_owner(ctx, owner_guid)
         .filter(|pet| PetPresence::of(pet.presence) == PetPresence::Out)
     {
-        materialize_beside(ctx, &owner, pet, FULL_HEALTH_PERCENT);
+        materialize_beside(ctx, &owner, pet, None);
     }
 }
 
@@ -541,13 +581,56 @@ pub(super) fn dismiss_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     }
 }
 
-const FULL_HEALTH_PERCENT: u32 = 100;
+/// Saves a living Hunter pet's health and power before its live entity is removed.
+pub(super) fn save_hunter_pet_vitals(ctx: &ReducerContext, live: &WorldEntity) {
+    if live.dead {
+        return;
+    }
+    let PetKind::Hunter { pet_id } = live_pet_kind(ctx, live.guid) else {
+        return;
+    };
+    if let Some(mut pet) = ctx.db.game_hunter_pet().pet_id().find(pet_id) {
+        pet.saved_health = live.health;
+        pet.saved_power = live.power;
+        ctx.db.game_hunter_pet().pet_id().update(pet);
+    }
+}
+
+/// CMSG_PET_ABANDON: a Hunter pet is removed for good; a summoned pet is only dismissed.
+pub(crate) fn abandon_pet(
+    ctx: &ReducerContext,
+    owner_guid: u64,
+    pet_guid: u64,
+) -> Result<(), crate::Refusal> {
+    let live = super::pet_of(ctx, owner_guid)
+        .filter(|pet| pet.guid == pet_guid)
+        .ok_or_else(|| format!("pet abandon: {owner_guid} has no live pet {pet_guid}"))?;
+    match live_pet_kind(ctx, live.guid) {
+        PetKind::Hunter { .. } => delete_live_hunter_pet(ctx, owner_guid),
+        PetKind::Summoned => super::despawn_pets(ctx, owner_guid),
+    }
+    Ok(())
+}
+
+/// A summon with a creature entry deletes the live Hunter pet it replaces (PET_SAVE_AS_DELETED).
+pub(super) fn delete_replaced_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
+    if super::pet_of(ctx, owner_guid)
+        .is_some_and(|live| matches!(live_pet_kind(ctx, live.guid), PetKind::Hunter { .. }))
+    {
+        delete_live_hunter_pet(ctx, owner_guid);
+    }
+}
+
+fn delete_live_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
+    super::despawn_pets_on_departure(ctx, owner_guid);
+    forget_hunter_pet(ctx, owner_guid);
+}
 
 fn materialize_beside(
     ctx: &ReducerContext,
     owner: &WorldEntity,
     pet: HunterPet,
-    health_percent: u32,
+    revive_percent: Option<u32>,
 ) {
     let Some(template) = ctx
         .db
@@ -564,17 +647,17 @@ fn materialize_beside(
         return;
     };
     let at = [owner.x, owner.y, owner.z, owner.orientation];
-    materialize(ctx, owner, &template, pet, at, health_percent);
+    materialize(ctx, owner, &template, pet, at, revive_percent);
 }
 
-/// The one builder of a live Hunter pet: tame, Call Pet and world entry all pass through it.
+/// Builds every live Hunter pet; Revive Pet passes `revive_percent`, others restore saved vitals.
 fn materialize(
     ctx: &ReducerContext,
     owner: &WorldEntity,
     template: &CreatureTemplate,
     mut pet: HunterPet,
     at: [f32; 4],
-    health_percent: u32,
+    revive_percent: Option<u32>,
 ) {
     let mut live = super::pet::build_pet_entity(ctx, owner, template, at);
     live.level = pet.level;
@@ -583,8 +666,14 @@ fn materialize(
     {
         live.max_health = max_health;
     }
-    live.health = health_at_percent(live.max_health, health_percent);
-    if pet.display_id != 0 {
+    (live.health, live.power) = restored_vitals(
+        (live.max_health, live.max_power, live.power),
+        (pet.saved_health, pet.saved_power),
+        revive_percent,
+    );
+    if pet.display_id == 0 {
+        pet.display_id = live.display_id;
+    } else {
         live.display_id = pet.display_id;
         live.native_display_id = pet.display_id;
         live.scale_x = model_scale(ctx, template, pet.display_id);
@@ -597,12 +686,30 @@ fn materialize(
     // Care pauses while the pet is away; vmangos saves no happiness loss for a dismissed pet.
     pet.care_updated_at = crate::time::now(ctx);
     pet.presence = PetPresence::Out.code();
+    pet.saved_health = 0;
+    pet.saved_power = 0;
     let pet = ctx.db.game_hunter_pet().pet_id().update(pet);
     publish_hunter_pet_protocol(ctx, &pet, pet_guid);
 }
 
+/// Health and power for a built pet from `(max_health, max_power, built_power)` and the saved pair.
+fn restored_vitals(
+    (max_health, max_power, built_power): (u32, u32, u32),
+    (saved_health, saved_power): (u32, u32),
+    revive_percent: Option<u32>,
+) -> (u32, u32) {
+    match revive_percent {
+        Some(percent) => (health_at_percent(max_health, percent), built_power),
+        None if saved_health == 0 => (max_health.max(1), built_power),
+        None => (
+            saved_health.clamp(1, max_health.max(1)),
+            saved_power.min(max_power),
+        ),
+    }
+}
+
 fn health_at_percent(max_health: u32, percent: u32) -> u32 {
-    ((u64::from(max_health) * u64::from(percent.min(FULL_HEALTH_PERCENT))) / 100)
+    ((u64::from(max_health) * u64::from(percent.min(100))) / 100)
         .clamp(1, u64::from(max_health.max(1))) as u32
 }
 
@@ -825,6 +932,16 @@ mod tests {
         assert_eq!(health_at_percent(1_000, 250), 1_000);
         assert_eq!(health_at_percent(5, 15), 1);
         assert_eq!(health_at_percent(1_000, 0), 1);
+    }
+
+    #[test]
+    fn a_built_pet_gets_its_saved_vitals_clamped_or_full_health_when_none_were_saved() {
+        let built = (1_000, 100, 100);
+        assert_eq!(restored_vitals(built, (0, 0), None), (1_000, 100));
+        assert_eq!(restored_vitals(built, (420, 30), None), (420, 30));
+        assert_eq!(restored_vitals(built, (5_000, 900), None), (1_000, 100));
+        assert_eq!(restored_vitals(built, (420, 30), Some(15)), (150, 100));
+        assert_eq!(restored_vitals((0, 0, 0), (0, 0), None), (1, 0));
     }
 
     #[test]

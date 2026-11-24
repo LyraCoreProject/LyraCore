@@ -192,6 +192,7 @@ pub(crate) fn despawn_pets(ctx: &ReducerContext, owner_guid: u64) {
 /// Removes the live pet at logout or Transfer; a Hunter pet that was out returns at world entry.
 pub(crate) fn despawn_pets_on_departure(ctx: &ReducerContext, owner_guid: u64) {
     if let Some(pet) = pet_of(ctx, owner_guid) {
+        super::hunter_pet::save_hunter_pet_vitals(ctx, &pet);
         super::despawn_creature_entity(ctx, pet.guid);
     }
     ctx.db.game_pet_command().owner_guid().delete(owner_guid);
@@ -230,6 +231,7 @@ pub(crate) fn summon_pet(ctx: &ReducerContext, caster_guid: u64, entry: u32) {
     let Some(caster) = entities.guid().find(caster_guid) else {
         return;
     };
+    super::hunter_pet::delete_replaced_hunter_pet(ctx, caster_guid);
     despawn_pets(ctx, caster_guid);
     match ctx.db.game_creature_template().entry().find(entry) {
         Some(tmpl) => {
@@ -296,9 +298,8 @@ pub(crate) fn despawn_pet(ctx: &ReducerContext, pet_guid: u64) {
         spacetimedb::log::info!("despawn_pet: refusing malformed pet row guid={pet_guid}");
         return;
     }
-    let owner_guid = pet.owner_guid;
-    super::despawn_creature_entity(ctx, pet.guid);
-    ctx.db.game_pet_command().owner_guid().delete(owner_guid);
+    // The cycle removes a pet whose owner died or left; vmangos saves it out of slot then.
+    despawn_pets(ctx, pet.owner_guid);
 }
 
 #[cfg(test)]

@@ -52,10 +52,10 @@ pub(crate) use hostile_summon::{check_hostile_summon, summon_hostile};
 pub use hunter_pet::PetKind;
 
 pub(crate) use hunter_pet::{
-    call_hunter_pet, clear_live_pet_kind, hunter_pet_for_owner, live_pet_kind, mark_summoned_pet,
-    publish_hunter_pet_protocol, rename_hunter_pet, restore_hunter_pet, revive_hunter_pet,
-    tame_creature, validate_revive_pet, validate_tame, PetRenameRefusal, PetSummonRefusal,
-    PET_NAME_INVALID,
+    abandon_pet, call_hunter_pet, clear_live_pet_kind, hunter_pet_for_owner, live_pet_kind,
+    mark_summoned_pet, publish_hunter_pet_protocol, rename_hunter_pet, restore_hunter_pet,
+    revive_hunter_pet, tame_creature, validate_revive_pet, validate_tame, PetRenameRefusal,
+    PetSummonRefusal, PET_NAME_INVALID,
 };
 
 pub(crate) use pet::{

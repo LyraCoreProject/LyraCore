@@ -30,6 +30,12 @@ pub(super) fn rename(
     })
 }
 
+// vmangos `WorldSession::HandlePetAbandon` sends no reply; the removal clears the pet bar.
+pub(super) fn abandon(ctx: &ReducerContext, owner: u64, pet: u64) -> Result<(), Rollback> {
+    super::actor(ctx, owner)?;
+    Ok(crate::creatures::abandon_pet(ctx, owner, pet)?)
+}
+
 fn tame_failure(refusal: PetSummonRefusal) -> ServerOpcodeMessage {
     let reason = match refusal {
         PetSummonRefusal::AnotherPetOut => PetTameFailureReason::AnotherSummonActive,

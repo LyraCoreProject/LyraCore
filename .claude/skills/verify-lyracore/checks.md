@@ -289,6 +289,8 @@ Setup. A Hunter who knows Tame Beast and has no pet, next to a tameable boar at 
 - Call Pet with no pet, or after the pet dies, shows the client's tame-failure text and brings none.
 - After the pet dies, Revive Pet brings it back beside the Hunter at 15% health with its bar. With
   the pet out, dismissed or absent, Revive Pet shows the tame-failure text and costs no mana.
+- Wound the pet, dismiss it and cast Call Pet: it returns with the same health, not full.
+- Abandon Pet from the pet portrait: the pet and its bar disappear, and Tame Beast works again.
 
 ## Mount
 
