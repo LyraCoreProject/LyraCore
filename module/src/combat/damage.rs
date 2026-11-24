@@ -16,6 +16,7 @@ pub struct CreatureLethalDamageFloor {
 #[derive(Clone, Copy)]
 pub(crate) struct FinalDamage {
     pub amount: u32,
+    pub absorbed: u32,
     lethal_prevented: bool,
 }
 
@@ -82,6 +83,7 @@ pub(crate) fn final_damage(
     let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) else {
         return FinalDamage {
             amount: post_mitigation,
+            absorbed: 0,
             lethal_prevented: false,
         };
     };
@@ -118,6 +120,7 @@ fn lethal_floor_amount(health: u32, post_mitigation: u32, protected: bool) -> Fi
         } else {
             post_mitigation
         },
+        absorbed: 0,
         lethal_prevented,
     }
 }
@@ -368,7 +371,14 @@ pub(crate) fn apply_hit(
                 target_guid,
             );
         }
-        crate::spell::proc::run_proc_pass(ctx, attacker_guid, target_guid, &hit, true);
+        crate::spell::proc::run_proc_pass(
+            ctx,
+            attacker_guid,
+            target_guid,
+            &hit,
+            true,
+            damage.absorbed,
+        );
         return HitOutcome {
             killed: false,
             duel_completed: true,
@@ -387,7 +397,14 @@ pub(crate) fn apply_hit(
                 reward_source,
             );
         }
-        crate::spell::proc::run_proc_pass(ctx, attacker_guid, target_guid, &hit, false);
+        crate::spell::proc::run_proc_pass(
+            ctx,
+            attacker_guid,
+            target_guid,
+            &hit,
+            false,
+            damage.absorbed,
+        );
         return HitOutcome {
             killed: true,
             duel_completed: false,
@@ -432,7 +449,7 @@ pub(crate) fn apply_hit(
             crate::spell::arm_spell_retaliation(ctx, attacker_guid, target_guid);
         }
     }
-    crate::spell::proc::run_proc_pass(ctx, attacker_guid, target_guid, &hit, true);
+    crate::spell::proc::run_proc_pass(ctx, attacker_guid, target_guid, &hit, true, damage.absorbed);
     HitOutcome {
         killed: false,
         duel_completed: false,
@@ -443,7 +460,6 @@ pub(crate) fn apply_hit(
 #[derive(Clone, Copy)]
 pub(crate) struct ResolvedDamage {
     damage: FinalDamage,
-    absorbed: u32,
 }
 
 impl ResolvedDamage {
@@ -452,7 +468,7 @@ impl ResolvedDamage {
     }
 
     pub(crate) fn absorbed(self) -> u32 {
-        self.absorbed
+        self.damage.absorbed
     }
 
     pub(crate) fn land(
@@ -474,12 +490,14 @@ pub(crate) fn resolve_damage(
 ) -> ResolvedDamage {
     let (dealt, absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
     ResolvedDamage {
-        damage: final_damage(ctx, target_guid, dealt),
-        absorbed,
+        damage: FinalDamage {
+            absorbed,
+            ..final_damage(ctx, target_guid, dealt)
+        },
     }
 }
 
-/// A projectile's damage, folded and absorbed at launch; godmode and the floor apply at impact.
+/// A projectile's damage, folded at launch; godmode applies at launch and impact, the floor at impact.
 #[derive(Clone, Copy)]
 pub(crate) struct FrozenDamage {
     amount: u32,
@@ -511,8 +529,10 @@ impl FrozenDamage {
 
     pub(crate) fn resolve(self, ctx: &ReducerContext, target: &WorldEntity) -> ResolvedDamage {
         ResolvedDamage {
-            damage: final_damage(ctx, target.guid, landed_amount(Some(target), self.amount)),
-            absorbed: self.absorbed,
+            damage: FinalDamage {
+                absorbed: self.absorbed,
+                ..final_damage(ctx, target.guid, landed_amount(Some(target), self.amount))
+            },
         }
     }
 }
@@ -545,12 +565,12 @@ pub(crate) fn deal_damage(
     }
     let resolved = resolve_damage(ctx, attacker_guid, target_guid, basis.max(0) as u32);
     if resolved.amount() == 0 && !resolved.damage.lethal_prevented {
-        return (0, resolved.absorbed);
+        return (0, resolved.absorbed());
     }
     // Enter combat before applying a lethal hit, which may remove the target.
     enter_combat(ctx, attacker_guid);
     resolved.land(ctx, attacker_guid, target_guid, hit);
-    (resolved.amount(), resolved.absorbed)
+    (resolved.amount(), resolved.absorbed())
 }
 
 // vmangos SPELL_ATTR_EX3_TREAT_AS_PERIODIC, kept in `attributes_ex_3`.

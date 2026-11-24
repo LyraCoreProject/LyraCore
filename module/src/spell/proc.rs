@@ -123,17 +123,15 @@ impl ProcHit {
     }
 }
 
-fn landed_result(hit: &Hit) -> u32 {
+fn landed_result(hit: &Hit, absorbed: u32) -> u32 {
     let quality = if hit.crit {
         PROC_EX_CRITICAL_HIT
     } else {
         PROC_EX_NORMAL_HIT
     };
-    if hit.blocked {
-        quality | PROC_EX_BLOCK
-    } else {
-        quality
-    }
+    let block = if hit.blocked { PROC_EX_BLOCK } else { 0 };
+    let absorb = if absorbed > 0 { PROC_EX_ABSORB } else { 0 };
+    quality | block | absorb
 }
 
 // vmangos Unit::CalculateMeleeDamage raises PROC_EX_BLOCK alone for a full block; a ranged hit is
@@ -150,12 +148,9 @@ fn unlanded_result(outcome: AttackOutcome, hit: &Hit, dealt: u32, absorbed: u32)
         | AttackOutcome::Glancing
         | AttackOutcome::Crushing
         | AttackOutcome::Block => match (dealt, absorbed, hit.blocked) {
-            (0, _, _) if hit.source == HitSource::Ranged => {
-                let absorb = if absorbed > 0 { PROC_EX_ABSORB } else { 0 };
-                Some(landed_result(hit) | absorb)
-            }
+            (0, _, _) if hit.source == HitSource::Ranged => Some(landed_result(hit, absorbed)),
             (0, 0, true) => Some(PROC_EX_BLOCK),
-            (0, 1.., _) => Some(landed_result(hit) | PROC_EX_ABSORB),
+            (0, 1.., _) => Some(landed_result(hit, absorbed)),
             _ => None,
         },
     }
@@ -336,13 +331,14 @@ pub(crate) fn run_proc_pass(
     target_guid: u64,
     hit: &Hit,
     target_survived: bool,
+    absorbed: u32,
 ) {
     fire_aura_procs(
         ctx,
         attacker_guid,
         target_guid,
         hit,
-        (landed_result(hit), true),
+        (landed_result(hit, absorbed), true),
         target_survived,
     );
 }
@@ -1454,6 +1450,26 @@ mod tests {
             "a full block raises the block alone"
         );
         assert_eq!(unlanded_result(AttackOutcome::Normal, &swing, 5, 40), None);
+    }
+
+    #[test]
+    fn a_landed_hit_an_absorb_took_part_of_adds_the_absorb() {
+        let swing = Hit::weapon(HitSource::MainHand, false);
+        let crit = Hit::spell(HitSource::Spell, 133, true);
+        let blocked = swing.with_block(10);
+        assert_eq!(landed_result(&swing, 0), PROC_EX_NORMAL_HIT);
+        assert_eq!(
+            landed_result(&swing, 7),
+            PROC_EX_NORMAL_HIT | PROC_EX_ABSORB
+        );
+        assert_eq!(
+            landed_result(&crit, 7),
+            PROC_EX_CRITICAL_HIT | PROC_EX_ABSORB
+        );
+        assert_eq!(
+            landed_result(&blocked, 7),
+            PROC_EX_NORMAL_HIT | PROC_EX_BLOCK | PROC_EX_ABSORB
+        );
     }
 
     #[test]
