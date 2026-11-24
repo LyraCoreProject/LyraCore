@@ -1897,7 +1897,9 @@ fn remove_from_log(ctx: &ReducerContext, mut cq: CharacterQuest) -> Result<(), c
 mod fixtures;
 pub(crate) mod share;
 
-pub(crate) use share::apply_push_quest_to_party;
+pub(crate) use share::{
+    apply_push_quest_to_party, sweep_delete_game_quest_share, sweep_transfer_game_quest_share,
+};
 
 #[cfg(test)]
 mod tests {

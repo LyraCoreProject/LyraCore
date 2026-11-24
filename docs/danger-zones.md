@@ -859,9 +859,10 @@ before moving active World Sessions.
 
 The private `game_quest_share` table is new and starts empty, so no Quest Share survives the
 publish. A Character takes a quest from a Group member only through that member's Quest Share, and
-a push needs the source shareable bit in `game_quest_flags`. A Realm whose quests were imported
-before `game_quest_flags` existed, and quests authored without a flags row, share nothing until
-quests are reimported or their flags rows are written.
+a push needs the source shareable bit in `game_quest_flags`. #977 added that table on 2026-11-04,
+and only the world importer fills it. Sharing works only on a Realm whose quests were imported on
+or after that date; a quest with no flags row, such as an authored or Package quest, is not
+shareable.
 
 ### Quest reward migration
 

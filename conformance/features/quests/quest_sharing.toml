@@ -13,6 +13,7 @@ tests = [
     { path = "crates/lyracore-shared/src/quest.rs", function = "only_the_sharable_flag_makes_a_quest_shareable", rung = "unit" },
     { path = "module/src/quest/share.rs", function = "a_quest_share_admits_only_its_sharer_and_quest", rung = "unit" },
     { path = "module/tests/quest_share.rs", function = "a_party_member_takes_only_the_quest_shared_with_them", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "a_refused_accept_ends_the_share", rung = "durable_module" },
     { path = "module/tests/quest_share.rs", function = "a_quest_without_the_shareable_flag_cannot_be_pushed", rung = "durable_module" },
     { path = "module/tests/quest_share.rs", function = "a_decline_or_the_sharer_leaving_the_group_ends_the_share", rung = "durable_module" },
 ]
@@ -27,14 +28,14 @@ status = "unverified"
 
 [[deliberate_deviations]]
 id = "accept_needs_quest_share"
-result = "An accept that names a party member as the giver needs that member's Quest Share of the quest. The Reference Server accepts a shareable quest from any player on the map who is on it, with or without a share."
+result = "An accept that names a party member as the giver needs that member's Quest Share of the quest. The Reference Server accepts a shareable quest from any online, alive player anywhere in the world who is on it, with or without a share, and checks no Group."
 reason = "The stock client names a player giver only for quest details a share sent, so the share is required to stop a crafted accept taking quests from another Character's log."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/QuestHandler.cpp"
 
 [[deliberate_deviations]]
 id = "unshareable_push_refused"
-result = "A push of a quest without QUEST_FLAGS_SHARABLE is refused and no member hears of it. The Reference Server sends the quest details and refuses only the accept."
-reason = "The stock client offers no share button for such a quest, and refusing the push keeps a Quest Share that no accept can use out of the receiver's way."
+result = "A push of a quest without QUEST_FLAGS_SHARABLE is refused and nobody hears anything. The Reference Server tells the sharer SHARING_QUEST for every member and shows each member the quest details; the later accept then fails CanShareQuest."
+reason = "The stock client disables the share button for such a quest, and refusing the push keeps a Quest Share that no accept can use out of the receiver's way."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/QuestHandler.cpp"
 
 [[known_gaps]]
@@ -44,7 +45,7 @@ symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
 
 [[known_gaps]]
-description = "A push reaches members within the group XP range of 74 yards; the Reference Server's QUEST_SHARE_DISTANCE is 14 yards. An accept out of range is refused without telling the sharer QUEST_PARTY_MSG_TOO_FAR, and push results follow LyraCore's own check order for a member on, finished with or unable to take the quest."
+description = "A push reaches members within the group XP range of 74 yards; the Reference Server's QUEST_SHARE_DISTANCE is 14 yards. Push results follow LyraCore's own check order for a member on, finished with or unable to take the quest. A member on another World Shard hears nothing; the Reference Server answers TOO_FAR for an online member on another map."
 path = "module/src/quest/share.rs"
 symbol = "evaluate_share"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.h; src/game/Handlers/QuestHandler.cpp WorldSession::HandlePushQuestToParty"

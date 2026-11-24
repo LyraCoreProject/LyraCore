@@ -10,6 +10,7 @@ pub mod share_result {
     pub const SHARING_QUEST: u8 = 0;
     pub const CANT_TAKE_QUEST: u8 = 1;
     pub const ACCEPT_QUEST: u8 = 2;
+    pub const DECLINE_QUEST: u8 = 3;
     pub const TOO_FAR: u8 = 4;
     pub const BUSY: u8 = 5;
     pub const LOG_FULL: u8 = 6;
@@ -26,7 +27,6 @@ pub fn shareable(quest_flags: u32) -> bool {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ShareCandidate {
-    pub online: bool,
     pub same_partition: bool,
     pub in_range: bool,
     pub on_quest: bool,
@@ -37,7 +37,7 @@ pub struct ShareCandidate {
 }
 
 pub fn share_result(member: ShareCandidate) -> u8 {
-    if !member.online || !member.same_partition || !member.in_range {
+    if !member.same_partition || !member.in_range {
         share_result::TOO_FAR
     } else if member.on_quest {
         share_result::HAVE_QUEST
@@ -120,7 +120,6 @@ mod tests {
     #[test]
     fn share_result_priority_order() {
         let ready = ShareCandidate {
-            online: true,
             same_partition: true,
             in_range: true,
             gates_ok: true,
@@ -137,7 +136,7 @@ mod tests {
         assert_eq!(share_result(ready), share_result::SHARING_QUEST);
         for far in [
             ShareCandidate {
-                online: false,
+                same_partition: false,
                 ..blocked
             },
             ShareCandidate {

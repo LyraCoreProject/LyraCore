@@ -52,8 +52,11 @@ pub(crate) fn apply_push_quest_to_party(
         if receiver_guid == sender_guid {
             continue;
         }
+        let Some(receiver) = ctx.db.game_world_entity().guid().find(receiver_guid) else {
+            continue;
+        };
         push_result(ctx, sender_guid, receiver_guid, share_result::SHARING_QUEST);
-        let result = evaluate_share(ctx, &sender_entity, &tmpl, receiver_guid);
+        let result = evaluate_share(ctx, &sender_entity, &tmpl, &receiver);
         if result != share_result::SHARING_QUEST {
             push_result(ctx, sender_guid, receiver_guid, result);
             continue;
@@ -80,32 +83,23 @@ fn evaluate_share(
     ctx: &ReducerContext,
     sender: &crate::WorldEntity,
     tmpl: &QuestTemplate,
-    member_guid: u64,
+    member: &crate::WorldEntity,
 ) -> u8 {
-    let member_entity = ctx.db.game_world_entity().guid().find(member_guid);
-    let (same_partition, in_range) = match &member_entity {
-        Some(e) => {
-            let (dx, dy, dz) = (e.x - sender.x, e.y - sender.y, e.z - sender.z);
-            (
-                e.map_id == sender.map_id && e.instance_id == sender.instance_id,
-                dx * dx + dy * dy + dz * dz <= PARTY_SHARE_RANGE_SQ,
-            )
-        }
-        None => (false, false),
-    };
-    let existing = character_quest_row(ctx, member_guid, tmpl.entry);
+    let existing = character_quest_row(ctx, member.guid, tmpl.entry);
     lyracore_shared::quest::share_result(ShareCandidate {
-        online: member_entity.is_some(),
-        same_partition,
-        in_range,
+        same_partition: member.map_id == sender.map_id && member.instance_id == sender.instance_id,
+        in_range: within_share_range(member, sender),
         on_quest: existing.as_ref().is_some_and(|q| q.is_active()),
         finished: existing.as_ref().is_some_and(|q| q.rewarded) && !tmpl.repeatable,
-        log_full: quest_slots_used(ctx, member_guid) >= MAX_QUEST_LOG_SIZE,
-        gates_ok: member_entity
-            .as_ref()
-            .is_some_and(|e| accept_gates(ctx, e, tmpl).is_ok()),
-        holds_quest_share: held_share(ctx, member_guid).is_some(),
+        log_full: quest_slots_used(ctx, member.guid) >= MAX_QUEST_LOG_SIZE,
+        gates_ok: accept_gates(ctx, member, tmpl).is_ok(),
+        holds_quest_share: held_share(ctx, member.guid).is_some(),
     })
+}
+
+fn within_share_range(a: &crate::WorldEntity, b: &crate::WorldEntity) -> bool {
+    let (dx, dy, dz) = (a.x - b.x, a.y - b.y, a.z - b.z);
+    dx * dx + dy * dy + dz * dz <= PARTY_SHARE_RANGE_SQ
 }
 
 /// vmangos `Player::CanShareQuest`: a shareable quest the sharer is on.
@@ -147,6 +141,29 @@ pub(super) fn settle_on_accept(ctx: &ReducerContext, receiver_guid: u64, quest_e
             share_result::ACCEPT_QUEST,
         );
     }
+}
+
+/// Ends a Quest Share after a refused accept, which writes nothing; true means the caller commits.
+pub(crate) fn end_after_refused_accept(
+    ctx: &ReducerContext,
+    receiver_guid: u64,
+    quest_entry: u32,
+) -> bool {
+    let Some(share) = take(ctx, receiver_guid) else {
+        return false;
+    };
+    let entity = |guid: u64| ctx.db.game_world_entity().guid().find(guid);
+    let apart = entity(receiver_guid)
+        .zip(entity(share.sharer_guid))
+        .is_some_and(|(receiver, sharer)| {
+            receiver.map_id != sharer.map_id
+                || receiver.instance_id != sharer.instance_id
+                || !within_share_range(&receiver, &sharer)
+        });
+    if share.quest_entry == quest_entry && apart {
+        push_result(ctx, share.sharer_guid, receiver_guid, share_result::TOO_FAR);
+    }
+    true
 }
 
 /// vmangos `WorldSession::HandleQuestPushResult`: relays the receiver's answer to its sharer.

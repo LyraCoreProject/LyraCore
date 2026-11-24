@@ -101,9 +101,10 @@ These stored bits do not implement the gameplay
 rules for every flag; the import Compatibility Manifest continues to report that gap.
 
 `game_quest_share` is a new private table holding each Character's Quest Share: the sharer and
-quest pushed to it. A row ends when the receiver accepts or declines and when either Character
-logs out, transfers or is removed from the Group; it stops counting once the two Characters are
-not in one Group. Only a quest whose `game_quest_flags` row has the shareable bit can be pushed
+quest pushed to it. A row ends when the receiver accepts any quest, fails to accept one, or
+declines, and when either Character logs out, transfers or is removed from the Group; it stops
+counting once the two Characters are not in one Group. A refused accept commits only the end of the
+row. Only a quest whose `game_quest_flags` row has the shareable bit can be pushed
 ([migration](danger-zones.md#quest-share-migration)).
 
 `game_quest_emote` is a new private companion table for the source quest emotes: the emote the

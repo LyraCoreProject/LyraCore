@@ -14,9 +14,6 @@ const SHARED: u32 = 5_096_200;
 const OTHER: u32 = SHARED + 1;
 const UNSHAREABLE: u32 = SHARED + 2;
 
-/// vmangos `QUEST_PARTY_MSG_DECLINE_QUEST`.
-const DECLINE_QUEST: u8 = 3;
-
 fn start(name: &str) -> Standalone {
     let mut realm = Standalone::start(name);
     realm.publish_module();
@@ -154,12 +151,14 @@ fn a_party_member_takes_only_the_quest_shared_with_them() {
         [(RECEIVER, SHARER, SHARED)],
         "a held share is not replaced"
     );
-    assert_refused(
-        &accept_from_sharer(&realm, OTHER),
-        "no party member shared that quest",
+    assert!(
+        accept_from_sharer(&realm, OTHER).status.success(),
+        "a refused accept that ends a share commits"
     );
     assert!(receiver_quests(&realm).is_empty());
+    assert!(quest_shares(&realm).is_empty());
 
+    assert!(push(&realm, SHARED).status.success());
     assert!(accept_from_sharer(&realm, SHARED).status.success());
     assert_eq!(receiver_quests(&realm), [SHARED]);
     assert!(quest_shares(&realm).is_empty());
@@ -169,8 +168,31 @@ fn a_party_member_takes_only_the_quest_shared_with_them() {
             share_result::SHARING_QUEST,
             share_result::SHARING_QUEST,
             share_result::BUSY,
+            share_result::SHARING_QUEST,
             share_result::ACCEPT_QUEST,
         ]
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_refused_accept_ends_the_share() {
+    let realm = start("quest-share-refused");
+    assert!(push(&realm, SHARED).status.success());
+    realm.assert_call("gw_abandon_quest", &[&session(SHARER), &SHARED.to_string()]);
+    assert!(accept_from_sharer(&realm, SHARED).status.success());
+    assert!(receiver_quests(&realm).is_empty());
+    assert!(quest_shares(&realm).is_empty());
+
+    realm.assert_call(
+        "debug_grant_quest",
+        &[&SHARER.to_string(), &SHARED.to_string()],
+    );
+    assert!(push(&realm, SHARED).status.success());
+    assert_eq!(quest_shares(&realm), [(RECEIVER, SHARER, SHARED)]);
+    assert_eq!(
+        push_results(&realm),
+        [share_result::SHARING_QUEST, share_result::SHARING_QUEST]
     );
 }
 
@@ -200,12 +222,15 @@ fn a_decline_or_the_sharer_leaving_the_group_ends_the_share() {
     assert!(push(&realm, SHARED).status.success());
     realm.assert_call(
         "debug_answer_quest_share",
-        &[&RECEIVER.to_string(), &DECLINE_QUEST.to_string()],
+        &[
+            &RECEIVER.to_string(),
+            &share_result::DECLINE_QUEST.to_string(),
+        ],
     );
     assert!(quest_shares(&realm).is_empty());
     assert_eq!(
         push_results(&realm),
-        [share_result::SHARING_QUEST, DECLINE_QUEST]
+        [share_result::SHARING_QUEST, share_result::DECLINE_QUEST]
     );
     assert_refused(
         &accept_from_sharer(&realm, SHARED),

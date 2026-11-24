@@ -365,8 +365,9 @@ _Avoid_: raid-only quest
 
 **Quest Share**:
 A shareable quest one Group member pushed to another, held by the receiver until it accepts or
-declines, or either Character leaves the world or the Group. A Character takes a quest from a Group
-member only through that member's Quest Share of it. Stored in `game_quest_share`.
+fails to accept any quest, declines, or either Character leaves the world or the Group. A Character
+takes a quest from a Group member only through that member's Quest Share of it. Stored in
+`game_quest_share`.
 _Avoid_: divider, quest push (for the held offer)
 
 **Subgroup**:
