@@ -587,8 +587,7 @@ pub(crate) fn loot_window_open(ctx: &ReducerContext, go_guid: u64) -> bool {
         .is_some()
 }
 
-/// Clears what a use left on an object about to respawn: Loot rows not under a live Loot Roll,
-/// purse, rolls and picked lock.
+/// Clears what a use left on an object about to respawn: its loot and its picked lock.
 pub(crate) fn clear_use_state(ctx: &ReducerContext, go_guid: u64) {
     crate::loot::reap_corpse_loot_family(ctx, go_guid);
     ctx.db.game_gameobject_unlocked().go_guid().delete(go_guid);
