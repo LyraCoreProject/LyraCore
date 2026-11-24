@@ -7,12 +7,10 @@ use lyracore_shared::group::RAID_MAX_MEMBERS;
 
 use crate::game_world_entity;
 
-use crate::game_corpse_loot_eligible;
+use crate::{game_corpse_loot_eligible, game_group};
 
 #[cfg(feature = "debug_reducers")]
-use crate::{
-    game_corpse_loot, game_creature_template, game_group, game_group_member, game_item_template,
-};
+use crate::{game_corpse_loot, game_creature_template, game_group_member, game_item_template};
 
 #[table(accessor = game_creature_quest_tap)]
 pub struct CreatureQuestTap {
@@ -143,12 +141,7 @@ pub(crate) fn death_entitlement(
         .game_creature_quest_tap()
         .creature_guid()
         .find(creature_guid)?;
-    let group_id = ctx
-        .db
-        .game_creature_loot_tag_group()
-        .creature_guid()
-        .find(creature_guid)
-        .map(|group| group.group_id);
+    let group_id = living_tag_group(ctx, creature_guid);
     let entities = ctx.db.game_world_entity();
     let recipients = ctx
         .db
@@ -156,7 +149,7 @@ pub(crate) fn death_entitlement(
         .by_creature()
         .filter(&creature_guid)
         .filter_map(|member| {
-            if !membership_is_current(ctx, group_id, tag.character_guid, member.character_guid) {
+            if !keeps_tag_rights(ctx, group_id, tag.character_guid, member.character_guid) {
                 return None;
             }
             let character = entities.guid().find(member.character_guid)?;
@@ -180,17 +173,28 @@ pub(crate) fn death_entitlement(
     })
 }
 
-fn membership_is_current(
+// The tag-time Group, or None once it has disbanded.
+fn living_tag_group(ctx: &ReducerContext, creature_guid: u64) -> Option<u64> {
+    ctx.db
+        .game_creature_loot_tag_group()
+        .creature_guid()
+        .find(creature_guid)
+        .map(|group| group.group_id)
+        .filter(|group_id| ctx.db.game_group().group_id().find(group_id).is_some())
+}
+
+// vmangos `Creature::IsTappedBy` and `Unit::Kill`: the tagger keeps credit after leaving a Group.
+fn keeps_tag_rights(
     ctx: &ReducerContext,
-    tag_group_id: Option<u64>,
+    living_group_id: Option<u64>,
     tagger_guid: u64,
     member_guid: u64,
 ) -> bool {
-    match tag_group_id {
-        Some(group_id) => crate::group::group_of(ctx, member_guid)
-            .is_some_and(|membership| membership.group_id == group_id),
-        None => member_guid == tagger_guid,
-    }
+    member_guid == tagger_guid
+        || living_group_id.is_some_and(|group_id| {
+            crate::group::group_of(ctx, member_guid)
+                .is_some_and(|membership| membership.group_id == group_id)
+        })
 }
 
 pub(crate) fn live_loot_tag_eligibility(
@@ -216,16 +220,11 @@ pub(crate) fn live_loot_tag_eligibility(
     if members.len() > RAID_MAX_MEMBERS {
         return LiveLootTagEligibility::ReadLimit;
     }
-    let group_id = ctx
-        .db
-        .game_creature_loot_tag_group()
-        .creature_guid()
-        .find(creature_guid)
-        .map(|group| group.group_id);
+    let group_id = living_tag_group(ctx, creature_guid);
     if members
         .iter()
         .any(|member| member.character_guid == character_guid)
-        && membership_is_current(ctx, group_id, tag.character_guid, character_guid)
+        && keeps_tag_rights(ctx, group_id, tag.character_guid, character_guid)
     {
         LiveLootTagEligibility::Available
     } else {
@@ -233,7 +232,7 @@ pub(crate) fn live_loot_tag_eligibility(
     }
 }
 
-// Rejoining must not restore rights from an earlier Loot Tag snapshot.
+// Rejoining must not restore rights from an earlier Loot Tag snapshot; the tagger keeps theirs.
 pub(crate) fn revoke_group_member(ctx: &ReducerContext, group_id: u64, character_guid: u64) {
     let tagged_creatures: Vec<u64> = ctx
         .db
@@ -244,6 +243,15 @@ pub(crate) fn revoke_group_member(ctx: &ReducerContext, group_id: u64, character
         .collect();
     let members = ctx.db.game_creature_quest_tap_member();
     for creature_guid in tagged_creatures {
+        let tagger_departs = ctx
+            .db
+            .game_creature_quest_tap()
+            .creature_guid()
+            .find(creature_guid)
+            .is_some_and(|tag| tag.character_guid == character_guid);
+        if tagger_departs {
+            continue;
+        }
         for member in members
             .by_creature()
             .filter(&creature_guid)
@@ -258,11 +266,35 @@ pub(crate) fn revoke_group_member(ctx: &ReducerContext, group_id: u64, character
     }
 }
 
+// vmangos loots to the living tagging Group: a tagger who left it gets rewards but no loot.
+fn loot_recipients(ctx: &ReducerContext, corpse_guid: u64, recipients: &[u64]) -> Vec<u64> {
+    let tagger_guid = ctx
+        .db
+        .game_creature_quest_tap()
+        .creature_guid()
+        .find(corpse_guid)
+        .map(|tag| tag.character_guid);
+    let tagger_left_living_group = tagger_guid
+        .zip(living_tag_group(ctx, corpse_guid))
+        .is_some_and(|(tagger, group_id)| {
+            crate::group::group_of(ctx, tagger).is_none_or(|member| member.group_id != group_id)
+        });
+    if !tagger_left_living_group || recipients.iter().all(|guid| Some(*guid) == tagger_guid) {
+        return recipients.to_vec();
+    }
+    recipients
+        .iter()
+        .copied()
+        .filter(|guid| Some(*guid) != tagger_guid)
+        .collect()
+}
+
 pub(crate) fn record_corpse_eligibility(
     ctx: &ReducerContext,
     corpse_guid: u64,
     recipients: &[u64],
 ) {
+    let recipients = loot_recipients(ctx, corpse_guid, recipients);
     let eligible = ctx.db.game_corpse_loot_eligible();
     for id in eligible
         .by_corpse()
@@ -371,6 +403,10 @@ const LOOT_TAG_FIXTURE_CHARACTER_D: u64 = 5_093_854;
 const LOOT_TAG_FIXTURE_CHARACTER_E: u64 = 5_093_855;
 #[cfg(feature = "debug_reducers")]
 const LOOT_TAG_FIXTURE_CHARACTER_F: u64 = 5_093_856;
+#[cfg(feature = "debug_reducers")]
+const LOOT_TAG_FIXTURE_DISBAND_GROUP: u64 = 5_093_860;
+#[cfg(feature = "debug_reducers")]
+const LOOT_TAG_FIXTURE_DEPARTURE_GROUP: u64 = 5_093_861;
 
 #[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
@@ -587,6 +623,14 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         LOOT_TAG_FIXTURE_CHARACTER_E,
         LiveLootTagEligibility::Foreign,
     )?;
+    expect_live_loot_tag_eligibility(
+        ctx,
+        departed_tagger,
+        LOOT_TAG_FIXTURE_CHARACTER_A,
+        LiveLootTagEligibility::Available,
+    )?;
+
+    verify_tagger_departures(ctx, &origin, base_x)?;
 
     let retained = fixture_creature_guid(7);
     insert_fixture_entity(ctx, &origin, retained, base_x, false, 0);
@@ -679,6 +723,181 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
 
     verify_corpse_loot_gates(ctx, &origin, base_x)?;
 
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+fn verify_tagger_departures(
+    ctx: &ReducerContext,
+    origin: &crate::CreatureTemplate,
+    x: f32,
+) -> Result<(), String> {
+    const A: u64 = LOOT_TAG_FIXTURE_CHARACTER_A;
+    const B: u64 = LOOT_TAG_FIXTURE_CHARACTER_B;
+    const E: u64 = LOOT_TAG_FIXTURE_CHARACTER_E;
+    use LiveLootTagEligibility::{Available, Foreign};
+
+    insert_fixture_group(ctx, LOOT_TAG_FIXTURE_DISBAND_GROUP, A, &[A, B]);
+    let disbanded = tagged_fixture_creature(ctx, origin, 15, x, A)?;
+    crate::group::remove_member(ctx, B, crate::group::Departure::Left);
+    expect_live_loot_tag_eligibility(ctx, disbanded, A, Available)?;
+    expect_live_loot_tag_eligibility(ctx, disbanded, B, Foreign)?;
+    expect_entitlement(ctx, disbanded, None, &[A])?;
+    kill_and_expect_rewards(ctx, disbanded, A, &[A], &[B], &[A])?;
+
+    insert_fixture_group(ctx, LOOT_TAG_FIXTURE_DEPARTURE_GROUP, A, &[A, B, E]);
+    let member_left = tagged_fixture_creature(ctx, origin, 16, x, A)?;
+    crate::group::remove_member(ctx, B, crate::group::Departure::Left);
+    expect_live_loot_tag_eligibility(ctx, member_left, A, Available)?;
+    expect_live_loot_tag_eligibility(ctx, member_left, E, Available)?;
+    expect_live_loot_tag_eligibility(ctx, member_left, B, Foreign)?;
+    expect_entitlement(
+        ctx,
+        member_left,
+        Some(LOOT_TAG_FIXTURE_DEPARTURE_GROUP),
+        &[A, E],
+    )?;
+    kill_and_expect_rewards(ctx, member_left, E, &[A, E], &[B], &[A, E])?;
+
+    insert_fixture_member(ctx, LOOT_TAG_FIXTURE_DEPARTURE_GROUP, B);
+    let tagger_left = tagged_fixture_creature(ctx, origin, 17, x, A)?;
+    crate::group::remove_member(ctx, A, crate::group::Departure::Left);
+    expect_live_loot_tag_eligibility(ctx, tagger_left, A, Available)?;
+    expect_live_loot_tag_eligibility(ctx, tagger_left, B, Available)?;
+    expect_live_loot_tag_eligibility(ctx, tagger_left, E, Available)?;
+    expect_entitlement(
+        ctx,
+        tagger_left,
+        Some(LOOT_TAG_FIXTURE_DEPARTURE_GROUP),
+        &[A, B, E],
+    )?;
+    kill_and_expect_rewards(ctx, tagger_left, B, &[A, B, E], &[], &[B, E])?;
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+fn insert_fixture_group(ctx: &ReducerContext, group_id: u64, leader_guid: u64, members: &[u64]) {
+    ctx.db.game_group().insert(crate::Group {
+        group_id,
+        leader_guid,
+        loot_method: crate::group::loot_method::FFA,
+        loot_threshold: 2,
+        rr_cursor: 0,
+        master_looter_guid: 0,
+        group_type: 0,
+    });
+    for character_guid in members {
+        insert_fixture_member(ctx, group_id, *character_guid);
+    }
+}
+
+#[cfg(feature = "debug_reducers")]
+fn insert_fixture_member(ctx: &ReducerContext, group_id: u64, character_guid: u64) {
+    ctx.db.game_group_member().insert(crate::GroupMember {
+        id: 0,
+        group_id,
+        character_guid,
+        owner_identity: spacetimedb::Identity::ZERO,
+        raid_slot: 0,
+    });
+}
+
+#[cfg(feature = "debug_reducers")]
+fn tagged_fixture_creature(
+    ctx: &ReducerContext,
+    origin: &crate::CreatureTemplate,
+    low: u32,
+    x: f32,
+    tagger_guid: u64,
+) -> Result<u64, String> {
+    let creature = fixture_creature_guid(low);
+    insert_fixture_entity(ctx, origin, creature, x, false, 0);
+    crate::threat::add_threat(ctx, creature, tagger_guid, 10);
+    expect_tagger(ctx, creature, tagger_guid)?;
+    Ok(creature)
+}
+
+#[cfg(feature = "debug_reducers")]
+fn expect_entitlement(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    group_id: Option<u64>,
+    recipients: &[u64],
+) -> Result<(), String> {
+    let creature = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(creature_guid)
+        .ok_or_else(|| format!("tagged creature {creature_guid} is missing"))?;
+    let entitlement = death_entitlement(
+        ctx,
+        creature_guid,
+        creature.x,
+        creature.y,
+        creature.map_id,
+        creature.instance_id,
+    )
+    .ok_or_else(|| format!("creature {creature_guid} lost its Loot Tag"))?;
+    if entitlement.group_id == group_id && entitlement.recipients == recipients {
+        Ok(())
+    } else {
+        Err(format!(
+            "creature {creature_guid} entitled {:?} of Group {:?}, expected {recipients:?} of Group {group_id:?}",
+            entitlement.recipients, entitlement.group_id
+        ))
+    }
+}
+
+#[cfg(feature = "debug_reducers")]
+fn kill_and_expect_rewards(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    killer_guid: u64,
+    rewarded: &[u64],
+    unrewarded: &[u64],
+    corpse_eligible: &[u64],
+) -> Result<(), String> {
+    // A level-up resets experience, so progress is level and experience together.
+    let progress = |guid: u64| {
+        ctx.db
+            .game_world_entity()
+            .guid()
+            .find(guid)
+            .map(|entity| (entity.level, entity.xp))
+            .ok_or_else(|| format!("Loot Tag fixture Character {guid} is missing"))
+    };
+    let before_rewarded: Vec<_> = rewarded
+        .iter()
+        .map(|guid| progress(*guid))
+        .collect::<Result<_, _>>()?;
+    let before_unrewarded: Vec<_> = unrewarded
+        .iter()
+        .map(|guid| progress(*guid))
+        .collect::<Result<_, _>>()?;
+    if !crate::combat::kill_creature(ctx, creature_guid, Some(killer_guid)) {
+        return Err(format!("fixture creature {creature_guid} did not die"));
+    }
+    for (guid, before) in rewarded.iter().zip(before_rewarded) {
+        if progress(*guid)? == before {
+            return Err(format!(
+                "Character {guid} got no experience from creature {creature_guid}"
+            ));
+        }
+    }
+    for (guid, before) in unrewarded.iter().zip(before_unrewarded) {
+        if progress(*guid)? != before {
+            return Err(format!(
+                "Character {guid} got experience from creature {creature_guid} without Loot Tag rights"
+            ));
+        }
+    }
+    if corpse_eligible_recipients(ctx, creature_guid) != corpse_eligible {
+        return Err(format!(
+            "creature {creature_guid} corpse eligibility was {:?}, expected {corpse_eligible:?}",
+            corpse_eligible_recipients(ctx, creature_guid)
+        ));
+    }
     Ok(())
 }
 
