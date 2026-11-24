@@ -328,7 +328,6 @@ enum MovePlan {
     AlreadyApplied,
 }
 
-/// Ok means the directory names `target` afterwards: the source then releases the Character.
 fn plan_move(
     entry: &CharacterDirectory,
     version: &CharacterDirectoryVersion,
@@ -352,6 +351,7 @@ fn plan_move(
     Ok(MovePlan::Apply)
 }
 
+/// Ok means the directory names `world` afterwards: the source then releases the Character.
 #[reducer]
 pub fn idc_native_transfer_moved(
     ctx: &ReducerContext,
@@ -430,8 +430,6 @@ pub fn retry_native_transfer_moved(
         .game_native_transfer_moved()
         .insert(NativeTransferMoved {
             id: 0,
-            // A fresh revision lets the retry pass a newer revision its source reported meanwhile.
-            revision: directory::revision(ctx),
             ..retry.call
         });
     Ok(())

@@ -39,7 +39,7 @@ outboxes and results resume on restart. A timeout alone never releases cross-Sha
 5. The Realm Shard accepts an owner change only from the current directory owner, with a newer
    revision and the same Account. It updates the directory and the matching away World Session's
    `world` together. A move that the directory already shows succeeds without change. It refuses
-   every other move, so the source keeps the target fenced and retries with a fresh revision.
+   every other move, so the source keeps the target fenced and retries the same move.
    Each World Shard observes the arriving revision and advances its directory clock, so a round
    trip remains ordered even across different wall clocks. A closed or replaced World Session is
    not restored by a late update.
