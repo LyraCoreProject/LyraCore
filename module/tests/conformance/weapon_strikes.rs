@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use anyhow::{ensure, Context, Result};
-use lyracore_test_support::{ReducerConnection, Standalone};
+use lyracore_test_support::{NativePacket, ReducerConnection, Standalone};
 use serde_json::json;
 use wire_client::compare::Difference;
 use wire_client::decode::{decode, Field, Packet};
@@ -35,11 +35,8 @@ fn cast(character: &mut Character) -> std::result::Result<(), String> {
         .map(|_| ())
 }
 
-fn own_packets(
-    character: &mut Character,
-    rows: &[Box<serde_json::value::RawValue>],
-) -> Result<Vec<Packet>> {
-    decoded(&character.delivery.route_rows(rows.to_vec())?)
+fn own_packets(character: &mut Character, rows: &[NativePacket]) -> Result<Vec<Packet>> {
+    decoded(&character.delivery.route_rows(rows)?)
 }
 
 fn decoded(routed: &[RoutedPacket]) -> Result<Vec<Packet>> {
@@ -53,9 +50,7 @@ fn decoded(routed: &[RoutedPacket]) -> Result<Vec<Packet>> {
         .collect()
 }
 
-fn advance_and_drain(
-    receiver: &mut ReducerConnection,
-) -> Result<Vec<Box<serde_json::value::RawValue>>> {
+fn advance_and_drain(receiver: &mut ReducerConnection) -> Result<Vec<NativePacket>> {
     receiver
         .call("debug_advance_roll_batch", json!([1]))
         .map_err(anyhow::Error::msg)?;
@@ -181,7 +176,7 @@ fn prepare(
     }
     let opening = advance_and_drain(&mut receiver)?;
     for character in &mut characters {
-        character.delivery.route_rows(opening.clone())?;
+        character.delivery.route_rows(&opening)?;
     }
     ready_casts(&mut receiver, &mut characters)?;
     verify_context(shard, shard_name, &characters, level_index)?;
@@ -385,7 +380,7 @@ fn cast_round(
     let rows = advance_and_drain(receiver)?;
     characters
         .iter_mut()
-        .map(|character| character.delivery.route_rows(rows.clone()))
+        .map(|character| character.delivery.route_rows(&rows))
         .collect()
 }
 
@@ -456,7 +451,7 @@ fn a_cast_weapon_strike_reaches_its_caster_as_one_go_that_names_its_outcome() ->
     }
     let forced = advance_and_drain(&mut receiver)?;
     for character in &mut characters {
-        character.delivery.route_rows(forced.clone())?;
+        character.delivery.route_rows(&forced)?;
     }
     let overpower = |guid: u64| -> Result<u64> {
         let rows = shard.query_database_rows(

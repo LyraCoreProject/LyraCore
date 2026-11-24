@@ -59,7 +59,7 @@ fn learning_a_taxi_node_is_idempotent_without_flight_or_packets() {
         let transaction = connection
             .call("debug_learn_taxi_node", json!([guid, 5090099]))
             .unwrap();
-        assert!(transaction.inserts("game_native_packet").is_empty());
+        assert!(transaction.packets().is_empty());
     }
     let known = shard.query_rows("SELECT * FROM game_character_taxi_node");
     assert_eq!(known.len(), 1);

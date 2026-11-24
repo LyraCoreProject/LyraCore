@@ -116,11 +116,11 @@ connection in `lyracore-test-support`. It uses SpacetimeDB 2.7.1's JSON protocol
 cannot submit reducer calls on its existing connection, and the SDK would require generated
 Module bindings. Each call returns its own subscribed inserts. The connection also buffers every
 subscribed `game_native_packet` insert across transactions, including scheduled reducers and other
-callers. `drain_packets` takes the received rows; `wait_for_packets` reads until a batch arrives or
-its timeout expires. Tier 1 must interpret the delivery audiences, including AOI instructions,
-to reconstruct each Character's packet stream.
+callers. `drain_packets` takes the received packets, decoded; `wait_for_packets` reads until a batch
+arrives or its timeout expires. Tier 1 reconstructs each Character's packet stream with the test
+support's `WorldSessionObserver`, which interprets the delivery audiences, including AOI instructions.
 
-Connection ids decode directly as `u128`; row text stays as raw JSON for typed decoding by callers.
+Connection ids decode directly as `u128`; other row text stays as raw JSON for typed decoding by callers.
 This avoids `serde_json`'s `arbitrary_precision` feature, which would change number representation
 and generic deserialization in other workspace crates through Cargo feature unification.
 

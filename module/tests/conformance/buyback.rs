@@ -3,7 +3,7 @@ use serde_json::json;
 
 use super::buy_in_slot::{delivered, money, request};
 use super::repair::price_the_blade;
-use super::{enter, fixture, Packet};
+use super::{enter, fixture};
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, SCENARIO_VENDOR_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
 
@@ -1011,11 +1011,10 @@ fn publish_repair_ends_legacy_world_sessions_before_buyback_resumes() {
         .call("debug_repair_after_publish", json!([]))
         .unwrap();
     assert!(
-        connection.drain_packets().iter().any(|row| {
-            let Packet(_, _, (tag, _), _, close_after, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            tag != 0 && close_after
-        }),
+        connection
+            .drain_packets()
+            .iter()
+            .any(|packet| packet.opcode.is_none() && packet.close_after),
         "legacy client must discard its synthetic objects and buyback fields on disconnect"
     );
     assert!(shard

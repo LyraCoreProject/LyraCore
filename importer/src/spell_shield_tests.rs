@@ -57,16 +57,8 @@ impl Character {
         self.connection
             .drain_packets()
             .into_iter()
-            .filter_map(|row| {
-                let row: serde_json::Value = serde_json::from_str(row.get()).unwrap();
-                (row[2][0] == 0 && row[2][1] == opcode).then(|| {
-                    let body = row[3].as_str().unwrap();
-                    (0..body.len())
-                        .step_by(2)
-                        .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
-                        .collect()
-                })
-            })
+            .filter(|packet| packet.opcode == Some(opcode))
+            .map(|packet| packet.body)
             .collect()
     }
 }

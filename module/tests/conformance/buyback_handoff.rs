@@ -481,10 +481,11 @@ fn repair_after_handoff_keeps_the_current_world_session() {
         c.destination.query_rows("SELECT * FROM game_buyback_state"),
         c.state
     );
-    assert!(c.connection.drain_packets().iter().all(|row| {
-        let Packet(_, _, _, _, close, _, _) = serde_json::from_str(row.get()).unwrap();
-        !close
-    }));
+    assert!(c
+        .connection
+        .drain_packets()
+        .iter()
+        .all(|packet| !packet.close_after));
 }
 
 #[test]

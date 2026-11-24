@@ -1,11 +1,11 @@
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, TEST_WOLF_ENTRY};
 use lyracore_shared::guid;
-use lyracore_test_support::{ReducerConnection, Standalone};
+use lyracore_test_support::{NativeAudience, ReducerConnection, Standalone};
 
 use serde_json::json;
 
 use super::buy_in_slot::request;
-use super::{enter, fixture, Packet};
+use super::{enter, fixture};
 
 const CMSG_LOOT: u32 = 0x15d;
 const CMSG_LOOT_MONEY: u32 = 0x15e;
@@ -143,14 +143,13 @@ impl Stage {
             .connection
             .drain_packets()
             .iter()
-            .filter_map(|row| {
-                let Packet(_, (audience, recipient), (tag, opcode), body, ..) =
-                    serde_json::from_str(row.get()).unwrap();
-                (audience == 0
-                    && tag == 0
-                    && serde_json::from_str::<u16>(opcode.get()).unwrap() == SMSG_LOOT_REMOVED
-                    && u8::from_str_radix(&body, 16) == Ok(slot))
-                .then(|| serde_json::from_str::<(u128,)>(recipient.get()).unwrap().0)
+            .filter_map(|packet| match packet.audience {
+                NativeAudience::Connection(connection)
+                    if packet.opcode == Some(SMSG_LOOT_REMOVED) && packet.body == [slot] =>
+                {
+                    Some(connection)
+                }
+                _ => None,
             })
             .collect();
         recipients.sort_unstable();

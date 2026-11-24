@@ -202,7 +202,7 @@ fn prepare(
         .map_err(anyhow::Error::msg)?;
     let opening = receiver.drain_packets();
     for character in &mut characters {
-        character.delivery.route_rows(opening.clone())?;
+        character.delivery.route_rows(&opening)?;
     }
     verify_context(
         shard,
@@ -353,7 +353,7 @@ fn collect(
         let mut blocked = None;
         for character in &mut characters {
             let mut observed = Vec::new();
-            for packet in character.delivery.route_rows(rows.clone())? {
+            for packet in character.delivery.route_rows(&rows)? {
                 if !matches!(packet.opcode, 0x130 | 0x131 | 0x132 | 0x250 | 0x14a) {
                     continue;
                 }

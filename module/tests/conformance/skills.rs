@@ -291,17 +291,11 @@ fn swing_hit_info(
     let packets = connection.drain_packets();
     let hits: Vec<_> = packets
         .into_iter()
-        .filter_map(|row| {
-            let super::Packet(_, _, (tag, opcode), body, _, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            if tag != 0 || serde_json::from_str::<u16>(opcode.get()).unwrap() != 0x14a {
+        .filter_map(|native| {
+            if native.opcode != Some(0x14a) {
                 return None;
             }
-            let body: Vec<_> = (0..body.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
-                .collect();
-            let packet = wire_client::decode::decode(0x14a, &body).unwrap();
+            let packet = wire_client::decode::decode(0x14a, &native.body).unwrap();
             if packet.fields.get("attacker") != Some(&Field::Guid(guid)) {
                 return None;
             }

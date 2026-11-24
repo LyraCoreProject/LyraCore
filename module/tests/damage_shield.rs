@@ -3,6 +3,7 @@ mod support;
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{A_DAMAGE_SHIELD, T_SELF};
+use lyracore_test_support::NativePacket;
 use serde_json::json;
 use std::time::{Duration, Instant};
 use support::{
@@ -20,7 +21,7 @@ const REFLECTED: u32 = 7;
 const OUT_OF_REACH_LEVEL: u32 = 60;
 const AVOIDED_SWINGS: usize = 2;
 const SWING_EVENTS: &str = "SELECT * FROM game_combat_event_live";
-const SMSG_SPELLORDAMAGE_IMMUNE: u64 = 0x263;
+const SMSG_SPELLORDAMAGE_IMMUNE: u16 = 0x263;
 const WOLF_SWING_ATTEMPTS: usize = 20;
 const PACKET_WAIT: Duration = Duration::from_secs(10);
 
@@ -111,21 +112,17 @@ fn a_creature_whose_template_is_immune_to_the_shields_school_takes_no_shield_dam
         WOLF_HEALTH,
         "the shield deals the immune wolf no damage"
     );
-    let immune = format!("{:016x}", PLAYER.swap_bytes()) + &format!("{:016x}", wolf.swap_bytes());
-    let reports_immunity = |row: &str| {
-        let packet: serde_json::Value = serde_json::from_str(row).unwrap();
-        packet[2][1] == SMSG_SPELLORDAMAGE_IMMUNE
-            && packet[3]
-                .as_str()
-                .is_some_and(|body| body.to_ascii_lowercase().starts_with(&immune))
+    let immune = [PLAYER.to_le_bytes(), wolf.to_le_bytes()].concat();
+    let reports_immunity = |packet: &NativePacket| {
+        packet.opcode == Some(SMSG_SPELLORDAMAGE_IMMUNE) && packet.body.starts_with(&immune)
     };
     let deadline = Instant::now() + PACKET_WAIT;
     let mut packets = wire.wait_for_packets(Duration::from_secs(1)).unwrap();
-    while !packets.iter().any(|row| reports_immunity(row.get())) && Instant::now() < deadline {
+    while !packets.iter().any(reports_immunity) && Instant::now() < deadline {
         packets.extend(wire.wait_for_packets(Duration::from_secs(1)).unwrap());
     }
     assert!(
-        packets.iter().any(|row| reports_immunity(row.get())),
+        packets.iter().any(reports_immunity),
         "the bearer reports the immunity with SMSG_SPELLORDAMAGE_IMMUNE"
     );
 }

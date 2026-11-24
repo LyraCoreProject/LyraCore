@@ -3,8 +3,8 @@ mod support;
 use lyracore_package_delta::fixture_ids::{SCENARIO_VENDOR_ENTRY, TEST_WOLF_ENTRY};
 use lyracore_shared::constants::{player_flags, unit_vis_flags};
 use lyracore_shared::spell::taxonomy::*;
-use serde::de::IgnoredAny;
-use serde_json::{json, value::RawValue};
+use lyracore_test_support::{NativeAudience, NativePacket};
+use serde_json::json;
 use support::{actor, number, ReducerConnection, Row, Standalone};
 use wire_client::decode::{self, Field};
 
@@ -275,8 +275,6 @@ fn bones_of_a_revived_character_disappear_after_an_hour() {
 }
 
 const SMSG_DESTROY_OBJECT: u16 = 0x00aa;
-const GRANT: u8 = 2;
-const REVOKE: u8 = 3;
 // UPDATETYPE_CREATE_OBJECT, and UPDATETYPE_CREATE_OBJECT2 for an object that just entered the map.
 const CREATE_OBJECT: u64 = 2;
 const CREATE_OBJECT2: u64 = 3;
@@ -290,17 +288,6 @@ enum CorpseSeen {
     Destroyed,
     Created { kind: u64, flags: u64 },
 }
-
-// Columns: id, audience, opcode, body, close_after, not_before_micros, authentication_complete.
-type NativePacketRow = (
-    u64,
-    (u8, Box<RawValue>),
-    (u8, Box<RawValue>),
-    String,
-    IgnoredAny,
-    IgnoredAny,
-    IgnoredAny,
-);
 
 /// Enters the world as a new human on its own Account; an Account holds one World Session.
 fn enter_viewer(shard: &Standalone, name: &str) -> (u64, ReducerConnection) {
@@ -343,28 +330,23 @@ fn enter_viewer(shard: &Standalone, name: &str) -> (u64, ReducerConnection) {
     (guid, connection)
 }
 
-fn corpse_seen(rows: &[Box<RawValue>], connection: u128) -> Vec<CorpseSeen> {
+fn corpse_seen(packets: &[NativePacket], connection: u128) -> Vec<CorpseSeen> {
     let corpse: u64 = CORPSE.parse().unwrap();
-    let mut rows: Vec<NativePacketRow> = rows
-        .iter()
-        .map(|row| serde_json::from_str(row.get()).unwrap())
-        .collect();
-    rows.sort_by_key(|(id, ..)| *id);
-    rows.into_iter()
-        .filter_map(|(_, (audience, recipient), (option, opcode), body, ..)| {
-            if !matches!(audience, GRANT | REVOKE) || option != 0 {
+    let mut packets = packets.to_vec();
+    packets.sort_by_key(|packet| packet.id);
+    packets
+        .into_iter()
+        .filter_map(|packet| {
+            let (NativeAudience::Grant(recipient) | NativeAudience::Revoke(recipient)) =
+                packet.audience
+            else {
+                return None;
+            };
+            let opcode = packet.opcode?;
+            if recipient.connection != connection || recipient.entity_guid != corpse {
                 return None;
             }
-            let ((to,), _, subject): ((u128,), u8, u64) =
-                serde_json::from_str(recipient.get()).unwrap();
-            if to != connection || subject != corpse {
-                return None;
-            }
-            let opcode: u16 = serde_json::from_str(opcode.get()).unwrap();
-            let body: Vec<u8> = (0..body.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
-                .collect();
+            let body = packet.body;
             if opcode == SMSG_DESTROY_OBJECT {
                 assert_eq!(body, corpse.to_le_bytes());
                 return Some(CorpseSeen::Destroyed);
@@ -417,10 +399,7 @@ fn a_viewer_sees_a_revived_characters_corpse_destroyed_then_created_as_bones() {
     let revived = viewer.call("debug_spirit_healer_res", json!([1])).unwrap();
     assert_eq!(corpse_is_bones(&shard), "true");
     assert_eq!(
-        corpse_seen(
-            revived.inserts("game_native_packet"),
-            viewer.connection_id()
-        ),
+        corpse_seen(revived.packets(), viewer.connection_id()),
         [
             CorpseSeen::Destroyed,
             CorpseSeen::Created {
