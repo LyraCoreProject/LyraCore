@@ -5304,7 +5304,8 @@ def check_handoff(host):
 
 def check_realm_shard(host):
     """Logon and Sessions stay on the Realm Shard; Character selection and the world run on its World
-    Shard, and a World Session moves between them by Handoff."""
+    Shard, and a World Session moves between them by Handoff. A second connection for the Account
+    replaces the World Session that is away on the World Shard."""
     world = host.add_database()
     host.call('debug_seed_scenario_fixtures', database=world)
     host.call('operator_add_peer_shard', [host.identity(world), 'world'])
@@ -5359,6 +5360,19 @@ def check_realm_shard(host):
     opcode, body = client.read()
     assert opcode == 0x3b and body[0] == 1, (hex(opcode), body.hex())
     enter()
+
+    away = host.rows('SELECT connection_id FROM game_native_away')
+    replacement = host.connect('SPLIT')
+    host.wait_until(lambda: not host.rows('SELECT character_guid FROM game_native_player', world),
+        'a second connection for the Account did not end its World Session on the World Shard')
+    client.read_until_closed(timeout=15)
+    opcode, body = replacement.read()
+    while (opcode, body[:1]) != (0x1ee, b'\x0c'):
+        opcode, body = replacement.read()
+    client = replacement
+    enter()
+    assert len(host.rows('SELECT connection_id FROM game_native_away')) == 1
+    assert host.rows('SELECT connection_id FROM game_native_away') != away
 
 
 def check_continent_shards(host):

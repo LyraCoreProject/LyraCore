@@ -4,15 +4,17 @@
 
 use lyracore_protocol::codec::{
     CMSG_CHAR_CREATE_OPCODE, CMSG_CHAR_DELETE_OPCODE, CMSG_CHAR_ENUM_OPCODE,
-    SMSG_CHAR_CREATE_OPCODE, SMSG_CHAR_DELETE_OPCODE, SMSG_CHAR_ENUM_OPCODE,
+    CMSG_LOGOUT_REQUEST_OPCODE, CMSG_PLAYER_LOGIN_OPCODE, SMSG_CHAR_CREATE_OPCODE,
+    SMSG_CHAR_DELETE_OPCODE, SMSG_CHAR_ENUM_OPCODE,
 };
 use spacetimedb::sats::bsatn;
 use spacetimedb::{
     reducer, table, ConnectionId, Identity, ReducerContext, ScheduleAt, Table, TimeDuration,
+    Timestamp,
 };
 
 use super::directory::{self, game_character_directory, game_map_owner};
-use super::handoff::{game_native_handoff, NativeHandoff};
+use super::handoff::NativeHandoff;
 use super::{
     game_native_cipher, game_native_world_connection, NativeActive, NativeWorldConnection,
     NativeWorldState, Rollback,
@@ -143,7 +145,10 @@ pub fn selection_answered(
             fail_selection(ctx, request.selection_id);
             return;
         }
-        cancel_selection(ctx, connection_id);
+        ctx.db
+            .game_pending_selection()
+            .id()
+            .delete(request.selection_id);
     }
     let Some(packets) = super::rollback::replies_in(&error) else {
         spacetimedb::log::warn!("World Shard refused a selection request: {error}");
@@ -232,7 +237,21 @@ pub(super) fn enter_world(
         client_proof: cipher.client_proof,
         character_guid,
     });
+    record_pending(
+        ctx,
+        connection.connection_id,
+        CMSG_PLAYER_LOGIN_OPCODE,
+        vec![world],
+        SELECTION_MICROS,
+    );
     Ok(())
+}
+
+/// Whether `pending` is the unexpired Character login that waits on `world`.
+fn entering(pending: &PendingSelection, world: Identity, now: Timestamp) -> bool {
+    pending.request_opcode == CMSG_PLAYER_LOGIN_OPCODE
+        && pending.remaining == [world]
+        && matches!(pending.scheduled_at, ScheduleAt::Time(due) if due > now)
 }
 
 #[reducer(on_result(game_world_entry))]
@@ -244,7 +263,17 @@ pub fn world_entry_answered(ctx: &ReducerContext, entry: WorldEntry, result: Res
     let NativeWorldState::CharacterSelection { account_id } = connection.state else {
         return;
     };
+    if !ctx
+        .db
+        .game_pending_selection()
+        .connection_id()
+        .find(connection_id)
+        .is_some_and(|pending| entering(&pending, entry.database.0, ctx.timestamp))
+    {
+        return;
+    }
     if let Err(error) = result {
+        cancel_selection(ctx, connection_id);
         spacetimedb::log::debug!("World Shard refused world entry: {error}");
         let _ = super::send(
             ctx,
@@ -258,6 +287,10 @@ pub fn world_entry_answered(ctx: &ReducerContext, entry: WorldEntry, result: Res
     }
     let aways = ctx.db.game_native_away();
     if let Some(previous) = aways.account_id().find(account_id) {
+        // On the same World Shard, world entry itself replaces the earlier World Session.
+        if previous.world.or_else(|| world_shard(ctx)) != Some(entry.database.0) {
+            end_away(ctx, &previous);
+        }
         crate::meeting_stone::remove_solo_seeker(ctx, previous.character_guid);
     }
     crate::meeting_stone::remove_solo_seeker(ctx, entry.character_guid);
@@ -282,11 +315,28 @@ pub struct AccountUpdate {
     pub session: Vec<u8>,
 }
 
-/// Sends Account and Session changes to the World Shard that holds the World Session.
+/// A new Session revokes an away World Session, as it revokes one on this Shard.
 pub(crate) fn account_changed(ctx: &ReducerContext, account_id: u64) {
-    let Some(away) = ctx.db.game_native_away().account_id().find(account_id) else {
-        return;
-    };
+    if let Some(away) = ctx.db.game_native_away().account_id().find(account_id) {
+        end_away(ctx, &away);
+    }
+}
+
+/// Whether an earlier World Session of the Account is still away on a World Shard, which is asked
+/// again to end it. A World Session on its way back to this Shard is replaced at once.
+pub(super) fn replacing(ctx: &ReducerContext, account_id: u64) -> bool {
+    if let Some(away) = ctx.db.game_native_away().account_id().find(account_id) {
+        end_away(ctx, &away);
+        return true;
+    }
+    super::handoff::abandon_account(ctx, account_id);
+    false
+}
+
+/// Asks the World Shard that holds the away World Session to end it, sending the current Account
+/// and Session with the request.
+fn end_away(ctx: &ReducerContext, away: &NativeAway) {
+    let account_id = away.account_id;
     let Some(world) = away.world.or_else(|| world_shard(ctx)) else {
         return;
     };
@@ -390,24 +440,26 @@ pub fn idc_world_entry(
     if !directory::owns_map(ctx, character.map_id) {
         return Err("World Shard does not own the Character map".into());
     }
-    let connection_id = ConnectionId::from_u128(connection);
-    let handoffs = ctx.db.game_native_handoff();
-    handoffs.connection_id().delete(connection_id);
-    handoffs.insert(NativeHandoff {
-        connection_id,
-        server_seed,
-        account_id: account.id,
-        client_seed,
-        client_proof,
-        character_guid: Some(character_guid),
-        world_port: false,
-        teleport_counter: 0,
-        transfer_id: 0,
-        transfer_source: None,
-    });
+    super::handoff::expect(
+        ctx,
+        NativeHandoff {
+            connection_id: ConnectionId::from_u128(connection),
+            server_seed,
+            account_id: account.id,
+            client_seed,
+            client_proof,
+            character_guid: Some(character_guid),
+            world_port: false,
+            teleport_counter: 0,
+            transfer_id: 0,
+            transfer_source: None,
+        },
+        CMSG_PLAYER_LOGIN_OPCODE,
+    );
     Ok(())
 }
 
+/// The Realm Shard has ended the Account's away World Session; this ends it here.
 #[reducer]
 pub fn idc_account_update(
     ctx: &ReducerContext,
@@ -415,8 +467,20 @@ pub fn idc_account_update(
     session: Vec<u8>,
 ) -> Result<(), String> {
     require_sender(ctx, realm_shard(ctx))?;
-    store_account(ctx, &account)?;
-    store_session(ctx, &session)
+    let account = store_account(ctx, &account)?;
+    store_session(ctx, &session)?;
+    let connections: Vec<ConnectionId> = ctx
+        .db
+        .game_native_world_connection()
+        .iter()
+        .filter(|connection| connection.state.account_id() == Some(account.id))
+        .map(|connection| connection.connection_id)
+        .collect();
+    for connection_id in connections {
+        super::disconnect(ctx, connection_id);
+    }
+    super::handoff::abandon_account(ctx, account.id);
+    Ok(())
 }
 
 #[table(accessor = game_selection_result, outbox(remote::idc_selection_result))]
@@ -529,9 +593,6 @@ pub struct WorldSessionClosed {
 
 /// Tells the Realm Shard that a World Session it handed here ended in the world.
 pub(super) fn closing(ctx: &ReducerContext, connection_id: ConnectionId) {
-    let Some(realm) = realm_shard(ctx) else {
-        return;
-    };
     let Some(connection) = ctx
         .db
         .game_native_world_connection()
@@ -541,15 +602,23 @@ pub(super) fn closing(ctx: &ReducerContext, connection_id: ConnectionId) {
         return;
     };
     if let NativeWorldState::InWorld(NativeActive { account_id, .. }) = connection.state {
-        ctx.db
-            .game_world_session_closed()
-            .insert(WorldSessionClosed {
-                id: 0,
-                database: remote::Identity(realm),
-                connection: connection_id.to_u128(),
-                account_id,
-            });
+        report_closed(ctx, connection_id, account_id);
     }
+}
+
+/// Tells the Realm Shard that a World Session it handed to this World Shard has ended.
+pub(super) fn report_closed(ctx: &ReducerContext, connection_id: ConnectionId, account_id: u64) {
+    let Some(realm) = realm_shard(ctx) else {
+        return;
+    };
+    ctx.db
+        .game_world_session_closed()
+        .insert(WorldSessionClosed {
+            id: 0,
+            database: remote::Identity(realm),
+            connection: connection_id.to_u128(),
+            account_id,
+        });
 }
 
 #[reducer]
@@ -606,20 +675,22 @@ pub fn idc_return_to_selection(
     }
     crate::meeting_stone::remove_solo_seeker(ctx, away.character_guid);
     ctx.db.game_native_away().account_id().delete(account_id);
-    let handoffs = ctx.db.game_native_handoff();
-    handoffs.connection_id().delete(connection_id);
-    handoffs.insert(NativeHandoff {
-        connection_id,
-        server_seed,
-        account_id,
-        client_seed,
-        client_proof,
-        character_guid: None,
-        world_port: false,
-        teleport_counter: 0,
-        transfer_id: 0,
-        transfer_source: None,
-    });
+    super::handoff::expect(
+        ctx,
+        NativeHandoff {
+            connection_id,
+            server_seed,
+            account_id,
+            client_seed,
+            client_proof,
+            character_guid: None,
+            world_port: false,
+            teleport_counter: 0,
+            transfer_id: 0,
+            transfer_source: None,
+        },
+        CMSG_LOGOUT_REQUEST_OPCODE,
+    );
     Ok(())
 }
 
@@ -641,6 +712,8 @@ pub fn idc_world_session_closed(
     Ok(())
 }
 
+/// A request of a connection that waits on another Shard: a Character selection request, a
+/// Character login, or a Handoff that waits for its connection.
 #[table(accessor = game_pending_selection, scheduled(expire_pending_selection))]
 pub struct PendingSelection {
     #[primary_key]
@@ -656,6 +729,28 @@ pub struct PendingSelection {
     pub answered: Vec<Identity>,
 }
 crate::virtual_clock_exempt!(game_pending_selection);
+
+const SELECTION_MICROS: i64 = 10_000_000;
+
+/// Records the connection's pending request, replacing an earlier one; it expires after `micros`.
+pub(super) fn record_pending(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    request_opcode: u32,
+    remaining: Vec<Identity>,
+    micros: i64,
+) -> PendingSelection {
+    cancel_selection(ctx, connection_id);
+    ctx.db.game_pending_selection().insert(PendingSelection {
+        id: 0,
+        connection_id,
+        scheduled_at: (ctx.timestamp + TimeDuration::from_micros(micros)).into(),
+        request_opcode,
+        remaining,
+        bodies: Vec::new(),
+        answered: Vec::new(),
+    })
+}
 
 pub(super) fn cancel_selection(ctx: &ReducerContext, connection_id: ConnectionId) {
     ctx.db
@@ -680,6 +775,15 @@ pub fn expire_pending_selection(
 ) -> Result<(), String> {
     if ctx.sender() != ctx.database_identity() {
         return Err("scheduler only".into());
+    }
+    if ctx
+        .db
+        .game_native_world_connection()
+        .connection_id()
+        .find(pending.connection_id)
+        .is_none()
+    {
+        super::handoff::abandon(ctx, pending.connection_id);
     }
     fail_selection(ctx, pending.id);
     Ok(())
@@ -733,15 +837,8 @@ pub(super) fn route_selection(
                 super::send_raw(ctx, connection_id, SMSG_CHAR_ENUM_OPCODE, vec![0], false);
                 return Ok(());
             }
-            let pending = ctx.db.game_pending_selection().insert(PendingSelection {
-                id: 0,
-                connection_id,
-                scheduled_at: (ctx.timestamp + TimeDuration::from_micros(10_000_000)).into(),
-                request_opcode: opcode,
-                remaining: worlds.clone(),
-                bodies: Vec::new(),
-                answered: Vec::new(),
-            });
+            let pending =
+                record_pending(ctx, connection_id, opcode, worlds.clone(), SELECTION_MICROS);
             for world in worlds {
                 relay_selection(
                     ctx,
@@ -779,15 +876,7 @@ pub(super) fn route_selection(
         }
         _ => return Ok(()),
     };
-    let pending = ctx.db.game_pending_selection().insert(PendingSelection {
-        id: 0,
-        connection_id,
-        scheduled_at: (ctx.timestamp + TimeDuration::from_micros(10_000_000)).into(),
-        request_opcode: opcode,
-        remaining: vec![world],
-        bodies: Vec::new(),
-        answered: Vec::new(),
-    });
+    let pending = record_pending(ctx, connection_id, opcode, vec![world], SELECTION_MICROS);
     if let Some(guid) = deleting {
         super::realm_auction::begin_deletion(ctx, guid, pending.id, world)?;
     }
@@ -926,6 +1015,33 @@ mod tests {
             selection_directory_changes(CMSG_CHAR_ENUM_OPCODE, &[1, 2], &[1, 2], |guid| guid == 1),
             vec![(2, true)]
         );
+    }
+
+    fn login(world: Identity, due: i64) -> PendingSelection {
+        PendingSelection {
+            id: 1,
+            connection_id: ConnectionId::from_u128(7),
+            scheduled_at: ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(due)),
+            request_opcode: CMSG_PLAYER_LOGIN_OPCODE,
+            remaining: vec![world],
+            bodies: Vec::new(),
+            answered: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_world_entry_answer_counts_only_within_its_login_window() {
+        let world = Identity::from_byte_array([1; 32]);
+        let other = Identity::from_byte_array([2; 32]);
+        let now = Timestamp::from_micros_since_unix_epoch(100);
+        assert!(entering(&login(world, 101), world, now));
+        assert!(!entering(&login(world, 100), world, now));
+        assert!(!entering(&login(other, 101), world, now));
+        let enumeration = PendingSelection {
+            request_opcode: CMSG_CHAR_ENUM_OPCODE,
+            ..login(world, 101)
+        };
+        assert!(!entering(&enumeration, world, now));
     }
 
     #[test]

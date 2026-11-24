@@ -247,10 +247,12 @@ Both belong to the Realm Shard and do not follow a Character-owned delete sweep.
 from the source World Shard's reducer timestamp; a source cannot replace a different owner.
 
 `game_pending_selection` holds one request per connection with its deadline and expected World
-Shards. It is removed on completion, failure or connection close. `game_selection_result` carries
-correlated replies and directory changes. The previous `game_selection_reply` layout remains for
-additive migration. `game_selection_request.selection_id` and `game_native_away.world` are typed,
-END-appended defaults; a legacy away row uses the default World Shard.
+Shards. It is removed on completion, failure or connection close. The same row holds a Character
+login until its Handoff, and the 30-second deadline of a Handoff row that waits for adoption.
+`game_selection_result` carries correlated replies and directory changes. The previous
+`game_selection_reply` layout remains for additive migration. `game_selection_request.selection_id`
+and `game_native_away.world` are typed, END-appended defaults; a legacy away row uses the default
+World Shard.
 
 `game_character_name` is a new private Realm table keyed by the lowercased name. A pending row
 has guid zero. Its selection id is nonzero for native creation and zero for Package creation;

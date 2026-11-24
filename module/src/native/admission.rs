@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use spacetimedb::{
     reducer, table, ConnectionId, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp,
 };
@@ -108,6 +110,23 @@ pub(super) fn remove(ctx: &ReducerContext, connection_id: ConnectionId) {
         .delete(connection_id);
 }
 
+/// Gives a World Session that returns from a World Shard the capacity slot its away record held,
+/// without queueing. False means a newer connection for the Account replaces it.
+pub(super) fn returned(ctx: &ReducerContext, connection_id: ConnectionId, account_id: u64) -> bool {
+    let admissions = ctx.db.game_native_admission();
+    if let Some(admission) = admissions.account_id().find(account_id) {
+        return admission.connection_id == connection_id;
+    }
+    admissions.insert(NativeAdmission {
+        ticket: 0,
+        connection_id,
+        account_id,
+        admitted: true,
+        entering_until: None,
+    });
+    true
+}
+
 pub(super) fn entered(ctx: &ReducerContext, connection_id: ConnectionId) {
     if let Some(mut admission) = ctx
         .db
@@ -144,30 +163,50 @@ fn reply(
     )
 }
 
+/// The World Sessions that hold a capacity slot: one per Account admitted on this Shard, away on a
+/// World Shard or returning from one.
+fn held_sessions(accounts: impl IntoIterator<Item = u64>) -> u32 {
+    let accounts: HashSet<u64> = accounts.into_iter().collect();
+    u32::try_from(accounts.len()).unwrap_or(u32::MAX)
+}
+
+/// Whether a waiting ticket is admitted. A ticket whose Account still holds an earlier World
+/// Session on a World Shard waits until that World Session ends.
+fn admits(limits: &NativeAdmissionLimits, active: u32, entering: u32, replacing: bool) -> bool {
+    !replacing
+        && (limits.max_sessions == 0 || active < limits.max_sessions)
+        && (limits.max_entering == 0 || entering < limits.max_entering)
+        && (limits.admissions_per_second == 0
+            || limits.admitted_in_window < limits.admissions_per_second)
+}
+
 fn drain(ctx: &ReducerContext, new_connection: Option<ConnectionId>) -> Result<(), String> {
+    let now = crate::time::now(ctx);
     let mut limits = limits(ctx);
-    if crate::time::now(ctx)
+    if now
         .duration_since(limits.window_started)
         .is_some_and(|elapsed| elapsed.as_micros() >= 1_000_000)
     {
-        limits.window_started = crate::time::now(ctx);
+        limits.window_started = now;
         limits.admitted_in_window = 0;
     }
-    let mut active = 0;
+    let mut admitted = Vec::new();
     let mut entering = 0;
     let mut waiting = Vec::new();
     for admission in ctx.db.game_native_admission().iter() {
         if admission.admitted {
-            active += 1;
-            entering += u32::from(
-                admission
-                    .entering_until
-                    .is_some_and(|until| until > crate::time::now(ctx)),
-            );
+            admitted.push(admission.account_id);
+            entering += u32::from(admission.entering_until.is_some_and(|until| until > now));
         } else {
             waiting.push(admission);
         }
     }
+    let mut active = held_sessions(
+        admitted
+            .into_iter()
+            .chain(super::realm_shard::away_accounts(ctx))
+            .chain(super::handoff::waiting_accounts(ctx)),
+    );
     waiting.sort_unstable_by_key(|admission| admission.ticket);
     let mut position = 0;
     for mut admission in waiting {
@@ -184,17 +223,13 @@ fn drain(ctx: &ReducerContext, new_connection: Option<ConnectionId>) -> Result<(
             super::disconnect(ctx, admission.connection_id);
             continue;
         }
-        if (limits.max_sessions == 0 || active < limits.max_sessions)
-            && (limits.max_entering == 0 || entering < limits.max_entering)
-            && (limits.admissions_per_second == 0
-                || limits.admitted_in_window < limits.admissions_per_second)
-        {
+        let replacing = super::realm_shard::replacing(ctx, admission.account_id);
+        if admits(&limits, active, entering, replacing) {
             active += 1;
             entering += 1;
             limits.admitted_in_window = limits.admitted_in_window.saturating_add(1);
             admission.admitted = true;
-            admission.entering_until =
-                Some(crate::time::now(ctx) + TimeDuration::from_micros(20_000_000));
+            admission.entering_until = Some(now + TimeDuration::from_micros(20_000_000));
             connection.state = NativeWorldState::CharacterSelection {
                 account_id: admission.account_id,
             };
@@ -236,4 +271,41 @@ fn drain(ctx: &ReducerContext, new_connection: Option<ConnectionId>) -> Result<(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session_limit(max_sessions: u32) -> NativeAdmissionLimits {
+        NativeAdmissionLimits {
+            id: 0,
+            max_sessions,
+            max_entering: 0,
+            admissions_per_second: 0,
+            window_started: Timestamp::from_micros_since_unix_epoch(0),
+            admitted_in_window: 0,
+        }
+    }
+
+    #[test]
+    fn a_world_session_away_on_a_world_shard_holds_a_capacity_slot() {
+        let admitted = [1];
+        let away = [2];
+        let active = held_sessions(admitted.into_iter().chain(away));
+        assert_eq!(active, 2);
+        assert!(!admits(&session_limit(2), active, 0, false));
+        assert!(admits(&session_limit(3), active, 0, false));
+    }
+
+    #[test]
+    fn an_account_admitted_and_away_holds_one_slot() {
+        assert_eq!(held_sessions([7, 7, 7]), 1);
+    }
+
+    #[test]
+    fn a_ticket_waits_while_its_account_is_away_even_with_free_capacity() {
+        assert!(!admits(&session_limit(0), 0, 0, true));
+        assert!(admits(&session_limit(0), 0, 0, false));
+    }
 }

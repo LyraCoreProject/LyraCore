@@ -66,7 +66,10 @@ attaches the connection to the target Shard under the same connection id and cal
 `native_world_adopt`, which builds the World Session from the target's `game_native_handoff` row.
 The source Shard sees an ordinary disconnect. A request still in flight to the source Shard may
 fail without ending the World Session. Handoff moves a World Session at Character selection or
-after a committed Character Transfer.
+after a committed Character Transfer. A Handoff row waits 30 seconds for its connection. A failed
+adoption, a connection that closes before adoption, or the deadline drops the row, unless a
+Character Transfer still fences it. A World Shard then reports the World Session closed to the Realm
+Shard, which removes its away record.
 
 World entry registers the Character as an AOI viewer before self CREATE and replays its grants
 after it. A Passenger's Transport is the one grant replayed before self CREATE.
@@ -98,15 +101,18 @@ World Sessions, maximum concurrent entries and admissions per second. Zero turns
 Limits default to zero and persist across restarts. Lowering a limit keeps admitted World Sessions
 connected. The Login Queue sends a position on arrival, updates waiting positions every second and
 admits tickets in order. A finished world entry releases its entry slot; an unfinished entry
-releases it after 20 seconds. The World Session keeps its capacity slot until disconnect. A new
-authenticated connection replaces an older one for the same Account and joins behind existing
-waiters.
+releases it after 20 seconds. The World Session keeps its capacity slot until disconnect. On a
+split Realm, a World Session away on a World Shard or on its way back keeps its slot, and its return
+to Character selection takes the slot back without queueing. A new authenticated connection replaces
+an older one for the same Account and joins behind existing waiters. When the older one is away, the
+new ticket waits while the Realm Shard asks its World Shard to end it, and the Login Queue admits it
+once the World Shard reports the World Session closed.
 
 Session revocation Gates run before admission and before every authenticated request, including
 ignored controls. The one-hour Session expiry limits new world authentication only. An established
 World Session continues past that deadline, and the reaper keeps its Session until the connection
 closes. Account bans, deleted Sessions and replacement login proofs still revoke established
-connections.
+connections. A new Session for an Account with an away World Session ends it on its World Shard.
 
 The local CLI starts this runtime. It builds the Host, publishes the `lyracore` Shard and
 provisions Accounts through the Module. Native data lives in `.lyracore/native-data`. See
@@ -470,8 +476,10 @@ before new creation opens. Old creation replies and profile outboxes must drain 
 Login and deletion route by Character guid and Account. Login sends the owning World Shard Account
 and Session copies, then hands the World Session over by Handoff. Logout hands it back. The Realm
 Shard records which World Shard holds the away World Session, so changed Accounts and Sessions go
-to that Shard. The Handoff row retains the Character guid for arrival. The Login Queue counts only
-World Sessions on the Realm Shard.
+to that Shard. The Handoff row retains the Character guid for arrival. The Login Queue counts away
+World Sessions toward its session limit. From `CMSG_PLAYER_LOGIN` until the Handoff, the Realm Shard
+refuses further selection requests of that connection. If the World Shard does not answer within
+ten seconds, the Realm Shard closes the World Session.
 
 A cross-map teleport to a Peer World Shard starts a Character Transfer when the client acknowledges
 its world port. The source leaves the world and sends one manifest batch over IDC while both copies
