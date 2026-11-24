@@ -200,11 +200,17 @@ that transaction. A missing request or a different Package name returns an error
 retain at most 64 requests on a Shard, including unread results.
 
 A restart or delayed reply does not release the name or discard pending work. A confirmed creation
-Refusal releases the name. Result delivery retries while its target is a Peer Shard. When the
-Operator removes the Realm from a World's Peer Shards, that World settles the request as `Created`,
-because the Character already exists there.
+Refusal releases the name. A refused result retries while its target is a Peer Shard. A refused
+Grant retries its Refusal to the World until the World accepts it. A refused Request settles as
+`Refused` at once. When the Operator removes the Realm from a World's Peer Shards after that World
+applied its Grant, the World settles the request as `Created`, because the Character exists there.
+The Realm then has no directory entry for the Character. Its guid-0 name reservation still counts
+toward the ten-Character limit and refuses Realm Teardown. After the Operator adds the Peer Shard
+again, run `operator_report_character_profiles` on the World to complete the Realm's records.
 The Package must wait for `Created` before placing or activating the Character. Creation does not
 move Package tables, activate Group presence, or enable guild or cross-Shard relocation operations.
+A `Created` result settled after the Realm was removed does not mean the Realm knows the Character.
+The Realm refuses its guild and Group requests and its relocation `Moved` until that report.
 
 Publish all Shards before using this interface and complete the
 [Character-name import](architecture.md#upgrade-character-name-reservations). Package Accounts are

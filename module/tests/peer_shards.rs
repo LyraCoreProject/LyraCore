@@ -139,9 +139,9 @@ fn a_package_guild_retry_stops_when_its_target_leaves_the_peer_shards() {
     }
 }
 
-// A Package Character creation result that the Realm refuses is retried every second. Once the
-// Operator removes the Realm from `game_peer_shard`, the retry stops and the request settles as
-// created, because the Character already exists on the World Shard.
+// A Package Character creation result that the target refuses is retried every second. Once the
+// Operator removes the target from `game_peer_shard`, the retry stops and the request settles as
+// created.
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_package_creation_retry_stops_and_settles_when_its_target_leaves_the_peer_shards() {
