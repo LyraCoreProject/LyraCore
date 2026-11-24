@@ -841,8 +841,7 @@ fn giver_has_quest_role(
                     .is_some_and(|t| t.start_quest == quest_entry)
         }
         GiverKind::Party(sharer_guid) => {
-            role == quest_role::START
-                && character_quest_row(ctx, sharer_guid, quest_entry).is_some_and(|q| q.is_active())
+            role == quest_role::START && share::can_share(ctx, sharer_guid, quest_entry)
         }
     }
 }
@@ -1102,6 +1101,9 @@ pub(crate) fn accept_offered_quest(
             .to_string()
             .into());
     }
+    if let GiverKind::Party(sharer_guid) = giver {
+        share::require_quest_share(ctx, player_guid, sharer_guid, quest_entry)?;
+    }
     let tmpl = ctx
         .db
         .game_quest_template()
@@ -1123,7 +1125,7 @@ pub(crate) fn accept_offered_quest(
     } else {
         0
     };
-    Ok(apply_accept_effects(
+    apply_accept_effects(
         ctx,
         player_guid,
         player.owner_identity,
@@ -1131,7 +1133,9 @@ pub(crate) fn accept_offered_quest(
         &tmpl,
         existing,
         deadline_micros,
-    )?)
+    )?;
+    share::settle_on_accept(ctx, player_guid, quest_entry);
+    Ok(())
 }
 
 fn apply_accept_effects(
@@ -1814,83 +1818,6 @@ crate::game_tick_pass!(fn quest_timer_pass(ctx) {
     }
 });
 
-pub(crate) fn apply_push_quest_to_party(
-    ctx: &ReducerContext,
-    sender_guid: u64,
-    quest_entry: u32,
-) -> Result<(), crate::Refusal> {
-    if !character_quest_row(ctx, sender_guid, quest_entry).is_some_and(|q| q.is_active()) {
-        return Err("you are not on that quest".into());
-    }
-    let sender_entity = crate::helpers::live_entity(ctx, sender_guid)
-        .map_err(|_| "player not in world".to_string())?;
-    let m = crate::group::group_of(ctx, sender_guid).ok_or_else(|| "not in a group".to_string())?;
-    let tmpl = ctx
-        .db
-        .game_quest_template()
-        .entry()
-        .find(quest_entry)
-        .ok_or_else(|| format!("no such quest {quest_entry}"))?;
-    for member in crate::group::members_of(ctx, m.group_id) {
-        if member.character_guid == sender_guid {
-            continue;
-        }
-        let result = evaluate_share(ctx, &sender_entity, &tmpl, member.character_guid);
-        if result == lyracore_shared::quest::share_result::SHARING_QUEST {
-            crate::group::push_event(
-                ctx,
-                member.character_guid,
-                lyracore_shared::quest::share_event_kind::QUEST_SHARE,
-                sender_guid,
-                quest_entry.to_string(),
-            );
-        }
-        crate::group::push_event(
-            ctx,
-            sender_guid,
-            lyracore_shared::quest::share_event_kind::QUEST_PUSH_RESULT,
-            member.character_guid,
-            result.to_string(),
-        );
-    }
-    Ok(())
-}
-
-fn evaluate_share(
-    ctx: &ReducerContext,
-    sender: &crate::WorldEntity,
-    tmpl: &QuestTemplate,
-    member_guid: u64,
-) -> u8 {
-    let member_entity = ctx.db.game_world_entity().guid().find(member_guid);
-    let (same_map_instance, in_range) = match &member_entity {
-        Some(e) => {
-            let (dx, dy, dz) = (e.x - sender.x, e.y - sender.y, e.z - sender.z);
-            (
-                e.map_id == sender.map_id && e.instance_id == sender.instance_id,
-                dx * dx + dy * dy + dz * dz <= PARTY_SHARE_RANGE_SQ,
-            )
-        }
-        None => (false, false),
-    };
-    let existing = character_quest_row(ctx, member_guid, tmpl.entry);
-    let member_active = existing.as_ref().is_some_and(|q| q.is_active());
-    let member_finished = existing.as_ref().is_some_and(|q| q.rewarded) && !tmpl.repeatable;
-    let log_full = quest_slots_used(ctx, member_guid) >= MAX_QUEST_LOG_SIZE;
-    let gates_ok = member_entity
-        .as_ref()
-        .is_some_and(|e| accept_gates(ctx, e, tmpl).is_ok());
-    lyracore_shared::quest::share_result(
-        member_entity.is_some(),
-        same_map_instance,
-        in_range,
-        member_active,
-        member_finished,
-        log_full,
-        gates_ok,
-    )
-}
-
 /// Every un-rewarded row, failed ones included, because the client log shows them.
 fn quest_slots_used(ctx: &ReducerContext, character_guid: u64) -> usize {
     ctx.db
@@ -1968,6 +1895,9 @@ fn remove_from_log(ctx: &ReducerContext, mut cq: CharacterQuest) -> Result<(), c
 
 #[cfg(feature = "debug_reducers")]
 mod fixtures;
+pub(crate) mod share;
+
+pub(crate) use share::apply_push_quest_to_party;
 
 #[cfg(test)]
 mod tests {

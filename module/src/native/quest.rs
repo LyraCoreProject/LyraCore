@@ -640,6 +640,10 @@ pub(super) fn receive(
             apply_push_quest_to_party(ctx, guid, q.quest_id)?;
             Vec::new()
         }
+        ClientOpcodeMessage::MSG_QUEST_PUSH_RESULT(answer) => {
+            share::answer_quest_share(ctx, guid, answer.message.as_int());
+            Vec::new()
+        }
         other => return Err(Unhandled::Declined(other)),
     };
     for packet in packets {

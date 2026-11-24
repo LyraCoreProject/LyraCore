@@ -153,7 +153,6 @@ pub(super) fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<V
         ClientOpcodeMessage::CMSG_QUEST_CONFIRM_ACCEPT(_) => {
             unavailable("Quest sharing confirmations")
         }
-        ClientOpcodeMessage::MSG_QUEST_PUSH_RESULT(_) => unavailable("Quest sharing responses"),
         // Instance bindings end with their Instance, so no character holds a raid lockout.
         ClientOpcodeMessage::CMSG_REQUEST_RAID_INFO => {
             message(ServerOpcodeMessage::SMSG_RAID_INSTANCE_INFO(Box::default()))

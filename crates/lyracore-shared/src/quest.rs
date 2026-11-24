@@ -9,31 +9,46 @@ pub mod share_event_kind {
 pub mod share_result {
     pub const SHARING_QUEST: u8 = 0;
     pub const CANT_TAKE_QUEST: u8 = 1;
+    pub const ACCEPT_QUEST: u8 = 2;
     pub const TOO_FAR: u8 = 4;
+    pub const BUSY: u8 = 5;
     pub const LOG_FULL: u8 = 6;
     pub const HAVE_QUEST: u8 = 7;
     pub const FINISH_QUEST: u8 = 8;
 }
 
-pub fn share_result(
-    member_online: bool,
-    same_map_instance: bool,
-    in_range: bool,
-    member_active: bool,
-    member_finished: bool,
-    log_full: bool,
-    gates_ok: bool,
-) -> u8 {
-    if !member_online || !same_map_instance || !in_range {
+/// vmangos `QUEST_FLAGS_SHARABLE`.
+pub const QUEST_FLAG_SHARABLE: u32 = 0x8;
+
+pub fn shareable(quest_flags: u32) -> bool {
+    quest_flags & QUEST_FLAG_SHARABLE != 0
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShareCandidate {
+    pub online: bool,
+    pub same_partition: bool,
+    pub in_range: bool,
+    pub on_quest: bool,
+    pub finished: bool,
+    pub log_full: bool,
+    pub gates_ok: bool,
+    pub holds_quest_share: bool,
+}
+
+pub fn share_result(member: ShareCandidate) -> u8 {
+    if !member.online || !member.same_partition || !member.in_range {
         share_result::TOO_FAR
-    } else if member_active {
+    } else if member.on_quest {
         share_result::HAVE_QUEST
-    } else if member_finished {
+    } else if member.finished {
         share_result::FINISH_QUEST
-    } else if log_full {
+    } else if member.log_full {
         share_result::LOG_FULL
-    } else if !gates_ok {
+    } else if !member.gates_ok {
         share_result::CANT_TAKE_QUEST
+    } else if member.holds_quest_share {
+        share_result::BUSY
     } else {
         share_result::SHARING_QUEST
     }
@@ -104,38 +119,67 @@ mod tests {
 
     #[test]
     fn share_result_priority_order() {
-        assert_eq!(
-            share_result(true, true, true, false, false, false, true),
-            share_result::SHARING_QUEST
-        );
-        assert_eq!(
-            share_result(false, true, true, true, true, true, false),
-            share_result::TOO_FAR
-        );
-        assert_eq!(
-            share_result(true, false, true, false, false, false, true),
-            share_result::TOO_FAR
-        );
-        assert_eq!(
-            share_result(true, true, false, false, false, false, true),
-            share_result::TOO_FAR
-        );
-        assert_eq!(
-            share_result(true, true, true, true, true, true, false),
-            share_result::HAVE_QUEST
-        );
-        assert_eq!(
-            share_result(true, true, true, false, true, true, false),
-            share_result::FINISH_QUEST
-        );
-        assert_eq!(
-            share_result(true, true, true, false, false, true, false),
-            share_result::LOG_FULL
-        );
-        assert_eq!(
-            share_result(true, true, true, false, false, false, false),
-            share_result::CANT_TAKE_QUEST
-        );
+        let ready = ShareCandidate {
+            online: true,
+            same_partition: true,
+            in_range: true,
+            gates_ok: true,
+            ..ShareCandidate::default()
+        };
+        let blocked = ShareCandidate {
+            on_quest: true,
+            finished: true,
+            log_full: true,
+            gates_ok: false,
+            holds_quest_share: true,
+            ..ready
+        };
+        assert_eq!(share_result(ready), share_result::SHARING_QUEST);
+        for far in [
+            ShareCandidate {
+                online: false,
+                ..blocked
+            },
+            ShareCandidate {
+                same_partition: false,
+                ..ready
+            },
+            ShareCandidate {
+                in_range: false,
+                ..ready
+            },
+        ] {
+            assert_eq!(share_result(far), share_result::TOO_FAR);
+        }
+        assert_eq!(share_result(blocked), share_result::HAVE_QUEST);
+        let blocked = ShareCandidate {
+            on_quest: false,
+            ..blocked
+        };
+        assert_eq!(share_result(blocked), share_result::FINISH_QUEST);
+        let blocked = ShareCandidate {
+            finished: false,
+            ..blocked
+        };
+        assert_eq!(share_result(blocked), share_result::LOG_FULL);
+        let blocked = ShareCandidate {
+            log_full: false,
+            ..blocked
+        };
+        assert_eq!(share_result(blocked), share_result::CANT_TAKE_QUEST);
+        let blocked = ShareCandidate {
+            gates_ok: true,
+            ..blocked
+        };
+        assert_eq!(share_result(blocked), share_result::BUSY);
+    }
+
+    #[test]
+    fn only_the_sharable_flag_makes_a_quest_shareable() {
+        assert!(!shareable(0));
+        assert!(!shareable(0x2 | 0x4));
+        assert!(shareable(0x8));
+        assert!(shareable(0x8 | 0x2));
     }
 }
 

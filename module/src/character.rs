@@ -859,6 +859,7 @@ fn finish_logout(
 ) {
     crate::combat::disengage(ctx, guid);
     crate::trade::cancel_trade_for(ctx, guid);
+    crate::quest::share::forget_quest_shares(ctx, guid);
     if !keep_corpse {
         crate::corpse::delete_resurrectable_corpse(ctx, guid);
     }

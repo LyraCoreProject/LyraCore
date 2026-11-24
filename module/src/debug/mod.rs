@@ -1099,6 +1099,17 @@ pub fn debug_push_quest(
 }
 
 #[reducer]
+pub fn debug_answer_quest_share(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    answer: u8,
+) -> Result<(), String> {
+    crate::helpers::require_character(ctx, character_guid)?;
+    crate::quest::share::answer_quest_share(ctx, character_guid, answer);
+    Ok(())
+}
+
+#[reducer]
 pub fn debug_gossip_select(
     ctx: &ReducerContext,
     character_guid: u64,

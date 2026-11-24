@@ -855,6 +855,14 @@ to rewarded.
 it and imports with no rows. An older destination refuses the new manifest, so update both Shards
 before moving active World Sessions.
 
+### Quest share migration
+
+The private `game_quest_share` table is new and starts empty, so no Quest Share survives the
+publish. A Character takes a quest from a Group member only through that member's Quest Share, and
+a push needs the source shareable bit in `game_quest_flags`. A Realm whose quests were imported
+before `game_quest_flags` existed, and quests authored without a flags row, share nothing until
+quests are reimported or their flags rows are written.
+
 ### Quest reward migration
 
 `game_quest_template` gains `required_money` and `rew_rep_faction_3`, `rew_rep_value_3` through
