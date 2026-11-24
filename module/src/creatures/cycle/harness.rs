@@ -3947,6 +3947,7 @@ fn a_creature_that_evades_ignores_the_player_it_fled_from_until_it_is_home() {
         .threat(WOLF, HUNTER, 1000)
         .standing(HUNTER, SourceStanding::Unattackable);
     run_once(&mut w);
+    w.advance_clock(1_000_000);
     run_once(&mut w);
 
     assert!(
@@ -3998,6 +3999,7 @@ fn a_creature_with_no_path_home_teleports_there_and_ends_its_return() {
     run_once(&mut w);
     assert_eq!(w.at(WOLF).at, home, "no step toward home means a teleport");
 
+    w.advance_clock(1_000_000);
     run_once(&mut w);
     assert!(w.eventai_returning_home.borrow().is_empty());
 }
