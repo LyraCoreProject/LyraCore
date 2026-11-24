@@ -694,6 +694,8 @@ pub struct RangedImpactSchedule {
 pub(crate) enum AttackRefusal {
     DeadTarget,
     FriendlyTarget,
+    /// The target creature is returning home.
+    Evading,
     Refused(ActionRefusal),
 }
 
@@ -710,6 +712,7 @@ impl From<AttackRefusal> for ActionRefusal {
                 ActionRefusal::new(ActionRefusalKind::DeadTarget, "target is dead")
             }
             AttackRefusal::FriendlyTarget => "target is friendly".to_string().into(),
+            AttackRefusal::Evading => "target is evading".to_string().into(),
             AttackRefusal::Refused(refusal) => refusal,
         }
     }
@@ -744,7 +747,7 @@ fn attack_target(
     }
     // vmangos `Unit::Attack` refuses an evading victim.
     if returning_home(ctx, target_guid) {
-        return Err(ActionRefusal::new(ActionRefusalKind::Other, "target is evading").into());
+        return Err(AttackRefusal::Evading);
     }
     Ok(target)
 }
@@ -941,7 +944,9 @@ pub(crate) fn apply_start_ranged_attack(
             {
                 Reason::OutOfRange
             }
-            AttackRefusal::FriendlyTarget | AttackRefusal::Refused(_) => Reason::Unreported,
+            AttackRefusal::FriendlyTarget | AttackRefusal::Evading | AttackRefusal::Refused(_) => {
+                Reason::Unreported
+            }
         };
         CastGateRefusal::other(reason, ActionRefusal::from(refusal).detail)
     })?;

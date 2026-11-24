@@ -143,6 +143,7 @@ fn unlanded_result(outcome: AttackOutcome, hit: &Hit, dealt: u32, absorbed: u32)
         AttackOutcome::Dodge => Some(PROC_EX_DODGE),
         AttackOutcome::Parry => Some(PROC_EX_PARRY),
         AttackOutcome::Immune => Some(PROC_EX_IMMUNE),
+        AttackOutcome::Evade => None,
         AttackOutcome::Normal
         | AttackOutcome::Crit
         | AttackOutcome::Glancing

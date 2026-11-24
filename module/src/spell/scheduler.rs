@@ -295,7 +295,10 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 if duel_finish.is_some_and(|finish| finishing_duels.contains(&finish.duel_id)) {
                     continue;
                 }
-                if dying.contains_key(&a.target_guid) {
+                // vmangos DealDamageMods zeroes a periodic tick on an evading creature.
+                if dying.contains_key(&a.target_guid)
+                    || crate::creatures::eventai::movement::returning_home(ctx, a.target_guid)
+                {
                     continue;
                 }
                 let spell = ctx.db.game_spell().spell_id().find(a.spell_id);
@@ -651,6 +654,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
             crate::helpers::entities_near(ctx, a.map_id, a.instance_id, a.x, a.y, a.radius_yd)
                 .into_iter()
                 .filter(|c| !c.dead && c.guid != a.caster_guid)
+                .filter(|c| !crate::creatures::eventai::movement::returning_home(ctx, c.guid))
                 .filter_map(|c| {
                     let (dx, dy, dz) = (c.x - a.x, c.y - a.y, c.z - a.z);
                     if dx * dx + dy * dy + dz * dz > r2 {

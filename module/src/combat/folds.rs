@@ -760,6 +760,10 @@ pub(crate) fn roll_swing_with_range(
     range: (u32, u32),
     strike: Option<QueuedStrike>,
 ) -> (u32, AttackOutcome, u32) {
+    // vmangos RollMeleeOutcomeAgainst and SpellHitResult answer evade before any other outcome.
+    if crate::creatures::eventai::movement::returning_home(ctx, target.guid) {
+        return (0, AttackOutcome::Evade, 0);
+    }
     // vmangos refuses a white swing in CalculateMeleeDamage and a queued strike in SpellHitResult.
     if crate::spell::immune_to_school(ctx, target, SCHOOL_MASK_PHYSICAL) {
         return (0, AttackOutcome::Immune, 0);
@@ -836,7 +840,8 @@ fn resolve_swing(
         AttackOutcome::Miss
         | AttackOutcome::Dodge
         | AttackOutcome::Parry
-        | AttackOutcome::Immune => return (0, outcome, 0),
+        | AttackOutcome::Immune
+        | AttackOutcome::Evade => return (0, outcome, 0),
         AttackOutcome::Crit => base * CRIT_MULT,
         AttackOutcome::Glancing if base > 0 => (base * GLANCING_DAMAGE_PCT / 100).max(1),
         AttackOutcome::Glancing => 0,
@@ -943,6 +948,9 @@ pub(crate) fn roll_ranged_swing(
         .spell_id()
         .find(ranged_spell_id)
         .map_or(SCHOOL_MASK_PHYSICAL, |spell| spell.school_mask);
+    if crate::creatures::eventai::movement::returning_home(ctx, target.guid) {
+        return RangedRoll::avoided(AttackOutcome::Evade);
+    }
     // vmangos SpellHitResult: IsImmuneToSpell takes Shoot's school, IsImmuneToDamage the wand's.
     if crate::spell::immune_to_school(ctx, target, spell_school_mask | (1 << school)) {
         return RangedRoll::avoided(AttackOutcome::Immune);
@@ -964,7 +972,8 @@ pub(crate) fn roll_ranged_swing(
         AttackOutcome::Miss
         | AttackOutcome::Dodge
         | AttackOutcome::Parry
-        | AttackOutcome::Immune => return RangedRoll::avoided(outcome),
+        | AttackOutcome::Immune
+        | AttackOutcome::Evade => return RangedRoll::avoided(outcome),
         AttackOutcome::Crit if school == 0 => base * CRIT_MULT,
         AttackOutcome::Crit => base + base / 2,
         AttackOutcome::Normal

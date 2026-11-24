@@ -416,6 +416,10 @@ pub fn build_attacker_state_update(
     if matches!(outcome, 3 | 4) || damage > 0 || blocked_amount > 0 {
         flags |= 0x2;
     }
+    // vmangos RollMeleeOutcomeAgainst sets HITINFO_SWINGNOHITSOUND on an evade.
+    if outcome == 9 {
+        flags |= HITINFO_SWINGNOHITSOUND;
+    }
     let mut packet = crate::world::encode(&ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(
         Box::new(message),
     ))
@@ -449,6 +453,7 @@ fn attacker_state_update(
             }),
         ),
         8 => (HitInfo::NormalSwing, u32::from(VICTIMSTATE_IS_IMMUNE)),
+        9 => (HitInfo::Miss, u32::from(VICTIMSTATE_EVADES)),
         _ => (HitInfo::AffectsVictim, u32::from(VICTIMSTATE_NORMAL)),
     };
     SMSG_ATTACKERSTATEUPDATE {
@@ -510,6 +515,7 @@ pub fn build_queued_strike_swing(strike: QueuedStrikeSwing) -> crate::world::Pac
         6 => (HITINFO_CRUSHING, VICTIMSTATE_NORMAL),
         7 => (HITINFO_ROLLED_BLOCK | HITINFO_BLOCK, VICTIMSTATE_BLOCK),
         8 => (0, VICTIMSTATE_IS_IMMUNE),
+        9 => (HITINFO_MISS | HITINFO_SWINGNOHITSOUND, VICTIMSTATE_EVADES),
         _ => (0, VICTIMSTATE_NORMAL),
     };
     let landed = victim_state == VICTIMSTATE_NORMAL;
@@ -533,11 +539,7 @@ pub fn build_queued_strike_swing(strike: QueuedStrikeSwing) -> crate::world::Pac
     let absorb = shown.map_or(0, |strike| strike.absorbed);
     let resist = shown.map_or(0, |strike| strike.resisted);
     let blocked_amount = shown.map_or(0, |strike| strike.blocked);
-    if damage == 0
-        && absorb == 0
-        && resist == 0
-        && blocked_amount == 0
-        && victim_state != VICTIMSTATE_UNAFFECTED
+    if damage == 0 && absorb == 0 && resist == 0 && blocked_amount == 0 && flags & HITINFO_MISS == 0
     {
         flags |= HITINFO_SUPPRESS_MISS_TEXT;
     }
@@ -567,11 +569,13 @@ pub fn build_queued_strike_swing(strike: QueuedStrikeSwing) -> crate::world::Pac
     packet
 }
 
+const HITINFO_SWINGNOHITSOUND: u32 = 0x0008_0000;
 const VICTIMSTATE_UNAFFECTED: u8 = 0;
 const VICTIMSTATE_NORMAL: u8 = 1;
 const VICTIMSTATE_DODGE: u8 = 2;
 const VICTIMSTATE_PARRY: u8 = 3;
 const VICTIMSTATE_BLOCK: u8 = 5;
+const VICTIMSTATE_EVADES: u8 = 6;
 const VICTIMSTATE_IS_IMMUNE: u8 = 7;
 
 #[cfg(test)]
@@ -728,6 +732,7 @@ mod tests {
             (7, 0, 25, 0x802, 5),
             (7, 5, 0, 0x802, 1),
             (8, 0, 0, 0, 7),
+            (9, 0, 0, 0x8_0010, 6),
         ] {
             let packet = build_attacker_state_update(1, 2, damage, outcome, blocked, 0);
             assert_eq!(packet.opcode, 0x14a);
@@ -775,6 +780,7 @@ mod tests {
             (3, 0, 0, 0x11000, 2),
             (4, 0, 0, 0x11000, 3),
             (8, 0, 0, 0x11000, 7),
+            (9, 0, 0, 0x9_0010, 6),
             (0, 40, 0, 0x11002, 1),
             (1, 80, 0, 0x11082, 1),
             (5, 28, 0, 0x15002, 1),

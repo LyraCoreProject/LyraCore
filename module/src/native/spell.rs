@@ -392,20 +392,22 @@ pub(super) fn swing_miss_info(hit_info: u8) -> Option<wow_world_messages::vanill
         3 => Some(SpellMissInfo::Dodge),
         4 => Some(SpellMissInfo::Parry),
         8 => Some(SpellMissInfo::Immune),
+        9 => Some(SpellMissInfo::Evade),
         _ => None,
     }
 }
 
 fn cast_miss_info(code: u8) -> Option<wow_world_messages::vanilla::SpellMissInfo> {
     use crate::spell::{
-        CAST_MISS_DODGE, CAST_MISS_IMMUNE, CAST_MISS_IMMUNE2, CAST_MISS_MISS, CAST_MISS_PARRY,
-        CAST_MISS_RESIST,
+        CAST_MISS_DODGE, CAST_MISS_EVADE, CAST_MISS_IMMUNE, CAST_MISS_IMMUNE2, CAST_MISS_MISS,
+        CAST_MISS_PARRY, CAST_MISS_RESIST,
     };
     use wow_world_messages::vanilla::SpellMissInfo;
     match code {
         CAST_MISS_MISS => Some(SpellMissInfo::Miss),
         CAST_MISS_RESIST => Some(SpellMissInfo::Resist),
         CAST_MISS_DODGE => Some(SpellMissInfo::Dodge),
+        CAST_MISS_EVADE => Some(SpellMissInfo::Evade),
         CAST_MISS_PARRY => Some(SpellMissInfo::Parry),
         CAST_MISS_IMMUNE => Some(SpellMissInfo::Immune),
         CAST_MISS_IMMUNE2 => Some(SpellMissInfo::Immune2),
@@ -572,6 +574,7 @@ mod tests {
             (crate::spell::CAST_MISS_MISS, 1),
             (crate::spell::CAST_MISS_DODGE, 3),
             (crate::spell::CAST_MISS_PARRY, 4),
+            (crate::spell::CAST_MISS_EVADE, 6),
             (crate::spell::CAST_MISS_IMMUNE, 7),
         ] {
             row.miss_info = miss_info;

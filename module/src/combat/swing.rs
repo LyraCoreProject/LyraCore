@@ -556,7 +556,8 @@ fn arms_revenge(hit_info: AttackOutcome, blocked: u32) -> bool {
         | AttackOutcome::Miss
         | AttackOutcome::Glancing
         | AttackOutcome::Crushing
-        | AttackOutcome::Immune => false,
+        | AttackOutcome::Immune
+        | AttackOutcome::Evade => false,
     };
     avoided || blocked > 0
 }

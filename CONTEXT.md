@@ -715,7 +715,8 @@ _Avoid_: cast flags, event flags, signal flags
 The primary target's outcome when a damage spell's hit roll fails, recorded on the GO row. The
 roll runs once per target, before any effect runs, and a missed target takes none of the spell's
 effects. A physical spell misses; a magic spell is resisted outright. A Weapon Strike rolls the
-physical attack table, so its target can also dodge or parry it.
+physical attack table, so its target can also dodge or parry it. A creature returning home evades
+every cast before any roll or immunity test, and every swing too.
 _Avoid_: spell miss flag, resist flag
 
 **Attack Table**:

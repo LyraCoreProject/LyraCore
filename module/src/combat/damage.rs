@@ -1,5 +1,6 @@
 use spacetimedb::{table, ReducerContext, Table};
 
+use crate::creatures::eventai::movement::returning_home;
 use crate::{game_spell, game_world_entity, WorldEntity};
 
 use super::*;
@@ -344,7 +345,8 @@ pub(crate) fn apply_hit(
     let Some(mut target) = entities.guid().find(target_guid) else {
         return miss;
     };
-    if target.dead {
+    // vmangos `DealDamageMods` zeroes damage to an evading creature.
+    if target.dead || returning_home(ctx, target_guid) {
         return miss;
     }
     let dmg = damage.amount;
@@ -592,7 +594,7 @@ pub(crate) fn deal_damage(
     let Some(target) = entities.guid().find(target_guid) else {
         return (0, 0);
     };
-    if target.dead {
+    if target.dead || returning_home(ctx, target_guid) {
         return (0, 0);
     }
     if entities
