@@ -16,6 +16,7 @@ tests = [
     { path = "module/tests/trainer_professions.rs", function = "a_permanent_skill_bonus_counts_toward_a_required_skill", rung = "durable_module" },
     { path = "module/tests/trainer_professions.rs", function = "a_third_primary_profession_is_refused_while_a_secondary_one_and_a_later_rank_are_not", rung = "durable_module" },
     { path = "module/tests/trainer_professions.rs", function = "a_higher_rank_is_refused_until_the_previous_rank_is_known", rung = "durable_module" },
+    { path = "module/tests/trainer_professions.rs", function = "a_pet_learn_wrapper_is_refused_without_charging_or_teaching_the_character", rung = "durable_module" },
 ]
 
 [vmangos]
@@ -37,3 +38,9 @@ description = "game_spell_chain.req_spell is never checked: vmangos shows an off
 path = "module/src/trainer.rs"
 symbol = "assess"
 evidence = "vmangos Player::GetTrainerSpellState at d9173eca3ea08dd985c52dabbcc826898d1d0b77, Player.cpp:4263-4268."
+
+[[known_gaps]]
+description = "A buy of a pet-learn offer, such as Dash (23100), is refused with Unavailable. vmangos casts the wrapper and teaches its trigger spell to the living pet; LyraCore has no per-pet spell storage, so nothing can learn it. The offer stays listed with the state of its trigger spell."
+path = "module/src/trainer.rs"
+symbol = "apply_trainer_buy"
+evidence = "vmangos WorldSession::HandleTrainerBuySpellOpcode, NPCHandler.cpp:286-342, and Spell::EffectLearnPetSpell at d9173eca3ea08dd985c52dabbcc826898d1d0b77. Missing piece: pet spell storage (issue #1223)."

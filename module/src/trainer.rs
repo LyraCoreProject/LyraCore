@@ -169,6 +169,20 @@ fn learn_kind(kind: u8, target: u8) -> u8 {
     }
 }
 
+fn teaches_the_pet(effect: &crate::SpellEffect) -> bool {
+    use lyracore_shared::spell::taxonomy::{E_SCRIPTED, T_CASTER_PET};
+    effect.kind == E_SCRIPTED && effect.target == T_CASTER_PET && effect.trigger_spell != 0
+}
+
+// LyraCore stores no spells for a Hunter Pet, so a pet-learn wrapper has nowhere to teach.
+fn is_pet_learn_wrapper(ctx: &ReducerContext, spell_id: u32) -> bool {
+    ctx.db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .any(|effect| teaches_the_pet(&effect))
+}
+
 fn learn_target_trigger(effect: &crate::SpellEffect) -> Option<u32> {
     lyracore_shared::trainer::learn_target_trigger(
         learn_kind(effect.kind, effect.target),
@@ -564,6 +578,12 @@ pub(crate) fn apply_trainer_buy(
             }
         };
         return Err(refused(refusal, &detail));
+    }
+    if is_pet_learn_wrapper(ctx, spell_id) {
+        return Err(refused(
+            TrainerRefusal::Unavailable,
+            "a pet skill needs pet spell storage",
+        ));
     }
     caster.money = caster.money.saturating_sub(offered.cost);
     let owner = caster.owner_identity;

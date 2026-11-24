@@ -291,3 +291,36 @@ fn a_higher_rank_is_refused_until_the_previous_rank_is_known() {
     buy(&shard, &npc, SECOND);
     assert!(knows(&shard, SECOND));
 }
+
+#[test]
+#[ignore = "requires the local SpacetimeDB 2.14.0 CLI and debug Module"]
+fn a_pet_learn_wrapper_is_refused_without_charging_or_teaching_the_character() {
+    use lyracore_shared::spell::taxonomy::{E_SCRIPTED, T_CASTER_PET};
+    use lyracore_shared::trainer::TrainerRefusal;
+    // vmangos spell 23100 Dash teaches 23099 to the pet.
+    const WRAPPER: u32 = 5_091_401;
+    const TRIGGER: u32 = 5_091_402;
+    let (shard, npc) = fixture("trainer-pet-learn");
+    offer(&shard, 5_091_401, WRAPPER, 0, 0);
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(WRAPPER, 0)),
+            ("spell_id", &WRAPPER),
+            ("kind", &E_SCRIPTED),
+            ("target", &T_CASTER_PET),
+            ("trigger_spell", &TRIGGER),
+        ],
+    );
+    let spells_before =
+        shard.query_rows("SELECT spell_id FROM game_player_spell WHERE character_guid = 1");
+
+    refused_buy(&shard, &npc, WRAPPER, TrainerRefusal::Unavailable.as_tag());
+
+    assert!(!knows(&shard, WRAPPER));
+    assert!(!knows(&shard, TRIGGER));
+    assert_eq!(
+        shard.query_rows("SELECT spell_id FROM game_player_spell WHERE character_guid = 1"),
+        spells_before
+    );
+}
