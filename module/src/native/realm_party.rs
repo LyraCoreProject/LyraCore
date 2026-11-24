@@ -853,6 +853,7 @@ pub(super) fn restore(ctx: &ReducerContext, guid: u64) {
     for member in previous {
         if member.group_id != membership.group_id {
             crate::loot::tag::revoke_group_member(ctx, member.group_id, guid);
+            crate::quest::share::forget_quest_shares(ctx, guid);
         }
         members.id().delete(member.id);
     }

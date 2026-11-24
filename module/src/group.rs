@@ -1551,6 +1551,7 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64, departure
     };
     let group_id = m.group_id;
     crate::loot::tag::revoke_group_member(ctx, group_id, character_guid);
+    crate::quest::share::forget_quest_shares(ctx, character_guid);
     ctx.db.game_group_member().id().delete(m.id);
     let remaining = members_of(ctx, group_id);
     if departure == Departure::Kicked && remaining.len() >= 2 {
@@ -1597,6 +1598,7 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64, departure
                     0,
                     String::new(),
                 );
+                crate::quest::share::forget_quest_shares(ctx, r.character_guid);
                 ctx.db.game_group_member().id().delete(r.id);
             }
             crate::meeting_stone::party_disbanded(ctx, group_id, &all_guids);

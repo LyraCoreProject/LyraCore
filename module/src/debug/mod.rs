@@ -1044,7 +1044,12 @@ pub fn debug_accept_quest(
     giver_guid: u64,
     quest_entry: u32,
 ) -> Result<(), String> {
-    crate::actor::accept_quest(ctx, character_guid, giver_guid, quest_entry)
+    // Commits a refusal that ends a Quest Share, as the native accept does.
+    crate::actor::accept_quest(ctx, character_guid, giver_guid, quest_entry).or_else(|refusal| {
+        crate::quest::share::end_after_refused_accept(ctx, character_guid, quest_entry)
+            .then_some(())
+            .ok_or(refusal)
+    })
 }
 
 #[reducer]
@@ -1096,6 +1101,17 @@ pub fn debug_push_quest(
         character_guid,
         quest_entry,
     )?)
+}
+
+#[reducer]
+pub fn debug_answer_quest_share(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    answer: u8,
+) -> Result<(), String> {
+    crate::helpers::require_character(ctx, character_guid)?;
+    crate::quest::share::answer_quest_share(ctx, character_guid, answer);
+    Ok(())
 }
 
 #[reducer]

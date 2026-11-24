@@ -561,13 +561,19 @@ pub(super) fn receive(
             .into_iter()
             .collect(),
         ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(q) => {
-            super::actor(ctx, guid)
+            let accepted = super::actor(ctx, guid)
                 .map_err(|refusal| AcceptQuestRefusal::from(String::from(refusal)))
-                .and_then(|_| accept_offered_quest(ctx, guid, q.guid.guid(), q.quest_id))
-                .map_err(|refusal| {
-                    Rollback::replies(accept_refusal(&refusal), ActionRefusal::from(refusal))
-                })?;
-            vec![packet(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE)?]
+                .and_then(|_| accept_offered_quest(ctx, guid, q.guid.guid(), q.quest_id));
+            match accepted {
+                Ok(()) => vec![packet(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE)?],
+                Err(refusal) => {
+                    let packets = accept_refusal(&refusal);
+                    if !share::end_after_refused_accept(ctx, guid, q.quest_id) {
+                        return Err(Rollback::replies(packets, ActionRefusal::from(refusal)).into());
+                    }
+                    packets
+                }
+            }
         }
         ClientOpcodeMessage::CMSG_QUESTGIVER_CANCEL => {
             vec![packet(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE)?]
@@ -638,6 +644,10 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_PUSHQUESTTOPARTY(q) => {
             super::actor(ctx, guid)?;
             apply_push_quest_to_party(ctx, guid, q.quest_id)?;
+            Vec::new()
+        }
+        ClientOpcodeMessage::MSG_QUEST_PUSH_RESULT(answer) => {
+            share::answer_quest_share(ctx, guid, answer.message.as_int());
             Vec::new()
         }
         other => return Err(Unhandled::Declined(other)),

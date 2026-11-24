@@ -102,6 +102,7 @@
     "quest_choice_reward": 3,
     "quest_failure": 4,
     "quest_log_full": 5,
+    "quest_share": 8,
     "quest_transfer": 6,
     "queued_strike": 6,
     "rage_from_damage_taken": 4,
