@@ -126,10 +126,11 @@ fn decode_hex(encoded: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-/// Routes packets to one World Session as the Native Host does; its AOI Grants span calls.
+/// Routes packets to one World Session as the Native Host does, ending at a Handoff marker.
 pub struct WorldSessionObserver {
     connection: u128,
     grants: BTreeSet<(u8, u64)>,
+    handed_off: bool,
 }
 
 impl WorldSessionObserver {
@@ -137,14 +138,20 @@ impl WorldSessionObserver {
         Self {
             connection,
             grants: BTreeSet::new(),
+            handed_off: false,
         }
     }
 
     /// Applies one packet's AOI instruction and returns whether this World Session receives it.
     pub fn receives(&mut self, packet: &NativePacket) -> bool {
+        if self.handed_off {
+            return false;
+        }
         match packet.audience {
-            NativeAudience::Connection(connection) | NativeAudience::Handoff(connection) => {
-                connection == self.connection
+            NativeAudience::Connection(connection) => connection == self.connection,
+            NativeAudience::Handoff(connection) => {
+                self.handed_off = connection == self.connection;
+                self.handed_off
             }
             NativeAudience::Aoi {
                 layer,
@@ -257,6 +264,29 @@ mod tests {
         session.receives(&grant);
         assert!(!session.receives(&packet(&format!("[4,[{}]]", u128::MAX))));
         assert!(!session.receives(&broadcast));
+    }
+
+    #[test]
+    fn a_handoff_marker_is_the_last_packet_a_world_session_receives() {
+        let mut session = WorldSessionObserver::new(1);
+        let packets = [
+            r#"[1,[2,[[1],0,55]],[0,169],"01",false,0,false]"#,
+            r#"[2,[5,[[2],[7]]],[1,[]],"",false,0,false]"#,
+            r#"[3,[0,[1]],[0,477],"03",false,0,false]"#,
+            r#"[4,[5,[[1],[7]]],[1,[]],"",false,0,false]"#,
+            r#"[5,[0,[1]],[0,477],"05",false,0,false]"#,
+            r#"[6,[1,[0,55,[1,[]]]],[0,169],"06",false,0,false]"#,
+        ]
+        .map(|row| NativePacket::decode(row).unwrap());
+        assert_eq!(
+            session
+                .received(&packets)
+                .iter()
+                .map(|packet| packet.id)
+                .collect::<Vec<_>>(),
+            [1, 3, 4]
+        );
+        assert!(session.received(&packets[4..]).is_empty());
     }
 
     #[test]

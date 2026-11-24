@@ -1058,18 +1058,11 @@ fn tier1_fails_on_close_cipher_transition_delay_and_handoff() {
     ] {
         assert!(Delivery::new(1).route(&refused).is_err(), "{refused:?}");
     }
-    assert!(Delivery::new(2)
-        .route(&refused_close(packet))
-        .unwrap()
-        .is_none());
-}
-
-#[cfg(test)]
-fn refused_close(packet: NativePacket) -> NativePacket {
-    NativePacket {
+    let elsewhere = NativePacket {
         close_after: true,
         ..packet
-    }
+    };
+    assert!(Delivery::new(2).route(&elsewhere).unwrap().is_none());
 }
 
 #[test]

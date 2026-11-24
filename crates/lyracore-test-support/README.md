@@ -29,10 +29,11 @@ These methods do not read pending socket messages. A subsequent reducer call act
 `wait_for_packets` reads until packets arrive or its deadline expires.
 
 `WorldSessionObserver` answers which packets one World Session received. It routes `NativePacket`s
-as the Native Host does: direct and Handoff packets by connection, AOI packets by the AOI Grants it
-has seen, which Revoke and Clear withdraw. Feed it every packet from World Session entry onward. It
-judges nothing; a test checks `close_after`, `not_before_micros` and `authentication_complete`
-itself. The Host's own router in `native-host/src/feed.rs` cannot be linked by tests, so the two
+as the Native Host does: direct packets by connection, AOI packets by the AOI Grants it has seen,
+which Revoke and Clear withdraw. The Host writes neither a Handoff marker nor any later packet from
+this Shard to the client. The observer returns the marker as its last packet, so a test can see the
+Handoff, and nothing after it. Feed it every packet from World Session entry onward. It judges
+nothing; a test checks `close_after`, `not_before_micros` and `authentication_complete` itself. The Host's own router in `native-host/src/feed.rs` cannot be linked by tests, so the two
 must change together.
 
 This uses SpacetimeDB 2.7.1's `v1.json.spacetimedb` protocol. The CLI subscription process cannot

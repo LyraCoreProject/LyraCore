@@ -30,8 +30,9 @@ pub struct ReducerRows {
 
 impl ReducerRows {
     // Decode positional rows directly into typed fields to preserve integers wider than u64.
-    // `game_native_packet` rows decode only into `packets`.
+    // Panics for `game_native_packet`, whose rows decode only into `packets`.
     pub fn inserts(&self, table: &str) -> &[Box<RawValue>] {
+        refuse_packet_table(table, "ReducerRows::packets()");
         self.inserts.get(table).map(Vec::as_slice).unwrap_or(&[])
     }
 
@@ -59,6 +60,13 @@ impl ReducerRows {
         }
         Ok(rows)
     }
+}
+
+fn refuse_packet_table(table: &str, decoded: &str) {
+    assert!(
+        table != PACKET_TABLE,
+        "{PACKET_TABLE} rows are decoded; read them with {decoded}"
+    );
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -166,11 +174,13 @@ impl ReducerConnection {
     }
 
     // Drains subscribed inserts through the last received transaction, including earlier calls.
+    // Panics for `game_native_packet`; use drain_packets.
     pub fn drain_inserts(&mut self, table: &str) -> Vec<Box<RawValue>> {
+        refuse_packet_table(table, "ReducerConnection::drain_packets()");
         self.inserts.remove(table).unwrap_or_default()
     }
 
-    // Returns buffered packet rows or waits for the first batch; an empty result means timeout.
+    // Returns buffered decoded packets or waits for the first batch; an empty result means timeout.
     pub fn wait_for_packets(&mut self, timeout: Duration) -> Result<Vec<NativePacket>, String> {
         let deadline = Instant::now()
             .checked_add(timeout)
@@ -303,8 +313,13 @@ mod tests {
         let packet = &rows.packets()[0];
         assert_eq!(packet.audience, NativeAudience::Connection(u128::MAX - 1));
         assert_eq!(packet.body, [0x78, 0x56, 0x34, 0x12]);
-        assert!(rows.inserts("game_native_packet").is_empty());
         assert!(rows.inserts("absent").is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "ReducerRows::packets()")]
+    fn packet_rows_are_not_read_as_raw_inserts() {
+        ReducerRows::default().inserts(PACKET_TABLE);
     }
 
     #[test]
