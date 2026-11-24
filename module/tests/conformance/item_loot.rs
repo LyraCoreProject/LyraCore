@@ -145,7 +145,7 @@ impl Stage {
         self.spawn_chest(
             entry,
             &[
-                ("data0", &FIXTURE_JERKY),
+                ("data_0", &FIXTURE_JERKY),
                 ("respawn_secs", &CHEST_RESPAWN_SECS),
             ],
         )
@@ -442,7 +442,7 @@ fn a_fully_looted_chest_released_respawns_sooner_than_one_left_with_loot() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_chest_without_a_respawn_time_stays_open() {
     let mut stage = stage("item-loot-chest-no-respawn");
-    let chest = stage.spawn_chest(RESPAWNING_CHEST, &[("data0", &FIXTURE_JERKY)]);
+    let chest = stage.spawn_chest(RESPAWNING_CHEST, &[("data_0", &FIXTURE_JERKY)]);
 
     window(&stage.use_chest(chest), chest);
     request(&mut stage.connection, CMSG_AUTOSTORE_LOOT_ITEM, vec![0]);
