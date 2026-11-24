@@ -254,6 +254,13 @@ login until its Handoff, and the 30-second deadline of a Handoff row that waits 
 and `game_native_away.world` are typed, END-appended defaults; a legacy away row uses the default
 World Shard.
 
+`game_world_session_end` is a new private Realm outbox to `idc_end_world_session` on a World Shard.
+`game_world_session_end_retry` is a new private scheduled Realm table with at most one row per
+Account. It holds the end that a newer Login Queue ticket waits for, its 90-second deadline and the
+resend time of a refused end. Both start empty. See
+[the admission rules](architecture.md#host-listeners-and-admission) and
+[the deploy order](danger-zones.md#world-session-end-migration).
+
 `game_character_name` is a new private Realm table keyed by the lowercased name. A pending row
 has guid zero. Its selection id is nonzero for native creation and zero for Package creation;
 a completed row has its Character guid and selection id zero. The Account and World identify the creator. Confirmed deletion releases the row. It stays

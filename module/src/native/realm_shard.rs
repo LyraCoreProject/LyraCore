@@ -288,8 +288,12 @@ pub fn world_entry_answered(ctx: &ReducerContext, entry: WorldEntry, result: Res
     let aways = ctx.db.game_native_away();
     if let Some(previous) = aways.account_id().find(account_id) {
         // On the same World Shard, world entry itself replaces the earlier World Session.
-        if previous.world.or_else(|| world_shard(ctx)) != Some(entry.database.0) {
-            end_away(ctx, &previous);
+        if let Some(world) = previous
+            .world
+            .or_else(|| world_shard(ctx))
+            .filter(|world| *world != entry.database.0)
+        {
+            super::replacement::end_away(ctx, world, &previous);
         }
         crate::meeting_stone::remove_solo_seeker(ctx, previous.character_guid);
     }
@@ -315,28 +319,11 @@ pub struct AccountUpdate {
     pub session: Vec<u8>,
 }
 
-/// A new Session revokes an away World Session, as it revokes one on this Shard.
+/// Sends Account and Session changes to the World Shard that holds the World Session.
 pub(crate) fn account_changed(ctx: &ReducerContext, account_id: u64) {
-    if let Some(away) = ctx.db.game_native_away().account_id().find(account_id) {
-        end_away(ctx, &away);
-    }
-}
-
-/// Whether an earlier World Session of the Account is still away on a World Shard, which is asked
-/// again to end it. A World Session on its way back to this Shard is replaced at once.
-pub(super) fn replacing(ctx: &ReducerContext, account_id: u64) -> bool {
-    if let Some(away) = ctx.db.game_native_away().account_id().find(account_id) {
-        end_away(ctx, &away);
-        return true;
-    }
-    super::handoff::abandon_account(ctx, account_id);
-    false
-}
-
-/// Asks the World Shard that holds the away World Session to end it, sending the current Account
-/// and Session with the request.
-fn end_away(ctx: &ReducerContext, away: &NativeAway) {
-    let account_id = away.account_id;
+    let Some(away) = ctx.db.game_native_away().account_id().find(account_id) else {
+        return;
+    };
     let Some(world) = away.world.or_else(|| world_shard(ctx)) else {
         return;
     };
@@ -459,7 +446,6 @@ pub fn idc_world_entry(
     Ok(())
 }
 
-/// The Realm Shard has ended the Account's away World Session; this ends it here.
 #[reducer]
 pub fn idc_account_update(
     ctx: &ReducerContext,
@@ -467,20 +453,8 @@ pub fn idc_account_update(
     session: Vec<u8>,
 ) -> Result<(), String> {
     require_sender(ctx, realm_shard(ctx))?;
-    let account = store_account(ctx, &account)?;
-    store_session(ctx, &session)?;
-    let connections: Vec<ConnectionId> = ctx
-        .db
-        .game_native_world_connection()
-        .iter()
-        .filter(|connection| connection.state.account_id() == Some(account.id))
-        .map(|connection| connection.connection_id)
-        .collect();
-    for connection_id in connections {
-        super::disconnect(ctx, connection_id);
-    }
-    super::handoff::abandon_account(ctx, account.id);
-    Ok(())
+    store_account(ctx, &account)?;
+    store_session(ctx, &session)
 }
 
 #[table(accessor = game_selection_result, outbox(remote::idc_selection_result))]

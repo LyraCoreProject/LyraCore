@@ -5305,7 +5305,8 @@ def check_handoff(host):
 def check_realm_shard(host):
     """Logon and Sessions stay on the Realm Shard; Character selection and the world run on its World
     Shard, and a World Session moves between them by Handoff. A second connection for the Account
-    replaces the World Session that is away on the World Shard."""
+    replaces the World Session that is away on the World Shard, and a late end for the replaced
+    connection leaves the new World Session alone."""
     world = host.add_database()
     host.call('debug_seed_scenario_fixtures', database=world)
     host.call('operator_add_peer_shard', [host.identity(world), 'world'])
@@ -5371,8 +5372,18 @@ def check_realm_shard(host):
         opcode, body = replacement.read()
     client = replacement
     enter()
-    assert len(host.rows('SELECT connection_id FROM game_native_away')) == 1
-    assert host.rows('SELECT connection_id FROM game_native_away') != away
+    replaced = host.rows('SELECT connection_id FROM game_native_away')
+    assert len(replaced) == 1 and replaced != away
+    account = host.rows("SELECT id FROM game_account WHERE username = 'SPLIT'")[0][0]
+    host.call('debug_end_world_session', [away[0][0], account])
+    time.sleep(1)
+    sequence = secrets.randbits(32)
+    client.send(0x1dc, struct.pack('<II', sequence, 0))
+    while client.read() != (0x1dd, struct.pack('<I', sequence)):
+        pass
+    assert host.rows('SELECT character_guid FROM game_native_player', world) == [[guid]], \
+        'a late end for the replaced connection ended the new World Session'
+    assert host.rows('SELECT connection_id FROM game_native_away') == replaced
 
 
 def check_continent_shards(host):

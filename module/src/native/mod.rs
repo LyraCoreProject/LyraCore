@@ -54,6 +54,7 @@ pub(crate) mod realm_mail;
 pub(crate) mod realm_party;
 pub(crate) mod realm_petition;
 pub(crate) mod realm_shard;
+mod replacement;
 pub(crate) mod reputation;
 mod rollback;
 mod social;

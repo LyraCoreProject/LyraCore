@@ -66,7 +66,8 @@ attaches the connection to the target Shard under the same connection id and cal
 `native_world_adopt`, which builds the World Session from the target's `game_native_handoff` row.
 The source Shard sees an ordinary disconnect. A request still in flight to the source Shard may
 fail without ending the World Session. Handoff moves a World Session at Character selection or
-after a committed Character Transfer. A Handoff row waits 30 seconds for its connection. A failed
+after a committed Character Transfer. A Handoff row for world entry or for the return to Character
+selection waits 30 seconds for its connection; a Transfer Handoff has no deadline. A failed
 adoption, a connection that closes before adoption, or the deadline drops the row, unless a
 Character Transfer still fences it. A World Shard then reports the World Session closed to the Realm
 Shard, which removes its away record.
@@ -105,14 +106,22 @@ releases it after 20 seconds. The World Session keeps its capacity slot until di
 split Realm, a World Session away on a World Shard or on its way back keeps its slot, and its return
 to Character selection takes the slot back without queueing. A new authenticated connection replaces
 an older one for the same Account and joins behind existing waiters. When the older one is away, the
-new ticket waits while the Realm Shard asks its World Shard to end it, and the Login Queue admits it
-once the World Shard reports the World Session closed.
+new ticket waits. The Realm Shard asks the World Shard that holds the older one, once, to end that
+connection (`idc_end_world_session`). The World Shard ends only that connection or its Handoff and
+always reports the World Session closed, also when it holds nothing of it. The report removes the
+away record and the Login Queue admits the ticket. A refused request is sent again after 30 seconds.
+The ticket waits at most 90 seconds, which covers the 30-second Handoff deadline and two resends.
+It does not wait when the away record names a Shard that is not a Peer Shard. At the bound the
+Realm Shard drops the away record and admits the ticket. An older World Session that still exists
+then ends when the World Shard receives the request, or on its next request if a new logon replaced
+the Session key. Until then the Account can have two World Sessions.
 
 Session revocation Gates run before admission and before every authenticated request, including
 ignored controls. The one-hour Session expiry limits new world authentication only. An established
 World Session continues past that deadline, and the reaper keeps its Session until the connection
 closes. Account bans, deleted Sessions and replacement login proofs still revoke established
-connections. A new Session for an Account with an away World Session ends it on its World Shard.
+connections. On a split Realm, the World Shard that holds an away World Session receives the new
+Session and revokes that World Session on its next request.
 
 The local CLI starts this runtime. It builds the Host, publishes the `lyracore` Shard and
 provisions Accounts through the Module. Native data lives in `.lyracore/native-data`. See
@@ -475,8 +484,8 @@ before new creation opens. Old creation replies and profile outboxes must drain 
 
 Login and deletion route by Character guid and Account. Login sends the owning World Shard Account
 and Session copies, then hands the World Session over by Handoff. Logout hands it back. The Realm
-Shard records which World Shard holds the away World Session, so changed Accounts and Sessions go
-to that Shard. The Handoff row retains the Character guid for arrival. The Login Queue counts away
+Shard records which World Shard holds the away World Session, so changed Accounts and Sessions, and
+a request to end that World Session, go to that Shard. The Handoff row retains the Character guid for arrival. The Login Queue counts away
 World Sessions toward its session limit. From `CMSG_PLAYER_LOGIN` until the Handoff, the Realm Shard
 refuses further selection requests of that connection. If the World Shard does not answer within
 ten seconds, the Realm Shard closes the World Session.

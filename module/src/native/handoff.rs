@@ -42,8 +42,8 @@ crate::outside_table_catalog!(game_native_handoff);
 /// a late world entry answer cannot write a Handoff marker for a Handoff that has already expired.
 const ADOPTION_MICROS: i64 = 30_000_000;
 
-/// Writes the Handoff that waits for its connection, replacing an earlier one. A Handoff the
-/// connection does not adopt in time expires as the pending `request_opcode`.
+/// Writes the Handoff that waits for its connection, replacing an earlier one. Its deadline is a
+/// `game_pending_selection` row for `request_opcode`, the client request that started the Handoff.
 pub(super) fn expect(ctx: &ReducerContext, handoff: NativeHandoff, request_opcode: u32) {
     let connection_id = handoff.connection_id;
     let handoffs = ctx.db.game_native_handoff();
@@ -65,19 +65,23 @@ pub(super) fn abandon(ctx: &ReducerContext, connection_id: ConnectionId) {
     let Some(handoff) = handoffs.connection_id().find(connection_id) else {
         return;
     };
-    if handoff.transfer_id != 0
+    if fenced(ctx, &handoff) {
+        return;
+    }
+    handoffs.connection_id().delete(connection_id);
+    super::realm_shard::cancel_selection(ctx, connection_id);
+    super::realm_shard::report_closed(ctx, connection_id, handoff.account_id);
+}
+
+/// Whether a Character Transfer still fences the Handoff, until the Transfer release.
+pub(super) fn fenced(ctx: &ReducerContext, handoff: &NativeHandoff) -> bool {
+    handoff.transfer_id != 0
         && ctx
             .db
             .game_transfer_in()
             .transfer_id()
             .find(handoff.transfer_id)
             .is_some()
-    {
-        return;
-    }
-    handoffs.connection_id().delete(connection_id);
-    super::realm_shard::cancel_selection(ctx, connection_id);
-    super::realm_shard::report_closed(ctx, connection_id, handoff.account_id);
 }
 
 pub(super) fn abandon_account(ctx: &ReducerContext, account_id: u64) {

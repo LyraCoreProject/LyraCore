@@ -223,7 +223,7 @@ fn drain(ctx: &ReducerContext, new_connection: Option<ConnectionId>) -> Result<(
             super::disconnect(ctx, admission.connection_id);
             continue;
         }
-        let replacing = super::realm_shard::replacing(ctx, admission.account_id);
+        let replacing = super::replacement::replacing(ctx, admission.account_id);
         if admits(&limits, active, entering, replacing) {
             active += 1;
             entering += 1;
