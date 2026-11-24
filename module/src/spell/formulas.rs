@@ -23,7 +23,7 @@ pub(crate) fn healed_value(health: u32, max_health: u32, basis: i32) -> u32 {
 }
 
 pub(crate) fn damaged_value(health: u32, basis: i32) -> u32 {
-    health.saturating_sub(basis.max(0) as u32).max(1)
+    health.saturating_sub(basis.max(0) as u32)
 }
 
 pub(crate) fn energized_value(power: u32, max_power: u32, basis: i32) -> u32 {

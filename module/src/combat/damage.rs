@@ -385,8 +385,7 @@ pub(crate) fn apply_hit(
         };
     }
     let shield = matches!(hit.source, HitSource::DamageShield);
-    let killed = lethal && (weapon || !target_is_player || shield);
-    if killed {
+    if lethal {
         if target_is_player {
             kill_player(ctx, target_guid, attacker_guid);
         } else {
@@ -418,9 +417,7 @@ pub(crate) fn apply_hit(
     target.health = crate::spell::damaged_value(target.health, dmg as i32);
     reward_taken_rage(&mut target, attacker_guid, before);
     target.update(ctx);
-    if !lethal {
-        super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), target_guid, target_is_player);
-    }
+    super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), target_guid, target_is_player);
     if damage.lethal_prevented {
         commit_death_prevention(ctx, target_guid, attacker_guid);
     }
