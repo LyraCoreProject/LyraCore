@@ -801,7 +801,6 @@ fn verify_tagger_departures(
     )?;
     kill_and_expect_rewards(ctx, tagger_left, B, &[A, B, E], &[], &[B, E])?;
 
-    // The tagger leaves a Group whose other members are out of range: nobody may loot the corpse.
     const C: u64 = LOOT_TAG_FIXTURE_CHARACTER_C;
     const D: u64 = LOOT_TAG_FIXTURE_CHARACTER_D;
     move_fixture_entity(ctx, C, x + 100.0)?;
