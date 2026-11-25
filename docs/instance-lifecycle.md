@@ -4,9 +4,23 @@
 Instance zero is the open world. SpacetimeDB allocates `game_instance.instance_id` from one.
 
 `resolve_or_create_instance` handles dungeon Area Trigger entry. It resolves the Group's live
-Instance first, then the Character's live binding, then creates an Instance. A solo Instance can be
-adopted by a Group its holder joins, so the other members enter the same run. Character bindings
-survive Group disband and expire when the Instance is reaped.
+Instance first, then the Character's live binding to a solo run, then creates an Instance. A run
+belongs to the Group that entered it, as in vmangos `DungeonMap::BindPlayerOrGroupOnEnter`. A
+binding to a Group's run never routes a Character outside that Group: after leaving the Group,
+or after the Group disbands, the Character enters a fresh run alone or its new Group's run. A
+member who enters its solo run while its Group has no run of that map gives the run to the Group,
+which is how a leader's earlier solo run becomes the Group's run. A Group never adopts a second run
+of one map.
+
+A Character who joins a Group without leading it loses its bindings, except for the map it stands
+on, as vmangos `Group::AddMember` resets a joining member's runs. The Group plane does this on one
+Shard; on a split Realm the World Shard that holds the Character does it when the Group projection
+first names it a member. Bindings expire when the Instance is reaped.
+
+vmangos `Group::Disband` hands the last member standing in the Group's run that run as its own.
+Here that member counts down and is removed like the one who left, unless the two form a Group
+again inside, which adopts the run. A known gap in
+`conformance/features/world/map_and_trigger_rules.toml` records this.
 
 `create_instance` builds creature entities from the map's authored spawn rows and makes copies of
 doors, buttons, chests and goobers. Templates and authored spawn rows are shared. With

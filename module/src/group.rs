@@ -1268,6 +1268,7 @@ impl JoinPlan {
                 .into_iter()
                 .map(|member| member.character_guid),
         );
+        crate::instance::unbind_joining_member(ctx, joiner_guid);
         crate::instance::reconcile_instance_removal(ctx, joiner_guid);
         if let JoinTarget::NewParty { leader_guid } = target {
             crate::instance::reconcile_instance_removal(ctx, leader_guid);
