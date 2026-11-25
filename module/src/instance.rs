@@ -768,6 +768,7 @@ pub(crate) fn create_instance(
         .insert(ctx);
         copied += 1;
     }
+    crate::gameobject::arm_instance_pools(ctx, map_id, instance_id);
 
     log::info!(
         "create_instance: instance {instance_id} map {map_id} party {party_id} — {spawned} creatures, {copied} GO copies"
@@ -949,6 +950,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
         crate::loot::reap_corpse_loot_family(ctx, *guid);
         crate::GameObject::delete(ctx, guid);
     }
+    crate::gameobject::forget_instance_pools(ctx, instance_id);
 
     crate::creatures::cancel_relay_runs_for_instance(ctx, instance_id);
     crate::encounter::sweep_encounter_state(ctx, instance_id);

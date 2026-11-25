@@ -156,9 +156,9 @@ echo "import-world.sh — spacetime reachable, canned row counts"
 STUB_MODE=succeed STUB_ROW_COUNT=150 run_import
 check "the run reaches the assertion stage (no ABORT)" not_contains "$out" '[world] ABORT'
 check "a count-based assertion reports the CANNED count, not 0" \
-    contains "$out" "gather-node GO spawns: 150"
+    contains "$out" "GameObjects written (static + pool members): 300"
 check "  ...and floors it clears print ok, not FAIL" \
-    contains "$out" "ok    gather-node GO spawns: 150"
+    contains "$out" "ok    GameObjects written (static + pool members): 300"
 check "the run reaches its own final verdict line" contains "$out" '[world]'
 
 echo

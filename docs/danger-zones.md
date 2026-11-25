@@ -246,6 +246,35 @@ A chest opened before the publish keeps its respawn time. When that time comes t
 and it respawns one respawn delay later. A Package that builds a `GameObject` row must set the three
 new fields, so its branch pins a Core revision with them.
 
+### GameObject pool migration
+
+`game_gameobject_pool_member` gains `rotation_0` to `rotation_3`, `respawn_min_secs` and
+`respawn_max_secs`, end-appended with default 0. The private `game_gameobject_pool_link` and
+`game_gameobject_pool_copy` tables are new and start empty. `game_gameobject_pool.in_place` keeps its
+column but nothing reads it. No other layout changes, and no Package builds a pool row.
+
+A Realm published without a reimport behaves as before: every imported chest, herb and ore
+placement is a static spawn, and the pool seeded at `init` (map 0's copper and tin vein) keeps
+rolling. One thing changes for that pool and for any pool written by hand: a used member's
+replacement now waits hidden for its respawn delay. A pool member's respawn no longer rolls the
+pool again.
+
+Publish the Module before you reimport: the importer calls the new `arm_pools` reducer. Reimport
+the `gameobjects` Import Family to import the pools. The reimport replaces every pool row,
+including the seeded pool, and writes no static spawn for a pooled placement. Its first
+`import_gameobjects` batch removes every old object, also when a slice holds only pooled
+placements. The importer then rolls the open-world pools through `arm_pools`, in batches that bring
+up at most 250 objects each, like the static spawn batches. Only the rolled members are up
+afterwards: about 6,700 of the 32,550 pooled placements in the full world. A rerun writes the same
+rows and rolls each pool once again, never twice over. `arm_all_pools` refuses a Realm with more
+than 250 top-level pools, so `import-world.sh` no longer calls it. An Instance created after the
+reimport rolls the pools of its map; a running Instance has lost its objects to the reimport, as
+before, and gets them back when it is created again. Shared import SQL defaults are not needed: the
+importer writes every member column.
+
+The import floors in `importer/scripts/import-world.sh` count the GameObjects the import wrote,
+static objects plus pool members, so a roll that shows only some members does not fail them.
+
 ### Chest money and item loot migration
 
 `game_item_template` gains `lock_id`, `money_min` and `money_max`, and `game_gameobject_template`
@@ -771,6 +800,33 @@ hit absorbed whole breaks the Auras that damage breaks and cancels a Hearthstone
 Falling, drowning and fatigue damage break those Auras, cancel or push back a cast and end a Duel at
 1 health; a Character immune to physical damage takes none of it. The `on_damage_taken` hook now also fires for a hit absorbed whole, for the hit that ends
 a Duel, and for environmental damage, which reports attacker 0.
+
+### Area target cap migration
+
+`game_spell.max_affected_targets` holds the source `MaxAffectedTargets`. It is END-appended with
+default 0, which means no cap, so no repair is needed. Publish through a planned update; development
+reload requires an unchanged schema.
+
+These changes apply at publish, without the reimport. No area spell stops at 20 units: an instant
+area effect and a ground area tick reach every unit they select. An instant or chain area spell that
+harms picks units by the ground area's rule: it hits a neutral creature without reputation, spares
+a reputation faction the Character is not at war with, and an unflagged Character's area spares
+another Character outside a Duel. Every harmful area spell, instant or a ground area tick, now
+passes over a totem and a unit whose flags make it not attackable or not selectable. A friendly area
+(`T_AREA_ALLY`) helps only units friendly to its caster, no longer neutral ones. Target 30 and
+helpful targets 7 and 8 import as `T_AREA_NOT_HOSTILE` (11), which keeps helping every unit not
+hostile to the caster; until the reimport those spells keep `T_AREA_ALLY` and help only friendly
+units.
+
+The importer now writes vmangos party targets 20, 33 and 34 as `T_PARTY_AREA` (9) and raid target
+56 as `T_RAID_AREA` (10), which reach only the caster's Group. Until you reimport `spell`, these
+spells keep `T_AREA_ALLY` and help every friendly unit in their radius, and a spell that vmangos
+limits with MaxAffectedTargets hits every unit in its area. Reimport `spell` from this revision
+before play resumes. An Operator Content edit now accepts effect targets up to 11.
+
+A Package Delta written before this revision has no `max_affected_targets`, so its new spells have no
+cap. Emit the Package again from a Base Snapshot of this revision, or set the field, before you
+apply it.
 
 ### Melee reach migration
 

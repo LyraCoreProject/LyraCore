@@ -78,6 +78,7 @@ fn source_spell(row: &Row, script_name: &str) -> Result<Spell> {
         aura_interrupt_flags: row.number("auraInterruptFlags")?,
         channel_interrupt_flags: row.number("channelInterruptFlags")?,
         prevention_type: row.number("preventionType")?,
+        max_affected_targets: row.number("maxAffectedTargets")?,
         proc_flags: row.number("procFlags")?,
         proc_chance: row.number("procChance")?,
         proc_charges: row.number("procCharges")?,
@@ -208,6 +209,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
         "interruptFlags",
         "auraInterruptFlags",
         "channelInterruptFlags",
+        "maxAffectedTargets",
         "castingTimeIndex",
         "categoryRecoveryTime",
         "category",
@@ -350,7 +352,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
 #[cfg(test)]
 pub(crate) fn fixture() -> crate::world_source::WorldSource {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
-    let mut columns = "customFlags minTargetLevel spellIconId activeIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 attributesEx3 attributesEx4 dmgClass stances stancesNot category targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime startRecoveryCategory startRecoveryTime interruptFlags auraInterruptFlags channelInterruptFlags procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    let mut columns = "customFlags minTargetLevel spellIconId activeIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 attributesEx3 attributesEx4 dmgClass stances stancesNot category targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime startRecoveryCategory startRecoveryTime interruptFlags auraInterruptFlags channelInterruptFlags maxAffectedTargets procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
     for prefix in [
         "effectBonusCoefficient",
         "effect",
@@ -568,6 +570,17 @@ mod tests {
             ),
             (0x0F, 0x7C0C, 1)
         );
+    }
+
+    #[test]
+    fn a_spells_max_affected_targets_reaches_the_source_spell() {
+        let source = fixture();
+        source
+            .fixture_connection()
+            .execute_batch("UPDATE spell_template SET maxAffectedTargets=3 WHERE build=5875")
+            .unwrap();
+        let (spells, _) = read(&source).unwrap();
+        assert_eq!(spells[0].max_affected_targets, 3);
     }
 
     #[test]

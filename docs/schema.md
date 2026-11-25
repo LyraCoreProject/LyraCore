@@ -932,6 +932,40 @@ That is why `debug_repair_after_publish` freezes profiles again: an Aura applied
 was frozen reads as "never procs, no charges", and a permanent self-buff never refreshes on its
 own.
 
+### GameObject pools
+
+`module/src/gameobject.rs` keeps vmangos pools of GameObject placements. `game_gameobject_pool`
+holds a pool's limit, `max_active`. `game_gameobject_pool_member` holds one placement, a point,
+with its template, position, rotation and respawn range. `game_gameobject_pool_link` holds vmangos
+`pool_pool`: a pool's parent (0 for a top-level pool), its weight among the parent's child pools,
+and the map of its top-level pool. Every imported pool has a link row; an Instance of that map rolls
+the top-level ones. A pool without a link row, such as the pool `init` seeds, is a top-level pool
+that rolls only in the open world. Imported points take the id `2^40 | source guid`.
+
+A roll picks among the members, or child pools, that are not up, by `weight`. The importer turns
+the vmangos chances into weights as `PoolGroup::RollOne` reads them: with a limit of 1, an entry with
+a chance takes that share of a 100 percent roll in order, and the entries without one split what
+is left equally; with any other limit every entry is equally likely. A weight of 0 never rolls.
+The weights of a limit-1 group whose chances leave part of the roll to no entry are scaled up to a
+whole roll; see the deliberate deviations in
+`conformance/features/gameobjects/gameobject_world.toml`. A top-level pool with such a group never
+spawns, as vmangos `CheckPool` decides, and the importer writes no row for it. A pool's child pools
+and its own members share its limit, as vmangos counts both: a roll brings up child pools first,
+then members, until the limit is up. A pooled placement must start ready (state 0); the importer
+refuses another, and every pooled placement in the pinned World Source does.
+
+The importer rolls the open-world pools through `arm_pools`, grouped so one call brings up at most
+250 objects; `arm_all_pools` rolls them all in one call and refuses more than 250 top-level pools.
+
+An open-world member that is up has an object at guid `POOL_TAG | point`. In an Instance it has an
+object at `POOL_TAG | GO_COPY_BAND | copy_id` and a `game_gameobject_pool_copy` row naming its
+Instance and point. `create_instance` rolls the top-level pools of its map and teardown forgets
+their copy rows. A looted chest or gathered node in a pool leaves its pool: a top-level pool rolls
+a replacement, and a child pool hands its place to another child pool of its parent, with the used
+pool rolling again when no other is free. The replacement's object is despawned and used until its
+own respawn delay passes. A pooled chest in an Instance, or one without a respawn time, despawns in
+place like any chest.
+
 ### Global cooldowns (`module/src/spell/tables.rs`)
 
 `game_spell.gcd_ms` and `gcd_category` are the source `StartRecoveryTime` and
@@ -983,6 +1017,39 @@ modifiers plus the amounts of its `SPELL_AURA_RESIST_PUSHBACK` Auras, such as Co
 delay, and the number of delays. Breaking or ending the channel deletes the row. A row left by a
 channel that ran out is harmless: a channel that no longer ends at that time starts again from no
 delays, and the next delay overwrites the row.
+
+### Area target cap
+
+`game_spell.max_affected_targets` is the source `MaxAffectedTargets`, kept verbatim. An instant
+area effect of a spell with a nonzero value reaches at most that many units. The cast's target is
+always kept and the rest are picked at random, as vmangos `Spell::SetTargetMap` does. A capped
+effect picks its units once, when the cast lands and before any effect runs; it later reaches only
+those units, so a picked unit that dies is not replaced and a unit that walks in is not added. One
+draw per cast ranks the units, so effects that select the same units keep the same ones. A chain
+effect stops at its jump count instead. A ground area tick has no cap, as vmangos
+`DynamicObject::Update` has none.
+
+The effect targets that select units in an area:
+
+- `T_AREA_ENEMY` (4): units the caster may attack, by vmangos `IsValidAttackTarget`.
+- `T_AREA_ALLY` (5, targets 29 and 31): units friendly to the caster, as vmangos
+  `SPELL_TARGETS_FRIENDLY`, with the caster's owner and the owner's other units.
+- `T_CHAIN_ENEMY` (6): the cast's target, then each time the nearest unit the caster may attack
+  within 10 yd. A jump count of 0 or 1 hits the target alone.
+- `T_PARTY_AREA` (9) and `T_RAID_AREA` (10): the caster's subgroup or whole raid and their pets,
+  measured from the caster, as vmangos `FillRaidOrPartyTargets`. The members come from the
+  Character that controls the caster; without one, from the caster's owner, or the caster itself
+  when it has no owner. Without a Group, that one unit and its pet. A party area includes the
+  caster and a raid area does not.
+- `T_AREA_NOT_HOSTILE` (11, target 30 and helpful targets 7 and 8): every unit not hostile to the
+  caster.
+
+An area wider than 100 grid cells (a radius above about 225 yd, up to 50,000 yd in the source
+data) reads its map partition through the `by_map` index instead of one lookup per cell.
+
+The default, 0, means no cap. A row written before the reimport, a test fixture and a Package Delta
+that omit the field reach every unit the area selects, as vmangos does for a spell without the
+field. Packages claim the column.
 
 ### Combo finishers (`module/src/combo.rs`)
 

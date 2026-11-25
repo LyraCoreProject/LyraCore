@@ -17,8 +17,8 @@ use crate::creatures::population::game_creature_population_member;
 use crate::creatures::{MOVEMENT_IDLE, MOVEMENT_RANDOM, MOVEMENT_WAYPOINT};
 use crate::game_world_entity;
 use crate::gameobject::{
-    game_gameobject, game_gameobject_template, is_gameobject_guid, GameObject, GO_COPY_BAND,
-    POOL_TAG,
+    game_gameobject, game_gameobject_pool_member, game_gameobject_template, is_gameobject_guid,
+    GameObject, GameObjectPoolMember, GO_COPY_BAND, POOL_TAG,
 };
 use crate::nav::game_nav_chunk;
 use crate::terrain::game_terrain_chunk;
@@ -461,6 +461,9 @@ fn update_gameobject(
     update: GameObjectSpawnUpdate,
 ) -> Result<String, String> {
     let GameObjectSpawnUpdate { guid, fields } = update;
+    if let Some(member) = crate::gameobject::world_pool_member(ctx, guid) {
+        return update_pool_member(ctx, guid, member, &fields);
+    }
     let old = authored_gameobject(ctx, guid)?;
     check_gameobject_fields(ctx, &fields)?;
     crate::gameobject::despawn_from_relay(ctx, guid)?;
@@ -473,7 +476,57 @@ fn update_gameobject(
     ))
 }
 
+/// Moves an open-world pool member within its map and shows its object at once with the edit.
+fn update_pool_member(
+    ctx: &ReducerContext,
+    guid: u64,
+    mut member: GameObjectPoolMember,
+    fields: &GameObjectSpawnFields,
+) -> Result<String, String> {
+    let old = ctx
+        .db
+        .game_gameobject()
+        .guid()
+        .find(guid)
+        .ok_or_else(|| format!("gameobject spawn {guid} does not exist"))?;
+    if fields.map_id != member.map_id {
+        return Err(format!(
+            "gameobject {guid} is a member of pool {}; the import owns the pool's map",
+            member.pool_id
+        ));
+    }
+    check_gameobject_fields(ctx, fields)?;
+    member.template_entry = fields.template_entry;
+    member.x = fields.x;
+    member.y = fields.y;
+    member.z = fields.z;
+    member.orientation = fields.orientation;
+    member.rotation_0 = fields.rotation_0;
+    member.rotation_1 = fields.rotation_1;
+    member.rotation_2 = fields.rotation_2;
+    member.rotation_3 = fields.rotation_3;
+    let pool_id = member.pool_id;
+    let respawn_range = (member.respawn_min_secs, member.respawn_max_secs);
+    ctx.db
+        .game_gameobject_pool_member()
+        .point_id()
+        .update(member);
+    crate::gameobject::despawn_from_relay(ctx, guid)?;
+    let go = insert_gameobject(ctx, guid, fields, respawn_range)?;
+    Ok(format!(
+        "updated gameobject {guid} of pool {pool_id}: {} -> {}",
+        describe_gameobject(&old),
+        describe_gameobject(&go)
+    ))
+}
+
 fn delete_gameobject(ctx: &ReducerContext, guid: u64) -> Result<String, String> {
+    if let Some(member) = crate::gameobject::world_pool_member(ctx, guid) {
+        return Err(format!(
+            "gameobject {guid} is a member of pool {}; the import owns the pool",
+            member.pool_id
+        ));
+    }
     let old = authored_gameobject(ctx, guid)?;
     crate::gameobject::despawn_from_relay(ctx, guid)?;
     Ok(format!(

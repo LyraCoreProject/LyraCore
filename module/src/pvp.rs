@@ -242,11 +242,16 @@ pub(crate) fn spell_targeted(
     target_guid: u64,
     e: &crate::SpellEffect,
 ) {
-    use lyracore_shared::spell::taxonomy::{E_DUEL, T_AREA_ALLY, T_TARGET_ALLY};
+    use lyracore_shared::spell::taxonomy::{
+        E_DUEL, T_AREA_ALLY, T_AREA_NOT_HOSTILE, T_PARTY_AREA, T_RAID_AREA, T_TARGET_ALLY,
+    };
     if e.kind == E_DUEL {
         return;
     }
-    let helpful_target = matches!(e.target, T_TARGET_ALLY | T_AREA_ALLY);
+    let helpful_target = matches!(
+        e.target,
+        T_TARGET_ALLY | T_AREA_ALLY | T_AREA_NOT_HOSTILE | T_PARTY_AREA | T_RAID_AREA
+    );
     let entities = ctx.db.game_world_entity();
     let (Some(caster), Some(target)) = (
         entities.guid().find(caster_guid),

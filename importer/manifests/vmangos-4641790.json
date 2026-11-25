@@ -2182,24 +2182,38 @@
     "pool_gameobject": {
       "columns": {
         "integer": [
+          "flags",
           "guid",
           "patch_max",
           "patch_min",
           "pool_entry"
+        ],
+        "real": [
+          "chance"
         ]
       },
-      "locked_rows": 29466
+      "locked_rows": 29466,
+      "bits": {
+        "flags": 0
+      }
     },
     "pool_gameobject_template": {
       "columns": {
         "integer": [
+          "flags",
           "id",
           "patch_max",
           "patch_min",
           "pool_entry"
+        ],
+        "real": [
+          "chance"
         ]
       },
-      "locked_rows": 100
+      "locked_rows": 100,
+      "bits": {
+        "flags": 0
+      }
     },
     "pool_pool": {
       "columns": {

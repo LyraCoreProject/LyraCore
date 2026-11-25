@@ -70,6 +70,7 @@ export const SPELL_COLUMNS: { readonly [K in SpellField]: Column } = {
   interruptFlags: { column: "interrupt_flags", type: "u32", defaultValue: 2 },
   channelInterruptFlags: { column: "channel_interrupt_flags", type: "u32", defaultValue: 4 },
   preventionType: { column: "prevention_type", type: "u8", defaultValue: 1 },
+  maxAffectedTargets: { column: "max_affected_targets", type: "u32", defaultValue: 0 },
 };
 
 export const SPELL_EFFECT_COLUMNS: {

@@ -22,7 +22,7 @@ The Deadmines checks run only when the profile includes map 36:
 | Floor | Old | New | Census count and reason |
 | --- | ---: | ---: | --- |
 | DEADMINES_CREATURE_SPAWNS | 100 | 180 | 207 placed spawns after patch selection. |
-| DEADMINES_GAMEOBJECTS | 3 | 65 | 75 placed GameObjects, including doors and chests. |
+| DEADMINES_GAMEOBJECTS | 3 | 65 | 75 placed GameObjects, including doors and chests; 46 are pool members. |
 
 `alliance-single` and `full-world` use the following floors. Each count is from
 the smaller Alliance profile. Other profiles retain their presence or corridor
@@ -32,7 +32,7 @@ floors because the census below does not measure their scope.
 | --- | ---: | ---: | --- |
 | TRAINER_OFFERINGS_CLASS | 1 | 12,000 | 13,529 offerings from selected trainer links. |
 | TRAINER_OFFERINGS_PROFESSION | 1 | 200 | 224 profession offerings. |
-| GATHER_NODE_GO | 1 | 12,000 | The existing query counts all 13,636 GameObjects, including 2,497 gather nodes. |
+| GATHER_NODE_GO | 1 | 12,000 | The query counts all 13,636 GameObjects written, including 2,497 gather nodes. |
 | QUEST_GIVER_RELATIONS | 1 | 2,000 | 2,366 selected creature-to-quest relations. |
 | QUESTS_L6_10 | 1 | 160 | 181 quests in the level band. |
 | QUESTS_L10_20 | 1 | 340 | 386 quests in the level band. |
@@ -48,6 +48,9 @@ The single-row Geomancer and Frost Armor rotation checks became a Geomancer
 Fireball cast check (476, spell 20793) and a Knuckleduster Pummel rotation check
 (449, spell 12555). vmangos gives the Geomancer one spell slot and no Frost Armor
 rotation. The Pillager check now requires entry 589 with Fireball 19816.
+
+The GameObject floors count what the import wrote: static objects plus pool members. A pool roll
+shows only some members, so counting `game_gameobject` alone would fall below the floor.
 
 Terrain, navigation, live-creature coverage, start positions, reserved taxi
 fixtures and the remaining presence checks keep their existing floors. Planned

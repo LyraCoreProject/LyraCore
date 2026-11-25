@@ -627,7 +627,6 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
     if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    const AOE_MAX_TARGETS: usize = 20;
     let now = crate::time::now(ctx);
     let now_micros = now.to_micros_since_unix_epoch();
     let areas = ctx.db.game_ground_area();
@@ -655,7 +654,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
         let caster = entities.guid().find(a.caster_guid);
         let r2 = a.radius_yd * a.radius_yd;
         let targets: Vec<WorldEntity> =
-            crate::helpers::entities_near(ctx, a.map_id, a.instance_id, a.x, a.y, a.radius_yd)
+            crate::helpers::area_candidates(ctx, a.map_id, a.instance_id, a.x, a.y, a.radius_yd)
                 .into_iter()
                 .filter(|c| !c.dead && c.guid != a.caster_guid)
                 .filter(|c| !crate::creatures::eventai::movement::returning_home(ctx, c.guid))
@@ -669,7 +668,6 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                         .is_some_and(|caster| crate::combat::area_may_harm(ctx, caster, &c))
                         .then_some(c)
                 })
-                .take(AOE_MAX_TARGETS)
                 .collect();
 
         let source = ctx

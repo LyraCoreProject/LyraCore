@@ -113,6 +113,9 @@ pub struct Spell {
     pub channel_interrupt_flags: u32,
     #[default(1u8)]
     pub prevention_type: u8,
+    // Spell.dbc MaxAffectedTargets; 0 means no cap (docs/schema.md#area-target-cap).
+    #[default(0u32)]
+    pub max_affected_targets: u32,
 }
 
 impl Spell {
@@ -164,6 +167,7 @@ impl Spell {
             interrupt_flags: INTERRUPT_FLAG_DAMAGE_PUSHBACK,
             channel_interrupt_flags: CHANNEL_INTERRUPT_ACTION_CANCELS,
             prevention_type: PREVENTION_TYPE_SILENCE,
+            max_affected_targets: 0,
         }
     }
 
