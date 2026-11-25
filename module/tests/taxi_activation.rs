@@ -798,6 +798,8 @@ fn a_sitting_character_still_gets_its_flight() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_flight_master_that_cannot_be_used_gets_no_reply() {
     let (shard, mut wire, master) = stage("taxi-activation-master", 1000);
+    // A hostile flight master must not pull the Character into combat before the last case.
+    shard.clear_schedule("game_creature_move_schedule");
     let entity = |assignment: &str| {
         format!("UPDATE game_world_entity SET {assignment} WHERE guid = {master}")
     };

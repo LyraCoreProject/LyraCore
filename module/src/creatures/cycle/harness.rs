@@ -1033,11 +1033,20 @@ impl Scenario {
     }
 
     fn tick(&self, sense: bool, scope: TickScope) -> TickContext {
+        let cadence = if sense {
+            TickCadence::Sense
+        } else {
+            TickCadence::Move
+        };
+        self.tick_at(cadence, scope)
+    }
+
+    fn tick_at(&self, cadence: TickCadence, scope: TickScope) -> TickContext {
         TickContext {
             now_micros: self.now_micros.get(),
             now_ms: (self.now_micros.get() / 1000) as u32,
             tick_secs: crate::creatures::MOVE_TICK_SECS,
-            sense,
+            cadence,
             sense_secs: crate::creatures::MOVE_TICK_SECS
                 * crate::creatures::SENSE_EVERY_N_TICKS as f32,
             scope,
@@ -1050,7 +1059,7 @@ impl Scenario {
             now_micros,
             now_ms: (now_micros / 1000) as u32,
             tick_secs: crate::creatures::tick_secs_for_interval(interval_micros),
-            sense: crate::creatures::is_sense_tick_for_interval(now_micros as i64, interval_micros),
+            cadence: TickCadence::for_interval(now_micros as i64, interval_micros),
             sense_secs: crate::creatures::sense_period_secs_for_interval(interval_micros),
             scope,
         }
@@ -2608,8 +2617,13 @@ impl IdleSink for Scenario {
 }
 
 impl EngageSink for Scenario {
-    fn players(&self) -> Vec<AggroTarget> {
-        self.players.borrow().clone()
+    fn players(&self, scope: &TickScope) -> Vec<AggroTarget> {
+        self.players
+            .borrow()
+            .iter()
+            .filter(|p| scope.covers(p.instance_id))
+            .copied()
+            .collect()
     }
     fn sensing_creatures(&self, active: &HashSet<u64>) -> Vec<Sensor> {
         let creatures = self.creatures.borrow();
@@ -3936,6 +3950,59 @@ fn a_creature_engages_the_nearest_hostile_player_it_can_see() {
 }
 
 #[test]
+fn a_creature_notices_a_player_in_its_aggro_range_within_one_second() {
+    let interval = crate::creatures::MOVE_TICK_MICROS;
+    for arrival in 0..8u64 {
+        let mut w = wolf_and_player(p(15.0, 0.0, 10.0));
+        let first = SETTLED + arrival * interval as u64;
+        for now in [first, first + interval as u64] {
+            let tick = w.firing(now, interval, catch_all());
+            run_cycle(&mut w, tick);
+        }
+
+        assert_eq!(
+            w.pulls(),
+            [(WOLF, HUNTER, Pull::Noticed)],
+            "the wolf pulls by the second firing after the player arrives ({arrival} firings past a sense firing)"
+        );
+    }
+}
+
+#[test]
+fn a_player_just_outside_the_aggro_range_is_never_noticed() {
+    let interval = crate::creatures::MOVE_TICK_MICROS;
+    let mut w = wolf_and_player(p(21.0, 0.0, 10.0));
+    for k in 0..8u64 {
+        let tick = w.firing(SETTLED + k * interval as u64, interval, catch_all());
+        run_cycle(&mut w, tick);
+    }
+
+    assert!(
+        w.pulls().is_empty(),
+        "a player one yard past the 20 yard radius is ignored through a whole sense period"
+    );
+}
+
+#[test]
+fn a_proximity_firing_leaves_wandering_and_pets_to_the_sense_firing() {
+    let mut loiterer = idle_wolf(p(0.0, 0.0, 10.0), true).rolls([0, 0, u32::MAX]);
+    let tick = loiterer.tick_at(TickCadence::Proximity, catch_all());
+    run_cycle(&mut loiterer, tick);
+
+    let mut seeker = warlock_and_imp(p(0.0, 0.0, 10.0))
+        .creature(WOLF, p(6.0, 0.0, 10.0))
+        .pet_bar(HUNTER, PetOrder::Follow, PetReact::Aggressive);
+    let tick = seeker.tick_at(TickCadence::Proximity, catch_all());
+    run_cycle(&mut seeker, tick);
+
+    assert_eq!(
+        (loiterer.effects().len(), seeker.pet_effects().len()),
+        (0, 0),
+        "the wander hop and the pet step keep the four-second sense cadence"
+    );
+}
+
+#[test]
 fn a_godmoded_or_dead_player_draws_no_aggro() {
     let untouchable: [fn(Scenario, u64) -> Scenario; 2] = [Scenario::godmoded, Scenario::corpse];
     for hold in untouchable {
@@ -5022,6 +5089,33 @@ fn a_caster_at_spell_range_casts_and_stays_where_it_is() {
     assert!(
         w.effects().is_empty() && w.victims() == [(WOLF, HUNTER)],
         "a casting firing throws no closing leg and keeps the engagement"
+    );
+}
+
+#[test]
+fn a_caster_pulled_between_sense_firings_casts_at_once_and_an_engaged_caster_waits() {
+    let mut w = wolf_and_player(p(15.0, 0.0, 10.0))
+        .caster(WOLF, 30.0)
+        .lone_spell(WOLF, NUKE)
+        .creature(PACK_MATE, p(0.0, 5.0, 10.0))
+        .attacking(PACK_MATE, HUNTER)
+        .caster(PACK_MATE, 30.0)
+        .lone_spell(PACK_MATE, NUKE);
+    let tick = w.tick_at(TickCadence::Proximity, catch_all());
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.casts(),
+        [(WOLF, NUKE, HUNTER)],
+        "only the caster pulled this firing begins a cast before the sense firing"
+    );
+
+    w.advance_clock(500_000);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+    assert!(
+        w.casts().contains(&(PACK_MATE, NUKE, HUNTER)),
+        "the engaged caster casts on the sense firing: {:?}",
+        w.casts()
     );
 }
 
@@ -6214,7 +6308,7 @@ fn a_dedicated_row_and_the_catch_all_stay_a_strict_partition() {
 }
 
 #[test]
-fn movement_runs_every_firing_while_sensing_holds_the_four_second_cadence() {
+fn movement_runs_every_firing_proximity_aggro_every_second_and_sensing_every_four() {
     let mut settled_at = Vec::new();
     for (interval_micros, firings) in [(100_000i64, 41u64), (crate::creatures::MOVE_TICK_MICROS, 9)]
     {
@@ -6226,22 +6320,28 @@ fn movement_runs_every_firing_while_sensing_holds_the_four_second_cadence() {
             60_000,
         );
         let mut moved = 0u64;
+        let mut noticed = 0u64;
         let mut sensed = 0u64;
+        let mut eventai = 0u64;
         for k in 0..firings {
             let tick = w.firing(k * interval_micros as u64, interval_micros, catch_all());
             let outcome = run_cycle(&mut w, tick);
             moved += outcome.rows_visited[0].1;
-            sensed += u64::from(
+            let ran = |pass: &str| {
                 outcome
                     .rows_visited
                     .iter()
-                    .any(|(pass, _)| *pass == "aggro"),
-            );
+                    .filter(|row| row.0 == pass)
+                    .count()
+            };
+            noticed += ran("aggro") as u64;
+            sensed += ran("pet") as u64;
+            eventai += ran("eventai") as u64;
         }
         assert_eq!(
-            (moved, u64::from(w.maintenance_runs.get()), sensed),
-            (firings, firings, 2),
-            "movement and due-time maintenance follow each firing; sensing stays at four seconds"
+            (moved, u64::from(w.maintenance_runs.get()), noticed, sensed, eventai),
+            (firings, firings, 5, 2, firings),
+            "movement, maintenance and EventAI follow each firing, proximity aggro each second and the pet step four seconds"
         );
         settled_at.push(w.at(WOLF).at);
     }

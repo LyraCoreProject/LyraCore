@@ -13,7 +13,7 @@ use super::ai::{
 use super::cast_condition;
 use super::eventai::EventAiRequest;
 use super::pet;
-use super::tick::cadence::{TickScope, MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};
+use super::tick::cadence::{TickCadence, TickScope, MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};
 use super::tick::TickSweep;
 use crate::combat::reach::{in_melee_reach, MeleeBody, MELEE_REACH_FLOOR_YD};
 use crate::threat::{select_victim, Contender, SourceStanding};
@@ -107,7 +107,7 @@ pub(crate) struct TickContext {
     pub now_micros: u64,
     pub now_ms: u32,
     pub tick_secs: f32,
-    pub sense: bool,
+    pub cadence: TickCadence,
     pub sense_secs: f32,
     pub scope: TickScope,
 }
@@ -262,7 +262,7 @@ pub(crate) struct Combatant {
 }
 
 pub(crate) trait EngageSink {
-    fn players(&self) -> Vec<AggroTarget>;
+    fn players(&self, scope: &TickScope) -> Vec<AggroTarget>;
     fn sensing_creatures(&self, active: &HashSet<u64>) -> Vec<Sensor>;
     fn hostile(&self, faction_template: u32, other: u32) -> bool;
     fn line_of_sight(&self, looker: u64, at: Point) -> bool;
@@ -549,7 +549,9 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         active,
         pets,
         in_combat,
-    } = timed(w, "sweep", |w| w.awake_creatures(&tick.scope, tick.sense));
+    } = timed(w, "sweep", |w| {
+        w.awake_creatures(&tick.scope, tick.cadence.sense())
+    });
     let global = tick.scope.runs_global_passes();
     let mut rows: Vec<(&'static str, u64)> = Vec::new();
 
@@ -565,9 +567,21 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         let maintenance = timed(w, "maintenance", |w| w.run_due_world_maintenance());
         rows.extend(maintenance);
     }
-    if tick.sense {
-        let seen = timed(w, "aggro", |w| aggro(w, &active));
+    let pulled = if tick.cadence.proximity() {
+        let (seen, pulled) = timed(w, "aggro", |w| aggro(w, &tick.scope, &active));
         rows.push(("aggro", seen as u64));
+        pulled
+    } else {
+        Vec::new()
+    };
+    // A creature pulled between sense ticks opens its spell list in the firing that pulls it.
+    if !tick.cadence.sense() && !pulled.is_empty() {
+        let opened = timed(w, "cast", |w| {
+            cast(w, &tick.scope, |guid| pulled.contains(&guid))
+        });
+        rows.push(("cast", opened as u64));
+    }
+    if tick.cadence.sense() {
         rows.push((
             "pet",
             timed(w, "pet", |w| pet_behavior(w, &tick, &pets)) as u64,
@@ -581,7 +595,10 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
                 })
             }),
         ));
-        rows.push(("cast", timed(w, "cast", |w| cast(w, &tick.scope)) as u64));
+        rows.push((
+            "cast",
+            timed(w, "cast", |w| cast(w, &tick.scope, |_| true)) as u64,
+        ));
         rows.push((
             "threat_retarget",
             timed(w, "threat_retarget", |w| threat_retarget(w, &tick.scope)) as u64,
@@ -600,7 +617,7 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         "idle",
         timed(w, "idle", |w| idle_movement(w, &tick, &active)) as u64,
     ));
-    if tick.sense && global {
+    if tick.cadence.sense() && global {
         rows.push((
             "regen*",
             timed(w, "regen", |w| regenerate(w, &in_combat)) as u64,
@@ -612,7 +629,7 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
     }
     rows.push(("rout", timed(w, "rout", |w| rout(w, &tick)) as u64));
     rows.push(("fear", timed(w, "fear", |w| fear(w, &tick)) as u64));
-    if !tick.sense {
+    if !tick.cadence.sense() {
         rows.push((
             "eventai",
             timed(w, "eventai", |w| {
@@ -760,10 +777,15 @@ fn sensing_order(w: &impl EngageSink, active: &HashSet<u64>) -> Vec<Sensor> {
     candidates
 }
 
+/// Returns the sensors visited and the creatures pulled.
 // Decide every pull before hooks run Package code that can change the candidates.
-fn aggro<W: EngageSink + IdleSink>(w: &mut W, active: &HashSet<u64>) -> usize {
+fn aggro<W: EngageSink + IdleSink>(
+    w: &mut W,
+    scope: &TickScope,
+    active: &HashSet<u64>,
+) -> (usize, Vec<u64>) {
     let targets: Vec<AggroTarget> = w
-        .players()
+        .players(scope)
         .into_iter()
         .filter(|p| is_aggro_candidate(p.dead, p.godmode, p.taxi_flying))
         .collect();
@@ -774,9 +796,9 @@ fn aggro_with_targets<W: EngageSink + IdleSink>(
     w: &mut W,
     active: &HashSet<u64>,
     targets: &[AggroTarget],
-) -> usize {
+) -> (usize, Vec<u64>) {
     if targets.is_empty() {
-        return 0;
+        return (0, Vec::new());
     }
     let sensors = sensing_order(w, active);
     let mut pulls = Vec::new();
@@ -793,10 +815,13 @@ fn aggro_with_targets<W: EngageSink + IdleSink>(
         };
         pulls.push((s.guid, victim));
     }
-    for (creature, victim) in pulls {
+    for &(creature, victim) in &pulls {
         w.engage(creature, victim, Pull::Noticed);
     }
-    sensors.len()
+    (
+        sensors.len(),
+        pulls.into_iter().map(|(creature, _)| creature).collect(),
+    )
 }
 
 fn nearest_noticed<W: EngageSink>(w: &W, s: &Sensor, targets: &[AggroTarget]) -> Option<u64> {
@@ -955,8 +980,13 @@ fn follow<W: IdleSink>(
     }))
 }
 
-fn cast<W: CastSink + EngageSink>(w: &mut W, scope: &TickScope) -> usize {
+fn cast<W: CastSink + EngageSink>(
+    w: &mut W,
+    scope: &TickScope,
+    chosen: impl Fn(u64) -> bool,
+) -> usize {
     let mut casters = w.casters(scope);
+    casters.retain(|c| chosen(c.guid));
     casters.sort_unstable_by_key(|c| c.guid);
     let visited = casters.len();
     // Choose every cast before applying one so earlier effects cannot change later choices.
@@ -1363,7 +1393,7 @@ fn idle_movement<W: IdleSink + MotionSink + PursuitSink>(
             walk_home(w, tick, &c, home);
             continue;
         }
-        if tick.sense {
+        if tick.cadence.sense() {
             w.reached_home(c.guid);
             loiter(w, tick, &c, home);
         }
