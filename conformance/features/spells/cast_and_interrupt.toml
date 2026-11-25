@@ -80,6 +80,26 @@ path = "module/tests/channelled_ground_area.rs"
 function = "a_channelled_ground_area_deals_its_last_tick_and_removes_its_dynamic_object_at_expiry"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "an_interrupt_ends_a_channel_aura_and_locks_its_school"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "an_interrupt_ends_a_channelled_ground_area_and_locks_its_school"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "an_interrupt_cancels_a_cast_in_progress_and_locks_its_school"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "an_interrupt_on_a_unit_that_is_not_casting_writes_no_lockout"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/SpellHandler.cpp"
@@ -179,7 +199,7 @@ symbol = "pushback_cast"
 evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::DelayedChannel subtracts the delay from the channel timer, calls DelaySpellAuraHolder on each target and DynamicObject::Delay on each of the caster's DynamicObjects for the spell, and sends MSG_CHANNEL_UPDATE with the remaining time."
 
 [[known_gaps]]
-description = "Kick, Counterspell and other interrupt effects end no channel. vmangos interrupts a channel whose spell has PreventionType SILENCE and AURA_INTERRUPT_ACTION_CANCELS in its channel interrupt flags, and locks its school; the Module interrupts only a cast in progress."
+description = "Kick, Counterspell and other interrupt effects end every cast in progress and every channel, and lock the school of each. vmangos interrupts only a spell with PreventionType SILENCE: a cast whose spell has the damage pushback interrupt flag, or a channel with AURA_INTERRUPT_ACTION_CANCELS in its channel interrupt flags. The Module imports none of PreventionType, interrupt flags or ChannelInterruptFlags, so it cannot exempt a spell that vmangos does not interrupt."
 path = "module/src/spell/control.rs"
 symbol = "interrupt_cast_and_lock"
-evidence = "Source reading, not measured. At d9173eca, SpellEffects.cpp Spell::EffectInterruptCast walks every current spell slot, including CURRENT_CHANNELED_SPELL, and calls LockOutSpells and InterruptSpell for an interruptible one."
+evidence = "Source reading, not measured. At d9173eca, SpellEffects.cpp Spell::EffectInterruptCast walks every current spell slot and calls LockOutSpells and InterruptSpell only for a spell that passes the PreventionType and interrupt flag checks."
