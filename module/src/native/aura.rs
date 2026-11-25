@@ -141,13 +141,17 @@ pub(crate) fn channel_started(ctx: &ReducerContext, guid: u64, spell_id: u32, du
 }
 
 pub(crate) fn channel_ended(ctx: &ReducerContext, guid: u64) {
+    channel_updated(ctx, guid, 0);
+}
+
+pub(crate) fn channel_updated(ctx: &ReducerContext, guid: u64, remaining_ms: u32) {
     if !super::has_world_session(ctx, guid) {
         return;
     }
     super::send_to_character(
         ctx,
         guid,
-        ServerOpcodeMessage::MSG_CHANNEL_UPDATE(MSG_CHANNEL_UPDATE_Server { time: 0 }),
+        ServerOpcodeMessage::MSG_CHANNEL_UPDATE(MSG_CHANNEL_UPDATE_Server { time: remaining_ms }),
         super::EncodeFailure::Panic,
     );
 }

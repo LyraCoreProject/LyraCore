@@ -209,7 +209,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | Terrain, nav and exact vmap | `terrain.rs`, `nav.rs`, `vmap.rs` |
 | Chat, social and addon bridge | `chat.rs`, `channel.rs`, `realm_chat.rs`, `away.rs`, `bridge.rs` |
 | Combat, threat, duel and PvP | `combat/engage.rs`, `combat/damage.rs`, `combat/energy.rs`, `threat.rs`, `duel.rs`, `pvp.rs` |
-| Spell and aura | `spell/tables.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
+| Spell and aura | `spell/tables.rs`, `spell/control.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
 | Quest | `quest.rs` |
 | Item, trade and mail | `items/tables.rs`, `items/buyback.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_reward.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
 | Auction house | `auction.rs` |
@@ -932,6 +932,34 @@ category 133 cooldown. Cancelling a timed cast clears only its category.
 public and transient: a row lingers after `ready_at` and is overwritten by the next cooldown in its
 category. It replaces `game_spell_cooldown`, which kept one row per caster and is retired. Packages
 claim `gcd_category`; a Package Delta without it gives a new spell category 0.
+
+### Interrupt flags
+
+`game_spell.interrupt_flags`, `channel_interrupt_flags` and `prevention_type` are the source
+`InterruptFlags`, `ChannelInterruptFlags` and `PreventionType`, kept verbatim. The Module reads these
+bits, as vmangos `Unit::DealDamage` and `Spell::EffectInterruptCast` do:
+
+- A direct hit on a Character cancels its cast in progress when `interrupt_flags` holds 0x10, and
+  otherwise pushes it back when it holds 0x02. A creature's cast is never pushed back.
+- A direct hit on a Character from another unit shortens its channel when `channel_interrupt_flags`
+  holds 0x4000: by 1000 ms, then 200 ms less for each later hit, down to 200 ms. The channel's
+  Auras and ground areas end that much sooner, their next tick moves so the last one falls on the
+  new end, and the channel ends when no time remains. Without 0x4000, a hit on any unit cancels its
+  channel when the flags hold 0x02.
+- An interrupt effect stops only a spell whose `prevention_type` is 1 (silence): a cast whose
+  `interrupt_flags` holds 0x02, or a channel whose `channel_interrupt_flags` holds 0x04.
+
+Periodic damage, including a ground-area tick, neither pushes back nor shortens anything.
+
+The defaults, 2, 4 and 1, keep the behaviour from before the columns existed: damage pushes back a
+cast and leaves a channel running, and an interrupt effect stops every cast and channel. A row
+written before the reimport, a test fixture and a Package Delta that omit the fields keep that
+behaviour, so none becomes uninterruptible. Packages claim all three columns.
+
+`game_channel_delay` holds one private row per caster: the channel's spell, its end after the last
+delay, and the number of delays. Breaking or ending the channel deletes the row. A row left by a
+channel that ran out is harmless: a channel that no longer ends at that time starts again from no
+delays, and the next delay overwrites the row.
 
 ### Combo finishers (`module/src/combo.rs`)
 

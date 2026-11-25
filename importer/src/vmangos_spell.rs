@@ -74,7 +74,10 @@ fn source_spell(row: &Row, script_name: &str) -> Result<Spell> {
         category_recovery_time: row.number("categoryRecoveryTime")?,
         start_recovery_time: row.number("startRecoveryTime")?,
         start_recovery_category: row.number("startRecoveryCategory")?,
+        interrupt_flags: row.number("interruptFlags")?,
         aura_interrupt_flags: row.number("auraInterruptFlags")?,
+        channel_interrupt_flags: row.number("channelInterruptFlags")?,
+        prevention_type: row.number("preventionType")?,
         proc_flags: row.number("procFlags")?,
         proc_chance: row.number("procChance")?,
         proc_charges: row.number("procCharges")?,
@@ -202,7 +205,9 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
         "attributesEx3",
         "attributesEx4",
         "dmgClass",
+        "interruptFlags",
         "auraInterruptFlags",
+        "channelInterruptFlags",
         "castingTimeIndex",
         "categoryRecoveryTime",
         "category",
@@ -345,7 +350,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
 #[cfg(test)]
 pub(crate) fn fixture() -> crate::world_source::WorldSource {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
-    let mut columns = "customFlags minTargetLevel spellIconId activeIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 attributesEx3 attributesEx4 dmgClass stances stancesNot category targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime startRecoveryCategory startRecoveryTime auraInterruptFlags procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    let mut columns = "customFlags minTargetLevel spellIconId activeIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 attributesEx3 attributesEx4 dmgClass stances stancesNot category targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime startRecoveryCategory startRecoveryTime interruptFlags auraInterruptFlags channelInterruptFlags procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
     for prefix in [
         "effectBonusCoefficient",
         "effect",
@@ -542,6 +547,27 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("non-finite"));
+    }
+
+    #[test]
+    fn drain_lifes_interrupt_fields_reach_the_source_spell() {
+        let source = fixture();
+        source
+            .fixture_connection()
+            .execute_batch(
+                "UPDATE spell_template SET interruptFlags=15, channelInterruptFlags=31756, \
+                 preventionType=1 WHERE build=5875",
+            )
+            .unwrap();
+        let (spells, _) = read(&source).unwrap();
+        assert_eq!(
+            (
+                spells[0].interrupt_flags,
+                spells[0].channel_interrupt_flags,
+                spells[0].prevention_type
+            ),
+            (0x0F, 0x7C0C, 1)
+        );
     }
 
     #[test]

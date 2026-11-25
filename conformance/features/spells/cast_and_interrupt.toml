@@ -135,6 +135,41 @@ path = "module/tests/interrupt_cast.rs"
 function = "an_interrupt_on_a_unit_that_is_not_casting_writes_no_lockout"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "an_interrupt_leaves_a_channel_without_silence_prevention_running"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "an_interrupt_leaves_a_cast_that_damage_does_not_push_back_running"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "damage_shortens_a_channel_aura_by_a_second_and_then_by_less"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "damage_shortens_a_channelled_ground_area_by_a_second"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "damage_ends_a_channel_with_less_time_left_than_its_delay"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "damage_cancels_a_channel_whose_flags_say_damage_cancels_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "damage_leaves_a_cast_without_the_pushback_flag_on_time"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/SpellHandler.cpp"
@@ -228,13 +263,25 @@ symbol = "resolve_effect_kind"
 evidence = "Source reading, not measured. vmangos reference world rows 10, 5740, 1510 and 16914 carry effect 27 with aura 3 at implicit target 28 and SPELL_ATTR_EX_CHANNELED_1, and no other channel effect. At d9173eca, SpellEffects.cpp Spell::EffectPersistentAA creates a DynamicObject, and DynamicObject::Update applies the Aura to the units inside its radius on every update. Only Consecration and Flamestrike set periodic_damage_as_persistent_area."
 
 [[known_gaps]]
-description = "Damage taken neither shortens nor cancels a channel. vmangos delays a channel on a hit, shortening its Auras and its DynamicObject, interrupts it when no time remains, and cancels it outright when its ChannelInterruptFlags say so; the Module pushes back only a cast in progress and does not import ChannelInterruptFlags."
+description = "Concentration Aura and Barkskin give no chance to resist pushback. vmangos adds the SPELL_AURA_RESIST_PUSHBACK (149) amount to the resist chance of a cast's pushback and a channel's delay; the importer keeps that Aura as a flag without its id, so only the SPELLMOD_NOT_LOSE_CASTING_TIME talents count."
 path = "module/src/spell/control.rs"
-symbol = "pushback_cast"
-evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::DelayedChannel subtracts the delay from the channel timer, calls DelaySpellAuraHolder on each target and DynamicObject::Delay on each of the caster's DynamicObjects for the spell, and sends MSG_CHANNEL_UPDATE with the remaining time."
+symbol = "pushback_on_damage"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::Delayed and Spell::DelayedChannel add GetTotalAuraModifier(SPELL_AURA_RESIST_PUSHBACK); spell_template rows 19746 and 22812 carry aura 149, which importer/src/spell_kind.rs aura_mod_to_kind maps to A_FLAG."
 
 [[known_gaps]]
-description = "Kick, Counterspell and other interrupt effects end every cast in progress and every channel, and lock the school of each. vmangos interrupts only a spell with PreventionType SILENCE: a cast whose spell has the damage pushback interrupt flag, or a channel with AURA_INTERRUPT_ACTION_CANCELS in its channel interrupt flags. The Module imports none of PreventionType, interrupt flags or ChannelInterruptFlags, so it cannot exempt a spell that vmangos does not interrupt."
+description = "Damage pushes a cast back 500 ms at most twice. vmangos pushes it back 1000 ms, then 200 ms less for each later hit down to 200 ms, with no limit on the count, and never past the cast's full cast time."
 path = "module/src/spell/control.rs"
-symbol = "interrupt_cast_and_lock"
-evidence = "Source reading, not measured. At d9173eca, SpellEffects.cpp Spell::EffectInterruptCast walks every current spell slot and calls LockOutSpells and InterruptSpell only for a spell that passes the PreventionType and interrupt flag checks."
+symbol = "CAST_PUSHBACK_MS"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::Delayed takes GetNextDelayAtDamageMsTime and caps m_timer at m_casttime. The Module's pending cast does not keep its full cast time, so it cannot apply the cap."
+
+[[known_gaps]]
+description = "Falling, drowning and fatigue damage neither push back a cast, cancel a channel whose flags say damage cancels it, nor end an Aura that damage breaks. vmangos deals environmental damage through DealDamage as SELF_DAMAGE, which does all three."
+path = "module/src/world.rs"
+symbol = "resolve_environmental_damage"
+evidence = "Source reading, not measured. At d9173eca, Player.cpp Player::EnvironmentalDamage calls DealDamage(this, damage, nullptr, SELF_DAMAGE, ...). The Module's fall, breath and fatigue damage change health directly and never reach break_auras_on_damage or pushback_on_damage."
+
+[[known_gaps]]
+description = "A direct hit that a shield absorbs completely does not cancel a Character's cast whose spell has SPELL_INTERRUPT_FLAG_DAMAGE_CANCELS, such as Hearthstone or a mount, and does not end an Aura that damage breaks. vmangos does both for an absorbed non-DOT hit."
+path = "module/src/combat/damage.rs"
+symbol = "apply_hit"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::DealDamage, for damage 0 with cleanDamage->absorb, calls RemoveAurasWithInterruptFlags(AURA_INTERRUPT_DAMAGE_CANCELS) and InterruptSpellsWithInterruptFlags(SPELL_INTERRUPT_FLAG_DAMAGE_CANCELS). The Module's deal_damage and apply_hit return before break_auras_on_damage and pushback_on_damage when the landed amount is 0."

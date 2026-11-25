@@ -560,6 +560,9 @@ fn apply_spell_field(spell: &mut Spell, field: &str, value: &FieldValue) -> Resu
         "attributes_ex_4" => spell.attributes_ex_4 = as_u32(field, value)?,
         "damage_class" => spell.damage_class = as_u8(field, value)?,
         "gcd_category" => spell.gcd_category = as_u32(field, value)?,
+        "interrupt_flags" => spell.interrupt_flags = as_u32(field, value)?,
+        "channel_interrupt_flags" => spell.channel_interrupt_flags = as_u32(field, value)?,
+        "prevention_type" => spell.prevention_type = as_u8(field, value)?,
 
         "custom_flags" => spell.custom_flags = as_u32(field, value)?,
         "min_target_level" => spell.min_target_level = as_u32(field, value)?,

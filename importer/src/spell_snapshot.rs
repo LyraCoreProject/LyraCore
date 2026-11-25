@@ -51,6 +51,9 @@ pub(crate) struct SpellHeaderRow {
     pub(crate) attributes_ex_4: u32,
     pub(crate) damage_class: u8,
     pub(crate) gcd_category: u32,
+    pub(crate) interrupt_flags: u32,
+    pub(crate) channel_interrupt_flags: u32,
+    pub(crate) prevention_type: u8,
 }
 
 impl SpellHeaderRow {
@@ -110,6 +113,12 @@ impl SpellHeaderRow {
             ("attributes_ex_4", FieldValue::U32(self.attributes_ex_4)),
             ("damage_class", FieldValue::U8(self.damage_class)),
             ("gcd_category", FieldValue::U32(self.gcd_category)),
+            ("interrupt_flags", FieldValue::U32(self.interrupt_flags)),
+            (
+                "channel_interrupt_flags",
+                FieldValue::U32(self.channel_interrupt_flags),
+            ),
+            ("prevention_type", FieldValue::U8(self.prevention_type)),
         ]
     }
 
@@ -385,6 +394,9 @@ mod tests {
             attributes_ex_4: 0,
             damage_class: 0,
             gcd_category: 133,
+            interrupt_flags: 0x0F,
+            channel_interrupt_flags: 0,
+            prevention_type: 1,
         }
     }
 
@@ -448,7 +460,7 @@ mod tests {
         assert!(sql.contains(",18446744073709551615,"), "{sql}");
         assert!(
             sql.ends_with(
-                ",true,0,0,3,18446744073709551615,0,0,0,8000,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,133)"
+                ",true,0,0,3,18446744073709551615,0,0,0,8000,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,133,15,0,1)"
             ),
             "{sql}"
         );
@@ -463,7 +475,7 @@ mod tests {
         spell.single_target_key = 99;
         assert!(spell
             .sql_values()
-            .ends_with(",13000,64,12,99,0,0,0,0,0,0,0,-1,0,0,0,0,0,133)"));
+            .ends_with(",13000,64,12,99,0,0,0,0,0,0,0,-1,0,0,0,0,0,133,15,0,1)"));
 
         let mut effect = effect(133, 0);
         effect.points_per_combo = 3.5;

@@ -405,6 +405,7 @@ pub(crate) fn apply_hit(
         }
     }
 
+    let periodic = is_periodic(ctx, hit);
     let duel_finish = attacker
         .as_ref()
         .and_then(|attacker| duel_finished_by(ctx, attacker, &target));
@@ -415,6 +416,10 @@ pub(crate) fn apply_hit(
         target.health = 1;
         reward_taken_rage(&mut target, attacker_guid, before);
         target.update(ctx);
+        // vmangos `Unit::DealDamage` pushes back the loser's cast and channel before the Duel ends.
+        if !periodic {
+            crate::spell::pushback_on_damage(ctx, target_guid, attacker_guid);
+        }
         super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), target_guid, target_is_player);
         crate::duel::complete_duel(
             ctx,
@@ -485,8 +490,12 @@ pub(crate) fn apply_hit(
         ctx,
         target_guid,
         if weapon { attacker_guid } else { 0 },
-        false,
+        periodic,
     );
+    // vmangos `Unit::DealDamage` neither delays nor cancels a cast or channel for DOT damage.
+    if !periodic {
+        crate::spell::pushback_on_damage(ctx, target_guid, attacker_guid);
+    }
     if accrues_threat {
         crate::threat::add_threat(
             ctx,

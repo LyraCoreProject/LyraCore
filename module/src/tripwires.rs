@@ -183,6 +183,7 @@ pub(crate) mod character_owned_tripwire {
         ),
         (
             &[
+                "game_channel_delay",
                 "game_dynamic_object",
                 "game_global_cooldown",
                 "game_ground_area",

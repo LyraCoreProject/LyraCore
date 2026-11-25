@@ -311,6 +311,25 @@ pub(crate) fn assist(
     Ok(())
 }
 
+/// The spell a Character channels for its Summoning Ritual: the owner's spell or the object's.
+pub(crate) fn channel_spell(ctx: &ReducerContext, character_guid: u64) -> Option<u32> {
+    let row = ctx
+        .db
+        .game_summoning_ritual_participant()
+        .character_guid()
+        .find(character_guid)?;
+    let ritual = ctx.db.game_summoning_ritual().id().find(row.ritual_id)?;
+    if ritual.owner_guid == character_guid {
+        return Some(ritual.spell_id);
+    }
+    ctx.db
+        .game_gameobject_ritual()
+        .entry()
+        .find(ritual.entry)
+        .map(|data| data.anim_spell_id)
+        .filter(|&spell_id| spell_id != 0)
+}
+
 /// Ends the Character's ritual channel, as vmangos `RemoveUniqueUse`; returns whether it had one.
 pub(crate) fn leave(ctx: &ReducerContext, character_guid: u64) -> bool {
     let participants = ctx.db.game_summoning_ritual_participant();

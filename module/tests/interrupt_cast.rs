@@ -6,6 +6,7 @@ use lyracore_shared::spell::taxonomy::{
     A_PERIODIC_DAMAGE, CAST_FLAG_CHANNELED, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, E_INTERRUPT,
     E_PERSISTENT_AREA, T_SELF, T_TARGET_ENEMY,
 };
+use spacetimedb::Timestamp;
 use support::{number, Field, Row, Standalone};
 
 const CHARACTER: u64 = 1;
@@ -14,11 +15,25 @@ const CHANNEL_AURA: u32 = 5_124_101;
 const CHANNELLED_AREA: u32 = 5_124_102;
 const SLOW_CAST: u32 = 5_124_103;
 const KICK: u32 = 5_124_104;
+const BITE: u32 = 5_124_105;
+const DAMAGE_CANCELLED_CHANNEL: u32 = 5_124_106;
+const SHORT_CHANNEL: u32 = 5_124_107;
+const UNSILENCEABLE_CHANNEL: u32 = 5_124_108;
+const UNPUSHED_CAST: u32 = 5_124_109;
+// vmangos spell_template interrupt fields of Fireball 133, Drain Life 689 and First Aid 746.
+const FIREBALL_INTERRUPT_FLAGS: u32 = 0x0F;
+const DRAIN_LIFE_CHANNEL_FLAGS: u32 = 0x7C0C;
+const FIRST_AID_CHANNEL_FLAGS: u32 = 0x3C0E;
+const WITHOUT_PUSHBACK_INTERRUPT_FLAGS: u32 = 0x09;
+const PREVENTION_SILENCE: u8 = 1;
+const PREVENTION_NONE: u8 = 0;
+const SHORT_CHANNEL_MS: u32 = 900;
 const KICK_LOCKOUT_MS: u32 = 5_000;
 const CHANNEL_DURATION_MS: u32 = 6_000;
 const PERIOD_MS: u32 = 1_000;
 // A cast at an equal level target misses at most 4% of the time.
 const CAST_ATTEMPTS: usize = 20;
+const CHARACTER_HEALTH: u32 = 100_000;
 const CHARACTER_FACTION: u32 = 9_301;
 const WOLF_FACTION: u32 = 9_302;
 
@@ -62,19 +77,7 @@ fn an_interrupt_ends_a_channelled_ground_area_and_locks_its_school() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_interrupt_cancels_a_cast_in_progress_and_locks_its_school() {
     let (shard, wolf) = stage("interrupt-cast-in-progress");
-    shard.assert_call(
-        "debug_begin_cast",
-        &[
-            &CHARACTER.to_string(),
-            &SLOW_CAST.to_string(),
-            &wolf.to_string(),
-        ],
-    );
-    assert_eq!(
-        pending_casts(&shard).len(),
-        1,
-        "the cast must be in progress"
-    );
+    begin_cast(&shard, SLOW_CAST, wolf);
 
     cast_until(&shard, wolf, KICK, CHARACTER, || {
         pending_casts(&shard).is_empty()
@@ -102,6 +105,127 @@ fn an_interrupt_on_a_unit_that_is_not_casting_writes_no_lockout() {
     assert!(locked_schools(&shard).is_empty());
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_interrupt_leaves_a_channel_without_silence_prevention_running() {
+    let (shard, wolf) = stage("interrupt-unsilenceable-channel");
+    cast_until(&shard, CHARACTER, UNSILENCEABLE_CHANNEL, wolf, || {
+        !auras_of(&shard, UNSILENCEABLE_CHANNEL).is_empty()
+    });
+    assert!(
+        !auras_of(&shard, UNSILENCEABLE_CHANNEL).is_empty(),
+        "the channel must start"
+    );
+
+    for _ in 0..5 {
+        shard.assert_call(
+            "debug_force_cast_at",
+            &[&wolf.to_string(), &KICK.to_string(), &CHARACTER.to_string()],
+        );
+    }
+
+    assert!(!auras_of(&shard, UNSILENCEABLE_CHANNEL).is_empty());
+    assert!(locked_schools(&shard).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_interrupt_leaves_a_cast_that_damage_does_not_push_back_running() {
+    let (shard, wolf) = stage("interrupt-unpushed-cast");
+    begin_cast(&shard, UNPUSHED_CAST, wolf);
+
+    for _ in 0..5 {
+        shard.assert_call(
+            "debug_force_cast_at",
+            &[&wolf.to_string(), &KICK.to_string(), &CHARACTER.to_string()],
+        );
+    }
+
+    assert_eq!(pending_casts(&shard).len(), 1);
+    assert!(locked_schools(&shard).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn damage_shortens_a_channel_aura_by_a_second_and_then_by_less() {
+    let (shard, wolf) = stage("damage-delays-channel-aura");
+    cast_until(&shard, CHARACTER, CHANNEL_AURA, wolf, || {
+        !channel_auras(&shard).is_empty()
+    });
+    let start = channel_end(&shard, CHANNEL_AURA);
+
+    bite_until(&shard, wolf, || channel_end(&shard, CHANNEL_AURA) != start);
+    let first = channel_end(&shard, CHANNEL_AURA);
+    bite_until(&shard, wolf, || channel_end(&shard, CHANNEL_AURA) != first);
+    let second = channel_end(&shard, CHANNEL_AURA);
+
+    assert_eq!((start - first, first - second), (1_000_000, 800_000));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn damage_shortens_a_channelled_ground_area_by_a_second() {
+    let (shard, wolf) = stage("damage-delays-channelled-area");
+    cast_area(&shard);
+    let start = area_end(&shard);
+
+    bite_until(&shard, wolf, || area_end(&shard) != start);
+
+    assert_eq!(start - area_end(&shard), 1_000_000);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn damage_ends_a_channel_with_less_time_left_than_its_delay() {
+    let (shard, wolf) = stage("damage-ends-short-channel");
+    cast_until(&shard, CHARACTER, SHORT_CHANNEL, wolf, || {
+        !auras_of(&shard, SHORT_CHANNEL).is_empty()
+    });
+    assert!(
+        !auras_of(&shard, SHORT_CHANNEL).is_empty(),
+        "the channel must start"
+    );
+
+    bite_until(&shard, wolf, || auras_of(&shard, SHORT_CHANNEL).is_empty());
+
+    assert!(auras_of(&shard, SHORT_CHANNEL).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn damage_cancels_a_channel_whose_flags_say_damage_cancels_it() {
+    let (shard, wolf) = stage("damage-cancels-channel");
+    cast_until(&shard, CHARACTER, DAMAGE_CANCELLED_CHANNEL, wolf, || {
+        !auras_of(&shard, DAMAGE_CANCELLED_CHANNEL).is_empty()
+    });
+    assert!(
+        !auras_of(&shard, DAMAGE_CANCELLED_CHANNEL).is_empty(),
+        "the channel must start"
+    );
+
+    bite_until(&shard, wolf, || {
+        auras_of(&shard, DAMAGE_CANCELLED_CHANNEL).is_empty()
+    });
+
+    assert!(auras_of(&shard, DAMAGE_CANCELLED_CHANNEL).is_empty());
+    assert!(health(&shard, CHARACTER) < CHARACTER_HEALTH);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn damage_leaves_a_cast_without_the_pushback_flag_on_time() {
+    let (shard, wolf) = stage("damage-leaves-unpushed-cast");
+    begin_cast(&shard, UNPUSHED_CAST, wolf);
+    let due = pending_casts(&shard)[0]["scheduled_at"].clone();
+
+    bite_until(&shard, wolf, || {
+        health(&shard, CHARACTER) < CHARACTER_HEALTH
+    });
+
+    assert!(health(&shard, CHARACTER) < CHARACTER_HEALTH);
+    assert_eq!(pending_casts(&shard)[0]["scheduled_at"], due);
+}
+
 fn stage(name: &str) -> (Standalone, u64) {
     let mut shard = Standalone::start(name);
     shard.publish_module();
@@ -126,40 +250,53 @@ fn stage(name: &str) -> (Standalone, u64) {
         .expect("the spawned wolf must exist");
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET godmode = false, level = 60, \
-         health = 100000, max_health = 100000 WHERE guid = {CHARACTER}"
+         health = {CHARACTER_HEALTH}, max_health = {CHARACTER_HEALTH} WHERE guid = {CHARACTER}"
     ));
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET simulation_indexed = false, level = 60, \
          health = 100000, max_health = 100000 WHERE guid = {wolf}"
     ));
     hostile_factions(&shard, wolf);
-    insert_spell(
+    let channelled = CAST_FLAG_IGNORE_RESISTANCES | CAST_FLAG_CHANNELED;
+    let channel_aura_effect: &[Field] = &[
+        ("kind", &A_PERIODIC_DAMAGE),
+        ("target", &T_TARGET_ENEMY),
+        ("base_points", &10),
+        ("period_ms", &PERIOD_MS),
+    ];
+    insert_drain_life_channel(
         &shard,
         CHANNEL_AURA,
+        CHANNEL_DURATION_MS,
+        channel_aura_effect,
+    );
+    insert_drain_life_channel(&shard, SHORT_CHANNEL, SHORT_CHANNEL_MS, channel_aura_effect);
+    insert_spell(
+        &shard,
+        DAMAGE_CANCELLED_CHANNEL,
         &[
             ("duration_ms", &CHANNEL_DURATION_MS),
-            (
-                "cast_flags",
-                &(CAST_FLAG_IGNORE_RESISTANCES | CAST_FLAG_CHANNELED),
-            ),
+            ("cast_flags", &channelled),
+            ("channel_interrupt_flags", &FIRST_AID_CHANNEL_FLAGS),
+            ("prevention_type", &PREVENTION_SILENCE),
         ],
-        &[
-            ("kind", &A_PERIODIC_DAMAGE),
-            ("target", &T_TARGET_ENEMY),
-            ("base_points", &10),
-            ("period_ms", &PERIOD_MS),
-        ],
+        channel_aura_effect,
     );
     insert_spell(
         &shard,
-        CHANNELLED_AREA,
+        UNSILENCEABLE_CHANNEL,
         &[
             ("duration_ms", &CHANNEL_DURATION_MS),
-            (
-                "cast_flags",
-                &(CAST_FLAG_IGNORE_RESISTANCES | CAST_FLAG_CHANNELED),
-            ),
+            ("cast_flags", &channelled),
+            ("channel_interrupt_flags", &DRAIN_LIFE_CHANNEL_FLAGS),
+            ("prevention_type", &PREVENTION_NONE),
         ],
+        channel_aura_effect,
+    );
+    insert_drain_life_channel(
+        &shard,
+        CHANNELLED_AREA,
+        CHANNEL_DURATION_MS,
         &[
             ("kind", &E_PERSISTENT_AREA),
             ("target", &T_SELF),
@@ -168,16 +305,32 @@ fn stage(name: &str) -> (Standalone, u64) {
             ("radius_yd", &10.0),
         ],
     );
+    let damage_effect: &[Field] = &[
+        ("kind", &E_DAMAGE),
+        ("target", &T_TARGET_ENEMY),
+        ("base_points", &10),
+    ];
     insert_spell(
         &shard,
         SLOW_CAST,
-        &[("cast_time_ms", &10_000)],
         &[
-            ("kind", &E_DAMAGE),
-            ("target", &T_TARGET_ENEMY),
-            ("base_points", &10),
+            ("cast_time_ms", &10_000),
+            ("interrupt_flags", &FIREBALL_INTERRUPT_FLAGS),
+            ("prevention_type", &PREVENTION_SILENCE),
         ],
+        damage_effect,
     );
+    insert_spell(
+        &shard,
+        UNPUSHED_CAST,
+        &[
+            ("cast_time_ms", &10_000),
+            ("interrupt_flags", &WITHOUT_PUSHBACK_INTERRUPT_FLAGS),
+            ("prevention_type", &PREVENTION_SILENCE),
+        ],
+        damage_effect,
+    );
+    insert_spell(&shard, BITE, &[], damage_effect);
     insert_spell(
         &shard,
         KICK,
@@ -238,6 +391,29 @@ fn insert_spell(shard: &Standalone, spell_id: u32, spell: &[Field], effect: &[Fi
     shard.insert_row("game_spell_effect", &effect_row);
 }
 
+fn insert_drain_life_channel(
+    shard: &Standalone,
+    spell_id: u32,
+    duration_ms: u32,
+    effect: &[Field],
+) {
+    insert_spell(
+        shard,
+        spell_id,
+        &[
+            ("duration_ms", &duration_ms),
+            (
+                "cast_flags",
+                &(CAST_FLAG_IGNORE_RESISTANCES | CAST_FLAG_CHANNELED),
+            ),
+            ("interrupt_flags", &FIREBALL_INTERRUPT_FLAGS),
+            ("channel_interrupt_flags", &DRAIN_LIFE_CHANNEL_FLAGS),
+            ("prevention_type", &PREVENTION_SILENCE),
+        ],
+        effect,
+    );
+}
+
 // A miss changes nothing, so a cast repeats until its outcome shows.
 fn cast_until(
     shard: &Standalone,
@@ -280,10 +456,66 @@ fn cast_area(shard: &Standalone) {
     );
 }
 
+fn begin_cast(shard: &Standalone, spell_id: u32, target: u64) {
+    shard.assert_call(
+        "debug_begin_cast",
+        &[
+            &CHARACTER.to_string(),
+            &spell_id.to_string(),
+            &target.to_string(),
+        ],
+    );
+    assert_eq!(
+        pending_casts(shard).len(),
+        1,
+        "the cast must be in progress"
+    );
+}
+
+// A miss deals no damage, so the wolf bites the Character until the hit shows.
+fn bite_until(shard: &Standalone, wolf: u64, landed: impl Fn() -> bool) {
+    cast_until(shard, wolf, BITE, CHARACTER, landed);
+}
+
 fn channel_auras(shard: &Standalone) -> Vec<Row> {
+    auras_of(shard, CHANNEL_AURA)
+}
+
+fn auras_of(shard: &Standalone, spell_id: u32) -> Vec<Row> {
     shard.query_rows(&format!(
-        "SELECT id FROM game_aura WHERE caster_guid = {CHARACTER} AND spell_id = {CHANNEL_AURA}"
+        "SELECT id, expires_at FROM game_aura WHERE caster_guid = {CHARACTER} AND spell_id = {spell_id}"
     ))
+}
+
+fn channel_end(shard: &Standalone, spell_id: u32) -> i64 {
+    auras_of(shard, spell_id)
+        .iter()
+        .map(|row| timestamp(&row["expires_at"]))
+        .max()
+        .expect("the channel must run")
+}
+
+fn area_end(shard: &Standalone) -> i64 {
+    let rows = shard.query_rows(&format!(
+        "SELECT expires_at FROM game_ground_area WHERE caster_guid = {CHARACTER}"
+    ));
+    assert_eq!(rows.len(), 1, "the channelled area must run");
+    timestamp(&rows[0]["expires_at"])
+}
+
+fn timestamp(value: &str) -> i64 {
+    Timestamp::parse_from_rfc3339(value)
+        .unwrap_or_else(|error| panic!("invalid durable timestamp {value:?}: {error}"))
+        .to_micros_since_unix_epoch()
+}
+
+fn health(shard: &Standalone, guid: u64) -> u32 {
+    number(
+        &shard.query_rows(&format!(
+            "SELECT health FROM game_world_entity WHERE guid = {guid}"
+        ))[0],
+        "health",
+    )
 }
 
 fn areas(shard: &Standalone) -> Vec<Row> {
@@ -294,7 +526,7 @@ fn areas(shard: &Standalone) -> Vec<Row> {
 
 fn pending_casts(shard: &Standalone) -> Vec<Row> {
     shard.query_rows(&format!(
-        "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {CHARACTER}"
+        "SELECT scheduled_id, scheduled_at FROM game_pending_cast WHERE caster_guid = {CHARACTER}"
     ))
 }
 
