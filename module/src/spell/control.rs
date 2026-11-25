@@ -700,6 +700,10 @@ pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
     let removed: Vec<Aura> = channel_auras(ctx, caster_guid).collect();
     let channelled_areas: Vec<GroundArea> = channelled_areas(ctx, caster_guid).collect();
     let broke_channel = !removed.is_empty() || !channelled_areas.is_empty();
+    ctx.db
+        .game_channel_delay()
+        .caster_guid()
+        .delete(caster_guid);
     shed_auras(ctx, removed);
     for area in &channelled_areas {
         super::cast::end_ground_area(ctx, area);
@@ -721,6 +725,10 @@ fn end_channel(ctx: &ReducerContext, caster_guid: u64, spell_id: u32) -> bool {
         .filter(|area| area.spell_id == spell_id)
         .collect();
     let ended = !auras.is_empty() || !areas.is_empty();
+    ctx.db
+        .game_channel_delay()
+        .caster_guid()
+        .delete(caster_guid);
     shed_auras(ctx, auras);
     for area in &areas {
         super::cast::end_ground_area(ctx, area);

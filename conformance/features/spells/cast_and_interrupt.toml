@@ -244,3 +244,9 @@ description = "Falling, drowning and fatigue damage neither push back a cast, ca
 path = "module/src/world.rs"
 symbol = "resolve_environmental_damage"
 evidence = "Source reading, not measured. At d9173eca, Player.cpp Player::EnvironmentalDamage calls DealDamage(this, damage, nullptr, SELF_DAMAGE, ...). The Module's fall, breath and fatigue damage change health directly and never reach break_auras_on_damage or pushback_on_damage."
+
+[[known_gaps]]
+description = "A direct hit that a shield absorbs completely does not cancel a Character's cast whose spell has SPELL_INTERRUPT_FLAG_DAMAGE_CANCELS, such as Hearthstone or a mount, and does not end an Aura that damage breaks. vmangos does both for an absorbed non-DOT hit."
+path = "module/src/combat/damage.rs"
+symbol = "apply_hit"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::DealDamage, for damage 0 with cleanDamage->absorb, calls RemoveAurasWithInterruptFlags(AURA_INTERRUPT_DAMAGE_CANCELS) and InterruptSpellsWithInterruptFlags(SPELL_INTERRUPT_FLAG_DAMAGE_CANCELS). The Module's deal_damage and apply_hit return before break_auras_on_damage and pushback_on_damage when the landed amount is 0."

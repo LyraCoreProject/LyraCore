@@ -563,8 +563,14 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         .collect();
     shed_auras(ctx, ended);
     for (source_spell, caster_guid, trigger_spell, level, channel_target) in channel_fires {
-        // A death earlier in this pass may have ended the channel.
-        if trigger_spell == 0 || !entities.guid().find(caster_guid).is_some_and(|c| !c.dead) {
+        // A death or a damage-cancelled channel earlier in this pass may have ended the channel.
+        if trigger_spell == 0
+            || !entities.guid().find(caster_guid).is_some_and(|c| !c.dead)
+            || !auras
+                .by_caster()
+                .filter(caster_guid)
+                .any(|aura| aura.spell_id == source_spell)
+        {
             continue;
         }
         let result = cast_aura_triggered(

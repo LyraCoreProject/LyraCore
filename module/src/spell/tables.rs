@@ -1523,13 +1523,13 @@ mod interrupt_flag_tests {
         let fireball = spell(0x0F, 0, 1);
         let drain_life = channel(0x0F, 0x7C0C, 1);
         let hurricane = channel(0x01, 0x7C0C, 1);
-        let evocation = channel(0x01, 0x7C0C, 0);
+        let first_aid = channel(0, 0x3C0E, 0);
         let volley = channel(0x09, 0x7C0C, 2);
         let cast_without_pushback = spell(0x09, 0, 1);
         assert!(fireball.yields_to_interrupt_effect());
         assert!(drain_life.yields_to_interrupt_effect());
         assert!(hurricane.yields_to_interrupt_effect());
-        assert!(!evocation.yields_to_interrupt_effect());
+        assert!(!first_aid.yields_to_interrupt_effect());
         assert!(!volley.yields_to_interrupt_effect());
         assert!(!cast_without_pushback.yields_to_interrupt_effect());
     }

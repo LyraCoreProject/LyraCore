@@ -955,8 +955,9 @@ written before the reimport, a test fixture and a Package Delta that omit the fi
 behaviour, so none becomes uninterruptible. Packages claim all three columns.
 
 `game_channel_delay` holds one private row per caster: the channel's spell, its end after the last
-delay, and the number of delays. A channel that no longer ends at that time starts again from no
-delays, so a stale row is harmless and the next delay overwrites it.
+delay, and the number of delays. Breaking or ending the channel deletes the row. A row left by a
+channel that ran out is harmless: a channel that no longer ends at that time starts again from no
+delays, and the next delay overwrites the row.
 
 ### Combo finishers (`module/src/combo.rs`)
 

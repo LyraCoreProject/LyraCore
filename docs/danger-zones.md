@@ -725,10 +725,15 @@ Package again from a Base Snapshot of this revision, or set `gcd_category`, befo
 2, 4 and 1, and the private `game_channel_delay` table starts empty, so no repair is needed. Publish
 through a planned update; development reload requires an unchanged schema.
 
-Until you reimport `spell`, every existing spell keeps the behaviour from before the columns: damage
-pushes back a cast and leaves a channel running, and an interrupt effect stops every cast and
-channel. Damage delays or cancels a channel, and Kick or Counterspell spares a spell vmangos does not
-interrupt, only after the reimport. Reimport `spell` from this revision before play resumes.
+Until you reimport `spell`, every existing spell keeps the interrupt behaviour from before the
+columns: damage pushes back a cast and leaves a channel running, and an interrupt effect stops every
+cast and channel. Damage delays or cancels a channel, and Kick or Counterspell spares a spell vmangos
+does not interrupt, only after the reimport. Reimport `spell` from this revision before play
+resumes.
+
+Two changes apply at publish, without the reimport. A creature's cast is no longer pushed back. A
+ground-area tick and a hit from a spell with SPELL_ATTR_EX3_TREAT_AS_PERIODIC no longer push back a
+cast, and the `on_damage_taken` hook reports them with `periodic` set to true.
 
 A Package Delta written before this revision has no interrupt fields, so its new spells take the
 defaults. Emit the Package again from a Base Snapshot of this revision, or set the fields, before
