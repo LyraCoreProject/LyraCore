@@ -263,9 +263,11 @@ and `game_native_away.world` are typed, END-appended defaults; a legacy away row
 World Shard.
 
 `game_world_session_end` is a new private Realm outbox to `idc_end_world_session` on a World Shard.
-`game_world_session_end_retry` is a new private scheduled Realm table with at most one row per
-Account. It holds the end that a newer Login Queue ticket waits for, its 90-second deadline and the
-resend time of a refused end. Both start empty. See
+`game_world_session_end_retry` is a private scheduled Realm table with at most one row per Account.
+It holds the 90-second bound that Login Queue tickets of the Account wait for the away World
+Session to end, and fires at that bound. `game_world_session_owed_end` is a new private scheduled Realm table with
+at most one row per connection. It holds an end the Realm Shard owes a World Shard and fires every
+30 seconds to send it again when the earlier send has its answer. All start empty. See
 [the admission rules](architecture.md#host-listeners-and-admission) and
 [the deploy order](danger-zones.md#world-session-end-migration).
 

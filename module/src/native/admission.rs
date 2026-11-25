@@ -110,6 +110,15 @@ pub(super) fn remove(ctx: &ReducerContext, connection_id: ConnectionId) {
         .delete(connection_id);
 }
 
+/// Whether a ticket of the Account waits in the Login Queue.
+pub(super) fn waiting(ctx: &ReducerContext, account_id: u64) -> bool {
+    ctx.db
+        .game_native_admission()
+        .account_id()
+        .find(account_id)
+        .is_some_and(|admission| !admission.admitted)
+}
+
 /// Gives a World Session that returns from a World Shard the capacity slot its away record held,
 /// without queueing. False means a newer connection for the Account replaces it.
 pub(super) fn returned(ctx: &ReducerContext, connection_id: ConnectionId, account_id: u64) -> bool {
