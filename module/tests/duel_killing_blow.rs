@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use support::{
     event_rows, fence_subscription, number, poll_until, subscribe_with_fence, Standalone,
     POLL_TIMEOUT,
@@ -10,10 +11,12 @@ const DUEL: u64 = 509_0001;
 /// `state::ACTIVE` in `module/src/duel.rs`.
 const ACTIVE: u8 = 2;
 
-#[test]
-#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_duel_ending_swing_is_no_killing_blow() {
-    let mut standalone = Standalone::start("duel-killing-blow");
+/// `completion_kind::WON` in `module/src/duel.rs`.
+const WON: &str = "2";
+
+/// An active Duel between `PLAYER` and a second Character, whose guid it returns.
+fn stage_active_duel(name: &str) -> (Standalone, u64) {
+    let mut standalone = Standalone::start(name);
     standalone.publish_module();
     standalone.clear_schedule("game_creature_move_schedule");
     standalone.clear_schedule("game_event_reaper_schedule");
@@ -44,11 +47,8 @@ fn a_duel_ending_swing_is_no_killing_blow() {
         number(&player, "z"),
     );
     standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET simulation_indexed = false, x = {}, y = {y}, z = {z}, health = 1 WHERE guid = {rival}",
+        "UPDATE game_world_entity SET simulation_indexed = false, x = {}, y = {y}, z = {z} WHERE guid = {rival}",
         x + 1.0
-    ));
-    standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET orientation = 0.0, godmode = true WHERE guid = {PLAYER}"
     ));
     standalone.insert_row(
         "game_duel",
@@ -65,6 +65,19 @@ fn a_duel_ending_swing_is_no_killing_blow() {
             ("state", &ACTIVE),
         ],
     );
+    (standalone, rival)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_duel_ending_swing_is_no_killing_blow() {
+    let (standalone, rival) = stage_active_duel("duel-killing-blow");
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET orientation = 0.0, godmode = true WHERE guid = {PLAYER}"
+    ));
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = 1 WHERE guid = {rival}"
+    ));
 
     let events = subscribe_with_fence(
         &standalone,
@@ -106,4 +119,59 @@ fn a_duel_ending_swing_is_no_killing_blow() {
         damaging[0]["killing_blow"], "false",
         "a Duel-ending swing is no killing blow: {swings:?}"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_hit_that_leaves_a_duelist_at_one_health_ends_the_duel_for_its_opponent() {
+    let (standalone, rival) = stage_active_duel("duel-third-party-hit");
+    standalone.assert_sql(&format!(
+        "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    standalone.assert_call(
+        "debug_spawn_at_feet",
+        &[&PLAYER.to_string(), &TEST_WOLF_ENTRY.to_string(), "3.0"],
+    );
+    let wolf: u64 = number(
+        &standalone
+            .query_rows(&format!(
+                "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+            ))
+            .remove(0),
+        "guid",
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET simulation_indexed = false WHERE guid = {wolf}"
+    ));
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = 40, max_health = 40 WHERE guid = {rival}"
+    ));
+
+    // debug_apply_damage caps the hit at the target's health minus 1.
+    standalone.assert_call(
+        "debug_apply_damage",
+        &[&rival.to_string(), "1000", &wolf.to_string()],
+    );
+
+    let rival_row = standalone
+        .query_rows(&format!(
+            "SELECT health, dead FROM game_world_entity WHERE guid = {rival}"
+        ))
+        .remove(0);
+    assert_eq!(rival_row["dead"], "false");
+    assert_eq!(rival_row["health"], "1");
+    assert!(
+        standalone
+            .query_rows(&format!("SELECT id FROM game_duel WHERE id = {DUEL}"))
+            .is_empty(),
+        "a hit that leaves a duelist at 1 health ends the Duel"
+    );
+    let completions = standalone.query_rows(&format!(
+        "SELECT completion_kind, winner_guid, loser_guid FROM game_duel_event \
+         WHERE duel_id = {DUEL} AND kind = 3 AND recipient_guid = {PLAYER}"
+    ));
+    assert_eq!(completions.len(), 1, "{completions:?}");
+    assert_eq!(completions[0]["completion_kind"], WON);
+    assert_eq!(completions[0]["winner_guid"], PLAYER.to_string());
+    assert_eq!(completions[0]["loser_guid"], rival.to_string());
 }

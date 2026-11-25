@@ -313,9 +313,22 @@ pub(crate) fn active_duel_between(
     duel_involving(ctx, attacker_guid).filter(|duel| active_pair(duel, attacker_guid, target_guid))
 }
 
-/// Whether `guid` fights a started Duel; vmangos `m_duel->startTime != 0`.
+/// The started Duel `guid` fights; vmangos `m_duel->startTime != 0`.
+pub(crate) fn active_duel_of(ctx: &ReducerContext, guid: u64) -> Option<Duel> {
+    duel_involving(ctx, guid).filter(|duel| duel.state == state::ACTIVE)
+}
+
 pub(crate) fn in_active_duel(ctx: &ReducerContext, guid: u64) -> bool {
-    duel_involving(ctx, guid).is_some_and(|duel| duel.state == state::ACTIVE)
+    active_duel_of(ctx, guid).is_some()
+}
+
+/// The other duelist of `duel`, given one of its two.
+pub(crate) fn opponent_in(duel: &Duel, guid: u64) -> u64 {
+    if duel.initiator_guid == guid {
+        duel.challenged_guid
+    } else {
+        duel.initiator_guid
+    }
 }
 
 fn active_pair(duel: &Duel, attacker_guid: u64, target_guid: u64) -> bool {
@@ -610,12 +623,11 @@ fn cancellation_result(duel: &Duel, actor_guid: u64) -> (u8, u64, u64) {
     if duel.state != state::ACTIVE {
         return (completion_kind::INTERRUPTED, 0, 0);
     }
-    let winner = if actor_guid == duel.initiator_guid {
-        duel.challenged_guid
-    } else {
-        duel.initiator_guid
-    };
-    (completion_kind::FLED, winner, actor_guid)
+    (
+        completion_kind::FLED,
+        opponent_in(duel, actor_guid),
+        actor_guid,
+    )
 }
 
 pub(crate) fn cancel_duel(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64) {
