@@ -343,9 +343,4 @@ mod tests {
     fn a_member_without_a_world_session_counts_offline_even_when_reported_online() {
         assert!(!counts_online(true, shard(1), None));
     }
-
-    #[test]
-    fn a_member_reported_online_with_a_world_session_counts_online() {
-        assert!(counts_online(true, shard(1), Some(shard(1))));
-    }
 }

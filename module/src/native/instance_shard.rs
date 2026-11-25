@@ -368,7 +368,7 @@ pub fn idc_world_instance_entry(
         instance.last_empty_at_micros = 0;
         ctx.db.game_instance().instance_id().update(instance);
     }
-    // Bindings travel with the Character; the admission lease protects this allocation until import.
+    // Bindings travel with the Character; the admission reservation holds this run until import.
     ctx.db
         .game_instance_binding()
         .by_character()
@@ -622,17 +622,20 @@ pub(super) fn imported(
         return Ok(());
     }
     let now = ctx.timestamp.to_micros_since_unix_epoch();
-    if !ctx.db.game_instance_entry_lease().iter().any(|lease| {
-        lease.source == ctx.sender()
-            && request_id.is_none_or(|id| lease.request_id == id)
-            && lease.guid == guid
-            && lease.connection == connection
-            && lease.map_id == map
-            && lease.instance_id == instance_id
-            && lease.expires > now
-    }) {
-        return Err("dungeon admission is missing or expired".into());
-    }
+    let lease = ctx
+        .db
+        .game_instance_entry_lease()
+        .iter()
+        .find(|lease| {
+            lease.source == ctx.sender()
+                && request_id.is_none_or(|id| lease.request_id == id)
+                && lease.guid == guid
+                && lease.connection == connection
+                && lease.map_id == map
+                && lease.instance_id == instance_id
+                && lease.expires > now
+        })
+        .ok_or("dungeon admission is missing or expired")?;
     if !ctx
         .db
         .game_instance()
@@ -644,15 +647,20 @@ pub(super) fn imported(
     }
     realm_party::restore(ctx, guid);
     instance::bind_character(ctx, guid, instance_id, map, ctx.database_identity());
+    ctx.db.game_instance_entry_lease().id().delete(lease.id);
     Ok(())
 }
 
-/// Import keeps the admission reservation; it ends here, once the Character stands in the Instance.
 pub(super) fn arrived(ctx: &ReducerContext, guid: u64, map: u32, instance: u64) {
     let leases = ctx.db.game_instance_entry_lease();
     let ids: Vec<_> = leases
         .iter()
-        .filter(|lease| lease.guid == guid && lease.map_id == map && lease.instance_id == instance)
+        .filter(|lease| {
+            lease.source == ctx.database_identity()
+                && lease.guid == guid
+                && lease.map_id == map
+                && lease.instance_id == instance
+        })
         .map(|lease| lease.id)
         .collect();
     for id in ids {
@@ -660,14 +668,31 @@ pub(super) fn arrived(ctx: &ReducerContext, guid: u64, map: u32, instance: u64) 
     }
 }
 
+/// Instances a Character is entering: admitted but not imported, or imported but not in the world.
 pub(crate) fn occupied(ctx: &ReducerContext) -> Vec<u64> {
+    use super::handoff::game_native_handoff;
+    use crate::game_character;
+
     let now = ctx.timestamp.to_micros_since_unix_epoch();
-    ctx.db
-        .game_instance_entry_lease()
+    let mut entering: Vec<u64> = ctx
+        .db
+        .game_native_handoff()
         .iter()
-        .filter(|lease| lease.expires > now)
-        .map(|lease| lease.instance_id)
-        .collect()
+        .filter(|handoff| handoff.transfer_id != 0)
+        .filter_map(|handoff| handoff.character_guid)
+        .chain(super::package_relocation::arriving(ctx))
+        .filter_map(|guid| ctx.db.game_character().guid().find(guid))
+        .map(|character| character.pending_instance_id)
+        .filter(|instance| *instance != 0)
+        .collect();
+    entering.extend(
+        ctx.db
+            .game_instance_entry_lease()
+            .iter()
+            .filter(|lease| lease.expires > now)
+            .map(|lease| lease.instance_id),
+    );
+    entering
 }
 
 pub(super) fn return_from_reaped(

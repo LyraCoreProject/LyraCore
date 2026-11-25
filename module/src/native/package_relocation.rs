@@ -55,6 +55,15 @@ pub struct PackageArrival {
     source: Identity,
 }
 
+/// Characters this Shard imported whose bodies wait for Transfer release.
+pub(super) fn arriving(ctx: &ReducerContext) -> Vec<u64> {
+    ctx.db
+        .game_package_arrival()
+        .iter()
+        .map(|arrival| arrival.crossing.guid)
+        .collect()
+}
+
 #[derive(SpacetimeType)]
 struct Import {
     crossing: Crossing,
@@ -503,9 +512,8 @@ pub fn idc_package_relocation(ctx: &ReducerContext, message: Vec<u8>) -> Result<
             }
             transfer::apply_release(&mut CtxShard { ctx }, crossing.id)?;
             super::realm_party::restore(ctx, crossing.guid);
-            let body = crate::actor::restore_sessionless_body(ctx, crossing.guid)
+            crate::actor::restore_sessionless_body(ctx, crossing.guid)
                 .ok_or("arriving Package Character is missing")?;
-            instance_shard::arrived(ctx, crossing.guid, body.map_id, body.instance_id);
             directory::changed(ctx, crossing.account_id, crossing.guid, true);
             ctx.db.game_package_arrival().id().delete(arrival.id);
         }

@@ -20,8 +20,8 @@ status = "unverified"
 
 [[deliberate_deviations]]
 id = "moved_member_counts_online"
-result = "A Group member on a cross-Shard loading screen counts as online once the Character directory names its destination, so a reset is not refused with INSTANCERESET_FAIL_OFFLINE; a member loading into the dungeon still refuses it with INSTANCERESET_FAIL_GENERAL. The Reference Server counts a member offline until it is in the world."
-reason = "The Realm Shard hears that the member is in the world only after its client is. Counting the moved World Session online keeps a reset sent right after the member's arrival from being refused; the admission reservation still protects the dungeon while a member loads into it."
+result = "A Group member whose World Session a cross-Shard Transfer has moved counts as online once the Character directory names the destination, before it is in the world there, so a reset is not refused with INSTANCERESET_FAIL_OFFLINE. A member loading into the dungeon still makes the reset fail with INSTANCERESET_FAIL_GENERAL. A member who disconnects inside the dungeon after that Transfer counts as online until its offline report or World Session close from the Instance Shard reaches the Realm Shard, so a reset sent in that time succeeds. The Reference Server counts a member offline whenever it is not in the world. Package Characters have no World Session and keep the Reference result."
+reason = "The Realm Shard hears that the member is in the world only after its client is. Counting the moved World Session online keeps a reset sent right after the member's arrival from being refused; occupancy still protects the dungeon while a member loads into it."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
 
 [[known_gaps]]
