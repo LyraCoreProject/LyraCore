@@ -200,6 +200,9 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         "pool_id,event_entry",
         &pool_rows,
     );
+    // Each statement commits alone, so a pass that ran part way through the import settled on a
+    // partial link set. Dropping the statuses last makes the next pass walk every link again.
+    stmts.push("DELETE FROM game_event_status WHERE event_entry >= 0".to_string());
     eprintln!(
         "game events: {} links and {} event pools; {} links name a spawn the import leaves out, \
          {} negative links on pooled placements are unsupported",

@@ -50,7 +50,11 @@ pub struct PopulationAssignment {
     pub entry: u32,
 }
 
-#[table(accessor = game_creature_population_selection, index(accessor = by_instance, btree(columns = [instance_id])))]
+#[table(
+    accessor = game_creature_population_selection,
+    index(accessor = by_instance, btree(columns = [instance_id])),
+    index(accessor = by_population, btree(columns = [population_id]))
+)]
 pub struct CreaturePopulationSelection {
     #[primary_key]
     pub id: String,
@@ -144,8 +148,8 @@ fn held_out_by_event_ids(member: &CreaturePopulationMember) -> bool {
 fn forget_event_id_selections(ctx: &ReducerContext, population_id: u64) {
     let selections = ctx.db.game_creature_population_selection();
     let stale: Vec<String> = selections
-        .iter()
-        .filter(|selection| selection.population_id == population_id)
+        .by_population()
+        .filter(population_id)
         .map(|selection| selection.id)
         .collect();
     for id in stale {
