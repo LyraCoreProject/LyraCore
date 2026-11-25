@@ -45,6 +45,9 @@ pub struct ServerConfig {
     pub vmap_enabled: bool,
     #[default(false)]
     pub nav_coverage_enabled: bool,
+    // docs/operations/vmap-rollout.md#movement-height-checks: on only after a live measurement.
+    #[default(false)]
+    pub movement_height_checks_enabled: bool,
 }
 
 /// The stored row, or the column defaults when the Shard has none yet.
@@ -57,6 +60,7 @@ pub(crate) fn server_config(ctx: &ReducerContext) -> ServerConfig {
         bots_idle: false,
         vmap_enabled: false,
         nav_coverage_enabled: false,
+        movement_height_checks_enabled: false,
     })
 }
 

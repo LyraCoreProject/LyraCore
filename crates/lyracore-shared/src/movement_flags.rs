@@ -12,7 +12,7 @@ pub const FALLING_FAR: u32 = 0x4000;
 pub const SWIMMING: u32 = 0x0020_0000;
 pub const FLYING: u32 = 0x0100_0000;
 pub const ON_TRANSPORT: u32 = 0x0200_0000;
-// The flag a feather fall Aura gives the client.
+// The flag `SMSG_MOVE_FEATHER_FALL` sets.
 pub const SAFE_FALL: u32 = 0x2000_0000;
 pub const HOVER: u32 = 0x4000_0000;
 

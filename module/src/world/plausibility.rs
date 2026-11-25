@@ -1,10 +1,10 @@
 use lyracore_shared::movement_flags::{
-    AIRBORNE, FIXED_Z, FLYING, HOVER, LEVITATING, SAFE_FALL, SWIMMING,
+    AIRBORNE, FIXED_Z, FLYING, HOVER, LEVITATING, ON_TRANSPORT, SAFE_FALL, SWIMMING,
 };
 use lyracore_shared::spell::taxonomy::A_FLAG;
 use spacetimedb::{ReducerContext, Table};
 
-use super::{game_movement_violation, game_world_entity, MovementViolation, WorldEntity};
+use super::{game_movement_violation, MovementViolation, WorldEntity};
 use crate::tables::game_creature_spline;
 
 /// Magnitude: the observed speed as a multiple of the mover's run speed.
@@ -74,7 +74,7 @@ impl MovementDelta {
         self.move_time_ms / 1000 != self.old_move_ms / 1000
     }
 
-    // A Character entering the world or a Shard starts with no client clock.
+    // Only a new entity has a zero clock: a zero client time leaves the stored clock as it was.
     fn starts_the_clock(&self) -> bool {
         self.old_move_ms == 0 && self.move_time_ms != 0
     }
@@ -82,15 +82,20 @@ impl MovementDelta {
 
 /// Records every implausible part of a Character's movement as a `game_movement_violation` row.
 /// It never corrects or refuses the movement.
-pub(crate) fn score_and_log_movement(ctx: &ReducerContext, guid: u64, delta: &MovementDelta) {
-    let Some(mover) = ctx.db.game_world_entity().guid().find(guid) else {
-        return;
-    };
+pub(crate) fn score_and_log_movement(
+    ctx: &ReducerContext,
+    mover: &WorldEntity,
+    delta: &MovementDelta,
+) {
     if !mover.is_player() || mover.godmode || delta.starts_the_clock() {
         return;
     }
-    let mut violations: Vec<(u8, f32)> = pace_violation(ctx, guid, delta).into_iter().collect();
-    violations.extend(gravity_violations(ctx, &mover, delta));
+    let guid = mover.guid;
+    let mut violations = Vec::new();
+    if !aboard(delta.flags, delta.old_flags) {
+        violations.extend(pace_violation(ctx, guid, delta));
+    }
+    violations.extend(gravity_violations(ctx, mover, delta));
     if violations.is_empty() || is_gm_character(ctx, guid) || on_server_leg(ctx, guid) {
         return;
     }
@@ -138,9 +143,15 @@ fn gravity_violations(
     mover: &WorldEntity,
     delta: &MovementDelta,
 ) -> Vec<(u8, f32)> {
-    let claimed = newly_claimed_gravity_flags(delta.flags, delta.old_flags);
+    let claimed = claimed_gravity_flags(
+        delta.flags,
+        delta.old_flags,
+        delta.enters_new_client_second(),
+    );
     let mut position_violations = Vec::new();
-    if delta.opcode as u32 == lyracore_shared::opcodes::movement::MSG_MOVE_FALL_LAND {
+    if delta.opcode as u32 == lyracore_shared::opcodes::movement::MSG_MOVE_FALL_LAND
+        && !aboard(delta.flags, delta.old_flags)
+    {
         let max_speed = crate::modifiers::effective_move_speed(
             ctx,
             mover.guid,
@@ -159,14 +170,21 @@ fn gravity_violations(
     }
     if delta.enters_new_client_second()
         && on_foot(delta.flags, delta.old_flags)
-        && crate::vmap::vmap_enabled(ctx, mover.map_id)
+        && height_checks_enabled(ctx, mover.map_id)
     {
         let (map_id, instance_id) = (mover.map_id, mover.instance_id);
         let (x, y, z) = (delta.x, delta.y, delta.z);
+        let collision = || {
+            if !crate::vmap::has_collision_cell(ctx, map_id, x, y) {
+                return CollisionFloor::Unloaded;
+            }
+            crate::vmap::floor_z(ctx, map_id, instance_id, x, y, z)
+                .map_or(CollisionFloor::Open, CollisionFloor::At)
+        };
         position_violations.extend(ground_violation(
             z,
             crate::terrain::ground_z(ctx, map_id, x, y),
-            || crate::vmap::floor_z(ctx, map_id, instance_id, x, y, z),
+            collision,
             || crate::terrain::liquid_level_at(ctx, map_id, x, y),
         ));
     }
@@ -202,19 +220,27 @@ fn fall_violation(
     (drop_yd > allowed_yd).then_some(drop_yd - allowed_yd)
 }
 
-// vmangos MovementAnticheat flags each of these as a fly, fixed-height, hover or slow-fall hack.
-fn claimed_gravity_flags(flags: u32) -> u32 {
+// vmangos `HandleFlagTests` flags these on every packet as fly or fixed-height hacks.
+fn flight_flags(flags: u32) -> u32 {
     let swim_flying = if flags & SWIMMING != 0 {
         flags & FLYING
     } else {
         0
     };
-    (flags & (LEVITATING | FIXED_Z | SAFE_FALL | HOVER)) | swim_flying
+    (flags & (LEVITATING | FIXED_Z)) | swim_flying
 }
 
-// Like vmangos, only a newly claimed flag counts, so an Aura that just ended is not flagged.
-fn newly_claimed_gravity_flags(flags: u32, old_flags: u32) -> u32 {
-    claimed_gravity_flags(flags) & !claimed_gravity_flags(old_flags)
+/// The gravity-defying flags this movement claims. Like vmangos, a hover or slow-fall flag counts
+/// only when the movement before lacked it, so an Aura that just ended is not flagged. A held
+/// fly or fixed-height flag counts again only in a new client second.
+fn claimed_gravity_flags(flags: u32, old_flags: u32, new_client_second: bool) -> u32 {
+    let flight = flight_flags(flags);
+    let counted = if new_client_second {
+        flight
+    } else {
+        flight & !flight_flags(old_flags)
+    };
+    counted | (flags & !old_flags & (SAFE_FALL | HOVER))
 }
 
 fn aura_granted_flags(ctx: &ReducerContext, guid: u64) -> u32 {
@@ -230,24 +256,49 @@ fn aura_granted_flags(ctx: &ReducerContext, guid: u64) -> u32 {
         })
 }
 
-/// Neither this movement nor the one before it is airborne or swimming.
-fn on_foot(flags: u32, old_flags: u32) -> bool {
-    (flags | old_flags) & (AIRBORNE | SWIMMING) == 0
+// An elevator or tram GameObject also sets this, and the Module does not carry its riders.
+fn aboard(flags: u32, old_flags: u32) -> bool {
+    (flags | old_flags) & ON_TRANSPORT != 0
 }
 
-/// `floor_z` is the highest collision surface at most `UNDERFOOT_REACH_YD` above the feet. It and
-/// `liquid_z` are read only when the terrain alone cannot clear the mover.
+/// Neither this movement nor the one before it is airborne, swimming or aboard a Transport.
+fn on_foot(flags: u32, old_flags: u32) -> bool {
+    (flags | old_flags) & (AIRBORNE | SWIMMING | ON_TRANSPORT) == 0
+}
+
+fn height_checks_enabled(ctx: &ReducerContext, map_id: u32) -> bool {
+    crate::config::server_config(ctx).movement_height_checks_enabled
+        && crate::vmap::vmap_enabled(ctx, map_id)
+}
+
+/// What the active collision generation holds under the mover.
+enum CollisionFloor {
+    /// The generation has no rows for the mover's cell.
+    Unloaded,
+    /// No collision surface lies under the mover.
+    Open,
+    /// The highest collision surface at most `UNDERFOOT_REACH_YD` above the feet.
+    At(f32),
+}
+
+/// `collision` and `liquid_z` are read only when the terrain alone cannot clear the mover. Without
+/// collision rows for the cell there is no verdict.
 fn ground_violation(
     z: f32,
     terrain_z: Option<f32>,
-    floor_z: impl FnOnce() -> Option<f32>,
+    collision: impl FnOnce() -> CollisionFloor,
     liquid_z: impl FnOnce() -> Option<f32>,
 ) -> Option<(u8, f32)> {
     let terrain_underfoot = terrain_z.filter(|terrain| *terrain <= z + UNDERFOOT_REACH_YD);
     if terrain_underfoot.is_some_and(|terrain| z - terrain <= FLIGHT_MIN_HEIGHT_YD) {
         return None;
     }
-    let (kind, yards, threshold) = match (terrain_underfoot, floor_z()) {
+    let floor_z = match collision() {
+        CollisionFloor::Unloaded => return None,
+        CollisionFloor::Open => None,
+        CollisionFloor::At(floor) => Some(floor),
+    };
+    let (kind, yards, threshold) = match (terrain_underfoot, floor_z) {
         (None, None) => (
             MOVE_VIOLATION_UNDER_WORLD,
             terrain_z? - z,
@@ -298,6 +349,18 @@ mod tests {
 
     fn no_probe() -> Option<f32> {
         panic!("the terrain alone settles this movement")
+    }
+
+    fn no_collision_probe() -> CollisionFloor {
+        panic!("the terrain alone settles this movement")
+    }
+
+    fn floor(z: f32) -> impl FnOnce() -> CollisionFloor {
+        move || CollisionFloor::At(z)
+    }
+
+    fn open() -> CollisionFloor {
+        CollisionFloor::Open
     }
 
     #[test]
@@ -377,14 +440,17 @@ mod tests {
 
     #[test]
     fn walking_and_jumping_over_terrain_need_no_collision_probe() {
-        assert_eq!(ground_violation(10.1, Some(10.0), no_probe, no_probe), None);
         assert_eq!(
-            ground_violation(11.6, Some(10.0), no_probe, no_probe),
+            ground_violation(10.1, Some(10.0), no_collision_probe, no_probe),
+            None
+        );
+        assert_eq!(
+            ground_violation(11.6, Some(10.0), no_collision_probe, no_probe),
             None,
             "a jump"
         );
         assert_eq!(
-            ground_violation(9.0, Some(10.5), no_probe, no_probe),
+            ground_violation(9.0, Some(10.5), no_collision_probe, no_probe),
             None,
             "a dip in the terrain"
         );
@@ -393,11 +459,11 @@ mod tests {
     #[test]
     fn standing_on_a_building_or_bridge_above_the_terrain_is_supported() {
         assert_eq!(
-            ground_violation(60.0, Some(10.0), || Some(59.8), || None),
+            ground_violation(60.0, Some(10.0), floor(59.8), || None),
             None
         );
         assert_eq!(
-            ground_violation(61.5, Some(10.0), || Some(60.0), || None),
+            ground_violation(61.5, Some(10.0), floor(60.0), || None),
             None,
             "walking down its stairs"
         );
@@ -406,24 +472,24 @@ mod tests {
     #[test]
     fn a_cave_floor_under_the_terrain_supports_the_mover() {
         assert_eq!(
-            ground_violation(-40.0, Some(0.0), || Some(-40.2), || None),
+            ground_violation(-40.0, Some(0.0), floor(-40.2), || None),
             None
         );
     }
 
     #[test]
     fn standing_high_above_every_surface_is_flight() {
-        let (kind, height) = ground_violation(40.0, Some(10.0), || None, || None).unwrap();
+        let (kind, height) = ground_violation(40.0, Some(10.0), open, || None).unwrap();
         assert_eq!(kind, MOVE_VIOLATION_FLIGHT);
         assert_eq!(height, 30.0);
-        let (kind, height) = ground_violation(80.0, Some(10.0), || Some(50.0), || None).unwrap();
+        let (kind, height) = ground_violation(80.0, Some(10.0), floor(50.0), || None).unwrap();
         assert_eq!(
             (kind, height),
             (MOVE_VIOLATION_FLIGHT, 30.0),
             "above a roof"
         );
         assert_eq!(
-            ground_violation(-10.0, Some(0.0), || Some(-40.0), || None).map(|v| v.0),
+            ground_violation(-10.0, Some(0.0), floor(-40.0), || None).map(|v| v.0),
             Some(MOVE_VIOLATION_FLIGHT),
             "inside a cave"
         );
@@ -431,10 +497,10 @@ mod tests {
 
     #[test]
     fn standing_under_the_terrain_with_nothing_beneath_is_under_the_world() {
-        let (kind, depth) = ground_violation(-40.0, Some(0.0), || None, || None).unwrap();
+        let (kind, depth) = ground_violation(-40.0, Some(0.0), open, || None).unwrap();
         assert_eq!((kind, depth), (MOVE_VIOLATION_UNDER_WORLD, 40.0));
         assert_eq!(
-            ground_violation(-5.0, Some(0.0), || None, || None),
+            ground_violation(-5.0, Some(0.0), open, || None),
             None,
             "clipping the terrain's edge"
         );
@@ -442,20 +508,17 @@ mod tests {
 
     #[test]
     fn walking_on_water_over_a_deep_lake_is_supported() {
-        assert_eq!(
-            ground_violation(30.0, Some(0.0), || None, || Some(30.0)),
-            None
-        );
+        assert_eq!(ground_violation(30.0, Some(0.0), open, || Some(30.0)), None);
     }
 
     #[test]
     fn missing_ground_data_gives_no_verdict() {
-        assert_eq!(ground_violation(500.0, None, || None, || None), None);
+        assert_eq!(ground_violation(500.0, None, open, || None), None);
     }
 
     #[test]
     fn ordinary_movement_flags_claim_no_gravity_defiance() {
-        use lyracore_shared::movement_flags::{FALLING_FAR, FORWARD, JUMPING, ON_TRANSPORT};
+        use lyracore_shared::movement_flags::{FALLING_FAR, FORWARD, JUMPING};
         for flags in [
             FORWARD,
             FORWARD | JUMPING,
@@ -464,25 +527,58 @@ mod tests {
             FLYING,
             ON_TRANSPORT,
         ] {
-            assert_eq!(newly_claimed_gravity_flags(flags, 0), 0, "{flags:#x}");
+            assert_eq!(claimed_gravity_flags(flags, 0, true), 0, "{flags:#x}");
         }
     }
 
     #[test]
     fn a_newly_claimed_fly_hover_or_slow_fall_flag_is_a_gravity_violation() {
-        assert_eq!(newly_claimed_gravity_flags(SAFE_FALL, 0), SAFE_FALL);
-        assert_eq!(newly_claimed_gravity_flags(HOVER | 0x1, 0x1), HOVER);
-        assert_eq!(newly_claimed_gravity_flags(LEVITATING, 0), LEVITATING);
-        assert_eq!(newly_claimed_gravity_flags(FIXED_Z, 0), FIXED_Z);
-        assert_eq!(newly_claimed_gravity_flags(SWIMMING | FLYING, 0), FLYING);
+        assert_eq!(claimed_gravity_flags(SAFE_FALL, 0, false), SAFE_FALL);
+        assert_eq!(claimed_gravity_flags(HOVER | 0x1, 0x1, false), HOVER);
+        assert_eq!(claimed_gravity_flags(LEVITATING, 0, false), LEVITATING);
+        assert_eq!(claimed_gravity_flags(FIXED_Z, 0, false), FIXED_Z);
+        assert_eq!(claimed_gravity_flags(SWIMMING | FLYING, 0, false), FLYING);
     }
 
     #[test]
-    fn a_gravity_flag_kept_from_the_previous_movement_is_not_flagged_again() {
-        assert_eq!(newly_claimed_gravity_flags(SAFE_FALL, SAFE_FALL), 0);
+    fn a_held_slow_fall_or_hover_flag_is_never_flagged_again() {
+        assert_eq!(claimed_gravity_flags(SAFE_FALL, SAFE_FALL, true), 0);
+        assert_eq!(claimed_gravity_flags(HOVER, HOVER, true), 0);
         assert_eq!(
-            newly_claimed_gravity_flags(SAFE_FALL | HOVER, SAFE_FALL),
+            claimed_gravity_flags(SAFE_FALL | HOVER, SAFE_FALL, false),
             HOVER
         );
+    }
+
+    #[test]
+    fn a_held_fly_or_fixed_height_flag_is_flagged_again_each_client_second() {
+        assert_eq!(claimed_gravity_flags(LEVITATING, LEVITATING, false), 0);
+        assert_eq!(
+            claimed_gravity_flags(LEVITATING, LEVITATING, true),
+            LEVITATING
+        );
+        assert_eq!(claimed_gravity_flags(FIXED_Z, FIXED_Z, true), FIXED_Z);
+        let swim_flying = SWIMMING | FLYING;
+        assert_eq!(
+            claimed_gravity_flags(swim_flying, swim_flying, true),
+            FLYING
+        );
+    }
+
+    #[test]
+    fn riding_an_elevator_or_tram_is_aboard_and_not_on_foot() {
+        use lyracore_shared::movement_flags::FORWARD;
+        assert!(aboard(FORWARD | ON_TRANSPORT, FORWARD));
+        assert!(aboard(FORWARD, ON_TRANSPORT), "stepping off");
+        assert!(!aboard(FORWARD, FORWARD));
+        assert!(!on_foot(ON_TRANSPORT, ON_TRANSPORT));
+        assert!(!on_foot(FORWARD, ON_TRANSPORT));
+    }
+
+    #[test]
+    fn a_cell_without_collision_rows_gives_no_height_verdict() {
+        let unloaded = || CollisionFloor::Unloaded;
+        assert_eq!(ground_violation(40.0, Some(10.0), unloaded, || None), None);
+        assert_eq!(ground_violation(-40.0, Some(0.0), unloaded, || None), None);
     }
 }

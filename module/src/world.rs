@@ -780,7 +780,13 @@ pub(crate) fn apply_movement_update(
     let old_move_ms = mover.last_move_ms;
     let (old_flags, old_resting, old_health) = (mover.movement_flags, mover.resting, mover.health);
 
-    let crossing = mover.place(x, y, z, MoveClock::At(move_time_ms));
+    // A zero client time keeps the stored clock, so only a new entity has a zero clock.
+    let clock = if move_time_ms == 0 {
+        MoveClock::Unchanged
+    } else {
+        MoveClock::At(move_time_ms)
+    };
+    let crossing = mover.place(x, y, z, clock);
     let (grid_x, grid_y) = (mover.grid_x, mover.grid_y);
     mover.orientation = o;
     mover.movement_flags = movement.flags();
@@ -844,15 +850,17 @@ pub(crate) fn apply_movement_update(
     };
     let moved = delta.moved();
 
-    if snapshot_needs_persist(
+    let mover = if snapshot_needs_persist(
         opcode,
         grid_x != old_gx || grid_y != old_gy,
         mover.movement_flags != old_flags,
         mover.resting != old_resting || mover.health != old_health,
         drift_sq,
     ) {
-        mover.update(ctx);
-    }
+        mover.update(ctx)
+    } else {
+        mover
+    };
     // After the entity write, which the damage and its reactions would otherwise overwrite.
     // A fall that deals 0 damage is no damage event in vmangos and keeps stealth.
     if fall_dmg > 0 {
@@ -877,7 +885,7 @@ pub(crate) fn apply_movement_update(
     }
 
     if moved && boarding == crate::transport::Boarding::Ashore {
-        score_and_log_movement(ctx, mover_guid, &delta);
+        score_and_log_movement(ctx, &mover, &delta);
     }
 
     if let Some(relay_body) = relay_body {

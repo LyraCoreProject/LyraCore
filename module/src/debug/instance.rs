@@ -144,6 +144,17 @@ pub fn debug_set_nav_coverage_enabled(ctx: &ReducerContext, enabled: bool) -> Re
 }
 
 #[reducer]
+pub fn debug_set_movement_height_checks_enabled(
+    ctx: &ReducerContext,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut c = crate::config::server_config(ctx);
+    c.movement_height_checks_enabled = enabled;
+    crate::config::save_server_config(ctx, c);
+    Ok(())
+}
+
+#[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn debug_vmap_ray(
     ctx: &ReducerContext,

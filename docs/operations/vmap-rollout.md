@@ -92,3 +92,21 @@ Before imported Deadmines acceptance, import the approved DOOR and BUTTON models
    build, expected and observed result, and the log window.
 3. If any result is ambiguous, set the Gate off, keep the active generation for diagnosis and mark the
    rollout inconclusive. Never delete the prior generation as part of incident handling.
+
+## Movement height checks
+
+The Flight and Under-world movement violations (kinds 5 and 6 in `game_movement_violation`) cast a
+collision ray. Nobody has measured that cost on a busy Realm, so the Gate
+`game_config.movement_height_checks_enabled` keeps them off. They also need `vmap_enabled` and
+collision rows for the Character's cell. The fall and gravity-flag violations do not need this Gate.
+
+1. With `vmap_enabled` on, record reducer time for movement on a normal load.
+2. Turn the Gate on and record the same measurement. Then play a normal session (jumps, long falls,
+   stairs, swimming, a city on a model floor, bridges, an elevator, Charge) and confirm that
+   `SELECT * FROM game_movement_violation` stays empty. The rows are reaped after a second, so query
+   during the session.
+
+   ```bash
+   spacetime call --server "$SPACETIME_SERVER" lyracore -- debug_set_movement_height_checks_enabled true
+   ```
+3. If the cost rises too much or a normal session gives a row, set the Gate off again.

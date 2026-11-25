@@ -12,6 +12,7 @@ const FORWARD: &str = "[1,0,0,0]";
 const FORWARD_SLOW_FALLING: &str = "[1,0,0,32]";
 
 // `game_movement_violation.kind` values.
+const MOVE_VIOLATION_TELEPORT: u8 = 2;
 const MOVE_VIOLATION_FALL: u8 = 3;
 const MOVE_VIOLATION_GRAVITY_FLAG: u8 = 4;
 
@@ -68,6 +69,16 @@ fn violations(shard: &Standalone) -> Vec<u8> {
         .iter()
         .map(|row| number(row, "kind"))
         .collect()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_zero_client_time_does_not_turn_the_teleport_check_off() {
+    let (shard, [x, y, z]) = fixture("movement-violation-zero-time");
+    send_move(&shard, START_FORWARD, FORWARD, [x, y, z], 1_000);
+    send_move(&shard, START_FORWARD, FORWARD, [x + 1.0, y, z], 0);
+    send_move(&shard, HEARTBEAT, FORWARD, [x + 100.0, y, z], 1_500);
+    assert_eq!(violations(&shard), vec![MOVE_VIOLATION_TELEPORT]);
 }
 
 #[test]
