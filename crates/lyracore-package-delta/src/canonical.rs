@@ -65,7 +65,7 @@ fn write_key(out: &mut String, key: PrimaryKey) {
         | PrimaryKey::CreatureTemplate { entry }
         | PrimaryKey::GameobjectTemplate { entry }
         | PrimaryKey::GameobjectTrap { entry } => write_members(out, &[("entry", entry.into())]),
-        PrimaryKey::QuestText { quest_entry } => {
+        PrimaryKey::QuestText { quest_entry } | PrimaryKey::QuestFlags { quest_entry } => {
             write_members(out, &[("quest_entry", quest_entry.into())]);
         }
         PrimaryKey::QuestObjective {

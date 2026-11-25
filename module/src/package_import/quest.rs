@@ -7,8 +7,8 @@ use lyracore_package_delta::{
 };
 
 use crate::quest::{
-    game_quest_cast_objective, game_quest_objective, game_quest_reward_choice,
-    game_quest_reward_item, game_quest_template, game_quest_text, QuestCastObjective,
+    game_quest_cast_objective, game_quest_flags, game_quest_objective, game_quest_reward_choice,
+    game_quest_reward_item, game_quest_template, game_quest_text, QuestCastObjective, QuestFlags,
     QuestObjective, QuestRewardChoice, QuestRewardItem, QuestTemplate, QuestText,
 };
 use crate::{game_creature_template, game_gameobject_template, game_item_template, game_spell};
@@ -49,7 +49,7 @@ fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Stri
                     }
                 }
             }
-            ClaimTable::QuestText => {}
+            ClaimTable::QuestText | ClaimTable::QuestFlags => {}
             ClaimTable::QuestObjective => check_objective_reference(ctx, row)?,
             ClaimTable::QuestCastObjective => {
                 if let Some(spell_id) = claimed_u32(row, "spell_id") {
@@ -172,6 +172,12 @@ fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
             .quest_entry()
             .find(row.key().quest_entry())
             .is_some(),
+        ClaimTable::QuestFlags => ctx
+            .db
+            .game_quest_flags()
+            .quest_entry()
+            .find(row.key().quest_entry())
+            .is_some(),
         ClaimTable::QuestObjective => ctx
             .db
             .game_quest_objective()
@@ -226,6 +232,16 @@ fn clear_package_range(ctx: &ReducerContext) {
         .collect();
     for quest_entry in stale_texts {
         texts.quest_entry().delete(quest_entry);
+    }
+
+    let flags = ctx.db.game_quest_flags();
+    let stale_flags: Vec<u32> = flags
+        .iter()
+        .filter(|f| is_package_quest_id(f.quest_entry))
+        .map(|f| f.quest_entry)
+        .collect();
+    for quest_entry in stale_flags {
+        flags.quest_entry().delete(quest_entry);
     }
 
     let objectives = ctx.db.game_quest_objective();
@@ -311,6 +327,25 @@ fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
                 apply_quest_text_field(&mut text, field, &claimed.value)?;
             }
             texts.quest_entry().update(text);
+        }
+        (ClaimTable::QuestFlags, Operation::Insert) => {
+            ctx.db
+                .game_quest_flags()
+                .try_insert(built_quest_flags(row)?)
+                .map_err(|e| format!("`game_quest_flags` row {} did not insert: {e}", row.key()))?;
+        }
+        (ClaimTable::QuestFlags, Operation::Update) => {
+            let flag_rows = ctx.db.game_quest_flags();
+            let mut quest_flags = flag_rows
+                .quest_entry()
+                .find(row.key().quest_entry())
+                .ok_or_else(|| {
+                    format!("`game_quest_flags` row {} vanished mid-apply", row.key())
+                })?;
+            for (field, claimed) in row.fields() {
+                apply_quest_flags_field(&mut quest_flags, field, &claimed.value)?;
+            }
+            flag_rows.quest_entry().update(quest_flags);
         }
         (ClaimTable::QuestObjective, Operation::Insert) => {
             ctx.db
@@ -554,6 +589,38 @@ fn built_quest_text(row: &TracedRow) -> Result<QuestText, String> {
     Ok(text)
 }
 
+fn blank_quest_flags(quest_entry: u32) -> QuestFlags {
+    QuestFlags {
+        quest_entry,
+        flags: 0,
+    }
+}
+
+fn apply_quest_flags_field(
+    quest_flags: &mut QuestFlags,
+    field: &str,
+    value: &FieldValue,
+) -> Result<(), String> {
+    match field {
+        "flags" => quest_flags.flags = as_u32(field, value)?,
+        other => {
+            return Err(format!(
+                "`game_quest_flags` has no claimable column `{other}`"
+            ))
+        }
+    }
+    Ok(())
+}
+
+fn built_quest_flags(row: &TracedRow) -> Result<QuestFlags, String> {
+    check_insert_is_whole(row)?;
+    let mut quest_flags = blank_quest_flags(row.key().quest_entry());
+    for (field, claimed) in row.fields() {
+        apply_quest_flags_field(&mut quest_flags, field, &claimed.value)?;
+    }
+    Ok(quest_flags)
+}
+
 fn blank_quest_objective(quest_entry: u32, obj_index: u8) -> QuestObjective {
     QuestObjective {
         id: packed_quest_objective_id(quest_entry, obj_index),
@@ -740,7 +807,8 @@ fn built_quest_reward_choice(row: &TracedRow) -> Result<QuestRewardChoice, Strin
 mod tests {
     use super::super::fixtures::{
         artifact, assert_each_column_sets_its_own_field, distinct_row, fields_of, plan,
-        quest_claim, quest_objective_claim, quest_reward_item_claim, PACKAGE_QUEST, REAL_QUEST,
+        quest_claim, quest_flags_claim, quest_objective_claim, quest_reward_item_claim,
+        PACKAGE_QUEST, REAL_QUEST,
     };
     use super::*;
 
@@ -792,6 +860,54 @@ mod tests {
     }
 
     #[test]
+    fn tuning_a_package_quests_flags_is_an_uninvented_package_row() {
+        let plan = plan(&[artifact(
+            "example.tuner",
+            &quest_flags_claim(
+                PACKAGE_QUEST,
+                "update",
+                r#"{"flags":{"type":"u32","value":8}}"#,
+            ),
+        )])
+        .expect("plan builds");
+
+        assert!(in_package_range(&plan.rows[0]));
+    }
+
+    #[test]
+    fn tuning_a_base_quests_flags_is_not_an_uninvented_package_row() {
+        let plan = plan(&[artifact(
+            "example.tuner",
+            &quest_flags_claim(
+                REAL_QUEST,
+                "update",
+                r#"{"flags":{"type":"u32","value":8}}"#,
+            ),
+        )])
+        .expect("plan builds");
+
+        assert!(!in_package_range(&plan.rows[0]));
+    }
+
+    #[test]
+    fn an_inserted_flags_row_carries_the_claimed_flags_onto_the_row() {
+        let plan = plan(&[artifact(
+            "example.bolt",
+            &quest_flags_claim(
+                PACKAGE_QUEST,
+                "insert",
+                r#"{"flags":{"type":"u32","value":4104}}"#,
+            ),
+        )])
+        .expect("plan builds");
+
+        let quest_flags = built_quest_flags(&plan.rows[0]).expect("row builds");
+
+        assert_eq!(quest_flags.quest_entry, PACKAGE_QUEST);
+        assert_eq!(quest_flags.flags, 4104);
+    }
+
+    #[test]
     fn an_inserted_objective_derives_its_packed_key_from_the_quest_and_the_slot() {
         let plan = plan(&[artifact(
             "example.bolt",
@@ -840,6 +956,15 @@ mod tests {
             ClaimTable::Quest,
             || blank_quest(PACKAGE_QUEST),
             apply_quest_field,
+        );
+    }
+
+    #[test]
+    fn every_claimable_quest_flags_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::QuestFlags,
+            || blank_quest_flags(PACKAGE_QUEST),
+            apply_quest_flags_field,
         );
     }
 

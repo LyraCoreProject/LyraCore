@@ -17,6 +17,7 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
             Table::QuestCastObjective => "game_quest_cast_objective",
             Table::QuestRewardItem => "game_quest_reward_item",
             Table::QuestRewardChoice => "game_quest_reward_choice",
+            Table::QuestFlags => "game_quest_flags",
             Table::PickpocketLoot => "game_pickpocket_loot",
             Table::GameobjectLoot => "game_gameobject_loot",
             Table::SkinningLoot => "game_skinning_loot",
@@ -60,7 +61,7 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
 
     assert_eq!(
         Table::ALL.len(),
-        44,
+        45,
         "a table reached the enum without reaching `Table::ALL`"
     );
 }
@@ -95,6 +96,7 @@ fn the_quest_tables_belong_to_the_quests_import_family() {
         Table::QuestCastObjective,
         Table::QuestRewardItem,
         Table::QuestRewardChoice,
+        Table::QuestFlags,
     ] {
         assert_eq!(table.family(), QUEST_FAMILY, "{table}");
     }
