@@ -22,6 +22,7 @@ const CMSG_QUESTGIVER_HELLO: u32 = 0x184;
 const CMSG_QUESTGIVER_COMPLETE_QUEST: u32 = 0x18A;
 const CMSG_QUESTGIVER_REQUEST_REWARD: u32 = 0x18C;
 const CMSG_QUESTGIVER_CHOOSE_REWARD: u32 = 0x18E;
+const CMSG_QUESTLOG_REMOVE_QUEST: u32 = 0x194;
 const SMSG_QUESTGIVER_REQUEST_ITEMS: u16 = 0x18B;
 const SMSG_QUESTGIVER_OFFER_REWARD: u16 = 0x18D;
 const SMSG_ITEM_PUSH_RESULT: u16 = 0x166;
@@ -904,6 +905,31 @@ fn handing_in_the_only_copy_while_it_is_worn_removes_its_stats() {
     grant_quest(&shard, guid, WORN_ITEM_QUEST);
 
     turn_in_for_reins(&mut connection, giver);
+
+    assert!(blade_slots(&shard, guid).is_empty());
+    assert_eq!(max_health(&shard, guid), base_health);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn abandoning_a_quest_whose_source_item_is_worn_removes_the_item_and_its_stats() {
+    let (shard, mut connection, guid, _giver, base_health) =
+        stage_worn_item_quest("quest-abandon-worn-source");
+    grant(&shard, guid, FIXTURE_BLADE, 1, 23);
+    connection
+        .call("debug_equip_item", json!([guid, 23]))
+        .unwrap();
+    assert!(
+        max_health(&shard, guid) > base_health,
+        "the worn blade adds stamina"
+    );
+    grant_quest(&shard, guid, WORN_ITEM_QUEST);
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET src_item = {FIXTURE_BLADE}, src_item_count = 1 \
+         WHERE entry = {WORN_ITEM_QUEST}"
+    ));
+
+    request(&mut connection, CMSG_QUESTLOG_REMOVE_QUEST, vec![0]);
 
     assert!(blade_slots(&shard, guid).is_empty());
     assert_eq!(max_health(&shard, guid), base_health);

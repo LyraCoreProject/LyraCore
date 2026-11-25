@@ -63,10 +63,6 @@ pub(crate) fn apply_item_destroy(
         item.stack_count -= count;
         item.update(ctx);
     }
-    if slot <= equip_slot::END {
-        crate::spell::recompute_vitals(ctx, character_guid);
-        crate::spell::recompute_sheet(ctx, character_guid);
-    }
     Ok(())
 }
 
