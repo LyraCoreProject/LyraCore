@@ -7,6 +7,7 @@ use spacetimedb::{
     Timestamp,
 };
 
+use super::directory;
 use super::handoff::{self, game_native_handoff};
 use super::realm_shard::{self, game_native_away, NativeAway};
 use super::{game_native_world_connection, NativeActive, NativeWorldState};
@@ -46,7 +47,7 @@ crate::virtual_clock_exempt!(game_world_session_end_retry);
 
 /// An end this Realm Shard owes `world` for one connection. Every 30 seconds it goes out again
 /// unless an earlier send to `world` still waits for its answer. It lasts until `world` accepts
-/// it, reports the World Session closed, or stops being a Peer Shard.
+/// the send it counts, reports the World Session closed, or stops being a Peer Shard.
 #[table(accessor = game_world_session_owed_end, scheduled(resend_world_session_end))]
 pub struct WorldSessionOwedEnd {
     #[primary_key]
@@ -58,6 +59,12 @@ pub struct WorldSessionOwedEnd {
     #[index(btree)]
     pub account_id: u64,
     pub world: Identity,
+    /// The arrival on `world` this end is for, as `game_native_away.arrival` records it.
+    #[default(0u64)]
+    pub arrival: u64,
+    /// The `game_world_session_end` id of the send to `world` whose answer counts; 0 for none.
+    #[default(0u64)]
+    pub sent: u64,
 }
 crate::virtual_clock_exempt!(game_world_session_owed_end);
 
@@ -102,7 +109,7 @@ pub(super) fn replacing(ctx: &ReducerContext, account_id: u64) -> bool {
         }
     };
     let connection = away.connection_id.to_u128();
-    owe(ctx, world, connection, account_id);
+    owe(ctx, world, connection, account_id, away.arrival);
     if waits
         .account_id()
         .find(account_id)
@@ -128,44 +135,76 @@ pub(super) fn replacing(ctx: &ReducerContext, account_id: u64) -> bool {
 
 /// Owes `world` the end of the away World Session, without a ticket that waits for it.
 pub(super) fn end_away(ctx: &ReducerContext, world: Identity, away: &NativeAway) {
-    owe(ctx, world, away.connection_id.to_u128(), away.account_id);
+    owe(
+        ctx,
+        world,
+        away.connection_id.to_u128(),
+        away.account_id,
+        away.arrival,
+    );
 }
 
-/// Sends `world` the end of `connection` unless it is already owed to `world`. An end owed to
-/// another World Shard follows the World Session to `world`.
-fn owe(ctx: &ReducerContext, world: Identity, connection: u128, account_id: u64) {
+/// Owes `world` the end of `connection` at `arrival` unless it is already owed there, and sends it
+/// unless an earlier send to `world` still waits for its answer. An end owed elsewhere follows the
+/// World Session to `world`.
+fn owe(ctx: &ReducerContext, world: Identity, connection: u128, account_id: u64, arrival: u64) {
     let owed = ctx.db.game_world_session_owed_end();
     if owed
         .connection()
         .find(connection)
-        .is_some_and(|end| end.world == world)
+        .is_some_and(|end| end.world == world && end.arrival == arrival)
     {
         return;
     }
     owed.connection().delete(connection);
+    let sent = if waiting(ctx, connection, world) {
+        0
+    } else {
+        send(ctx, world, connection, account_id)
+    };
     owed.insert(WorldSessionOwedEnd {
         scheduled_id: 0,
         scheduled_at: (ctx.timestamp + TimeDuration::from_micros(RESEND_MICROS)).into(),
         connection,
         account_id,
         world,
-    });
-    send(ctx, world, connection, account_id);
-}
-
-fn send(ctx: &ReducerContext, world: Identity, connection: u128, account_id: u64) {
-    ctx.db.game_world_session_end().insert(WorldSessionEnd {
-        id: 0,
-        database: remote::Identity(world),
-        connection,
-        account_id,
+        arrival,
+        sent,
     });
 }
 
-/// A Character Transfer moved `connection` from `source` to `target`; an end owed to the source
-/// is owed to the target from its next send. The move arrives before the Transfer release, so the
-/// target would refuse an end sent now.
-pub(super) fn moved(ctx: &ReducerContext, connection: u128, source: Identity, target: Identity) {
+/// Whether a send of the end of `connection` to `world` still waits for its answer.
+fn waiting(ctx: &ReducerContext, connection: u128, world: Identity) -> bool {
+    ctx.db
+        .game_world_session_end()
+        .iter()
+        .any(|call| call.connection == connection && call.database.0 == world)
+}
+
+fn send(ctx: &ReducerContext, world: Identity, connection: u128, account_id: u64) -> u64 {
+    ctx.db
+        .game_world_session_end()
+        .insert(WorldSessionEnd {
+            id: 0,
+            database: remote::Identity(world),
+            connection,
+            account_id,
+        })
+        .id
+}
+
+/// A Character Transfer moved `connection` from `source` to `target`, where it arrives anew. The
+/// away record and an end owed to the source name that arrival on the target; the end goes out at
+/// its next send. The move arrives before the Transfer release, so the target would refuse an end
+/// sent now.
+pub(super) fn moved(
+    ctx: &ReducerContext,
+    account_id: u64,
+    connection: u128,
+    source: Identity,
+    target: Identity,
+) {
+    let arrival = directory::revision(ctx);
     let owed = ctx.db.game_world_session_owed_end();
     if let Some(mut end) = owed
         .connection()
@@ -173,12 +212,24 @@ pub(super) fn moved(ctx: &ReducerContext, connection: u128, source: Identity, ta
         .filter(|end| end.world == source)
     {
         end.world = target;
+        end.arrival = arrival;
+        end.sent = 0;
         owed.scheduled_id().update(end);
+    }
+    let aways = ctx.db.game_native_away();
+    if let Some(mut away) = aways.account_id().find(account_id).filter(|away| {
+        away.connection_id == ConnectionId::from_u128(connection)
+            && away.world.or_else(|| world_shard(ctx)) == Some(source)
+    }) {
+        away.world = Some(target);
+        away.arrival = arrival;
+        aways.account_id().update(away);
     }
 }
 
-/// `world` no longer holds the World Session of `connection`.
-pub(super) fn closed(ctx: &ReducerContext, connection: u128, world: Identity) {
+/// `world` reports that the World Session of `connection` closed. A World Shard reports only a
+/// connection it held until it ended for good, so no later arrival can follow the report.
+pub(super) fn closed(ctx: &ReducerContext, connection: u128, account_id: u64, world: Identity) {
     let owed = ctx.db.game_world_session_owed_end();
     if owed
         .connection()
@@ -187,6 +238,33 @@ pub(super) fn closed(ctx: &ReducerContext, connection: u128, world: Identity) {
     {
         owed.connection().delete(connection);
     }
+    realm_shard::drop_away(ctx, account_id, connection, world, None);
+}
+
+/// Whether an answer to `call` ends `end`: only the send `end` counts does. Another send may have
+/// been answered before the connection arrived on that World Shard again.
+fn counts(end: &WorldSessionOwedEnd, call: &WorldSessionEnd) -> bool {
+    end.sent != 0 && end.sent == call.id
+}
+
+/// The World Shard accepted `call`.
+fn accepted(ctx: &ReducerContext, call: &WorldSessionEnd) {
+    let owed = ctx.db.game_world_session_owed_end();
+    let Some(end) = owed
+        .connection()
+        .find(call.connection)
+        .filter(|end| counts(end, call))
+    else {
+        return;
+    };
+    owed.connection().delete(call.connection);
+    realm_shard::drop_away(
+        ctx,
+        end.account_id,
+        end.connection,
+        end.world,
+        Some(end.arrival),
+    );
 }
 
 /// The World Shards that this Realm Shard still owes the end of a World Session of the Account.
@@ -223,7 +301,7 @@ pub fn world_session_end_answered(
     result: Result<(), String>,
 ) {
     match result {
-        Ok(()) => closed(ctx, call.connection, call.database.0),
+        Ok(()) => accepted(ctx, &call),
         Err(error) => {
             spacetimedb::log::warn!("World Shard refused to end a World Session: {error}")
         }
@@ -247,19 +325,17 @@ pub fn resend_world_session_end(
         );
         return Ok(());
     }
-    let answered = !ctx
-        .db
-        .game_world_session_end()
-        .iter()
-        .any(|call| call.connection == end.connection && call.database.0 == end.world);
-    let end = owed.insert(WorldSessionOwedEnd {
+    let sent = if waiting(ctx, end.connection, end.world) {
+        end.sent
+    } else {
+        send(ctx, end.world, end.connection, end.account_id)
+    };
+    owed.insert(WorldSessionOwedEnd {
         scheduled_id: 0,
         scheduled_at: (ctx.timestamp + TimeDuration::from_micros(RESEND_MICROS)).into(),
+        sent,
         ..end
     });
-    if answered {
-        send(ctx, end.world, end.connection, end.account_id);
-    }
     Ok(())
 }
 
@@ -307,8 +383,8 @@ enum End {
     Abandon,
     /// A Character Transfer still fences its Handoff; refuse, and the Realm Shard resends.
     Refuse,
-    /// Nothing of it is here; report it closed.
-    Report,
+    /// Nothing of it is here; accept, and the Realm Shard drops what it records for that send.
+    Absent,
 }
 
 /// `open` is the state of the connection on this Shard, `handoff` the Account of its Handoff and
@@ -326,13 +402,13 @@ fn world_session_end(
     match handoff {
         Some((handoff_account, true)) if handoff_account == account_id => End::Refuse,
         Some((handoff_account, false)) if handoff_account == account_id => End::Abandon,
-        _ => End::Report,
+        _ => End::Absent,
     }
 }
 
 /// Ends this World Shard's World Session or Handoff of the connection, and nothing else of the
-/// Account. The Realm Shard learns that the World Session is closed, even when nothing of it was
-/// here.
+/// Account. A connection this Shard handed to another Shard is not here. Ok tells the Realm Shard
+/// that nothing of it is left here.
 #[reducer]
 pub fn idc_end_world_session(
     ctx: &ReducerContext,
@@ -346,6 +422,7 @@ pub fn idc_end_world_session(
         .game_native_world_connection()
         .connection_id()
         .find(connection_id)
+        .filter(|_| !handoff::handed_off(ctx, connection_id))
         .map(|connection| connection.state);
     let handoff = ctx
         .db
@@ -362,12 +439,13 @@ pub fn idc_end_world_session(
         }
         End::Abandon => handoff::abandon(ctx, connection_id),
         End::Refuse => return Err("a Character Transfer still fences this World Session".into()),
-        End::Report => realm_shard::report_closed(ctx, connection_id, account_id),
+        End::Absent => {}
     }
     Ok(())
 }
 
-/// Owes this Realm Shard's World Shard the end of a connection, as a late or refused end does.
+/// Owes this Realm Shard's World Shard the end of a connection at its recorded arrival, as a late
+/// or refused end does.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_end_world_session(
@@ -377,7 +455,14 @@ pub fn debug_end_world_session(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let world = world_shard(ctx).ok_or("this Shard has no World Shard")?;
-    owe(ctx, world, connection_id.to_u128(), account_id);
+    let arrival = ctx
+        .db
+        .game_native_away()
+        .account_id()
+        .find(account_id)
+        .filter(|away| away.connection_id == connection_id)
+        .map_or(0, |away| away.arrival);
+    owe(ctx, world, connection_id.to_u128(), account_id, arrival);
     Ok(())
 }
 
@@ -386,9 +471,43 @@ mod tests {
     use super::*;
 
     const ACCOUNT: u64 = 7;
+    const CONNECTION: u128 = 5;
 
     fn world() -> Identity {
         Identity::from_byte_array([1; 32])
+    }
+
+    fn owed(sent: u64) -> WorldSessionOwedEnd {
+        WorldSessionOwedEnd {
+            scheduled_id: 1,
+            scheduled_at: ScheduleAt::Time(Timestamp::UNIX_EPOCH),
+            connection: CONNECTION,
+            account_id: ACCOUNT,
+            world: world(),
+            arrival: 3,
+            sent,
+        }
+    }
+
+    fn call(id: u64) -> WorldSessionEnd {
+        WorldSessionEnd {
+            id,
+            database: remote::Identity(world()),
+            connection: CONNECTION,
+            account_id: ACCOUNT,
+        }
+    }
+
+    #[test]
+    fn only_the_answer_to_the_counted_send_ends_an_owed_end() {
+        assert!(counts(&owed(8), &call(8)));
+        assert!(!counts(&owed(8), &call(7)));
+    }
+
+    #[test]
+    fn after_a_move_no_answer_ends_an_owed_end_until_it_is_sent_again() {
+        assert!(!counts(&owed(0), &call(0)));
+        assert!(!counts(&owed(0), &call(8)));
     }
 
     #[test]
@@ -417,12 +536,12 @@ mod tests {
         });
         assert_eq!(
             world_session_end(Some(&other), Some((ACCOUNT + 1, false)), ACCOUNT),
-            End::Report
+            End::Absent
         );
     }
 
     #[test]
-    fn an_end_always_reports_the_world_session_closed() {
+    fn an_end_reports_the_close_of_what_it_ends() {
         let selection = NativeWorldState::CharacterSelection {
             account_id: ACCOUNT,
         };
@@ -434,7 +553,6 @@ mod tests {
             world_session_end(None, Some((ACCOUNT, false)), ACCOUNT),
             End::Abandon
         );
-        assert_eq!(world_session_end(None, None, ACCOUNT), End::Report);
     }
 
     #[test]

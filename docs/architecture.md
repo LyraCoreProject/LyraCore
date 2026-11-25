@@ -110,8 +110,9 @@ to Character selection takes the slot back without queueing. A new authenticated
 an older one for the same Account and joins behind existing waiters. When the older one is away, the
 new ticket waits. The Realm Shard then owes the World Shard that holds the older one the end of that
 connection (`idc_end_world_session`) and sends it. The World Shard ends only that connection
-or its Handoff and always reports the World Session closed, also when it holds nothing of it. The
-report removes the away record and the Login Queue admits the ticket. The ticket waits at most 90
+or its Handoff and reports the World Session closed. When it holds nothing of the connection,
+including a connection it has handed to another Shard, it only accepts the end. The report, or the
+accepted end, removes the away record and the Login Queue admits the ticket. The ticket waits at most 90
 seconds, and not at all when the away record names a Shard that is not a Peer Shard. At the bound
 the Realm Shard drops the away record and admits the ticket. The bound belongs to the away World
 Session, not to one ticket: a newer ticket of the Account keeps the time left, and a bound that
@@ -119,12 +120,22 @@ passes while no ticket waits leaves the away record.
 
 An owed end lasts past the bound, one row per connection (`game_world_session_owed_end`). Every 30
 seconds it goes out again, unless an earlier send still waits for its answer, until the World Shard
-accepts it, reports the World Session closed, or leaves the Peer Shards. A Character Transfer of
+accepts the send it counts, reports the World Session closed, or leaves the Peer Shards. A Character Transfer of
 that World Session moves it to the target World Shard, which receives it at the next send, after
 the Transfer release. A newer World Session that enters another World Shard owes the end of the older one the same
 way. Account and Session changes go to every World Shard that holds an away World Session of the
 Account or is owed an end for one. So a World Shard on an older Module, or a Transfer that fences
 the Handoff past the bound, delays the end of the older World Session but does not lose it.
+
+A connection can leave a World Shard and come back to it, so a late message about its earlier
+arrival must not end the current one. The Realm Shard stamps each arrival on a World Shard, at
+world entry and at each Transfer move, with a new directory clock value
+(`game_native_away.arrival`). An owed end names its arrival and the send whose answer counts, and a
+move clears that send. An accepted end removes the owed end and the away record of its arrival
+only when it answers the counted send. A World Shard reports a World Session closed only when the
+connection ends for good there: a connection it has handed to another Shard, whose socket the
+Native Host then detaches from it, is not reported. No later arrival can follow a report, so a
+report needs no stamp.
 
 Session revocation Gates run before admission and before every authenticated request, including
 ignored controls. The one-hour Session expiry limits new world authentication only. An established

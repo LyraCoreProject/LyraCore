@@ -403,6 +403,7 @@ fn end_connection(ctx: &ReducerContext, connection_id: ConnectionId, end: Connec
         .find(connection_id)
         .is_some();
     realm_shard::closing(ctx, connection_id);
+    handoff::clear_handed_off(ctx, connection_id);
     realm_shard::clear_return(ctx, connection_id);
     realm_shard::cancel_selection(ctx, connection_id);
     #[cfg(feature = "conformance_test_fixture")]
