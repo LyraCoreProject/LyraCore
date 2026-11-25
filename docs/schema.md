@@ -271,6 +271,12 @@ at most one row per connection. It holds an end the Realm Shard owes a World Sha
 [the admission rules](architecture.md#host-listeners-and-admission) and
 [the deploy order](danger-zones.md#world-session-end-migration).
 
+`game_native_away.arrival` and `game_world_session_owed_end.arrival` and `.sent` are END-appended
+with default 0. `arrival` stamps each arrival of a World Session on a World Shard, and `sent` is the
+id of the `game_world_session_end` send whose answer counts. `game_native_handed_off` is a new
+private table, one row per connection whose Handoff marker this Shard wrote, until the connection
+closes here or this Shard adopts it again.
+
 `game_character_name` is a new private Realm table keyed by the lowercased name. A pending row
 has guid zero. Its selection id is nonzero for native creation and zero for Package creation;
 a completed row has its Character guid and selection id zero. The Account and World identify the creator. Confirmed deletion releases the row. It stays

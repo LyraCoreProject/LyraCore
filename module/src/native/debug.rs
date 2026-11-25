@@ -171,7 +171,8 @@ pub fn debug_native_enter_world(ctx: &ReducerContext, character_guid: u64) -> Re
     )
 }
 
-/// Records on this Realm Shard that `world` holds the World Session `connection` of a Character.
+/// Records on this Realm Shard that `world` holds the World Session `connection` of a Character,
+/// as a new arrival there.
 #[reducer]
 pub fn debug_native_away(
     ctx: &ReducerContext,
@@ -189,6 +190,7 @@ pub fn debug_native_away(
         connection_id: ConnectionId::from_u128(connection),
         world: Some(world),
         character_guid,
+        arrival: super::directory::revision(ctx),
     });
     Ok(())
 }

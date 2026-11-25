@@ -36,7 +36,30 @@ pub struct NativeHandoff {
     pub transfer_source: Option<Identity>,
 }
 
-crate::outside_table_catalog!(game_native_handoff);
+/// A connection whose Handoff marker this Shard wrote: its World Session now lives on the target,
+/// although the connection stays open here until the Native Host detaches it.
+#[table(accessor = game_native_handed_off)]
+pub struct NativeHandedOff {
+    #[primary_key]
+    pub connection_id: ConnectionId,
+}
+
+crate::outside_table_catalog!(game_native_handoff, game_native_handed_off);
+
+pub(super) fn handed_off(ctx: &ReducerContext, connection_id: ConnectionId) -> bool {
+    ctx.db
+        .game_native_handed_off()
+        .connection_id()
+        .find(connection_id)
+        .is_some()
+}
+
+pub(super) fn clear_handed_off(ctx: &ReducerContext, connection_id: ConnectionId) {
+    ctx.db
+        .game_native_handed_off()
+        .connection_id()
+        .delete(connection_id);
+}
 
 /// How long a Handoff waits for its connection. It outlasts the Realm Shard's entering window, so
 /// a late world entry answer cannot write a Handoff marker for a Handoff that has already expired.
@@ -122,6 +145,11 @@ pub(super) fn waiting_accounts(ctx: &ReducerContext) -> Vec<u64> {
 }
 
 pub(super) fn write_marker(ctx: &ReducerContext, connection_id: ConnectionId, database: Identity) {
+    if !handed_off(ctx, connection_id) {
+        ctx.db
+            .game_native_handed_off()
+            .insert(NativeHandedOff { connection_id });
+    }
     ctx.db.game_native_packet().insert(super::NativePacket {
         id: 0,
         audience: super::NativeAudience::Handoff(NativeHandoffTarget {
@@ -146,6 +174,7 @@ pub fn native_world_adopt(ctx: &ReducerContext) -> Result<(), String> {
         .ok_or("no Handoff waits for this connection")?;
     handoffs.connection_id().delete(connection_id);
     super::realm_shard::cancel_selection(ctx, connection_id);
+    clear_handed_off(ctx, connection_id);
     ctx.db
         .game_native_transfer_pending()
         .connection_id()

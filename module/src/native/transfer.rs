@@ -382,13 +382,15 @@ pub fn idc_native_transfer_moved(
     version.revision = revision;
     directory.guid().update(entry);
     versions.guid().update(version);
-    super::replacement::moved(ctx, connection, ctx.sender(), world);
+    let arrival = directory::revision(ctx);
+    super::replacement::moved(ctx, connection, ctx.sender(), world, arrival);
     let aways = ctx.db.game_native_away();
     if let Some(mut away) = aways.account_id().find(account_id) {
         if away.connection_id == ConnectionId::from_u128(connection)
             && away.world.or_else(|| crate::peer::world_shard(ctx)) == Some(ctx.sender())
         {
             away.world = Some(world);
+            away.arrival = arrival;
             aways.account_id().update(away);
         }
     }

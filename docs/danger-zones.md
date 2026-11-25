@@ -1001,6 +1001,16 @@ Session closes, so publish the World Shards first here too. A `game_world_sessio
 that the previous Module scheduled at a resend time waits on to its deadline, and the waiting ticket
 owes the end again on its next Login Queue pass.
 
+Arrival stamps (#1286) END-append `arrival` to `game_native_away` and `arrival` and `sent` to
+`game_world_session_owed_end`, all defaulting to 0, and add the private `game_native_handed_off`
+table, which starts empty. No reducer argument changes, so the idc bindings stay as they are. Rows
+from before the publish carry arrival 0 and match each other. An answer to a send the previous Module
+made does not count, so that end goes out once more 30 seconds later. Publish the Realm Shard
+before the World Shards. A World Shard on this Module no longer reports a connection it holds
+nothing of; a Realm Shard on the previous Module needs that report to drop a stale away record, so
+a ticket waiting on one would wait the full 90-second bound. A World Shard on the previous Module
+keeps reporting it and keeps the old hazard until it is published.
+
 ## 2. Tooling gotchas
 
 - **`spacetime sql` (2.5):** no `ORDER BY`, no `IN` or subqueries, no `Timestamp` or `Identity`
