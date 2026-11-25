@@ -4,8 +4,8 @@ use crate::game_npc_vendor;
 
 use super::inventory::is_carried_slot;
 use super::rules::{
-    buy_cost, durability_multiplier_id, equip_slot, repair_bill, repair_cost,
-    repaired_by_repair_all, sell_value, sell_value_after_wear,
+    buy_cost, durability_multiplier_id, repair_bill, repair_cost, repaired_by_repair_all,
+    sell_value, sell_value_after_wear,
 };
 use super::tables::{
     game_durability_cost, game_durability_quality, game_item_instance, game_item_template,
@@ -188,10 +188,6 @@ pub(crate) fn apply_item_sell_count(
     let mut player = crate::helpers::live_entity(ctx, player_guid)?;
     player.money = player.money.saturating_add(earned);
     player.update(ctx);
-    if slot <= equip_slot::END {
-        crate::spell::recompute_vitals(ctx, player_guid);
-        crate::spell::recompute_sheet(ctx, player_guid);
-    }
     Ok(())
 }
 
@@ -566,7 +562,6 @@ pub(crate) fn apply_player_repair(
         crate::reputation::vendor_discount_pct(ctx, player_guid, npc.faction_template);
     let discount_mod = 1.0 - discount_pct as f32 / 100.0;
     let mut spent = false;
-    let mut restored_equipped_stats = false;
     for mut inst in targets {
         let Some(tmpl) = templates.entry().find(inst.entry) else {
             continue;
@@ -584,7 +579,6 @@ pub(crate) fn apply_player_repair(
         }
         player.money -= bill;
         spent = true;
-        restored_equipped_stats |= inst.slot <= equip_slot::END && inst.durability == 0;
         inst.durability = tmpl.max_durability;
         inst.update(ctx);
     }
@@ -593,10 +587,6 @@ pub(crate) fn apply_player_repair(
         let mut fresh = crate::helpers::live_entity(ctx, player_guid)?;
         fresh.money = player.money;
         fresh.update(ctx);
-    }
-    if restored_equipped_stats {
-        crate::spell::recompute_vitals(ctx, player_guid);
-        crate::spell::recompute_sheet(ctx, player_guid);
     }
     Ok(())
 }
