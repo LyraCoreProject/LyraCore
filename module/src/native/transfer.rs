@@ -384,6 +384,7 @@ pub fn idc_native_transfer_moved(
     versions.guid().update(version);
     super::replacement::moved(ctx, account_id, connection, ctx.sender(), world);
     directory::observe_revision(ctx, revision);
+    super::realm_party::moved(ctx, character_guid);
     let _ = transfer_id;
     Ok(())
 }

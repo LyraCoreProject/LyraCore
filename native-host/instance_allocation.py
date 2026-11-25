@@ -124,8 +124,17 @@ def check(host):
     assert cross(member, member_guid, continent, leave) == 0
     leader.send(0x31d)
     assert received(leader, 0x31e) == [struct.pack('<I', 36)]
-    host.wait_until(lambda: host.rows(f'SELECT revision FROM game_party_character WHERE guid = {member_guid}', second) == [[pinned]],
-                    'the reset did not reach the second Instance Shard')
+    host.wait_until(lambda: not host.rows('SELECT id FROM game_world_instance_reset'),
+                    'the reset did not reach every Instance Shard')
+    later.send(0x6e, b'Allocmember\0')
+    assert received(later, 0x7f) == [struct.pack('<I', 0) + b'Allocmember\0' + struct.pack('<I', 4)]
+
+    def counted_online(shard):
+        [[moved]] = host.rows(f'SELECT revision FROM game_character_directory_version WHERE guid = {member_guid}')
+        return any(online and revision >= moved for online, revision in
+                   host.rows(f'SELECT online, revision FROM game_party_character WHERE guid = {member_guid}', shard))
+
+    host.wait_until(lambda: counted_online(second), 'World Shards did not count the moved member online')
     for shard in (None, *worlds):
         host.sql(f'UPDATE game_party_character SET online = true, revision = {reported} WHERE guid = {member_guid}', shard)
     member.send(0x4b)
