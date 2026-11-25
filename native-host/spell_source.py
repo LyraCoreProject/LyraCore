@@ -155,7 +155,8 @@ def check_spell_source_behavior(host):
         caster.send(0x12e, cast(delayed, b))
         pending = f'SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {a}'
         host.wait_until(lambda: host.rows(pending), 'cast did not start')
-        host.call('debug_teleport', [turner, 0, 8000 if turner == a else 8005, 9000, 0, 3.14159265])
+        # A teleport would end the caster's cast.
+        host.sql(f'UPDATE game_world_entity SET orientation = 3.14159265 WHERE guid = {turner}')
         assert host.rows(pending), 'turning cancelled before completion'
         host.wait_until(lambda: not host.rows(pending), 'cast did not complete')
         assert not auras(delayed), 'completion ignored the facing requirement'
