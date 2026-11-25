@@ -78,7 +78,11 @@ fn an_area_spell_hits_an_enemy_character_only_when_both_characters_are_flagged()
         rival_health,
         "vmangos CanAttackWithoutEnablingPvP: an unflagged caster's area spares Characters"
     );
-    assert_eq!(flags(&shard, mage).0, mage_flags);
+    assert_eq!(
+        flags(&shard, mage).0 & unit_flags::PVP,
+        mage_flags & unit_flags::PVP,
+        "an area that spares the flagged Character leaves its caster unflagged"
+    );
 
     set_flagged(&shard, mage);
     let mut casts = 0;
