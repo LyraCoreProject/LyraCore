@@ -5093,6 +5093,33 @@ fn a_caster_at_spell_range_casts_and_stays_where_it_is() {
 }
 
 #[test]
+fn a_caster_pulled_between_sense_firings_casts_at_once_and_an_engaged_caster_waits() {
+    let mut w = wolf_and_player(p(15.0, 0.0, 10.0))
+        .caster(WOLF, 30.0)
+        .lone_spell(WOLF, NUKE)
+        .creature(PACK_MATE, p(0.0, 5.0, 10.0))
+        .attacking(PACK_MATE, HUNTER)
+        .caster(PACK_MATE, 30.0)
+        .lone_spell(PACK_MATE, NUKE);
+    let tick = w.tick_at(TickCadence::Proximity, catch_all());
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.casts(),
+        [(WOLF, NUKE, HUNTER)],
+        "only the caster pulled this firing begins a cast before the sense firing"
+    );
+
+    w.advance_clock(500_000);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+    assert!(
+        w.casts().contains(&(PACK_MATE, NUKE, HUNTER)),
+        "the engaged caster casts on the sense firing: {:?}",
+        w.casts()
+    );
+}
+
+#[test]
 fn a_wall_blocked_caster_drops_the_spell_and_closes_instead() {
     let mut w = wolf_casting(p(20.0, 0.0, 10.0)).wall_between(WOLF, HUNTER);
     let tick = w.tick(true, catch_all());

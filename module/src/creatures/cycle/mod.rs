@@ -567,9 +567,19 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         let maintenance = timed(w, "maintenance", |w| w.run_due_world_maintenance());
         rows.extend(maintenance);
     }
-    if tick.cadence.proximity() {
-        let seen = timed(w, "aggro", |w| aggro(w, &tick.scope, &active));
+    let pulled = if tick.cadence.proximity() {
+        let (seen, pulled) = timed(w, "aggro", |w| aggro(w, &tick.scope, &active));
         rows.push(("aggro", seen as u64));
+        pulled
+    } else {
+        Vec::new()
+    };
+    // A creature pulled between sense ticks opens its spell list in the firing that pulls it.
+    if !tick.cadence.sense() && !pulled.is_empty() {
+        let opened = timed(w, "cast", |w| {
+            cast(w, &tick.scope, |guid| pulled.contains(&guid))
+        });
+        rows.push(("cast", opened as u64));
     }
     if tick.cadence.sense() {
         rows.push((
@@ -585,7 +595,10 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
                 })
             }),
         ));
-        rows.push(("cast", timed(w, "cast", |w| cast(w, &tick.scope)) as u64));
+        rows.push((
+            "cast",
+            timed(w, "cast", |w| cast(w, &tick.scope, |_| true)) as u64,
+        ));
         rows.push((
             "threat_retarget",
             timed(w, "threat_retarget", |w| threat_retarget(w, &tick.scope)) as u64,
@@ -764,8 +777,13 @@ fn sensing_order(w: &impl EngageSink, active: &HashSet<u64>) -> Vec<Sensor> {
     candidates
 }
 
+/// Returns the sensors visited and the creatures pulled.
 // Decide every pull before hooks run Package code that can change the candidates.
-fn aggro<W: EngageSink + IdleSink>(w: &mut W, scope: &TickScope, active: &HashSet<u64>) -> usize {
+fn aggro<W: EngageSink + IdleSink>(
+    w: &mut W,
+    scope: &TickScope,
+    active: &HashSet<u64>,
+) -> (usize, Vec<u64>) {
     let targets: Vec<AggroTarget> = w
         .players(scope)
         .into_iter()
@@ -778,9 +796,9 @@ fn aggro_with_targets<W: EngageSink + IdleSink>(
     w: &mut W,
     active: &HashSet<u64>,
     targets: &[AggroTarget],
-) -> usize {
+) -> (usize, Vec<u64>) {
     if targets.is_empty() {
-        return 0;
+        return (0, Vec::new());
     }
     let sensors = sensing_order(w, active);
     let mut pulls = Vec::new();
@@ -797,10 +815,13 @@ fn aggro_with_targets<W: EngageSink + IdleSink>(
         };
         pulls.push((s.guid, victim));
     }
-    for (creature, victim) in pulls {
+    for &(creature, victim) in &pulls {
         w.engage(creature, victim, Pull::Noticed);
     }
-    sensors.len()
+    (
+        sensors.len(),
+        pulls.into_iter().map(|(creature, _)| creature).collect(),
+    )
 }
 
 fn nearest_noticed<W: EngageSink>(w: &W, s: &Sensor, targets: &[AggroTarget]) -> Option<u64> {
@@ -959,8 +980,13 @@ fn follow<W: IdleSink>(
     }))
 }
 
-fn cast<W: CastSink + EngageSink>(w: &mut W, scope: &TickScope) -> usize {
+fn cast<W: CastSink + EngageSink>(
+    w: &mut W,
+    scope: &TickScope,
+    chosen: impl Fn(u64) -> bool,
+) -> usize {
     let mut casters = w.casters(scope);
+    casters.retain(|c| chosen(c.guid));
     casters.sort_unstable_by_key(|c| c.guid);
     let visited = casters.len();
     // Choose every cast before applying one so earlier effects cannot change later choices.

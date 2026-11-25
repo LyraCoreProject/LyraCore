@@ -173,14 +173,14 @@ fn creature_pass(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
         sense_secs: sense_period_secs_for_interval(period_micros),
         scope,
     };
-    let (sense, scope_label) = (cadence.sense(), scope_label(&tick.scope));
+    let scope_label = scope_label(&tick.scope);
 
     let outcome = crate::creatures::cycle::run(ctx, tick);
 
     log_pass_stats(
         ctx,
         &scope_label,
-        sense,
+        cadence,
         outcome.awake,
         &outcome.rows_visited,
         interval_micros,
@@ -318,7 +318,7 @@ fn scope_label(scope: &TickScope) -> String {
 fn log_pass_stats(
     ctx: &ReducerContext,
     scope_label: &str,
-    sense: bool,
+    cadence: TickCadence,
     awake: usize,
     rows_visited: &[(&'static str, u64)],
     interval_micros: i64,
@@ -333,7 +333,7 @@ fn log_pass_stats(
         .collect::<Vec<_>>()
         .join(" ");
     log::info!(
-        "tick_creatures pass rows-visited: scope={scope_label} sense={sense} awake={awake} {body} (*=global pass)"
+        "tick_creatures pass rows-visited: scope={scope_label} cadence={cadence:?} awake={awake} {body} (*=global pass)"
     );
 }
 
