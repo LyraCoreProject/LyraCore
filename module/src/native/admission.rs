@@ -104,10 +104,22 @@ pub(super) fn request(
 }
 
 pub(super) fn remove(ctx: &ReducerContext, connection_id: ConnectionId) {
+    let admissions = ctx.db.game_native_admission();
+    if let Some(admission) = admissions.connection_id().find(connection_id) {
+        if !admission.admitted {
+            super::replacement::stop_waiting(ctx, admission.account_id);
+        }
+        admissions.connection_id().delete(connection_id);
+    }
+}
+
+/// Whether a ticket of the Account waits in the Login Queue.
+pub(super) fn waiting(ctx: &ReducerContext, account_id: u64) -> bool {
     ctx.db
         .game_native_admission()
-        .connection_id()
-        .delete(connection_id);
+        .account_id()
+        .find(account_id)
+        .is_some_and(|admission| !admission.admitted)
 }
 
 /// Gives a World Session that returns from a World Shard the capacity slot its away record held,

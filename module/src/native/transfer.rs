@@ -1,3 +1,4 @@
+use lyracore_protocol::codec::{CMSG_PLAYER_LOGIN_OPCODE, MSG_MOVE_WORLDPORT_ACK_OPCODE};
 use spacetimedb::sats::bsatn;
 use spacetimedb::{
     reducer, table, ConnectionId, Identity, ReducerContext, ScheduleAt, Table, TimeDuration,
@@ -8,9 +9,7 @@ use super::directory::{
     CharacterDirectoryVersion,
 };
 use super::handoff::{game_native_handoff, NativeHandoff};
-use super::realm_shard::{
-    game_native_away, game_world_session_closed, store_account, store_session, WorldSessionClosed,
-};
+use super::realm_shard::{game_native_away, store_account, store_session};
 use super::teleport::NativeTeleportOrigin;
 use super::{
     game_native_cipher, game_native_world_connection, NativePlayer, NativeWorldConnection,
@@ -386,6 +385,7 @@ pub fn idc_native_transfer_moved(
     version.revision = revision;
     directory.guid().update(entry);
     versions.guid().update(version);
+    super::replacement::moved(ctx, connection, ctx.sender(), world);
     let aways = ctx.db.game_native_away();
     if let Some(mut away) = aways.account_id().find(account_id) {
         if away.connection_id == ConnectionId::from_u128(connection)
@@ -560,25 +560,23 @@ pub fn idc_native_transfer_release(
         }
         transfer::apply_release(&mut CtxShard { ctx }, transfer_id)?;
     }
-    if !connected {
-        clear_pending_playtest(ctx, character_guid);
-        ctx.db
-            .game_world_session_closed()
-            .insert(WorldSessionClosed {
-                id: 0,
-                database: remote::Identity(realm),
-                connection,
-                account_id: handoff.account_id,
-            });
-        ctx.db
-            .game_native_handoff()
-            .connection_id()
-            .delete(handoff.connection_id);
+    if connected {
+        super::handoff::await_adoption(
+            ctx,
+            handoff.connection_id,
+            if handoff.world_port {
+                MSG_MOVE_WORLDPORT_ACK_OPCODE
+            } else {
+                CMSG_PLAYER_LOGIN_OPCODE
+            },
+        );
+    } else {
+        super::handoff::abandon(ctx, handoff.connection_id);
     }
     Ok(())
 }
 
-fn clear_pending_playtest(ctx: &ReducerContext, guid: u64) {
+pub(super) fn clear_pending_playtest(ctx: &ReducerContext, guid: u64) {
     if let Some(mut character) = crate::helpers::character_by_guid(ctx, guid) {
         let (godmode, speed) = crate::character::persisted_gm_playtest(
             character.pending_godmode,

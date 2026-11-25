@@ -319,26 +319,36 @@ pub struct AccountUpdate {
     pub session: Vec<u8>,
 }
 
-/// Sends Account and Session changes to the World Shard that holds the World Session.
+/// Sends Account and Session changes to each World Shard that holds a World Session of the
+/// Account, including one whose end this Realm Shard still owes.
 pub(crate) fn account_changed(ctx: &ReducerContext, account_id: u64) {
-    let Some(away) = ctx.db.game_native_away().account_id().find(account_id) else {
+    let mut worlds = super::replacement::owed_worlds(ctx, account_id);
+    worlds.extend(
+        ctx.db
+            .game_native_away()
+            .account_id()
+            .find(account_id)
+            .and_then(|away| away.world.or_else(|| world_shard(ctx))),
+    );
+    worlds.sort();
+    worlds.dedup();
+    if worlds.is_empty() {
         return;
-    };
-    let Some(world) = away.world.or_else(|| world_shard(ctx)) else {
-        return;
-    };
+    }
     let (Some(account), Some(session)) = (
         ctx.db.game_account().id().find(account_id),
         ctx.db.game_session().account_id().find(account_id),
     ) else {
         return;
     };
-    ctx.db.game_account_update().insert(AccountUpdate {
-        id: 0,
-        database: remote::Identity(world),
-        account: blob(&account),
-        session: blob(&session),
-    });
+    for world in worlds {
+        ctx.db.game_account_update().insert(AccountUpdate {
+            id: 0,
+            database: remote::Identity(world),
+            account: blob(&account),
+            session: blob(&session),
+        });
+    }
 }
 
 #[reducer]
@@ -675,6 +685,7 @@ pub fn idc_world_session_closed(
     account_id: u64,
 ) -> Result<(), String> {
     directory::require_world(ctx)?;
+    super::replacement::closed(ctx, connection, ctx.sender());
     let aways = ctx.db.game_native_away();
     if let Some(away) = aways.account_id().find(account_id).filter(|away| {
         away.connection_id == ConnectionId::from_u128(connection)
