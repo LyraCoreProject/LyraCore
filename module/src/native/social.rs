@@ -127,20 +127,16 @@ fn online(ctx: &ReducerContext, character: &Character) -> Option<codec::FriendOn
 
 fn remote_online(ctx: &ReducerContext, guid: u64) -> Option<codec::FriendOnline> {
     let character = ctx.db.game_party_character().guid().find(guid)?;
-    if !character.online
-        || ctx
-            .db
-            .game_character_profile()
-            .guid()
-            .find(guid)
-            .is_some_and(|profile| profile.deleted)
+    if ctx
+        .db
+        .game_character_profile()
+        .guid()
+        .find(guid)
+        .is_some_and(|profile| profile.deleted)
     {
         return None;
     }
-    character
-        .stats
-        .as_ref()
-        .map(|stats| stats.friend_online(character.class, character.chat_tag))
+    friend_online(&character)
 }
 
 fn target_race(ctx: &ReducerContext, guid: u64) -> Option<u8> {
@@ -391,21 +387,23 @@ pub(super) fn projected_presence(
     previous: Option<&PartyCharacter>,
     character: &PartyCharacter,
 ) {
-    if previous.is_some_and(|old| old.online == character.online)
-        || previous.is_none() && !character.online
+    let fields = friend_online(character);
+    if previous.and_then(friend_online).is_some() == fields.is_some()
+        || ctx
+            .db
+            .game_character_profile()
+            .guid()
+            .find(character.guid)
+            .is_some_and(|profile| profile.deleted)
     {
         return;
     }
-    if ctx
-        .db
-        .game_character_profile()
-        .guid()
-        .find(character.guid)
-        .is_some_and(|profile| profile.deleted)
-    {
-        return;
-    }
-    let fields = character
+    notify_presence(ctx, character.guid, character.race, fields);
+}
+
+/// A Character counts as online to friends once its presence carries Member Stats.
+fn friend_online(character: &PartyCharacter) -> Option<codec::FriendOnline> {
+    character
         .online
         .then(|| {
             character
@@ -413,8 +411,7 @@ pub(super) fn projected_presence(
                 .as_ref()
                 .map(|stats| stats.friend_online(character.class, character.chat_tag))
         })
-        .flatten();
-    notify_presence(ctx, character.guid, character.race, fields);
+        .flatten()
 }
 
 fn prune_deleted(ctx: &ReducerContext, guid: u64) {

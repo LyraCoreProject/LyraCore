@@ -171,7 +171,8 @@ A Transfer reports the member offline from its source Shard, and the destination
 only after its client is in the world there. The Character directory moves before the destination
 releases that client, so the source's report can be stale while the member stands in the world. The
 Realm therefore counts a member online while its World Session lives on a World Shard other than
-the one that reported it offline. A member still loading into the dungeon keeps the reset refused
+the one that reported it offline, the rule [Groups across World Shards](architecture.md#groups-across-world-shards)
+gives for every Group reader. A member still loading into the dungeon keeps the reset refused
 through occupancy. The `moved_member_counts_online` Deliberate Deviation in
 `conformance/features/world/instance_reset.toml` records where this differs from vmangos.
 

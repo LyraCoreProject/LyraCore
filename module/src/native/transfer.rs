@@ -393,6 +393,7 @@ pub fn idc_native_transfer_moved(
         }
     }
     directory::observe_revision(ctx, revision);
+    super::realm_party::moved(ctx, character_guid);
     let _ = transfer_id;
     Ok(())
 }

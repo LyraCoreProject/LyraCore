@@ -699,6 +699,19 @@ remote Member Stats for their local party frames. Group chat selects the authori
 audience and uses the same connection-bound delivery and ignore Gates as whispers. Group events
 are delivered only to their original connection; login restores the roster and pending invite.
 
+A Transfer's source reports the Character offline when it departs, and the destination reports it
+online only once its client is in the world there. The Character directory moves in between, so
+the source's report goes stale. The Realm Shard counts a Character online while its World Session
+lives on a World Shard other than the one that reported it offline. Group invites, invites by name,
+Meeting Stone Seekers and Instance resets use this rule. The Realm sends World Shards a stale
+report with the rule applied, at the revision of the Character's directory version, which every
+later report of the directory owner exceeds; the move itself republishes the Character. That copy
+has no Member Stats, so party frames show the member as loading and friends see no change until
+the destination reports. Until the move reaches the Realm, the source's report stands and the
+Character counts offline. A Character that disconnects after the move counts online on the Realm
+until its World Session close arrives; World Shards keep the online copy until the Realm next
+publishes the Character. Package Characters have no World Session and keep their reports.
+
 Shard-local Group mutations are refused when a World Shard has a Realm Shard. Sessionless Group
 actions are not supported in this topology; single-Shard behavior is unchanged. An existing multi-Shard Realm requires migration of its Group state before
 this revision is deployed. This change does not supply an automatic Group migration.
