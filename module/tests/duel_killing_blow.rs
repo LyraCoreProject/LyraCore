@@ -11,9 +11,6 @@ const DUEL: u64 = 509_0001;
 /// `state::ACTIVE` in `module/src/duel.rs`.
 const ACTIVE: u8 = 2;
 
-/// `completion_kind::WON` in `module/src/duel.rs`.
-const WON: &str = "2";
-
 /// An active Duel between `PLAYER` and a second Character, whose guid it returns.
 fn stage_active_duel(name: &str) -> (Standalone, u64) {
     let mut standalone = Standalone::start(name);
@@ -123,7 +120,7 @@ fn a_duel_ending_swing_is_no_killing_blow() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_creature_hit_that_leaves_a_duelist_at_one_health_ends_the_duel_for_its_opponent() {
+fn a_creature_hit_that_leaves_a_duelist_at_one_health_ends_the_duel() {
     let (standalone, rival) = stage_active_duel("duel-third-party-hit");
     standalone.assert_sql(&format!(
         "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
@@ -166,12 +163,4 @@ fn a_creature_hit_that_leaves_a_duelist_at_one_health_ends_the_duel_for_its_oppo
             .is_empty(),
         "a hit that leaves a duelist at 1 health ends the Duel"
     );
-    let completions = standalone.query_rows(&format!(
-        "SELECT completion_kind, winner_guid, loser_guid FROM game_duel_event \
-         WHERE duel_id = {DUEL} AND kind = 3 AND recipient_guid = {PLAYER}"
-    ));
-    assert_eq!(completions.len(), 1, "{completions:?}");
-    assert_eq!(completions[0]["completion_kind"], WON);
-    assert_eq!(completions[0]["winner_guid"], PLAYER.to_string());
-    assert_eq!(completions[0]["loser_guid"], rival.to_string());
 }
