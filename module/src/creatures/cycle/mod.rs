@@ -207,6 +207,8 @@ pub(crate) trait IdleSink {
     fn roll(&self) -> u32;
     fn aim_at_waypoint(&mut self, guid: u64, waypoint_id: u64);
     fn reached_home(&mut self, guid: u64);
+    fn teleport(&mut self, guid: u64, at: Point);
+    fn leg_parked(&self, guid: u64) -> bool;
     fn commit_leg(&mut self, guid: u64, leg: Leg);
 }
 
@@ -759,7 +761,7 @@ fn sensing_order(w: &impl EngageSink, active: &HashSet<u64>) -> Vec<Sensor> {
 }
 
 // Decide every pull before hooks run Package code that can change the candidates.
-fn aggro<W: EngageSink>(w: &mut W, active: &HashSet<u64>) -> usize {
+fn aggro<W: EngageSink + IdleSink>(w: &mut W, active: &HashSet<u64>) -> usize {
     let targets: Vec<AggroTarget> = w
         .players()
         .into_iter()
@@ -768,7 +770,7 @@ fn aggro<W: EngageSink>(w: &mut W, active: &HashSet<u64>) -> usize {
     aggro_with_targets(w, active, &targets)
 }
 
-fn aggro_with_targets<W: EngageSink>(
+fn aggro_with_targets<W: EngageSink + IdleSink>(
     w: &mut W,
     active: &HashSet<u64>,
     targets: &[AggroTarget],
@@ -780,6 +782,7 @@ fn aggro_with_targets<W: EngageSink>(
     let mut pulls = Vec::new();
     for s in &sensors {
         if s.would_rout
+            || w.returning_home(s.guid)
             || s.cannot_act
             || s.react_state != crate::creatures::CreatureReactState::Aggressive
         {
@@ -1333,19 +1336,11 @@ fn idle_movement<W: IdleSink + MotionSink + PursuitSink>(
     let mut visited = 0usize;
     for c in idle_order(w, active) {
         visited += 1;
-        if !moves_itself(w, c.guid) {
+        if w.returning_home(c.guid) {
+            return_home(w, tick, &c);
             continue;
         }
-        if w.returning_home(c.guid) {
-            let Some(home) = w.return_home_of(c.guid) else {
-                continue;
-            };
-            let (hdx, hdy) = (home.at.x - c.at.x, home.at.y - c.at.y);
-            if hdx * hdx + hdy * hdy > RETURN_LEASH_SQ {
-                walk_home(w, tick, &c, home);
-            } else {
-                w.reached_home(c.guid);
-            }
+        if !moves_itself(w, c.guid) {
             continue;
         }
         if let Some(orientation) = w.pending_facing(c.guid) {
@@ -1406,11 +1401,27 @@ fn follow_authored<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature,
     );
 }
 
-fn walk_home<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Home) {
+// As vmangos `HomeMovementGenerator`: arrive when unable to move, teleport home with no path.
+fn return_home<W: IdleSink + MotionSink>(w: &mut W, tick: &TickContext, c: &IdleCreature) {
+    let Some(home) = w.return_home_of(c.guid) else {
+        w.reached_home(c.guid);
+        return;
+    };
+    let (hdx, hdy) = (home.at.x - c.at.x, home.at.y - c.at.y);
+    if hdx * hdx + hdy * hdy <= RETURN_LEASH_SQ || w.movement_suppressed(c.guid) {
+        w.reached_home(c.guid);
+    } else if w.leg_parked(c.guid) {
+        // A stop written earlier this firing is the creature's one movement row.
+    } else if !walk_home(w, tick, c, home) {
+        w.teleport(c.guid, home.at);
+    }
+}
+
+fn walk_home<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Home) -> bool {
     let run = w.speed_of(c.guid, Gait::Run);
     let step = w.navigate(c.guid, (home.at.x, home.at.y), run * tick.tick_secs, 0.0);
     let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, run) else {
-        return;
+        return false;
     };
     let leg = Leg {
         to: (x, y),
@@ -1420,6 +1431,7 @@ fn walk_home<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home:
         hold_until_landed: false,
     };
     w.commit_leg(c.guid, leg);
+    true
 }
 
 fn loiter<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Home) {

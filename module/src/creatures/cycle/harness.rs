@@ -1124,6 +1124,27 @@ impl Scenario {
         entitled && rout_window_open(now_ms, self.rout_ends_ms(guid)) && !self.cc(guid).2
     }
 
+    // As production `eventai_on_evade`: a creature within the leash of home arrives at once.
+    fn begin_return(&mut self, guid: u64) {
+        let home = self.homes.borrow().get(&guid).map(|home| home.at);
+        let at = self.creatures.borrow().get(&guid).map(|c| c.at);
+        let (Some(home), Some(at)) = (home, at) else {
+            return;
+        };
+        if (home.x - at.x).powi(2) + (home.y - at.y).powi(2) > RETURN_LEASH_SQ {
+            self.eventai_returning_home.borrow_mut().insert(guid);
+            return;
+        }
+        eventai::evaluate(
+            self,
+            EventAiRequest::Edge(EventContext::empty(
+                EventKind::OnReachedHome,
+                guid,
+                self.now_micros.get() / 1_000,
+            )),
+        );
+    }
+
     fn place(
         &self,
         guid: u64,
@@ -1948,9 +1969,7 @@ impl EventAiWorld for Scenario {
                     .retain(|fight| fight.attacker != creature_guid);
                 self.engaged.borrow_mut().remove(&creature_guid);
                 if !evade.combat_only {
-                    self.eventai_returning_home
-                        .borrow_mut()
-                        .insert(creature_guid);
+                    self.begin_return(creature_guid);
                 }
                 return true;
             }
@@ -2114,6 +2133,9 @@ impl EventAiWorld for Scenario {
     }
 
     fn eventai_start_attack(&mut self, creature_guid: u64, target_guid: u64) -> bool {
+        self.eventai_returning_home
+            .borrow_mut()
+            .remove(&creature_guid);
         if let Some(fight) = self
             .fights
             .borrow_mut()
@@ -2491,6 +2513,32 @@ impl IdleSink for Scenario {
         if let Some(c) = self.creatures.borrow_mut().get_mut(&guid) {
             c.wp_target = waypoint_id;
         }
+    }
+    fn teleport(&mut self, guid: u64, at: Point) {
+        let Some(c) = self.place(guid, at, None, None) else {
+            return;
+        };
+        self.record(MoveEffect {
+            guid,
+            start: at,
+            dest: at,
+            dur_ms: 0,
+            spline_id: self.next_spline_id(guid),
+            run: false,
+            map_id: c.map_id,
+            instance_id: c.instance_id,
+            grid: c.grid,
+            cell: c.cell,
+            facing: false,
+            facing_angle: 0.0,
+        });
+        self.park_leg(guid, at, c.map_id, c.instance_id);
+    }
+    fn leg_parked(&self, guid: u64) -> bool {
+        self.legs
+            .borrow()
+            .iter()
+            .any(|leg| leg.guid == guid && leg.dur_ms == 0)
     }
     fn reached_home(&mut self, guid: u64) {
         if !self.eventai_returning_home.borrow_mut().remove(&guid) {
@@ -2914,6 +2962,7 @@ impl ThreatSink for Scenario {
         self.standings.borrow().get(&target) != Some(&SourceStanding::Unattackable)
     }
     fn evade(&mut self, creature: u64) {
+        self.begin_return(creature);
         self.fights.borrow_mut().retain(|f| f.attacker != creature);
         self.threat
             .borrow_mut()
@@ -3899,6 +3948,140 @@ fn a_godmoded_or_dead_player_draws_no_aggro() {
             "a player who cannot die is never pulled"
         );
     }
+}
+
+#[test]
+fn a_creature_returning_home_notices_nobody() {
+    let mut w = wolf_and_player(p(5.0, 0.0, 10.0)).home(WOLF, p(-30.0, 0.0, 10.0), false);
+    w.eventai_returning_home.borrow_mut().insert(WOLF);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.pulls().is_empty(),
+        "an evading creature ignores players until it reaches its home point"
+    );
+}
+
+fn returning_wolf(at: Point, home: Point) -> Scenario {
+    let w = Scenario::new(SETTLED)
+        .creature(WOLF, at)
+        .awake([WOLF])
+        .home(WOLF, home, false);
+    w.eventai_returning_home.borrow_mut().insert(WOLF);
+    w
+}
+
+fn run_once(w: &mut Scenario) {
+    let tick = w.tick(true, catch_all());
+    run_cycle(w, tick);
+}
+
+#[test]
+fn a_creature_that_evades_ignores_the_player_it_fled_from_until_it_is_home() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .awake([WOLF])
+        .home(WOLF, p(-40.0, 0.0, 10.0), false)
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 1000)
+        .standing(HUNTER, SourceStanding::Unattackable);
+    run_once(&mut w);
+    w.advance_clock(1_000_000);
+    run_once(&mut w);
+
+    assert!(
+        w.eventai_returning_home.borrow().contains(&WOLF) && w.pulls().is_empty(),
+        "the wolf returns home and does not pull the player beside it"
+    );
+}
+
+#[test]
+fn a_creature_that_evades_at_its_home_is_not_left_returning() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .awake([WOLF])
+        .home(WOLF, p(0.0, 0.0, 10.0), false)
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 1000)
+        .standing(HUNTER, SourceStanding::Unattackable);
+    run_once(&mut w);
+
+    assert!(
+        w.victims().is_empty() && w.eventai_returning_home.borrow().is_empty(),
+        "a creature that is already home has nothing to return to"
+    );
+}
+
+#[test]
+fn a_creature_returning_home_keeps_walking_while_a_unit_attacks_it() {
+    let mut w = returning_wolf(p(0.0, 20.0, 10.0), p(0.0, 0.0, 10.0))
+        .player(HUNTER, p(0.0, 22.0, 10.0))
+        .attacking(HUNTER, WOLF);
+    run_once(&mut w);
+
+    let legs = w.effects();
+    assert!(
+        legs.len() == 1 && legs[0].run && legs[0].dest.y < 20.0,
+        "the wolf runs home despite the melee row aimed at it: {legs:?}"
+    );
+}
+
+#[test]
+fn a_returning_creature_with_no_home_point_ends_its_return() {
+    let mut w = Scenario::new(SETTLED)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .awake([WOLF]);
+    w.eventai_returning_home.borrow_mut().insert(WOLF);
+    run_once(&mut w);
+
+    assert!(w.eventai_returning_home.borrow().is_empty());
+}
+
+#[test]
+fn a_creature_that_cannot_move_ends_its_return_where_it_stands() {
+    let mut w = returning_wolf(p(0.0, 20.0, 10.0), p(0.0, 0.0, 10.0)).rooted(WOLF);
+    run_once(&mut w);
+
+    assert!(
+        w.eventai_returning_home.borrow().is_empty() && w.effects().is_empty(),
+        "a rooted wolf neither walks nor stays in evade"
+    );
+}
+
+#[test]
+fn a_creature_with_no_path_home_teleports_there_and_ends_its_return() {
+    let home = p(0.0, 0.0, 10.0);
+    let mut w = returning_wolf(p(0.0, 20.0, 10.0), home).detour(WOLF, (0.0, 20.0));
+    run_once(&mut w);
+    assert_eq!(w.at(WOLF).at, home, "no step toward home means a teleport");
+    assert!(
+        w.effects().len() == 1 && w.effects()[0].dest == home && w.effects()[0].dur_ms == 0,
+        "the teleport tells observers with one zero-length leg at home: {:?}",
+        w.effects()
+    );
+
+    w.advance_clock(1_000_000);
+    run_once(&mut w);
+    assert!(w.eventai_returning_home.borrow().is_empty());
+}
+
+#[test]
+fn a_stop_written_this_firing_defers_the_teleport_home_to_the_next_firing() {
+    let (start, home) = (p(0.0, 20.0, 10.0), p(0.0, 0.0, 10.0));
+    let mut w = returning_wolf(start, home)
+        .flying(WOLF, start, p(0.0, 10.0, 10.0), 0, 7_500)
+        .detour(WOLF, (0.0, 20.0));
+    w.legs.borrow_mut()[0].waypoints = vec![(0.0, 15.0, 10.0), (0.0, 10.0, 10.0)];
+    w.obstructed_paths.borrow_mut().insert(WOLF);
+    run_once(&mut w);
+    assert!(
+        w.effects().len() == 1 && w.at(WOLF).at == start,
+        "the obstruction stop is the one row of the firing: {:?}",
+        w.effects()
+    );
+
+    w.advance_clock(1_000_000);
+    run_once(&mut w);
+    assert_eq!(w.at(WOLF).at, home, "the next firing teleports");
 }
 
 #[test]

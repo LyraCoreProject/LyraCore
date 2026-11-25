@@ -4,10 +4,10 @@ use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::constants::unit_flags::IN_COMBAT;
 use lyracore_shared::spell::taxonomy::{
-    A_CONTROL, A_IMMUNITY, CAST_FLAG_IGNORE_RESISTANCES, M_FEAR, P_MECHANIC, P_SCHOOL_MASK, T_SELF,
-    T_TARGET_ENEMY,
+    A_CONTROL, A_IMMUNITY, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, M_FEAR, P_MECHANIC,
+    P_SCHOOL_MASK, T_SELF, T_TARGET_ENEMY,
 };
-use support::{number, Standalone};
+use support::{event_rows, fence_subscription, number, subscribe_with_fence, Standalone};
 
 const VICTIM: &str = "1";
 const CHALLENGER: &str = "5096010";
@@ -23,6 +23,14 @@ const PHYSICAL_IMMUNITY: u32 = 5_113_302;
 const PHYSICAL: i32 = 1;
 // SPELL_AURA_SCHOOL_IMMUNITY in the low byte of an immunity Aura's p1.
 const SOURCE_SCHOOL_IMMUNITY: i32 = 39;
+const EVADE_SPELL: u32 = 5_113_303;
+// AttackOutcome::wire in game_combat_event_live.hit_info, and vmangos SpellMissInfo in
+// game_spell_cast_event_live.miss_info.
+const HIT_INFO_EVADE: &str = "9";
+const MISS_EVADE: &str = "6";
+// vmangos SpellSchoolMask FROST, and the spell's range in yards.
+const FROST: u32 = 0x10;
+const EVADE_SPELL_RANGE_YD: u32 = 30;
 
 struct Fight {
     shard: Standalone,
@@ -348,6 +356,192 @@ fn a_creature_whose_only_source_turns_friendly_evades_with_full_health() {
     );
     assert_eq!(number::<u32>(&wolf, "unit_flags") & IN_COMBAT, 0);
     assert_eq!(wolf["health"], wolf["max_health"]);
+}
+
+impl Fight {
+    fn row(&self, query: &str) -> Vec<support::Row> {
+        self.shard.query_rows(query)
+    }
+
+    fn make_wolf_hostile_again(&self) {
+        for (id, group, friend_group, enemy_group) in [
+            (CHARACTER_FACTION, 1u32, 1u32, 2u32),
+            (WOLF_FACTION, 2, 2, 1),
+        ] {
+            self.shard.assert_sql(&format!(
+                "UPDATE game_faction_template SET faction_group = {group}, \
+                 friend_group = {friend_group}, enemy_group = {enemy_group} WHERE id = {id}"
+            ));
+        }
+    }
+
+    fn returning(&self) -> bool {
+        !self
+            .row(&format!(
+                "SELECT creature_guid FROM game_creature_ai_returning_home \
+                 WHERE creature_guid = {}",
+                self.wolf
+            ))
+            .is_empty()
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_returning_home_evades_damage_swings_and_spells() {
+    let fight = Fight::start("threat-evade-returning", 3.0);
+    let wolf = &fight.wolf;
+    let spawn = fight.row(&format!(
+        "SELECT x FROM game_creature_spawn WHERE guid = {wolf}"
+    ));
+    let home_x = number::<f32>(&spawn[0], "x") - 2000.0;
+    fight.shard.assert_sql(&format!(
+        "UPDATE game_creature_spawn SET x = {home_x} WHERE guid = {wolf}"
+    ));
+    fight.shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = 50000 WHERE guid = {wolf}"
+    ));
+    fight.befriend_wolf_to_characters();
+    fight.settle();
+    assert!(
+        fight.returning(),
+        "the wolf evaded and walks to its far home"
+    );
+    let max_health = fight.entity(wolf)["max_health"].clone();
+    assert_eq!(
+        fight.entity(wolf)["health"],
+        max_health,
+        "the evade healed it"
+    );
+
+    fight.make_wolf_hostile_again();
+    fight.shard.assert_sql(&format!(
+        "DELETE FROM game_creature_quest_tap WHERE creature_guid = {wolf}"
+    ));
+    let tapped =
+        format!("SELECT creature_guid FROM game_creature_quest_tap WHERE creature_guid = {wolf}");
+    assert!(fight.row(&tapped).is_empty(), "no Loot Tag before the hit");
+
+    fight.shard.assert_call(
+        "debug_spawn_at_feet",
+        &[VICTIM, &TEST_WOLF_ENTRY.to_string(), "2"],
+    );
+    let control = fight
+        .row(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
+        .iter()
+        .map(|row| number::<u64>(row, "guid"))
+        .max()
+        .unwrap()
+        .to_string();
+    assert_ne!(&control, wolf, "the control wolf is a second creature");
+    fight.shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET faction_template = {WOLF_FACTION}, health = 100000, \
+         max_health = 100000 WHERE guid = {control}"
+    ));
+    fight
+        .shard
+        .assert_call("debug_apply_damage", &[&control, "500", VICTIM]);
+    assert!(
+        number::<u32>(&fight.entity(&control), "health") < 100_000,
+        "a hostile wolf that is not returning takes the damage"
+    );
+
+    fight
+        .shard
+        .assert_call("debug_apply_damage", &[wolf, "500", VICTIM]);
+    let after = fight.entity(wolf);
+    assert_eq!(
+        after["health"], max_health,
+        "the returning wolf took no damage"
+    );
+    assert_eq!(number::<u32>(&after, "unit_flags") & IN_COMBAT, 0);
+    assert!(fight
+        .row(&format!(
+            "SELECT id FROM game_threat WHERE creature_guid = {wolf}"
+        ))
+        .is_empty());
+    assert!(
+        fight.row(&tapped).is_empty(),
+        "no Loot Tag from an evaded hit"
+    );
+    assert!(fight.returning());
+
+    let at = &fight.row(&format!(
+        "SELECT x, y, z, map_id FROM game_world_entity WHERE guid = {wolf}"
+    ))[0];
+    let [x, y, z] = ["x", "y", "z"].map(|axis| number::<f32>(at, axis));
+    fight.shard.assert_call(
+        "debug_teleport",
+        &[
+            VICTIM,
+            &at["map_id"],
+            &(x + 1.0).to_string(),
+            &y.to_string(),
+            &z.to_string(),
+            &std::f32::consts::PI.to_string(),
+        ],
+    );
+    let swings = subscribe_with_fence(&fight.shard, &["SELECT * FROM game_combat_event_live"]);
+    fight.shard.assert_call("debug_engage", &[VICTIM, wolf]);
+    fight.shard.assert_call("debug_advance_roll_batch", &["10"]);
+    fence_subscription(&fight.shard, &swings);
+    let swings: Vec<_> = event_rows(&swings, "game_combat_event_live")
+        .into_iter()
+        .filter(|row| row["attacker_guid"] == VICTIM && row["target_guid"] == *wolf)
+        .collect();
+    assert!(
+        !swings.is_empty(),
+        "the swing at the returning wolf is reported"
+    );
+    assert!(
+        swings
+            .iter()
+            .all(|row| row["hit_info"] == HIT_INFO_EVADE && row["damage"] == "0"),
+        "every swing evades: {swings:?}"
+    );
+
+    fight.shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &EVADE_SPELL),
+            ("name", &"Evade fixture"),
+            ("school_mask", &FROST),
+            ("range_yd", &EVADE_SPELL_RANGE_YD),
+            ("is_negative", &true),
+            ("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES),
+        ],
+    );
+    fight.shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(EVADE_SPELL, 0)),
+            ("spell_id", &EVADE_SPELL),
+            ("kind", &E_DAMAGE),
+            ("base_points", &50),
+            ("target", &T_TARGET_ENEMY),
+        ],
+    );
+    let casts = subscribe_with_fence(
+        &fight.shard,
+        &[&format!(
+            "SELECT * FROM game_spell_cast_event_live WHERE spell_id = {EVADE_SPELL} AND kind = 2"
+        )],
+    );
+    fight
+        .shard
+        .assert_call("debug_cast_at", &[VICTIM, &EVADE_SPELL.to_string(), wolf]);
+    fight
+        .shard
+        .assert_call("debug_advance_virtual_clock", &["50000"]);
+    fence_subscription(&fight.shard, &casts);
+    let go = event_rows(&casts, "game_spell_cast_event_live")
+        .pop()
+        .expect("the cast reports its GO");
+    assert_eq!(go["miss_info"], MISS_EVADE);
+    assert_eq!(fight.entity(wolf)["health"], max_health);
+    assert!(fight.returning());
 }
 
 #[test]

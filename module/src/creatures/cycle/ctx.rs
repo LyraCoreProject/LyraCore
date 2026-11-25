@@ -572,6 +572,20 @@ impl IdleSink for CtxWorld<'_> {
             e.update(self.ctx);
         }
     }
+    fn teleport(&mut self, guid: u64, at: Point) {
+        if let Some(e) = self.place(guid, at, None, None) {
+            leg::park(self.ctx, &e);
+        }
+    }
+    // `advance_legs` drops a zero-length leg next firing, so one here was written this firing.
+    fn leg_parked(&self, guid: u64) -> bool {
+        self.ctx
+            .db
+            .game_creature_spline()
+            .guid()
+            .find(guid)
+            .is_some_and(|leg| leg.dur_ms == 0)
+    }
     fn reached_home(&mut self, guid: u64) {
         crate::creatures::eventai_on_reached_home(self.ctx, guid);
     }
@@ -1263,6 +1277,9 @@ impl PetSink for CtxWorld<'_> {
         pet::cancel_attack_order(self.ctx, owner);
     }
     fn take_victim(&mut self, guid: u64, victim: u64) {
+        if eventai::movement::returning_home(self.ctx, victim) {
+            return;
+        }
         if crate::creatures::guardian::is_guardian(self.ctx, guid)
             && crate::combat::arm_creature_engagement(self.ctx, guid, victim, true)
         {

@@ -1612,8 +1612,8 @@ impl EventAiWorld for DatabaseWorld<'_> {
             }
             super::MovementOperation::Evade(evade) => {
                 crate::combat::disengage(self.ctx, creature_guid);
-                if !evade.combat_only {
-                    super::eventai_on_evade(self.ctx, creature_guid);
+                if !evade.combat_only && super::eventai_on_evade(self.ctx, creature_guid) {
+                    super::eventai_arrived_home(self.ctx, creature_guid);
                 }
                 true
             }

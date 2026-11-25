@@ -6,8 +6,8 @@ use spacetimedb::{table, Table};
 use super::mobility::game_creature_ai_summon_origin;
 use super::{EventAiRequest, EventCondition, EventContext, EventKind};
 use crate::{
-    game_creature_ai_rule_state, game_creature_ai_state, game_melee_attack, game_world_entity,
-    WorldEntity,
+    game_creature_ai_rule_state, game_creature_ai_state, game_creature_spawn, game_melee_attack,
+    game_world_entity, WorldEntity,
 };
 
 pub(crate) fn runs_eventai(ctx: &ReducerContext, creature: &WorldEntity) -> bool {
@@ -219,13 +219,14 @@ pub(crate) fn eventai_on_receive_emote(
     super::evaluate_context(ctx, EventAiRequest::Edge(context));
 }
 
-pub(crate) fn eventai_on_evade(ctx: &ReducerContext, creature_guid: u64) {
+/// True when the creature evaded at home: the caller fires `eventai_arrived_home` once it is reset.
+pub(crate) fn eventai_on_evade(ctx: &ReducerContext, creature_guid: u64) -> bool {
     crate::spell::source_behavior::remove_auras_on_evade(ctx, creature_guid);
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
-        return;
+        return false;
     };
     if creature.dead || !runs_eventai(ctx, &creature) {
-        return;
+        return false;
     }
     evaluate_edge(
         ctx,
@@ -236,10 +237,23 @@ pub(crate) fn eventai_on_evade(ctx: &ReducerContext, creature_guid: u64) {
         (creature.target_guid != 0).then_some(creature.target_guid),
         false,
     );
+    let Some(home) = ctx.db.game_creature_spawn().guid().find(creature_guid) else {
+        return false;
+    };
+    let (dx, dy) = (home.x - creature.x, home.y - creature.y);
+    // vmangos HomeMovementGenerator arrives next update; within the leash this arrives at once.
+    if dx * dx + dy * dy <= crate::creatures::ai::RETURN_LEASH_SQ {
+        return true;
+    }
     let returning = ctx.db.game_creature_ai_returning_home();
     if returning.creature_guid().find(creature_guid).is_none() {
         returning.insert(CreatureAiReturningHome { creature_guid });
     }
+    false
+}
+
+pub(crate) fn eventai_arrived_home(ctx: &ReducerContext, creature_guid: u64) {
+    fire_reached_home(ctx, creature_guid);
 }
 
 pub(crate) fn eventai_on_reached_home(ctx: &ReducerContext, creature_guid: u64) {
@@ -251,6 +265,10 @@ pub(crate) fn eventai_on_reached_home(ctx: &ReducerContext, creature_guid: u64) 
     {
         return;
     }
+    fire_reached_home(ctx, creature_guid);
+}
+
+fn fire_reached_home(ctx: &ReducerContext, creature_guid: u64) {
     evaluate_edge(
         ctx,
         EventKind::OnReachedHome,

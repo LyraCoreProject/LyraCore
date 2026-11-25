@@ -4,6 +4,7 @@ use crate::{game_faction_template, game_pending_cast, game_spell, game_world_ent
 
 use super::*;
 use crate::actor::{ActionRefusal, ActionRefusalKind};
+use crate::creatures::eventai::movement::returning_home;
 use crate::creatures::tick::game_creature_spline;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
 
@@ -59,7 +60,7 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     let Some(mut e) = entities.guid().find(guid) else {
         return;
     };
-    if e.dead || e.is_flying() {
+    if e.dead || e.is_flying() || returning_home(ctx, guid) {
         return;
     }
     let now_ms = crate::time::now_ms(ctx);
@@ -162,9 +163,11 @@ fn join_fight(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) {
     );
 }
 
+// No unscripted engagement starts during a return home; `start_attack` ends the return first.
 fn start_creature_attack(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) -> bool {
-    if crate::creatures::react_state(ctx, creature_guid)
-        == crate::creatures::CreatureReactState::Passive
+    if returning_home(ctx, creature_guid)
+        || crate::creatures::react_state(ctx, creature_guid)
+            == crate::creatures::CreatureReactState::Passive
     {
         return false;
     }
@@ -224,6 +227,7 @@ pub(crate) fn engage_passive_creature(ctx: &ReducerContext, creature_guid: u64, 
         || source.dead
         || creature.map_id != source.map_id
         || creature.instance_id != source.instance_id
+        || returning_home(ctx, creature_guid)
         || !may_harm(ctx, &source, &creature)
     {
         return;
@@ -690,6 +694,8 @@ pub struct RangedImpactSchedule {
 pub(crate) enum AttackRefusal {
     DeadTarget,
     FriendlyTarget,
+    /// The target creature is returning home.
+    Evading,
     Refused(ActionRefusal),
 }
 
@@ -706,6 +712,7 @@ impl From<AttackRefusal> for ActionRefusal {
                 ActionRefusal::new(ActionRefusalKind::DeadTarget, "target is dead")
             }
             AttackRefusal::FriendlyTarget => "target is friendly".to_string().into(),
+            AttackRefusal::Evading => "target is evading".to_string().into(),
             AttackRefusal::Refused(refusal) => refusal,
         }
     }
@@ -737,6 +744,10 @@ fn attack_target(
     }
     if ctx.db.game_faction_template().count() > 0 && !may_harm(ctx, attacker, &target) {
         return Err(AttackRefusal::FriendlyTarget);
+    }
+    // vmangos `Unit::Attack` refuses an evading victim.
+    if returning_home(ctx, target_guid) {
+        return Err(AttackRefusal::Evading);
     }
     Ok(target)
 }
@@ -868,6 +879,7 @@ fn start_attack(
     }
 
     if !attacker.is_player() {
+        crate::creatures::eventai::movement::end_return(ctx, attacker.guid);
         if arm_creature_engagement(ctx, attacker.guid, target_guid, false) {
             return Ok(AttackStart::Armed);
         }
@@ -924,18 +936,25 @@ pub(crate) fn apply_start_ranged_attack(
 
     let ranged_weapon = equipped_ranged_weapon(ctx, attacker.guid)
         .ok_or_else(|| "no ranged weapon equipped".to_string())?;
-    let target = attack_target(ctx, &attacker, target_guid).map_err(|refusal| {
-        let reason = match &refusal {
-            AttackRefusal::DeadTarget => Reason::TargetDead,
-            AttackRefusal::Refused(refusal)
-                if refusal.kind == ActionRefusalKind::OtherPartition =>
-            {
-                Reason::OutOfRange
-            }
-            AttackRefusal::FriendlyTarget | AttackRefusal::Refused(_) => Reason::Unreported,
-        };
-        CastGateRefusal::other(reason, ActionRefusal::from(refusal).detail)
-    })?;
+    let target = match attack_target(ctx, &attacker, target_guid) {
+        // vmangos lets a shot go at an evading creature and shows the evade.
+        Err(AttackRefusal::Evading) => crate::helpers::live_entity(ctx, target_guid)
+            .map_err(|_| "no such target".to_string())?,
+        result => result.map_err(|refusal| {
+            let reason = match &refusal {
+                AttackRefusal::DeadTarget => Reason::TargetDead,
+                AttackRefusal::Refused(refusal)
+                    if refusal.kind == ActionRefusalKind::OtherPartition =>
+                {
+                    Reason::OutOfRange
+                }
+                AttackRefusal::FriendlyTarget
+                | AttackRefusal::Evading
+                | AttackRefusal::Refused(_) => Reason::Unreported,
+            };
+            CastGateRefusal::other(reason, ActionRefusal::from(refusal).detail)
+        })?,
+    };
     {
         let (dx, dy, dz) = (
             target.x - attacker.x,

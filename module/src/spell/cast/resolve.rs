@@ -639,10 +639,6 @@ fn engage_refusing_unit(ctx: &ReducerContext, caster_guid: u64, unit_guid: u64) 
     if unit.dead || !crate::combat::may_harm(ctx, &caster, &unit) {
         return;
     }
-    // vmangos SpellHitResult answers SPELL_MISS_EVADE before it tests immunity.
-    if !unit.is_player() && crate::creatures::eventai::movement::returning_home(ctx, unit_guid) {
-        return;
-    }
     if unit.is_player() {
         crate::combat::enter_combat(ctx, caster_guid);
         crate::combat::enter_combat(ctx, unit_guid);
@@ -744,25 +740,30 @@ impl<'a> CastTargets<'a> {
         if self.rolls_weapon && t != caster_guid {
             remember_hit_target(&mut self.weapon_targets, &mut self.seen_weapon_targets, t);
         }
-        let admission = if self
-            .immunity
-            .refuses_spell(ctx, caster_guid, t, hdr, &spell.effects)
-        {
-            None
-        } else {
-            let roll = if self.rolls_hit && t != caster_guid {
-                let (level, table) = (self.level, self.table);
-                *self.rolls.entry(t).or_insert_with(|| {
-                    self.rolled.push(t);
-                    hit_roll(ctx, caster_guid, level, t, table, hdr)
-                })
+        // vmangos SpellHitResult answers SPELL_MISS_EVADE before it tests immunity.
+        let admission =
+            if t != caster_guid && crate::creatures::eventai::movement::returning_home(ctx, t) {
+                self.rolls.entry(t).or_insert(AttackOutcome::Evade);
+                Some((AttackOutcome::Evade, false))
+            } else if self
+                .immunity
+                .refuses_spell(ctx, caster_guid, t, hdr, &spell.effects)
+            {
+                None
             } else {
-                AttackOutcome::Normal
+                let roll = if self.rolls_hit && t != caster_guid {
+                    let (level, table) = (self.level, self.table);
+                    *self.rolls.entry(t).or_insert_with(|| {
+                        self.rolled.push(t);
+                        hit_roll(ctx, caster_guid, level, t, table, hdr)
+                    })
+                } else {
+                    AttackOutcome::Normal
+                };
+                let immune = crate::spell::is_immune_to_effect(ctx, caster_guid, t, hdr, e);
+                self.immunity.record(t, immune);
+                Some((roll, immune))
             };
-            let immune = crate::spell::is_immune_to_effect(ctx, caster_guid, t, hdr, e);
-            self.immunity.record(t, immune);
-            Some((roll, immune))
-        };
         self.admitted.insert((e.effect_index, t), admission);
         admission
     }
@@ -1226,7 +1227,8 @@ fn arm_avoidance_reacts(
         | AttackOutcome::Glancing
         | AttackOutcome::Crushing
         | AttackOutcome::Block
-        | AttackOutcome::Immune => {}
+        | AttackOutcome::Immune
+        | AttackOutcome::Evade => {}
     }
 }
 
@@ -1237,6 +1239,7 @@ fn cast_miss(roll: AttackOutcome, weapon_strike: bool, magic_hit: bool) -> u8 {
         AttackOutcome::Miss if weapon_strike || !magic_hit => crate::spell::CAST_MISS_MISS,
         AttackOutcome::Miss => crate::spell::CAST_MISS_RESIST,
         AttackOutcome::Immune => crate::spell::CAST_MISS_IMMUNE,
+        AttackOutcome::Evade => crate::spell::CAST_MISS_EVADE,
         AttackOutcome::Normal
         | AttackOutcome::Crit
         | AttackOutcome::Glancing
