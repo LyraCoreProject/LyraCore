@@ -179,8 +179,9 @@ fn source_of(spawn: &CreatureSpawn) -> u64 {
 }
 
 /// Shows or hides the spawn `source_guid` and its copies as its Game Events decide. A shown spawn
-/// whose respawn is off respawns on the next pass; a hidden one leaves through
-/// `despawn_creature_entity` with both timers off. Returns the spawn rows it changed.
+/// whose respawn is off respawns on the next pass, unless its population leaves it out or a copy
+/// stands in for it; a hidden one leaves through `despawn_creature_entity` with both timers off.
+/// Returns the spawn rows it changed.
 pub(crate) fn show_spawn_for_events(ctx: &ReducerContext, source_guid: u64, shows: bool) -> usize {
     let spawns = ctx.db.game_creature_spawn();
     let entities = ctx.db.game_world_entity();
@@ -190,6 +191,9 @@ pub(crate) fn show_spawn_for_events(ctx: &ReducerContext, source_guid: u64, show
         .into_iter()
         .chain(spawns.by_source_guid().filter(source_guid))
         .collect();
+    let world_copy = rows
+        .iter()
+        .any(|spawn| spawn.source_guid == source_guid && spawn.instance_id == 0);
     let mut changed = 0;
     for mut spawn in rows {
         let in_world = entities.guid().find(spawn.guid).is_some();
@@ -198,6 +202,13 @@ pub(crate) fn show_spawn_for_events(ctx: &ReducerContext, source_guid: u64, show
                 && lyracore_shared::instance::has_instance_population(spawn.map_id);
             if in_world || instance_zero || !crate::time::is_never(ctx, spawn.respawn_at) {
                 continue;
+            }
+            if spawn.source_guid == 0 {
+                match crate::creatures::population::entry_for_spawn(ctx, &spawn) {
+                    None => continue,
+                    Some(entry) if entry != spawn.entry && world_copy => continue,
+                    Some(_) => {}
+                }
             }
             spawn.respawn_at = crate::time::now(ctx);
         } else {

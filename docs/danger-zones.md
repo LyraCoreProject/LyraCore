@@ -280,22 +280,29 @@ static objects plus pool members, so a roll that shows only some members does no
 The private `game_event`, `game_event_link`, `game_event_pool`, `game_event_status` and
 `game_event_override` tables and the `game_event_schedule` scheduled table are new and start empty.
 No existing column or reducer argument changes, so no Package builds a changed row.
-`game_creature_population_member.event_ids` keeps its column but nothing reads it; the importer
-writes it empty.
 
-Publish the Module before you import: the `events` Import Family writes the new tables. Call
-`debug_repair_after_publish`, which arms the Game Event pass. Until the import every spawn shows,
-since no spawn has a link: event GameObjects stay up as before, a creature tied to an event that a
-population had left parked stays parked, and a new Instance can now bring one up. Import the
-`events` family straight after the publish.
+**A publish alone changes nothing a player sees.** With no link, every spawn shows as before, and a
+creature population member's `event_ids` keep its positive-event members out of selections as
+before: creatures tied to an event stay parked, creatures tied to its absence stay up, and event
+GameObjects stay up. Call `debug_repair_after_publish`, which arms the Game Event pass; it has no
+work until links exist.
 
-`import-world.sh` imports `events` with the other families, and its links are written before the
-spawn batches, so every spawn and pool comes up in its event's state. An `events` import alone
-clears `game_event_status`, and the minute pass then brings the existing world to each event's
-state, at most 500 spawns a minute: the full world links about 12,000 GameObjects and 3,000
-creatures, so a Realm imported before this change settles within about half an hour. Reimport
-`gameobjects` and `creatures` with it to settle at once. A rerun of `events` writes the same rows.
-Operator starts and stops survive the import.
+Then import in one of these orders, with the updated importer:
+
+1. The full `import-world.sh` run. Its links are written before the spawn batches, so every spawn
+   and pool comes up in its event's state.
+2. `--family creatures` or `--family gameobjects`. Each also writes the `events` family before its
+   spawn batches, so links always name the spawns the import writes.
+3. `--family events` alone. It clears `game_event_status`, and the minute pass then brings the
+   existing world to each event's state, at most 500 changes a minute: the full world links about
+   12,000 GameObjects and 3,000 creatures, so a Realm imported before this change settles within
+   about half an hour. A population whose selection was made while `event_ids` kept its members out
+   rolls again the first time its event shows it.
+
+A rerun writes the same rows. Operator holds survive an import; `debug_event_clear` releases a hold
+whose event an import removed. An importer from before this change re-importing `creatures` writes
+`event_ids` but no links; if no `events` import ever ran, the Realm keeps the behavior before Game
+Events, otherwise the existing links still name the same spawns.
 
 ### Chest money and item loot migration
 

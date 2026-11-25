@@ -40,7 +40,7 @@ pub struct CreaturePopulationMember {
     pub entry: u32,
     pub choices: String,
     pub chance_bp: u32,
-    // Unused: a spawn's Game Events live in `game_event_link`.
+    // Signed vmangos events; read only until Game Event Links exist, see `entry_for_spawn`.
     pub event_ids: String,
 }
 
@@ -78,6 +78,7 @@ struct Member {
     entry: u32,
     choices: Vec<u32>,
     chance_bp: u32,
+    requires_event: bool,
 }
 
 fn numbers<T: std::str::FromStr>(text: &str) -> Result<Vec<T>, String> {
@@ -114,9 +115,14 @@ fn decode_entries(text: &str) -> Result<Vec<EntryChoice>, String> {
         .collect()
 }
 
-fn decode_member(member: &CreaturePopulationMember) -> Result<Member, String> {
+/// `honour_event_ids` keeps a member with a positive event out, as before Game Event Links.
+fn decode_member(
+    member: &CreaturePopulationMember,
+    honour_event_ids: bool,
+) -> Result<Member, String> {
     let choices = numbers::<u32>(&member.choices)?;
-    if member.chance_bp > 10_000 || choices.contains(&0) {
+    let events = numbers::<i32>(&member.event_ids)?;
+    if member.chance_bp > 10_000 || choices.contains(&0) || events.contains(&0) {
         return Err(format!("invalid population member {}", member.source_guid));
     }
     Ok(Member {
@@ -124,7 +130,37 @@ fn decode_member(member: &CreaturePopulationMember) -> Result<Member, String> {
         entry: member.entry,
         choices,
         chance_bp: member.chance_bp,
+        requires_event: honour_event_ids && events.iter().any(|event| *event > 0),
     })
+}
+
+/// Whether the member's `event_ids` name a positive event, which kept it out of selections.
+fn held_out_by_event_ids(member: &CreaturePopulationMember) -> bool {
+    numbers::<i32>(&member.event_ids).is_ok_and(|events| events.iter().any(|&event| event > 0))
+}
+
+/// Drops the selections of a population made while `event_ids` kept its event members out, and
+/// clears those ids, so the population rolls again once now that Game Event Links decide.
+fn forget_event_id_selections(ctx: &ReducerContext, population_id: u64) {
+    let selections = ctx.db.game_creature_population_selection();
+    let stale: Vec<String> = selections
+        .iter()
+        .filter(|selection| selection.population_id == population_id)
+        .map(|selection| selection.id)
+        .collect();
+    for id in stale {
+        selections.id().delete(id);
+    }
+    let members = ctx.db.game_creature_population_member();
+    let marked: Vec<CreaturePopulationMember> = members
+        .by_population()
+        .filter(population_id)
+        .filter(|member| !member.event_ids.is_empty())
+        .collect();
+    for mut member in marked {
+        member.event_ids.clear();
+        members.source_guid().update(member);
+    }
 }
 
 pub(crate) fn check_definitions(ctx: &ReducerContext) -> Result<(), String> {
@@ -150,7 +186,7 @@ pub(crate) fn check_definitions(ctx: &ReducerContext) -> Result<(), String> {
         }
     }
     for member in ctx.db.game_creature_population_member().iter() {
-        let source = decode_member(&member)?;
+        let source = decode_member(&member, true)?;
         let Some(population) = populations.population_id().find(member.population_id) else {
             return Err(format!(
                 "population member {} references missing group {}",
@@ -195,7 +231,10 @@ fn select_pool(
     members: &[Member],
     draw: &mut impl FnMut() -> u64,
 ) -> Vec<PopulationAssignment> {
-    let mut eligible: Vec<_> = members.iter().collect();
+    let mut eligible: Vec<_> = members
+        .iter()
+        .filter(|member| !member.requires_event)
+        .collect();
     for index in (1..eligible.len()).rev() {
         let other = choose_index(index + 1, draw);
         eligible.swap(index, other);
@@ -240,7 +279,10 @@ fn select(
     }
     let mut eligible: Vec<&Member> = members
         .iter()
-        .filter(|member| member.chance_bp == 0 || draw() % 10_000 < u64::from(member.chance_bp))
+        .filter(|member| {
+            !member.requires_event
+                && (member.chance_bp == 0 || draw() % 10_000 < u64::from(member.chance_bp))
+        })
         .collect();
     for index in (1..eligible.len()).rev() {
         let other = choose_index(index + 1, &mut draw);
@@ -322,6 +364,11 @@ pub(crate) fn entry_for_spawn(ctx: &ReducerContext, spawn: &CreatureSpawn) -> Op
     else {
         return (spawn.entry != 0).then_some(spawn.entry);
     };
+    // Before the `events` family is imported, `event_ids` keep event members out as they did.
+    let links_exist = crate::game_events::links_exist(ctx);
+    if links_exist && held_out_by_event_ids(&member) {
+        forget_event_id_selections(ctx, member.population_id);
+    }
     let selections = ctx.db.game_creature_population_selection();
     let id = format!("{}:{}", member.population_id, spawn.instance_id);
     if let Some(selection) = selections.id().find(&id) {
@@ -343,7 +390,7 @@ pub(crate) fn entry_for_spawn(ctx: &ReducerContext, spawn: &CreatureSpawn) -> Op
             .game_creature_population_member()
             .by_population()
             .filter(member.population_id)
-            .map(|member| decode_member(&member))
+            .map(|member| decode_member(&member, !links_exist))
             .collect::<Result<Vec<_>, _>>()?;
         Ok::<_, String>(select(&definition, &members, &entries, || {
             ctx.random::<u64>()
@@ -414,6 +461,7 @@ mod tests {
             entry,
             choices: Vec::new(),
             chance_bp: 0,
+            requires_event: false,
         }
     }
 
@@ -428,16 +476,18 @@ mod tests {
     }
 
     #[test]
-    fn multi_member_pool_ignores_explicit_chances() {
+    fn multi_member_pool_ignores_explicit_chances_and_preserves_event_gates() {
         let members: Vec<_> = (1..=8)
             .map(|guid| {
                 let mut member = member(guid, 10);
                 member.chance_bp = 75;
+                member.requires_event = guid > 6;
                 member
             })
             .collect();
         let selected = select_pool(4, &members, &mut || 9_999);
         assert_eq!(selected.len(), 4);
+        assert!(selected.iter().all(|choice| choice.source_guid <= 6));
     }
 
     #[test]
@@ -496,13 +546,43 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_slot_chance_remains_dormant() {
+    fn positive_event_membership_and_failed_slot_chance_remain_dormant() {
         let group = definition(0, "");
+        let mut event = member(1, 10);
+        event.requires_event = true;
         let mut chance = member(2, 20);
         chance.chance_bp = 1_000;
-        let selected = select(&group, &[chance, member(3, 30)], &[], || 5_000);
+        let selected = select(&group, &[event, chance, member(3, 30)], &[], || 5_000);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].source_guid, 3);
+    }
+
+    fn event_member(event_ids: &str) -> CreaturePopulationMember {
+        CreaturePopulationMember {
+            source_guid: 1,
+            population_id: 1,
+            entry: 10,
+            choices: String::new(),
+            chance_bp: 0,
+            event_ids: event_ids.to_owned(),
+        }
+    }
+
+    #[test]
+    fn negative_event_membership_spawns_when_no_events_are_active() {
+        let member = decode_member(&event_member("-4"), true).unwrap();
+        let selected = select(&definition(0, ""), &[member], &[], || 0);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].entry, 10);
+    }
+
+    #[test]
+    fn event_ids_keep_no_member_out_once_game_event_links_decide() {
+        let source = event_member("7");
+        assert!(held_out_by_event_ids(&source));
+        assert!(decode_member(&source, true).unwrap().requires_event);
+        let member = decode_member(&source, false).unwrap();
+        assert_eq!(select(&definition(0, ""), &[member], &[], || 0).len(), 1);
     }
 
     #[test]

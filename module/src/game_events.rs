@@ -15,8 +15,10 @@ pub struct GameEvent {
     pub end_secs: i64,
     pub occurrence_mins: u32,
     pub length_mins: u32,
-    // False for a vmangos `hardcoded` or `disabled` event: only an Operator runs it.
-    pub follows_calendar: bool,
+    // vmangos `hardcoded`: a script, absent here, runs it, so the calendar keeps it stopped.
+    pub scripted: bool,
+    // vmangos `disabled`, or left out of patch 1.12: nothing runs or stops it.
+    pub disabled: bool,
     pub description: String,
 }
 
@@ -44,12 +46,16 @@ pub struct GameEventPool {
     pub event_entry: u32,
 }
 
-/// The state the world was last brought to for an event; a missing row has not been applied.
+/// The state an event's spawns are being brought to, and how far that has come.
 #[table(accessor = game_event_status)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct GameEventStatus {
     #[primary_key]
     pub event_entry: u32,
     pub state: GameEventState,
+    // The lowest link and pool not yet brought to `state`; `u64::MAX` and `u32::MAX` once all are.
+    pub next_link_id: u64,
+    pub next_pool_id: u32,
 }
 
 /// An Operator's start or stop, which holds until the Operator clears it.
@@ -68,6 +74,16 @@ pub struct GameEventSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
+// No Package claims or reads Game Event rows.
+crate::outside_table_catalog!(
+    game_event,
+    game_event_link,
+    game_event_pool,
+    game_event_status,
+    game_event_override,
+    game_event_schedule
+);
+
 #[derive(SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GameEventState {
     Active,
@@ -79,8 +95,8 @@ pub enum GameEventState {
 // One pass a minute keeps each calendar boundary within a minute and corrects a missed one.
 pub(crate) const GAME_EVENT_TICK_MICROS: i64 = 60_000_000;
 
-// One pass changes at most this many spawns; the next pass carries on where it stopped.
-const SPAWN_CHANGES_PER_PASS: usize = 500;
+// One pass changes at most this many spawns and pools; the next pass carries on where it stopped.
+const CHANGES_PER_PASS: usize = 500;
 
 const DAY_SECS: i64 = 86_400;
 const YEAR_MINS: u32 = 525_600;
@@ -102,6 +118,12 @@ impl GameEvent {
             occurrence_mins: self.occurrence_mins,
             length_mins: self.length_mins,
         }
+    }
+}
+
+impl GameEventStatus {
+    fn settled(&self) -> bool {
+        self.next_link_id == u64::MAX && self.next_pool_id == u32::MAX
     }
 }
 
@@ -142,6 +164,8 @@ pub(crate) fn in_window(occurrence: Occurrence, now_secs: i64) -> bool {
         < i64::from(length_mins) * 60
 }
 
+/// vmangos `GameEventMgr::Update`: a disabled or zero-length event is not checked, a scripted
+/// one stays stopped until its script runs it, and an Operator's start or stop wins.
 pub(crate) fn event_state(
     event: Option<&GameEvent>,
     running: Option<bool>,
@@ -153,7 +177,8 @@ pub(crate) fn event_state(
     match running {
         Some(true) => GameEventState::Active,
         Some(false) => GameEventState::Inactive,
-        None if !event.follows_calendar => GameEventState::Unscheduled,
+        None if event.disabled || event.length_mins == 0 => GameEventState::Unscheduled,
+        None if event.scripted => GameEventState::Inactive,
         None if in_window(event.occurrence(), now_secs) => GameEventState::Active,
         None => GameEventState::Inactive,
     }
@@ -177,10 +202,28 @@ pub(crate) fn shows_for(links: impl IntoIterator<Item = (bool, GameEventState)>)
     !needs_running || running
 }
 
-fn now_secs(ctx: &ReducerContext) -> i64 {
-    crate::time::now(ctx)
-        .to_micros_since_unix_epoch()
-        .div_euclid(1_000_000)
+/// The work toward `state`: a status already heading there keeps its progress, any other starts
+/// again from the first link and pool.
+fn retarget(
+    status: Option<GameEventStatus>,
+    event_entry: u32,
+    state: GameEventState,
+) -> GameEventStatus {
+    match status {
+        Some(status) if status.state == state => status,
+        _ => GameEventStatus {
+            event_entry,
+            state,
+            next_link_id: 0,
+            next_pool_id: 0,
+        },
+    }
+}
+
+/// The part of a pass's budget each of `pending` events gets first, so one large event cannot
+/// hold back the others; what is left goes to them in order.
+fn fair_share(budget: usize, pending: usize) -> usize {
+    (budget / pending.max(1)).max(1)
 }
 
 fn state_of(ctx: &ReducerContext, event_entry: u32, now_secs: i64) -> GameEventState {
@@ -195,9 +238,14 @@ fn state_of(ctx: &ReducerContext, event_entry: u32, now_secs: i64) -> GameEventS
     )
 }
 
+/// Whether any Game Event Link exists; until the `events` family is imported, none does.
+pub(crate) fn links_exist(ctx: &ReducerContext) -> bool {
+    ctx.db.game_event_link().count() > 0
+}
+
 /// Whether the creature spawn source or world GameObject `spawn_guid` shows now.
 pub(crate) fn spawn_shows(ctx: &ReducerContext, spawn_guid: u64) -> bool {
-    let now = now_secs(ctx);
+    let now = crate::time::now_secs(ctx) as i64;
     shows_for(
         ctx.db
             .game_event_link()
@@ -209,11 +257,12 @@ pub(crate) fn spawn_shows(ctx: &ReducerContext, spawn_guid: u64) -> bool {
 
 /// Whether the top-level GameObject pool `pool_id` may roll now.
 pub(crate) fn pool_shows(ctx: &ReducerContext, pool_id: u32) -> bool {
+    let now = crate::time::now_secs(ctx) as i64;
     ctx.db
         .game_event_pool()
         .pool_id()
         .find(pool_id)
-        .is_none_or(|pool| state_of(ctx, pool.event_entry, now_secs(ctx)) == GameEventState::Active)
+        .is_none_or(|pool| state_of(ctx, pool.event_entry, now) == GameEventState::Active)
 }
 
 /// Every event's state at one instant.
@@ -223,7 +272,7 @@ struct Calendar {
 
 impl Calendar {
     fn load(ctx: &ReducerContext) -> Self {
-        let now = now_secs(ctx);
+        let now = crate::time::now_secs(ctx) as i64;
         let overrides = ctx.db.game_event_override();
         let states = ctx
             .db
@@ -258,29 +307,44 @@ impl Calendar {
     }
 }
 
-/// Brings every spawn of an event whose state changed since it was last applied to that state,
+/// Brings the spawns and pools of every event whose state is not yet applied toward that state,
 /// through the spawn lifecycle; docs/schema.md#game-events.
 pub(crate) fn reconcile(ctx: &ReducerContext) {
+    reconcile_within(ctx, CHANGES_PER_PASS);
+}
+
+fn reconcile_within(ctx: &ReducerContext, mut budget: usize) {
     let calendar = Calendar::load(ctx);
     let statuses = ctx.db.game_event_status();
-    let mut budget = SPAWN_CHANGES_PER_PASS;
-    for (&event_entry, &state) in &calendar.states {
-        if statuses
-            .event_entry()
-            .find(event_entry)
-            .is_some_and(|status| status.state == state)
-        {
-            continue;
+    let mut pending: Vec<GameEventStatus> = calendar
+        .states
+        .iter()
+        .map(|(&event_entry, &state)| {
+            retarget(statuses.event_entry().find(event_entry), event_entry, state)
+        })
+        .filter(|status| !status.settled())
+        .collect();
+    let share = fair_share(budget, pending.len());
+    for round_share in [Some(share), None] {
+        for status in &mut pending {
+            if status.settled() || budget == 0 {
+                continue;
+            }
+            let mut allowance = round_share.map_or(budget, |share| share.min(budget));
+            let granted = allowance;
+            advance(ctx, &calendar, status, &mut allowance);
+            budget -= granted - allowance;
         }
-        if !apply(ctx, &calendar, event_entry, &mut budget) {
+    }
+    for status in pending {
+        if !status.settled() {
             log::info!(
-                "game events: {SPAWN_CHANGES_PER_PASS} spawn changes reached; event \
-                 {event_entry} continues on the next pass"
+                "game events: event {} continues toward {:?} on the next pass",
+                status.event_entry,
+                status.state
             );
-            return;
         }
-        let status = GameEventStatus { event_entry, state };
-        if statuses.event_entry().find(event_entry).is_some() {
+        if statuses.event_entry().find(status.event_entry).is_some() {
             statuses.event_entry().update(status);
         } else {
             statuses.insert(status);
@@ -288,41 +352,61 @@ pub(crate) fn reconcile(ctx: &ReducerContext) {
     }
 }
 
-/// Shows or hides each spawn and pool tied to the event; false when `budget` ran out first.
-fn apply(ctx: &ReducerContext, calendar: &Calendar, event_entry: u32, budget: &mut usize) -> bool {
-    let spawns: Vec<u64> = ctx
-        .db
-        .game_event_link()
-        .by_event()
-        .filter(event_entry)
-        .map(|link| link.spawn_guid)
-        .collect();
-    for spawn_guid in spawns {
-        if *budget == 0 {
-            return false;
+/// Brings the event's links, then its pools, from the status cursors toward its state, until
+/// `budget` changes are spent.
+fn advance(
+    ctx: &ReducerContext,
+    calendar: &Calendar,
+    status: &mut GameEventStatus,
+    budget: &mut usize,
+) {
+    if status.next_link_id != u64::MAX {
+        let from = status.next_link_id;
+        let mut links: Vec<(u64, u64)> = ctx
+            .db
+            .game_event_link()
+            .by_event()
+            .filter(status.event_entry)
+            .filter(|link| link.link_id >= from)
+            .map(|link| (link.link_id, link.spawn_guid))
+            .collect();
+        links.sort_unstable();
+        for (link_id, spawn_guid) in links {
+            if *budget == 0 {
+                status.next_link_id = link_id;
+                return;
+            }
+            let shows = calendar.spawn_shows(ctx, spawn_guid);
+            let changed = if crate::gameobject::is_gameobject_guid(spawn_guid) {
+                usize::from(crate::gameobject::show_for_events(ctx, spawn_guid, shows))
+            } else {
+                crate::creatures::show_spawn_for_events(ctx, spawn_guid, shows)
+            };
+            *budget = budget.saturating_sub(changed);
         }
-        let shows = calendar.spawn_shows(ctx, spawn_guid);
-        let changed = if crate::gameobject::is_gameobject_guid(spawn_guid) {
-            usize::from(crate::gameobject::show_for_events(ctx, spawn_guid, shows))
-        } else {
-            crate::creatures::show_spawn_for_events(ctx, spawn_guid, shows)
-        };
-        *budget = budget.saturating_sub(changed);
+        status.next_link_id = u64::MAX;
     }
-    let pools: Vec<u32> = ctx
-        .db
-        .game_event_pool()
-        .by_event()
-        .filter(event_entry)
-        .map(|pool| pool.pool_id)
-        .collect();
-    pools.is_empty()
-        || crate::gameobject::show_event_pools(
-            ctx,
-            &pools,
-            calendar.state(event_entry) == GameEventState::Active,
-            budget,
-        )
+    if status.next_pool_id != u32::MAX {
+        let from = status.next_pool_id;
+        let mut pools: Vec<u32> = ctx
+            .db
+            .game_event_pool()
+            .by_event()
+            .filter(status.event_entry)
+            .map(|pool| pool.pool_id)
+            .filter(|&pool_id| pool_id >= from)
+            .collect();
+        pools.sort_unstable();
+        let shows = calendar.state(status.event_entry) == GameEventState::Active;
+        for pool_id in pools {
+            if *budget == 0 {
+                status.next_pool_id = pool_id;
+                return;
+            }
+            *budget -= usize::from(crate::gameobject::show_event_pool(ctx, pool_id, shows));
+        }
+        status.next_pool_id = u32::MAX;
+    }
 }
 
 #[reducer]
@@ -348,7 +432,7 @@ pub(crate) fn rearm_schedule(ctx: &ReducerContext) {
     });
 }
 
-fn hold(ctx: &ReducerContext, event_entry: u32, running: Option<bool>) -> Result<(), String> {
+fn hold(ctx: &ReducerContext, event_entry: u32, running: bool) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     if ctx
         .db
@@ -361,12 +445,10 @@ fn hold(ctx: &ReducerContext, event_entry: u32, running: Option<bool>) -> Result
     }
     let overrides = ctx.db.game_event_override();
     overrides.event_entry().delete(event_entry);
-    if let Some(running) = running {
-        overrides.insert(GameEventOverride {
-            event_entry,
-            running,
-        });
-    }
+    overrides.insert(GameEventOverride {
+        event_entry,
+        running,
+    });
     reconcile(ctx);
     Ok(())
 }
@@ -374,19 +456,38 @@ fn hold(ctx: &ReducerContext, event_entry: u32, running: Option<bool>) -> Result
 /// Runs the event until `debug_event_clear`, whatever its calendar says.
 #[reducer]
 pub fn debug_event_start(ctx: &ReducerContext, event_entry: u32) -> Result<(), String> {
-    hold(ctx, event_entry, Some(true))
+    hold(ctx, event_entry, true)
 }
 
 /// Stops the event until `debug_event_clear`, whatever its calendar says.
 #[reducer]
 pub fn debug_event_stop(ctx: &ReducerContext, event_entry: u32) -> Result<(), String> {
-    hold(ctx, event_entry, Some(false))
+    hold(ctx, event_entry, false)
 }
 
-/// Hands the event back to its calendar.
+/// Hands the event back to its calendar; it also clears a hold on an event an import removed.
 #[reducer]
 pub fn debug_event_clear(ctx: &ReducerContext, event_entry: u32) -> Result<(), String> {
-    hold(ctx, event_entry, None)
+    crate::helpers::require_operator(ctx)?;
+    if !ctx
+        .db
+        .game_event_override()
+        .event_entry()
+        .delete(event_entry)
+    {
+        return Err(format!("game event {event_entry} has no Operator hold"));
+    }
+    reconcile(ctx);
+    Ok(())
+}
+
+/// Runs one pass that changes at most `budget` spawns and pools.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_run_game_event_pass(ctx: &ReducerContext, budget: u32) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    reconcile_within(ctx, budget as usize);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -405,14 +506,15 @@ mod tests {
         }
     }
 
-    fn event(follows_calendar: bool, occurrence: Occurrence) -> GameEvent {
+    fn event(scripted: bool, disabled: bool, occurrence: Occurrence) -> GameEvent {
         GameEvent {
             event_entry: 7,
             start_secs: occurrence.start_secs,
             end_secs: occurrence.end_secs,
             occurrence_mins: occurrence.occurrence_mins,
             length_mins: occurrence.length_mins,
-            follows_calendar,
+            scripted,
+            disabled,
             description: String::new(),
         }
     }
@@ -489,48 +591,86 @@ mod tests {
     }
 
     #[test]
-    fn the_calendar_runs_a_scheduled_event_and_never_a_scripted_one() {
+    fn the_calendar_runs_a_scheduled_event_and_keeps_a_scripted_one_stopped() {
+        use GameEventState::*;
         let inside = NIGHT_START + MINUTE;
         let outside = NIGHT_START + 13 * HOUR;
-        let scheduled = event(true, night());
-        assert_eq!(
-            event_state(Some(&scheduled), None, inside),
-            GameEventState::Active
+        let scheduled = event(false, false, night());
+        assert_eq!(event_state(Some(&scheduled), None, inside), Active);
+        assert_eq!(event_state(Some(&scheduled), None, outside), Inactive);
+        let scripted = event(true, false, night());
+        assert_eq!(event_state(Some(&scripted), None, inside), Inactive);
+    }
+
+    #[test]
+    fn a_disabled_missing_or_zero_length_event_is_unscheduled() {
+        let inside = NIGHT_START + MINUTE;
+        let disabled = event(true, true, night());
+        let empty = event(
+            false,
+            false,
+            Occurrence {
+                length_mins: 0,
+                ..night()
+            },
         );
-        assert_eq!(
-            event_state(Some(&scheduled), None, outside),
-            GameEventState::Inactive
-        );
-        let scripted = event(false, night());
-        assert_eq!(
-            event_state(Some(&scripted), None, inside),
-            GameEventState::Unscheduled
-        );
-        assert_eq!(event_state(None, None, inside), GameEventState::Unscheduled);
+        for definition in [Some(&disabled), Some(&empty), None] {
+            assert_eq!(
+                event_state(definition, None, inside),
+                GameEventState::Unscheduled
+            );
+        }
     }
 
     #[test]
     fn an_operator_start_or_stop_holds_over_the_calendar() {
+        use GameEventState::*;
         let outside = NIGHT_START + 13 * HOUR;
         let inside = NIGHT_START + MINUTE;
-        let scheduled = event(true, night());
-        let scripted = event(false, night());
+        let scheduled = event(false, false, night());
+        let disabled = event(true, true, night());
+        assert_eq!(event_state(Some(&scheduled), Some(true), outside), Active);
+        assert_eq!(event_state(Some(&scheduled), Some(false), inside), Inactive);
+        assert_eq!(event_state(Some(&disabled), Some(true), outside), Active);
+        assert_eq!(event_state(None, Some(true), inside), Unscheduled);
+    }
+
+    fn status(state: GameEventState, next_link_id: u64) -> GameEventStatus {
+        GameEventStatus {
+            event_entry: 7,
+            state,
+            next_link_id,
+            next_pool_id: 0,
+        }
+    }
+
+    #[test]
+    fn a_state_change_part_way_through_starts_again_from_the_first_link() {
+        let halfway = status(GameEventState::Active, 501);
         assert_eq!(
-            event_state(Some(&scheduled), Some(true), outside),
-            GameEventState::Active
+            retarget(Some(halfway), 7, GameEventState::Inactive),
+            status(GameEventState::Inactive, 0)
+        );
+    }
+
+    #[test]
+    fn work_toward_an_unchanged_state_keeps_its_progress() {
+        let halfway = status(GameEventState::Active, 501);
+        assert_eq!(
+            retarget(Some(halfway.clone()), 7, GameEventState::Active),
+            halfway
         );
         assert_eq!(
-            event_state(Some(&scheduled), Some(false), inside),
-            GameEventState::Inactive
+            retarget(None, 7, GameEventState::Active),
+            status(GameEventState::Active, 0)
         );
-        assert_eq!(
-            event_state(Some(&scripted), Some(true), outside),
-            GameEventState::Active
-        );
-        assert_eq!(
-            event_state(None, Some(true), inside),
-            GameEventState::Unscheduled
-        );
+    }
+
+    #[test]
+    fn every_pending_event_gets_a_share_of_the_pass() {
+        assert_eq!(fair_share(500, 4), 125);
+        assert_eq!(fair_share(500, 0), 500);
+        assert_eq!(fair_share(3, 10), 1);
     }
 
     #[test]

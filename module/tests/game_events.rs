@@ -18,6 +18,7 @@ const WOLF_WHILE_RUNNING: u32 = 3_000_001;
 const WOLF_WHILE_STOPPED: u32 = 3_000_002;
 const LANTERN_WHILE_RUNNING: u32 = 5_300_401;
 const LANTERN_WHILE_STOPPED: u32 = 5_300_402;
+const PARTIAL_LANTERNS: u32 = 5_300_501;
 
 struct Place {
     map_id: u32,
@@ -59,8 +60,15 @@ fn realm(name: &str) -> (Standalone, Place) {
     (shard, place)
 }
 
+#[derive(Clone, Copy)]
+enum Kind {
+    Calendar,
+    Scripted,
+    Disabled,
+}
+
 /// A yearly Game Event whose window opens at `start_secs` for `length_mins`.
-fn festival(shard: &Standalone, start_secs: i64, length_mins: u32, follows_calendar: bool) {
+fn festival(shard: &Standalone, start_secs: i64, length_mins: u32, kind: Kind) {
     shard.insert_row(
         "game_event",
         &[
@@ -69,7 +77,8 @@ fn festival(shard: &Standalone, start_secs: i64, length_mins: u32, follows_calen
             ("end_secs", &(VIRTUAL_START_SECS + 100_000_000)),
             ("occurrence_mins", &YEAR_MINS),
             ("length_mins", &length_mins),
-            ("follows_calendar", &follows_calendar),
+            ("scripted", &matches!(kind, Kind::Scripted)),
+            ("disabled", &matches!(kind, Kind::Disabled)),
             ("description", &"Fixture festival"),
         ],
     );
@@ -179,7 +188,7 @@ fn settle(shard: &Standalone) {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_event_inside_its_window_when_the_world_loads_shows_its_spawns_at_once() {
     let (shard, at) = realm("game-event-loaded-inside");
-    festival(&shard, VIRTUAL_START_SECS - 30, 1, true);
+    festival(&shard, VIRTUAL_START_SECS - 30, 1, Kind::Calendar);
     festival_spawns(&shard, &at);
 
     settle(&shard);
@@ -191,7 +200,7 @@ fn an_event_inside_its_window_when_the_world_loads_shows_its_spawns_at_once() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_minute_pass_ends_an_event_through_the_despawn_path_and_brings_back_its_absent_spawns() {
     let (shard, at) = realm("game-event-calendar-end");
-    festival(&shard, VIRTUAL_START_SECS - 30, 1, true);
+    festival(&shard, VIRTUAL_START_SECS - 30, 1, Kind::Calendar);
     festival_spawns(&shard, &at);
     settle(&shard);
     assert_eq!(festival_world(&shard), RUNNING);
@@ -209,7 +218,7 @@ fn the_minute_pass_ends_an_event_through_the_despawn_path_and_brings_back_its_ab
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_operator_start_and_stop_hold_over_the_calendar_until_cleared() {
     let (shard, at) = realm("game-event-operator");
-    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, true);
+    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
     festival_spawns(&shard, &at);
     settle(&shard);
     assert_eq!(festival_world(&shard), STOPPED);
@@ -234,6 +243,12 @@ fn an_operator_start_and_stop_hold_over_the_calendar_until_cleared() {
     );
 
     refused(&shard, "debug_event_start", &["5300999"], "does not exist");
+    refused(
+        &shard,
+        "debug_event_clear",
+        &[&FESTIVAL.to_string()],
+        "has no Operator hold",
+    );
     assert!(shard
         .query_rows("SELECT event_entry FROM game_event_override")
         .is_empty());
@@ -243,29 +258,78 @@ fn an_operator_start_and_stop_hold_over_the_calendar_until_cleared() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_negative_link_spawn_shows_while_its_event_is_stopped_and_leaves_while_it_runs() {
     let (shard, at) = realm("game-event-negative-link");
-    festival(&shard, VIRTUAL_START_SECS - 30, 1, false);
+    festival(&shard, VIRTUAL_START_SECS - 30, 1, Kind::Scripted);
     festival_spawns(&shard, &at);
     settle(&shard);
     assert_eq!(
         festival_world(&shard),
-        [false; 4],
-        "a scripted event neither runs nor stops on the calendar"
+        STOPPED,
+        "a scripted event without its script stays stopped"
     );
-
-    shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
-    settle(&shard);
-    assert_eq!(festival_world(&shard), STOPPED);
 
     shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
     settle(&shard);
     assert_eq!(festival_world(&shard), RUNNING);
+
+    shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
+    settle(&shard);
+    assert_eq!(festival_world(&shard), STOPPED);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_disabled_event_shows_neither_its_spawns_nor_its_absence_spawns() {
+    let (shard, at) = realm("game-event-disabled");
+    festival(&shard, VIRTUAL_START_SECS - 30, 1, Kind::Disabled);
+    festival_spawns(&shard, &at);
+
+    settle(&shard);
+
+    assert_eq!(festival_world(&shard), [false; 4]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_stop_part_way_through_a_start_takes_every_shown_spawn_down() {
+    let (shard, at) = realm("game-event-partial-start");
+    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
+    let lanterns: Vec<u64> = (PARTIAL_LANTERNS..PARTIAL_LANTERNS + 3)
+        .map(lantern_guid)
+        .collect();
+    for &guid in &lanterns {
+        link(&shard, guid, false);
+    }
+    let packed = lanterns
+        .iter()
+        .map(|guid| {
+            format!(
+                "{guid},{LANTERN},{},{},{},{},0,1,0,0,0,0",
+                at.map_id, at.x, at.y, at.z
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+    shard.assert_call("import_gameobjects_append", &[&packed]);
+    shard.assert_call("debug_run_game_event_pass", &["500"]);
+    let up = || lanterns.iter().filter(|&&guid| shown(&shard, guid)).count();
+    assert_eq!(up(), 0);
+
+    shard.insert_row(
+        "game_event_override",
+        &[("event_entry", &FESTIVAL), ("running", &true)],
+    );
+    shard.assert_call("debug_run_game_event_pass", &["1"]);
+    assert_eq!(up(), 1, "a pass with room for one change shows one lantern");
+
+    shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
+    assert_eq!(up(), 0, "the stop reaches the lantern the start showed");
 }
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_respawn_due_while_its_event_does_not_run_brings_nothing_back() {
     let (shard, at) = realm("game-event-respawn-gate");
-    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, true);
+    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
     festival_spawns(&shard, &at);
 
     settle(&shard);
@@ -296,7 +360,7 @@ fn a_respawn_due_while_its_event_does_not_run_brings_nothing_back() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_pool_tied_to_an_event_rolls_only_while_the_event_runs() {
     let (shard, at) = realm("game-event-pool");
-    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, true);
+    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
     shard.insert_row(
         "game_gameobject_template",
         &[

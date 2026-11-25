@@ -229,6 +229,7 @@ fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
             apply_fields(row, |field, value| {
                 apply_spawn_field(&mut spawn, field, value)
             })?;
+            spawn.despawned |= !crate::game_events::spawn_shows(ctx, spawn.guid);
             spawn.try_insert(ctx).map_err(|e| insert_failed(row, &e))?;
         }
         (ClaimTable::GameobjectSpawn, Operation::Update) => {

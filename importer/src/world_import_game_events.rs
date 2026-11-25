@@ -102,11 +102,11 @@ fn definitions(dump: &(impl TableRows + ?Sized)) -> Result<BTreeMap<u32, String>
         let end = source_time_secs(row.text("end_time")?)?;
         let occurrence: u32 = row.number("occurence")?;
         let length: u32 = row.number("length")?;
-        let follows_calendar =
-            row.number::<u8>("hardcoded")? == 0 && row.number::<u8>("disabled")? == 0;
+        let scripted = row.number::<u8>("hardcoded")? != 0;
+        let disabled = row.number::<u8>("disabled")? != 0;
         let description = row.optional_text("description")?.unwrap_or_default();
         let definition = format!(
-            "({entry},{start},{end},{occurrence},{length},{follows_calendar},{})",
+            "({entry},{start},{end},{occurrence},{length},{scripted},{disabled},{})",
             sql_str(description.trim())
         );
         if rows.insert(entry, definition).is_some() {
@@ -150,8 +150,8 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         },
     );
 
-    // An event the World Source leaves out for patch 1.12 still hides its spawns, so it gets a
-    // row the calendar never runs.
+    // An event the World Source leaves out for patch 1.12 is disabled, as vmangos disables it, so
+    // its spawns stay hidden.
     let linked = links
         .spawns
         .iter()
@@ -160,7 +160,7 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
     for event in linked {
         definitions
             .entry(event)
-            .or_insert_with(|| format!("({event},0,0,0,0,false,'')"));
+            .or_insert_with(|| format!("({event},0,0,0,0,false,true,'')"));
     }
 
     let mut stmts = vec![
@@ -172,7 +172,7 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
     push_insert(
         &mut stmts,
         "game_event",
-        "event_entry,start_secs,end_secs,occurrence_mins,length_mins,follows_calendar,description",
+        "event_entry,start_secs,end_secs,occurrence_mins,length_mins,scripted,disabled,description",
         &definitions.into_values().collect::<Vec<_>>(),
     );
     let link_rows: Vec<String> = links

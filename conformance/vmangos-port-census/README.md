@@ -13,6 +13,10 @@ Milestone 5 assigns `game_quest_event_requirement` to `creature-ai`. It emits tw
 `full-world` and one for `alliance-single`; `quests` no longer writes that table. The archived
 Milestone 4 family counts predate that ownership change. Combined rows are unchanged.
 
+The `events` Import Family now imports Game Event Links, so the importer no longer reports the
+`creatures.game-event` and `gameobjects.game-event` findings these reports list; its own manifest
+reports `events.scripted` and `events.pooled-absence`.
+
 The [Feature Ledger](../README.md) records the remaining gaps, including
 the generated per-creature behavior comparison. These reports describe source and import plans;
 they do not establish real-client conformance.

@@ -912,35 +912,23 @@ fn arm_world_root(ctx: &ReducerContext, pool_id: u32, fence: &MapFence) {
     }
 }
 
-/// Rolls the top-level open-world pools of one Game Event, or takes them down, wherever they are
-/// not so already; `false` when `budget` ran out first. Each pool it changes spends one.
-pub(crate) fn show_event_pools(
-    ctx: &ReducerContext,
-    pool_ids: &[u32],
-    shows: bool,
-    budget: &mut usize,
-) -> bool {
-    let fence = MapFence::instanceable(ctx);
-    for &pool_id in pool_ids {
-        if pool_is_active(ctx, PoolScope::World, pool_id, 0) == shows {
-            continue;
-        }
-        if *budget == 0 {
-            return false;
-        }
-        if shows {
-            spawn_pool(
-                ctx,
-                PoolScope::World,
-                pool_id,
-                PoolTiming::Now,
-                Some(&fence),
-                0,
-            );
-        } else {
-            despawn_pool(ctx, PoolScope::World, pool_id, 0);
-        }
-        *budget -= 1;
+/// Rolls a Game Event's top-level open-world pool, or takes it down, unless it is so already.
+/// Returns whether it changed.
+pub(crate) fn show_event_pool(ctx: &ReducerContext, pool_id: u32, shows: bool) -> bool {
+    if pool_is_active(ctx, PoolScope::World, pool_id, 0) == shows {
+        return false;
+    }
+    if shows {
+        spawn_pool(
+            ctx,
+            PoolScope::World,
+            pool_id,
+            PoolTiming::Now,
+            Some(&MapFence::instanceable(ctx)),
+            0,
+        );
+    } else {
+        despawn_pool(ctx, PoolScope::World, pool_id, 0);
     }
     true
 }
@@ -1246,18 +1234,34 @@ pub(crate) fn respawn_timer_elapsed(ctx: &ReducerContext, go_guid: u64) {
 }
 
 /// Shows or hides a world object as its Game Events decide: a hidden one waits despawned with no
-/// respawn time, and shows again closed and unused. Returns whether it changed.
+/// respawn time, and shows again in the state it had, a chest or node unused. Returns whether it
+/// changed.
 pub(crate) fn show_for_events(ctx: &ReducerContext, guid: u64, shows: bool) -> bool {
     let Some(object) = ctx.db.game_gameobject().guid().find(guid) else {
         return false;
     };
     let hidden = object.despawned && object.respawn_at_micros == 0;
     match (shows, hidden) {
-        (true, true) => respawn(ctx, object),
+        (true, true) => reveal_for_events(ctx, object),
         (false, false) => hide_for_events(ctx, object),
         _ => return false,
     }
     true
+}
+
+fn reveal_for_events(ctx: &ReducerContext, mut object: GameObject) {
+    let used_up = ctx
+        .db
+        .game_gameobject_template()
+        .entry()
+        .find(object.template_entry)
+        .is_some_and(|template| matches!(template.type_id, go_type::CHEST | go_type::GATHER));
+    if used_up {
+        respawn(ctx, object);
+        return;
+    }
+    object.despawned = false;
+    object.update(ctx);
 }
 
 fn hide_for_events(ctx: &ReducerContext, mut object: GameObject) {
