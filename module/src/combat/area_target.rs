@@ -1,4 +1,4 @@
-//! The ground area tick's target rule: vmangos `IsValidAttackTarget` with `GetReactionTo`.
+//! The faction, reputation and PvP checks of vmangos `IsValidAttackTarget` for a ground area.
 
 use spacetimedb::ReducerContext;
 

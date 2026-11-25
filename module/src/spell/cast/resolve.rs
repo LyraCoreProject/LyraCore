@@ -887,7 +887,9 @@ fn run_spell_effects(
             draw,
         );
         if e.kind == E_PERSISTENT_AREA {
-            place_ground_area(ctx, e, hdr, caster_guid, target_guid, points, dest);
+            if targets.may_reach(caster_guid) {
+                place_ground_area(ctx, e, hdr, caster_guid, target_guid, points, dest);
+            }
             continue;
         }
         for t in select_targets(ctx, caster_guid, target_guid, e, dest) {

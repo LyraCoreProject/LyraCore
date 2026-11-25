@@ -1762,7 +1762,14 @@ fn create_ground_area(
         cell: 0,
     }
     .insert(ctx);
-    if hdr.cast_flags & CAST_FLAG_CHANNELED != 0 {
+    // A channel Aura from an earlier effect of the spell has already started the channel bar.
+    let bar_started = ctx
+        .db
+        .game_aura()
+        .by_caster()
+        .filter(caster_guid)
+        .any(|aura| aura.spell_id == e.spell_id);
+    if hdr.cast_flags & CAST_FLAG_CHANNELED != 0 && !bar_started {
         crate::native::aura::channel_started(ctx, caster_guid, e.spell_id, hdr.duration_ms);
     }
 }
@@ -1780,7 +1787,6 @@ pub(crate) fn is_channelled_area(ctx: &ReducerContext, area: &GroundArea) -> boo
         .is_some_and(|spell| spell.cast_flags & CAST_FLAG_CHANNELED != 0)
 }
 
-/// Whether the caster holds a channelled ground area of the spell.
 pub(crate) fn holds_channelled_area(ctx: &ReducerContext, caster_guid: u64, spell_id: u32) -> bool {
     ctx.db
         .game_ground_area()

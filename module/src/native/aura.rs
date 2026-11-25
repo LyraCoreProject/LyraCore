@@ -108,10 +108,10 @@ fn channel(ctx: &ReducerContext, aura: &Aura, removed: bool) {
         .min_by_key(|row| row.id);
     let holds_area =
         crate::spell::cast::holds_channelled_area(ctx, aura.caster_guid, aura.spell_id);
-    let notice = channel_notice(removed, active.map(|row| row.id), aura.id, holds_area);
-    if notice == Some(ChannelNotice::End) {
+    let change = channel_bar_change(removed, active.map(|row| row.id), aura.id, holds_area);
+    if change == Some(ChannelBar::End) {
         channel_ended(ctx, aura.caster_guid);
-    } else if notice == Some(ChannelNotice::Start) {
+    } else if change == Some(ChannelBar::Start) {
         let duration = aura
             .expires_at
             .to_micros_since_unix_epoch()
@@ -127,24 +127,24 @@ fn channel(ctx: &ReducerContext, aura: &Aura, removed: bool) {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum ChannelNotice {
+enum ChannelBar {
     Start,
     End,
 }
 
 /// Channel Auras start and end the channel bar unless a channelled ground area holds it.
-fn channel_notice(
+fn channel_bar_change(
     removed: bool,
     first_channel_aura: Option<u64>,
     aura_id: u64,
     holds_area: bool,
-) -> Option<ChannelNotice> {
+) -> Option<ChannelBar> {
     if holds_area {
         None
     } else if removed {
-        first_channel_aura.is_none().then_some(ChannelNotice::End)
+        first_channel_aura.is_none().then_some(ChannelBar::End)
     } else {
-        (first_channel_aura == Some(aura_id)).then_some(ChannelNotice::Start)
+        (first_channel_aura == Some(aura_id)).then_some(ChannelBar::Start)
     }
 }
 
@@ -461,20 +461,20 @@ mod tests {
     #[test]
     fn a_channelled_ground_area_keeps_the_channel_bar_when_its_last_channel_aura_ends() {
         // Hurricane's slow leaves the last enemy while its area keeps ticking.
-        assert_eq!(channel_notice(true, None, 7, true), None);
+        assert_eq!(channel_bar_change(true, None, 7, true), None);
         assert_eq!(
-            channel_notice(true, None, 7, false),
-            Some(ChannelNotice::End)
+            channel_bar_change(true, None, 7, false),
+            Some(ChannelBar::End)
         );
     }
 
     #[test]
     fn a_channelled_ground_area_has_already_started_the_channel_bar_for_its_auras() {
-        assert_eq!(channel_notice(false, Some(7), 7, true), None);
+        assert_eq!(channel_bar_change(false, Some(7), 7, true), None);
         assert_eq!(
-            channel_notice(false, Some(7), 7, false),
-            Some(ChannelNotice::Start)
+            channel_bar_change(false, Some(7), 7, false),
+            Some(ChannelBar::Start)
         );
-        assert_eq!(channel_notice(false, Some(5), 7, false), None);
+        assert_eq!(channel_bar_change(false, Some(5), 7, false), None);
     }
 }
