@@ -133,8 +133,7 @@ impl ItemStoragePlan {
         consume_item_stacks(&mut self.items, entry, count)
     }
 
-    /// Consumes like [`Self::consume`] but skips stacks offered in a trade, as vmangos
-    /// `Player::DestroyItemCount` does.
+    /// Consumes like [`Self::consume`] but skips stacks offered in a Trade Session.
     pub(crate) fn consume_untraded(
         &mut self,
         ctx: &ReducerContext,

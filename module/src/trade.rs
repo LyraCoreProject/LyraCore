@@ -355,7 +355,7 @@ fn refresh_offer(ctx: &ReducerContext, owner_guid: u64) {
     }
 }
 
-/// Resets the accepts when an item write changes what the partner sees of an offered item.
+/// Resets the accepts when a write changes an offered item's trade window view or soulbound state.
 pub(crate) fn offered_item_written(
     ctx: &ReducerContext,
     previous: &crate::ItemInstance,
@@ -369,6 +369,7 @@ pub(crate) fn offered_item_written(
             item.enchant_id,
             item.durability,
             item.random_property_id,
+            item.soulbound,
         )
     };
     if current.is_none_or(|current| seen(current) != seen(previous))
