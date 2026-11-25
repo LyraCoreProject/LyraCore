@@ -224,9 +224,6 @@ if [ "$MAP" = 0 ]; then
   echo "[world] restore taxi fixture"
   restore_taxi_fixture_or_fail || exit 1
 fi
-# arm_pool fences candidates against the imported terrain and navigation maps.
-echo "[world] arm gather pools"
-call_q arm_all_pools >/dev/null 2>&1
 
 fail=0
 # This file carries SQL failures out of command substitutions to the parent shell.
@@ -271,6 +268,14 @@ n() {
   out="$(q "$1" 2>&1)"; status=$?
   if [ "$status" -ne 0 ]; then sql_note_failure "$out"; printf '0'; return 0; fi
   printf '%s\n' "$out" | grep -cE "${2:-^ *[0-9]}"
+}
+# GameObjects the import wrote: static objects (guids below the pool tag) plus pool members.
+POOL_OBJECT_GUID_FLOOR=17370524500256358400
+go_written() {
+  local static members
+  static="$(n "SELECT guid FROM game_gameobject WHERE guid < $POOL_OBJECT_GUID_FLOOR${1:+ AND $1}" '[0-9]')"
+  members="$(n "SELECT point_id FROM game_gameobject_pool_member${1:+ WHERE $1}" '[0-9]')"
+  echo $((static + members))
 }
 q_list() {
   local out status
@@ -380,7 +385,7 @@ verify_profile_corridors() {
       chk "Dun Morogh vendor (Durnan Furcutter 836)" 1 "$(n "SELECT item_entry FROM game_npc_vendor WHERE creature_entry=836")"
       verify_named_corridor "Loch Modan follow-on" 0 1340 "$FLOOR_LOCH_MODAN_CONTENT"
       chk "Loch Modan Mining trainer (Brock Stoneseeker 1681)" 1 "$(n "SELECT spell_id FROM game_trainer_spell WHERE trainer_entry=1681")"
-      chk "Eastern profile GameObjects (map 0)" "$FLOOR_CORRIDOR_GAMEOBJECTS" "$(n "SELECT guid FROM game_gameobject WHERE map_id=0")"
+      chk "Eastern profile GameObjects written (map 0)" "$FLOOR_CORRIDOR_GAMEOBJECTS" "$(go_written "map_id = 0")"
       verify_graveyard_zone "Dun Morogh" 1
       verify_graveyard_zone "Loch Modan" 38
       ;;
@@ -393,7 +398,7 @@ verify_profile_corridors() {
       chk "Teldrassil Warrior trainer (Alyissia 3593)" 1 "$(n "SELECT spell_id FROM game_trainer_spell WHERE trainer_entry=3593")"
       verify_named_corridor "Darkshore follow-on" 1 10219 "$FLOOR_DARKSHORE_CONTENT"
       chk "Darkshore vendor (Laird 4200)" 1 "$(n "SELECT item_entry FROM game_npc_vendor WHERE creature_entry=4200")"
-      chk "Kalimdor profile GameObjects (map 1)" "$FLOOR_CORRIDOR_GAMEOBJECTS" "$(n "SELECT guid FROM game_gameobject WHERE map_id=1")"
+      chk "Kalimdor profile GameObjects written (map 1)" "$FLOOR_CORRIDOR_GAMEOBJECTS" "$(go_written "map_id = 1")"
       verify_graveyard_zone "Teldrassil" 141
       verify_graveyard_zone "Darkshore" 148
       ;;
@@ -426,7 +431,7 @@ chk0 "Goldshire anchor trainers spawned {328,377,906,913,917,927} (NOT total cov
     "$(n "SELECT guid FROM game_world_entity WHERE owner_guid=0 AND (entry=328 OR entry=377 OR entry=906 OR entry=913 OR entry=917 OR entry=927)" '[0-9]{6,}')"
 chk "class trainer offerings (learn_skill_line=0)"   "$FLOOR_TRAINER_OFFERINGS_CLASS" "$(n "SELECT spell_id FROM game_trainer_spell WHERE learn_skill_line = 0")"
 chk "profession learn offerings (learn_skill_line>0)" "$FLOOR_TRAINER_OFFERINGS_PROFESSION" "$(n "SELECT spell_id FROM game_trainer_spell WHERE learn_skill_line > 0")"
-chk "gather-node GO spawns"                          "$FLOOR_GATHER_NODE_GO" "$(n "SELECT guid FROM game_gameobject" '[0-9]')"
+chk "GameObjects written (static + pool members)"    "$FLOOR_GATHER_NODE_GO" "$(go_written)"
 chk_open_world "terrain chunks (ground-z heightmap)" "$FLOOR_TERRAIN_CHUNKS" "$(n "SELECT key FROM game_terrain_chunk" '[0-9]')"
 chk_open_world "nav chunks (walkability/LoS grid)"   "$FLOOR_NAV_CHUNKS" "$(n "SELECT key FROM game_nav_chunk" '[0-9]')"
 chk0 "innkeeper Farley(295) spawned"      "$FLOOR_INNKEEPER_FARLEY" "$(n "SELECT guid FROM game_world_entity WHERE entry=295 AND owner_guid=0" '[0-9]{6,}')"
@@ -538,8 +543,8 @@ chk "Deadmines portal round-trip: entrance(78)+exit(119) both present" "$FLOOR_D
 # Imported spawn rows are independent of the creature tick timing.
 chk36 "Deadmines creature spawns (map 36) [V]" "$FLOOR_DEADMINES_CREATURE_SPAWNS" \
     "$(n "SELECT guid FROM game_creature_spawn WHERE map_id = 36" '[0-9]')"
-chk36 "Deadmines gameobjects (doors/cannon/chests, map 36) [V]" "$FLOOR_DEADMINES_GAMEOBJECTS" \
-    "$(n "SELECT guid FROM game_gameobject WHERE map_id = 36" '[0-9]')"
+chk36 "Deadmines gameobjects written (doors/cannon/chests + pool members, map 36) [V]" "$FLOOR_DEADMINES_GAMEOBJECTS" \
+    "$(go_written "map_id = 36")"
 chk36 "Deadmines bosses spawned (>=6 distinct placed entries) [V]" "$FLOOR_DEADMINES_BOSSES" \
     "$(q_list "SELECT entry FROM game_creature_spawn WHERE map_id = 36 AND (entry=644 OR entry=643 OR entry=642 OR entry=1763 OR entry=646 OR entry=647 OR entry=639)" | sort -u | wc -l)"
 chk36 "Deadmines named drops (Cruel Barb ~5191 + Smite's Reaver ~5196) [V]" "$FLOOR_DEADMINES_NAMED_LOOT" \

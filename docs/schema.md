@@ -932,6 +932,40 @@ That is why `debug_repair_after_publish` freezes profiles again: an Aura applied
 was frozen reads as "never procs, no charges", and a permanent self-buff never refreshes on its
 own.
 
+### GameObject pools
+
+`module/src/gameobject.rs` keeps vmangos pools of GameObject placements. `game_gameobject_pool`
+holds a pool's limit, `max_active`. `game_gameobject_pool_member` holds one placement, a point,
+with its template, position, rotation and respawn range. `game_gameobject_pool_link` holds vmangos
+`pool_pool`: a pool's parent (0 for a top-level pool), its weight among the parent's child pools,
+and the map of its top-level pool. Every imported pool has a link row; an Instance of that map rolls
+the top-level ones. A pool without a link row, such as the pool `init` seeds, is a top-level pool
+that rolls only in the open world. Imported points take the id `2^40 | source guid`.
+
+A roll picks among the members, or child pools, that are not up, by `weight`. The importer turns
+the vmangos chances into weights as `PoolGroup::RollOne` reads them: with a limit of 1, an entry with
+a chance takes that share of a 100 percent roll in order, and the entries without one split what
+is left equally; with any other limit every entry is equally likely. A weight of 0 never rolls.
+The weights of a limit-1 group whose chances leave part of the roll to no entry are scaled up to a
+whole roll; see the deliberate deviations in
+`conformance/features/gameobjects/gameobject_world.toml`. A top-level pool with such a group never
+spawns, as vmangos `CheckPool` decides, and the importer writes no row for it. A pool's child pools
+and its own members share its limit, as vmangos counts both: a roll brings up child pools first,
+then members, until the limit is up. A pooled placement must start ready (state 0); the importer
+refuses another, and every pooled placement in the pinned World Source does.
+
+The importer rolls the open-world pools through `arm_pools`, grouped so one call brings up at most
+250 objects; `arm_all_pools` rolls them all in one call and refuses more than 250 top-level pools.
+
+An open-world member that is up has an object at guid `POOL_TAG | point`. In an Instance it has an
+object at `POOL_TAG | GO_COPY_BAND | copy_id` and a `game_gameobject_pool_copy` row naming its
+Instance and point. `create_instance` rolls the top-level pools of its map and teardown forgets
+their copy rows. A looted chest or gathered node in a pool leaves its pool: a top-level pool rolls
+a replacement, and a child pool hands its place to another child pool of its parent, with the used
+pool rolling again when no other is free. The replacement's object is despawned and used until its
+own respawn delay passes. A pooled chest in an Instance, or one without a respawn time, despawns in
+place like any chest.
+
 ### Global cooldowns (`module/src/spell/tables.rs`)
 
 `game_spell.gcd_ms` and `gcd_category` are the source `StartRecoveryTime` and

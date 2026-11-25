@@ -246,6 +246,35 @@ A chest opened before the publish keeps its respawn time. When that time comes t
 and it respawns one respawn delay later. A Package that builds a `GameObject` row must set the three
 new fields, so its branch pins a Core revision with them.
 
+### GameObject pool migration
+
+`game_gameobject_pool_member` gains `rotation_0` to `rotation_3`, `respawn_min_secs` and
+`respawn_max_secs`, end-appended with default 0. The private `game_gameobject_pool_link` and
+`game_gameobject_pool_copy` tables are new and start empty. `game_gameobject_pool.in_place` keeps its
+column but nothing reads it. No other layout changes, and no Package builds a pool row.
+
+A Realm published without a reimport behaves as before: every imported chest, herb and ore
+placement is a static spawn, and the pool seeded at `init` (map 0's copper and tin vein) keeps
+rolling. One thing changes for that pool and for any pool written by hand: a used member's
+replacement now waits hidden for its respawn delay. A pool member's respawn no longer rolls the
+pool again.
+
+Publish the Module before you reimport: the importer calls the new `arm_pools` reducer. Reimport
+the `gameobjects` Import Family to import the pools. The reimport replaces every pool row,
+including the seeded pool, and writes no static spawn for a pooled placement. Its first
+`import_gameobjects` batch removes every old object, also when a slice holds only pooled
+placements. The importer then rolls the open-world pools through `arm_pools`, in batches that bring
+up at most 250 objects each, like the static spawn batches. Only the rolled members are up
+afterwards: about 6,700 of the 32,550 pooled placements in the full world. A rerun writes the same
+rows and rolls each pool once again, never twice over. `arm_all_pools` refuses a Realm with more
+than 250 top-level pools, so `import-world.sh` no longer calls it. An Instance created after the
+reimport rolls the pools of its map; a running Instance has lost its objects to the reimport, as
+before, and gets them back when it is created again. Shared import SQL defaults are not needed: the
+importer writes every member column.
+
+The import floors in `importer/scripts/import-world.sh` count the GameObjects the import wrote,
+static objects plus pool members, so a roll that shows only some members does not fail them.
+
 ### Chest money and item loot migration
 
 `game_item_template` gains `lock_id`, `money_min` and `money_max`, and `game_gameobject_template`

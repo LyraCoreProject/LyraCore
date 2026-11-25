@@ -7,6 +7,7 @@ use crate::game_corpse_loot;
 use crate::game_corpse_loot_eligible;
 use crate::game_creature_spawn_map;
 use crate::game_gameobject_loot;
+use crate::game_map;
 use crate::game_world_entity;
 use crate::native::game_native_player;
 use crate::nav::game_nav_chunk;
@@ -264,10 +265,12 @@ pub struct GameObjectPool {
     #[primary_key]
     pub pool_id: u32,
     pub max_active: u32,
+    // Unused: every pool rolls a used member's replacement and shows it after its respawn delay.
     #[default(false)]
     pub in_place: bool,
 }
 
+// `weight` is a member's share of a roll; docs/schema.md#gameobject-pools gives the rule.
 #[table(accessor = game_gameobject_pool_member, public,
         index(accessor = by_pool, btree(columns = [pool_id])))]
 pub struct GameObjectPoolMember {
@@ -282,11 +285,53 @@ pub struct GameObjectPoolMember {
     pub z: f32,
     pub orientation: f32,
     pub weight: u32,
+    #[default(0.0f32)]
+    pub rotation_0: f32,
+    #[default(0.0f32)]
+    pub rotation_1: f32,
+    #[default(0.0f32)]
+    pub rotation_2: f32,
+    #[default(0.0f32)]
+    pub rotation_3: f32,
+    // The source spawn's respawn range in seconds; 0 and 0 take the template's `respawn_secs`.
+    #[default(0u32)]
+    pub respawn_min_secs: u32,
+    #[default(0u32)]
+    pub respawn_max_secs: u32,
+}
+
+/// A pool's parent, as vmangos `pool_pool`, and its map; docs/schema.md#gameobject-pools.
+#[table(
+    accessor = game_gameobject_pool_link,
+    index(accessor = by_parent, btree(columns = [parent_pool_id])),
+    index(accessor = by_map, btree(columns = [map_id]))
+)]
+pub struct GameObjectPoolLink {
+    #[primary_key]
+    pub pool_id: u32,
+    // 0 for a top-level pool.
+    pub parent_pool_id: u32,
+    // The pool's share of a roll among its parent's child pools.
+    pub weight: u32,
+    pub map_id: u32,
+}
+
+/// A pool member's object in one Instance; its guid is `pool_copy_guid(copy_id)`.
+#[table(
+    accessor = game_gameobject_pool_copy,
+    index(accessor = by_instance_point, btree(columns = [instance_id, point_id]))
+)]
+pub struct GameObjectPoolCopy {
+    #[primary_key]
+    #[auto_inc]
+    pub copy_id: u64,
+    pub instance_id: u64,
+    pub point_id: u64,
 }
 
 // Bit 47 keeps pool-point guids disjoint from imported and standalone gameobjects.
 pub const POOL_TAG: u64 = 1 << 47;
-// Bit 46 reserves gameobject Instance copies below pool bit 47.
+// Bit 46 reserves gameobject Instance copies below pool bit 47; a pool member's copy sets both.
 pub(crate) const GO_COPY_BAND: u64 = 1 << 46;
 // Bit 45 reserves Duel flags below the Instance copies.
 pub(crate) const DUEL_FLAG_BAND: u64 = 1 << 45;
@@ -359,15 +404,22 @@ pub(crate) fn spawn_standalone(
 }
 
 pub(crate) fn pool_point_guid(point_id: u64) -> u64 {
-    gameobject_guid(POOL_TAG | (point_id & 0x7FFF_FFFF_FFFF))
+    gameobject_guid(POOL_TAG | (point_id & (GO_COPY_BAND - 1)))
 }
 
+/// The pool point of an open-world pool object's guid.
 pub(crate) fn pool_point_id_of(guid: u64) -> Option<u64> {
-    if is_gameobject_guid(guid) && (guid & POOL_TAG) != 0 {
-        Some(guid & 0x7FFF_FFFF_FFFF)
-    } else {
-        None
-    }
+    (is_gameobject_guid(guid) && guid & (POOL_TAG | GO_COPY_BAND) == POOL_TAG)
+        .then_some(guid & (GO_COPY_BAND - 1))
+}
+
+fn pool_copy_guid(copy_id: u64) -> u64 {
+    gameobject_guid(POOL_TAG | GO_COPY_BAND | (copy_id & (GO_COPY_BAND - 1)))
+}
+
+fn pool_copy_id_of(guid: u64) -> Option<u64> {
+    (is_gameobject_guid(guid) && guid & (POOL_TAG | GO_COPY_BAND) == POOL_TAG | GO_COPY_BAND)
+        .then_some(guid & (GO_COPY_BAND - 1))
 }
 
 pub(crate) fn weighted_pick(weights: &[u32], roll: u32) -> Option<usize> {
@@ -381,51 +433,99 @@ pub(crate) fn weighted_pick(weights: &[u32], roll: u32) -> Option<usize> {
     None
 }
 
-pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64) {
-    let gos = ctx.db.game_gameobject();
-    let members = ctx.db.game_gameobject_pool_member();
-    crate::GameObject::delete(ctx, gathered_guid);
-    let candidates: Vec<GameObjectPoolMember> = members
-        .by_pool()
-        .filter(&pool_id)
-        .filter(|m| m.weight > 0 && gos.guid().find(pool_point_guid(m.point_id)).is_none())
-        .collect();
-    if candidates.is_empty() {
-        return;
+fn pick_weighted<'a, T>(
+    ctx: &ReducerContext,
+    candidates: &'a [T],
+    weight: impl Fn(&T) -> u32,
+) -> Option<&'a T> {
+    let weights: Vec<u32> = candidates.iter().map(weight).collect();
+    let total = weights.iter().fold(0u32, |sum, w| sum.saturating_add(*w));
+    if total == 0 {
+        return None;
     }
-    let weights: Vec<u32> = candidates.iter().map(|m| m.weight).collect();
-    let total: u32 = weights.iter().sum();
-    let roll = ctx.random::<u32>() % total;
-    let chosen =
-        &candidates[weighted_pick(&weights, roll).expect("roll < total ⇒ a band always hits")];
-    activate_point(ctx, chosen);
+    weighted_pick(&weights, ctx.random::<u32>() % total).map(|index| &candidates[index])
 }
 
-fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
-    GameObject {
-        guid: pool_point_guid(m.point_id),
-        template_entry: m.template_entry,
-        map_id: m.map_id,
-        x: m.x,
-        y: m.y,
-        z: m.z,
-        orientation: m.orientation,
-        state: 0,
-        created_at: crate::time::now(ctx),
-        respawn_at_micros: 0,
-        instance_id: 0,
-        grid_x: 0,
-        grid_y: 0,
-        cell: 0,
-        rotation_0: 0.0,
-        rotation_1: 0.0,
-        rotation_2: 0.0,
-        rotation_3: 0.0,
-        respawn_min_secs: 0,
-        respawn_max_secs: 0,
-        despawned: false,
+// Imported data holds three levels; the cap stops a malformed link cycle.
+const MAX_POOL_DEPTH: u32 = 8;
+
+/// Where a pool rolls: the open world, or one Instance of the pool's map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PoolScope {
+    World,
+    Instance { instance_id: u64, map_id: u32 },
+}
+
+impl PoolScope {
+    fn instance_id(self) -> u64 {
+        match self {
+            Self::World => 0,
+            Self::Instance { instance_id, .. } => instance_id,
+        }
     }
-    .insert(ctx);
+
+    fn admits_map(self, map_id: u32) -> bool {
+        match self {
+            Self::World => true,
+            Self::Instance { map_id: own, .. } => own == map_id,
+        }
+    }
+
+    /// The guid of the point's object in this scope, while the point is up here.
+    fn active_guid(self, ctx: &ReducerContext, point_id: u64) -> Option<u64> {
+        match self {
+            Self::World => {
+                let guid = pool_point_guid(point_id);
+                ctx.db.game_gameobject().guid().find(guid).map(|_| guid)
+            }
+            Self::Instance { instance_id, .. } => ctx
+                .db
+                .game_gameobject_pool_copy()
+                .by_instance_point()
+                .filter((instance_id, point_id))
+                .next()
+                .map(|copy| pool_copy_guid(copy.copy_id)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PoolTiming {
+    Now,
+    AfterRespawnDelay,
+}
+
+/// The maps an open-world pool arms on: an imported map that no Instance copies.
+struct MapFence {
+    imported: HashSet<u32>,
+    instanceable: HashSet<u32>,
+}
+
+impl MapFence {
+    fn load(ctx: &ReducerContext) -> Self {
+        Self {
+            imported: imported_spatial_maps(ctx),
+            ..Self::instanceable(ctx)
+        }
+    }
+
+    /// Fences only the maps an Instance copies, without reading terrain or navigation.
+    fn instanceable(ctx: &ReducerContext) -> Self {
+        Self {
+            imported: HashSet::new(),
+            instanceable: ctx
+                .db
+                .game_map()
+                .iter()
+                .map(|map| map.id)
+                .filter(|&map_id| crate::instance::is_instanceable(ctx, map_id))
+                .collect(),
+        }
+    }
+
+    fn admits(&self, map_id: u32) -> bool {
+        pool_member_map_is_live(map_id, &self.imported) && !self.instanceable.contains(&map_id)
+    }
 }
 
 fn imported_spatial_maps(ctx: &ReducerContext) -> HashSet<u32> {
@@ -447,69 +547,461 @@ pub(crate) fn pool_member_map_is_live(member_map: u32, imported_maps: &HashSet<u
     imported_maps.is_empty() || imported_maps.contains(&member_map)
 }
 
-pub(crate) fn eligible_pool_candidates(
-    members: Vec<GameObjectPoolMember>,
-    active_point_guids: &HashSet<u64>,
-    imported_maps: &HashSet<u32>,
-) -> Vec<GameObjectPoolMember> {
+pub(crate) fn eligible_pool_candidates<'a>(
+    members: &'a [GameObjectPoolMember],
+    active_points: &HashSet<u64>,
+    admits_map: impl Fn(u32) -> bool,
+) -> Vec<&'a GameObjectPoolMember> {
     members
-        .into_iter()
-        .filter(|m| {
-            m.weight > 0
-                && pool_member_map_is_live(m.map_id, imported_maps)
-                && !active_point_guids.contains(&pool_point_guid(m.point_id))
-        })
+        .iter()
+        .filter(|m| m.weight > 0 && admits_map(m.map_id) && !active_points.contains(&m.point_id))
         .collect()
 }
 
-pub(crate) fn arm_pool(ctx: &ReducerContext, pool_id: u32) {
-    let gos = ctx.db.game_gameobject();
-    let members = ctx.db.game_gameobject_pool_member();
-    let imported_maps = imported_spatial_maps(ctx);
-    let max_active = ctx
-        .db
+fn pool_limit(ctx: &ReducerContext, pool_id: u32) -> u32 {
+    ctx.db
         .game_gameobject_pool()
         .pool_id()
         .find(pool_id)
-        .map(|p| p.max_active)
-        .unwrap_or(0);
-    for m in members.by_pool().filter(&pool_id) {
-        crate::GameObject::delete(ctx, pool_point_guid(m.point_id));
+        .map_or(0, |pool| pool.max_active)
+}
+
+fn pool_members(ctx: &ReducerContext, pool_id: u32) -> Vec<GameObjectPoolMember> {
+    ctx.db
+        .game_gameobject_pool_member()
+        .by_pool()
+        .filter(&pool_id)
+        .collect()
+}
+
+fn child_pools(ctx: &ReducerContext, pool_id: u32) -> Vec<GameObjectPoolLink> {
+    if pool_id == 0 {
+        return Vec::new();
     }
-    for _ in 0..max_active {
-        let pool_members: Vec<GameObjectPoolMember> = members.by_pool().filter(&pool_id).collect();
-        let active_point_guids: HashSet<u64> = pool_members
+    ctx.db
+        .game_gameobject_pool_link()
+        .by_parent()
+        .filter(&pool_id)
+        .collect()
+}
+
+/// The pool member an object stands for, and the scope its pool rolls in.
+fn pool_point_of(ctx: &ReducerContext, guid: u64) -> Option<(GameObjectPoolMember, PoolScope)> {
+    let members = ctx.db.game_gameobject_pool_member();
+    if let Some(point_id) = pool_point_id_of(guid) {
+        return members
+            .point_id()
+            .find(point_id)
+            .map(|member| (member, PoolScope::World));
+    }
+    let copy = ctx
+        .db
+        .game_gameobject_pool_copy()
+        .copy_id()
+        .find(pool_copy_id_of(guid)?)?;
+    let member = members.point_id().find(copy.point_id)?;
+    let scope = PoolScope::Instance {
+        instance_id: copy.instance_id,
+        map_id: member.map_id,
+    };
+    Some((member, scope))
+}
+
+/// The open-world pool member whose object `guid` is.
+pub(crate) fn world_pool_member(ctx: &ReducerContext, guid: u64) -> Option<GameObjectPoolMember> {
+    ctx.db
+        .game_gameobject_pool_member()
+        .point_id()
+        .find(pool_point_id_of(guid)?)
+}
+
+fn pool_is_active(ctx: &ReducerContext, scope: PoolScope, pool_id: u32, depth: u32) -> bool {
+    depth <= MAX_POOL_DEPTH
+        && (pool_members(ctx, pool_id)
             .iter()
-            .map(|m| pool_point_guid(m.point_id))
-            .filter(|guid| gos.guid().find(guid).is_some())
-            .collect();
-        let candidates =
-            eligible_pool_candidates(pool_members, &active_point_guids, &imported_maps);
-        if candidates.is_empty() {
-            break;
-        }
-        let weights: Vec<u32> = candidates.iter().map(|m| m.weight).collect();
-        let total: u32 = weights.iter().sum();
-        let roll = ctx.random::<u32>() % total;
-        let chosen =
-            &candidates[weighted_pick(&weights, roll).expect("roll < total ⇒ a band always hits")];
-        activate_point(ctx, chosen);
+            .any(|m| scope.active_guid(ctx, m.point_id).is_some())
+            || child_pools(ctx, pool_id)
+                .iter()
+                .any(|child| pool_is_active(ctx, scope, child.pool_id, depth + 1)))
+}
+
+fn despawn_point(ctx: &ReducerContext, scope: PoolScope, point_id: u64) {
+    let Some(guid) = scope.active_guid(ctx, point_id) else {
+        return;
+    };
+    crate::loot::reap_corpse_loot_family(ctx, guid);
+    close_loot_windows(ctx, guid);
+    ctx.db.game_gameobject_unlocked().go_guid().delete(guid);
+    ctx.db
+        .game_gameobject_trap_cooldown()
+        .go_guid()
+        .delete(guid);
+    GameObject::delete(ctx, guid);
+    if let Some(copy_id) = pool_copy_id_of(guid) {
+        ctx.db.game_gameobject_pool_copy().copy_id().delete(copy_id);
     }
 }
 
+fn despawn_pool(ctx: &ReducerContext, scope: PoolScope, pool_id: u32, depth: u32) {
+    if depth > MAX_POOL_DEPTH {
+        return;
+    }
+    for member in pool_members(ctx, pool_id) {
+        despawn_point(ctx, scope, member.point_id);
+    }
+    for child in child_pools(ctx, pool_id) {
+        despawn_pool(ctx, scope, child.pool_id, depth + 1);
+    }
+}
+
+/// When a rolled member shows; 0, never, for a chest without a respawn time.
+fn replacement_respawn_at(
+    ctx: &ReducerContext,
+    member: &GameObjectPoolMember,
+    instance_id: u64,
+) -> u64 {
+    let template = ctx
+        .db
+        .game_gameobject_template()
+        .entry()
+        .find(member.template_entry);
+    let delay = spawn_respawn_secs(
+        member.respawn_min_secs,
+        member.respawn_max_secs,
+        template
+            .as_ref()
+            .map_or(0, |template| template.respawn_secs),
+        ctx.random(),
+    );
+    let now = now_micros(ctx);
+    if template.is_some_and(|template| template.type_id == go_type::CHEST) {
+        chest_respawn_at(now, delay, instance_id).unwrap_or(0)
+    } else {
+        now + respawn_window_micros(delay)
+    }
+}
+
+fn activate_point(
+    ctx: &ReducerContext,
+    scope: PoolScope,
+    member: &GameObjectPoolMember,
+    timing: PoolTiming,
+) {
+    let instance_id = scope.instance_id();
+    let guid = match scope {
+        PoolScope::World => pool_point_guid(member.point_id),
+        PoolScope::Instance { instance_id, .. } => pool_copy_guid(
+            ctx.db
+                .game_gameobject_pool_copy()
+                .insert(GameObjectPoolCopy {
+                    copy_id: 0,
+                    instance_id,
+                    point_id: member.point_id,
+                })
+                .copy_id,
+        ),
+    };
+    // A replacement waits hidden and used, as a despawned object does.
+    let hidden_until = match timing {
+        PoolTiming::Now => None,
+        PoolTiming::AfterRespawnDelay => Some(replacement_respawn_at(ctx, member, instance_id)),
+    };
+    GameObject {
+        guid,
+        template_entry: member.template_entry,
+        map_id: member.map_id,
+        x: member.x,
+        y: member.y,
+        z: member.z,
+        orientation: member.orientation,
+        state: u8::from(hidden_until.is_some()),
+        created_at: crate::time::now(ctx),
+        respawn_at_micros: hidden_until.unwrap_or(0),
+        instance_id,
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
+        rotation_0: member.rotation_0,
+        rotation_1: member.rotation_1,
+        rotation_2: member.rotation_2,
+        rotation_3: member.rotation_3,
+        respawn_min_secs: member.respawn_min_secs,
+        respawn_max_secs: member.respawn_max_secs,
+        despawned: hidden_until.is_some(),
+    }
+    .insert(ctx);
+}
+
+fn active_points(
+    ctx: &ReducerContext,
+    scope: PoolScope,
+    members: &[GameObjectPoolMember],
+) -> HashSet<u64> {
+    members
+        .iter()
+        .filter(|m| scope.active_guid(ctx, m.point_id).is_some())
+        .map(|m| m.point_id)
+        .collect()
+}
+
+fn active_child_pools(
+    ctx: &ReducerContext,
+    scope: PoolScope,
+    children: &[GameObjectPoolLink],
+    left_out: Option<u32>,
+    depth: u32,
+) -> HashSet<u32> {
+    children
+        .iter()
+        .filter(|child| {
+            Some(child.pool_id) != left_out && pool_is_active(ctx, scope, child.pool_id, depth + 1)
+        })
+        .map(|child| child.pool_id)
+        .collect()
+}
+
+/// Rolls the pool's members up to its limit (vmangos `PoolGroup::SpawnObject`); returns how many.
+fn fill_members(
+    ctx: &ReducerContext,
+    scope: PoolScope,
+    pool_id: u32,
+    timing: PoolTiming,
+    fence: Option<&MapFence>,
+    depth: u32,
+) -> u32 {
+    let limit = pool_limit(ctx, pool_id) as usize;
+    let members = pool_members(ctx, pool_id);
+    let mut active = active_points(ctx, scope, &members);
+    // Child pools and members share the limit, as vmangos `mSpawnedPools` counts both.
+    let children_up = active_child_pools(ctx, scope, &child_pools(ctx, pool_id), None, depth).len();
+    let mut brought_up = 0;
+    while active.len() + children_up < limit {
+        let candidates = eligible_pool_candidates(&members, &active, |map_id| {
+            scope.admits_map(map_id) && fence.is_none_or(|fence| fence.admits(map_id))
+        });
+        let Some(chosen) = pick_weighted(ctx, &candidates, |m| m.weight) else {
+            break;
+        };
+        activate_point(ctx, scope, chosen, timing);
+        active.insert(chosen.point_id);
+        brought_up += 1;
+    }
+    brought_up
+}
+
+/// Rolls child pools, never `left_out`, up to the pool's limit; returns whether any came up.
+fn fill_children(
+    ctx: &ReducerContext,
+    scope: PoolScope,
+    pool_id: u32,
+    timing: PoolTiming,
+    fence: Option<&MapFence>,
+    left_out: Option<u32>,
+    depth: u32,
+) -> bool {
+    let children = child_pools(ctx, pool_id);
+    if children.is_empty() {
+        return false;
+    }
+    let limit = pool_limit(ctx, pool_id) as usize;
+    let members_up = active_points(ctx, scope, &pool_members(ctx, pool_id)).len();
+    let mut active = active_child_pools(ctx, scope, &children, left_out, depth);
+    let mut tried: HashSet<u32> = left_out.into_iter().collect();
+    let mut brought_up = false;
+    while active.len() + members_up < limit {
+        let candidates: Vec<&GameObjectPoolLink> = children
+            .iter()
+            .filter(|child| {
+                child.weight > 0
+                    && !active.contains(&child.pool_id)
+                    && !tried.contains(&child.pool_id)
+            })
+            .collect();
+        let Some(chosen) = pick_weighted(ctx, &candidates, |child| child.weight) else {
+            break;
+        };
+        let chosen = chosen.pool_id;
+        tried.insert(chosen);
+        if spawn_pool(ctx, scope, chosen, timing, fence, depth + 1) {
+            active.insert(chosen);
+            brought_up = true;
+        }
+    }
+    brought_up
+}
+
+/// Brings up child pools, then members (vmangos `PoolManager::SpawnPool`); whether any came up.
+fn spawn_pool(
+    ctx: &ReducerContext,
+    scope: PoolScope,
+    pool_id: u32,
+    timing: PoolTiming,
+    fence: Option<&MapFence>,
+    depth: u32,
+) -> bool {
+    if depth > MAX_POOL_DEPTH {
+        return false;
+    }
+    let children = fill_children(ctx, scope, pool_id, timing, fence, None, depth);
+    let members = fill_members(ctx, scope, pool_id, timing, fence, depth) > 0;
+    children || members
+}
+
+/// Takes a used object out of its pool and rolls a hidden replacement; `false` outside a pool.
+/// docs/schema.md#gameobject-pools gives the rule.
+pub(crate) fn pool_member_used_up(ctx: &ReducerContext, guid: u64) -> bool {
+    let Some((member, scope)) = pool_point_of(ctx, guid) else {
+        return false;
+    };
+    despawn_point(ctx, scope, member.point_id);
+    let parent = ctx
+        .db
+        .game_gameobject_pool_link()
+        .pool_id()
+        .find(member.pool_id)
+        .map(|link| link.parent_pool_id)
+        .filter(|&parent| parent != 0);
+    // vmangos UpdatePool: a nested pool hands its place to a free sibling.
+    let moved = parent.is_some_and(|parent| {
+        fill_children(
+            ctx,
+            scope,
+            parent,
+            PoolTiming::AfterRespawnDelay,
+            None,
+            Some(member.pool_id),
+            0,
+        )
+    });
+    if moved {
+        despawn_pool(ctx, scope, member.pool_id, 0);
+    } else {
+        // vmangos leaves a nested place empty with no sibling free: a Deliberate Deviation.
+        fill_members(
+            ctx,
+            scope,
+            member.pool_id,
+            PoolTiming::AfterRespawnDelay,
+            None,
+            0,
+        );
+    }
+    true
+}
+
+/// Deletes `gathered_guid` and rolls the pool's members up again at once.
+#[cfg(feature = "debug_reducers")]
+pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64) {
+    crate::GameObject::delete(ctx, gathered_guid);
+    fill_members(ctx, PoolScope::World, pool_id, PoolTiming::Now, None, 0);
+}
+
+fn arm_world_root(ctx: &ReducerContext, pool_id: u32, fence: &MapFence) {
+    despawn_pool(ctx, PoolScope::World, pool_id, 0);
+    spawn_pool(
+        ctx,
+        PoolScope::World,
+        pool_id,
+        PoolTiming::Now,
+        Some(fence),
+        0,
+    );
+}
+
+pub(crate) fn arm_pool(ctx: &ReducerContext, pool_id: u32) {
+    arm_world_root(ctx, pool_id, &MapFence::load(ctx));
+}
+
+fn is_world_root(ctx: &ReducerContext, pool_id: u32) -> bool {
+    ctx.db
+        .game_gameobject_pool_link()
+        .pool_id()
+        .find(pool_id)
+        .is_none_or(|link| link.parent_pool_id == 0)
+}
+
+// One roll call takes at most 250 pools; the importer groups them to bring up at most 250 objects.
+const MAX_POOLS_PER_ROLL: usize = 250;
+
+/// Rolls the listed top-level open-world pools afresh, as `;`-separated pool ids.
+#[reducer]
+pub fn arm_pools(ctx: &ReducerContext, packed: String) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let pool_ids = packed
+        .split(';')
+        .filter(|id| !id.is_empty())
+        .map(|id| id.parse::<u32>().map_err(|_| format!("bad pool id: {id}")))
+        .collect::<Result<Vec<u32>, String>>()?;
+    if pool_ids.len() > MAX_POOLS_PER_ROLL {
+        return Err(format!(
+            "{} pools are more than one call rolls ({MAX_POOLS_PER_ROLL})",
+            pool_ids.len()
+        ));
+    }
+    if let Some(pool_id) = pool_ids.iter().find(|&&id| !is_world_root(ctx, id)) {
+        return Err(format!("pool {pool_id} is not a top-level pool"));
+    }
+    let fence = MapFence::instanceable(ctx);
+    for pool_id in pool_ids {
+        arm_world_root(ctx, pool_id, &fence);
+    }
+    Ok(())
+}
+
+/// Rolls every top-level open-world pool afresh; a Realm with more than one call's worth refuses.
 #[reducer]
 pub fn arm_all_pools(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let pool_ids: Vec<u32> = ctx
+    let roots: Vec<u32> = ctx
         .db
         .game_gameobject_pool()
         .iter()
-        .map(|p| p.pool_id)
+        .map(|pool| pool.pool_id)
+        .filter(|&pool_id| is_world_root(ctx, pool_id))
         .collect();
-    for pid in pool_ids {
-        arm_pool(ctx, pid);
+    if roots.len() > MAX_POOLS_PER_ROLL {
+        return Err(format!(
+            "{} top-level pools are more than one call rolls; roll them with arm_pools in batches",
+            roots.len()
+        ));
+    }
+    let fence = MapFence::load(ctx);
+    for pool_id in roots {
+        arm_world_root(ctx, pool_id, &fence);
     }
     Ok(())
+}
+
+/// Rolls the top-level pools of `map_id` for a new Instance of that map.
+pub(crate) fn arm_instance_pools(ctx: &ReducerContext, map_id: u32, instance_id: u64) {
+    let scope = PoolScope::Instance {
+        instance_id,
+        map_id,
+    };
+    let roots: Vec<u32> = ctx
+        .db
+        .game_gameobject_pool_link()
+        .by_map()
+        .filter(&map_id)
+        .filter(|link| link.parent_pool_id == 0)
+        .map(|link| link.pool_id)
+        .collect();
+    for pool_id in roots {
+        spawn_pool(ctx, scope, pool_id, PoolTiming::Now, None, 0);
+    }
+}
+
+/// Forgets an Instance's pool objects; the caller deletes the objects themselves.
+pub(crate) fn forget_instance_pools(ctx: &ReducerContext, instance_id: u64) {
+    let copies = ctx.db.game_gameobject_pool_copy();
+    let copy_ids: Vec<u64> = copies
+        .by_instance_point()
+        .filter(instance_id)
+        .map(|copy| copy.copy_id)
+        .collect();
+    for copy_id in copy_ids {
+        copies.copy_id().delete(copy_id);
+    }
 }
 
 const RESPAWN_WINDOW_MICROS: u64 = 180_000_000;
@@ -638,9 +1130,12 @@ fn despawn_chest(ctx: &ReducerContext, mut chest: GameObject, template: &GameObj
         template.respawn_secs,
         ctx.random(),
     );
+    let respawn_at = chest_respawn_at(now_micros(ctx), delay, chest.instance_id);
+    if respawn_at.is_some() && pool_member_used_up(ctx, chest.guid) {
+        return;
+    }
     chest.despawned = true;
-    chest.respawn_at_micros =
-        chest_respawn_at(now_micros(ctx), delay, chest.instance_id).unwrap_or(0);
+    chest.respawn_at_micros = respawn_at.unwrap_or(0);
     chest.update(ctx);
 }
 
@@ -708,27 +1203,17 @@ pub(crate) fn respawn_timer_elapsed(ctx: &ReducerContext, go_guid: u64) {
     }
 }
 
-/// Shows the object again closed and unused; a pooled object respawns as another roll of its pool.
+/// Shows the object again closed and unused.
 pub(crate) fn respawn(ctx: &ReducerContext, mut object: GameObject) {
     crate::loot::reap_corpse_loot_family(ctx, object.guid);
     ctx.db
         .game_gameobject_unlocked()
         .go_guid()
         .delete(object.guid);
-    match pool_point_id_of(object.guid).and_then(|point_id| {
-        ctx.db
-            .game_gameobject_pool_member()
-            .point_id()
-            .find(point_id)
-    }) {
-        Some(member) => reroll_pool(ctx, member.pool_id, object.guid),
-        None => {
-            object.state = 0;
-            object.despawned = false;
-            object.respawn_at_micros = 0;
-            object.update(ctx);
-        }
-    }
+    object.state = 0;
+    object.despawned = false;
+    object.respawn_at_micros = 0;
+    object.update(ctx);
 }
 
 /// Stamps an opened or despawned world chest that has no respawn time, so the respawn pass can
@@ -974,32 +1459,17 @@ fn use_resolved_gameobject(
                 tmpl.data1,
                 tmpl.gather_gray,
             );
-            match pool_point_id_of(go.guid)
-                .and_then(|pid| ctx.db.game_gameobject_pool_member().point_id().find(pid))
-            {
-                Some(member)
-                    if !ctx
-                        .db
-                        .game_gameobject_pool()
-                        .pool_id()
-                        .find(member.pool_id)
-                        .map(|p| p.in_place)
-                        .unwrap_or(false) =>
-                {
-                    reroll_pool(ctx, member.pool_id, go.guid);
-                }
-                _ => {
-                    let delay = spawn_respawn_secs(
-                        go.respawn_min_secs,
-                        go.respawn_max_secs,
-                        tmpl.respawn_secs,
-                        ctx.random(),
-                    );
-                    go.state = 1;
-                    go.despawned = true;
-                    go.respawn_at_micros = now_micros(ctx) + respawn_window_micros(delay);
-                    go.update(ctx);
-                }
+            if !pool_member_used_up(ctx, go.guid) {
+                let delay = spawn_respawn_secs(
+                    go.respawn_min_secs,
+                    go.respawn_max_secs,
+                    tmpl.respawn_secs,
+                    ctx.random(),
+                );
+                go.state = 1;
+                go.despawned = true;
+                go.respawn_at_micros = now_micros(ctx) + respawn_window_micros(delay);
+                go.update(ctx);
             }
         }
         go_type::DOOR | go_type::BUTTON => {
@@ -1089,6 +1559,7 @@ pub(crate) fn despawn_from_relay(ctx: &ReducerContext, go_guid: u64) -> Result<(
         return Err(format!("relay gameobject {go_guid} is missing"));
     }
     crate::loot::reap_corpse_loot_family(ctx, go_guid);
+    close_loot_windows(ctx, go_guid);
     ctx.db.game_gameobject_unlocked().go_guid().delete(go_guid);
     ctx.db
         .game_gameobject_trap_cooldown()
@@ -1229,7 +1700,13 @@ pub fn import_gameobjects(ctx: &ReducerContext, packed: String) -> Result<(), St
     for go_guid in picked {
         unlocked.go_guid().delete(go_guid);
     }
-    if load_go_batch(ctx, &packed)? == 0 {
+    let pool_copies = ctx.db.game_gameobject_pool_copy();
+    let copy_ids: Vec<u64> = pool_copies.iter().map(|copy| copy.copy_id).collect();
+    for copy_id in copy_ids {
+        pool_copies.copy_id().delete(copy_id);
+    }
+    // A slice whose every placement is pooled sends an empty first batch to clear the old objects.
+    if load_go_batch(ctx, &packed)? == 0 && ctx.db.game_gameobject_pool_member().count() == 0 {
         return Err("import payload was empty".to_string());
     }
     Ok(())
@@ -1506,6 +1983,12 @@ mod tests {
                 z: 0.0,
                 orientation: 0.0,
                 weight,
+                rotation_0: 0.0,
+                rotation_1: 0.0,
+                rotation_2: 0.0,
+                rotation_3: 0.0,
+                respawn_min_secs: 0,
+                respawn_max_secs: 0,
             }
         }
         let live_map: HashSet<u32> = [1].into_iter().collect();
@@ -1515,8 +1998,10 @@ mod tests {
             member(3, 0, 5),
             member(4, 1, 5),
         ];
-        let active_point_guids: HashSet<u64> = [pool_point_guid(4)].into_iter().collect();
-        let out = eligible_pool_candidates(members, &active_point_guids, &live_map);
+        let active_points: HashSet<u64> = [4].into_iter().collect();
+        let out = eligible_pool_candidates(&members, &active_points, |map_id| {
+            pool_member_map_is_live(map_id, &live_map)
+        });
         let ids: Vec<u64> = out.iter().map(|m| m.point_id).collect();
         assert_eq!(
             ids,
@@ -1567,12 +2052,12 @@ mod tests {
     }
 
     #[test]
-    fn gather_deplete_routes_pooled_to_reroll_and_standalone_to_in_place() {
+    fn gather_deplete_routes_pooled_to_its_pool_and_standalone_to_in_place() {
         let pooled = pool_point_guid(1_000_000);
         assert_eq!(
             pool_point_id_of(pooled),
             Some(1_000_000),
-            "pooled point → consult the pool's in_place"
+            "pooled point → its pool rolls the replacement"
         );
         let standalone = gameobject_guid(50102);
         assert_eq!(
@@ -1657,5 +2142,22 @@ mod tests {
         assert_eq!(pool_point_id_of(copy_guid), None);
         const { assert!(GO_COPY_BAND > 0xFF_FFFF) };
         assert_ne!(copy_guid, pool_point_guid(1));
+    }
+
+    #[test]
+    fn a_pool_members_instance_copy_guid_is_disjoint_from_points_and_plain_copies() {
+        let pool_copy = pool_copy_guid(7);
+        assert_eq!(pool_copy_id_of(pool_copy), Some(7));
+        assert_eq!(pool_point_id_of(pool_copy), None);
+        assert_eq!(pool_copy_id_of(pool_point_guid(7)), None);
+        assert_eq!(pool_copy_id_of(gameobject_guid(GO_COPY_BAND | 7)), None);
+        assert_ne!(pool_copy, gameobject_guid(GO_COPY_BAND | 7));
+    }
+
+    #[test]
+    fn an_open_world_point_never_reaches_the_instance_copy_band() {
+        let point = (1 << 40) | 3_998_642;
+        assert_eq!(pool_point_id_of(pool_point_guid(point)), Some(point));
+        assert_eq!(pool_point_guid(point) & GO_COPY_BAND, 0);
     }
 }

@@ -247,7 +247,8 @@ _Avoid_: editor API, world editor reducers
 
 **Authored Spawn**:
 An instance-zero creature or gameobject spawn row that no Package, population copy, Instance or
-pool owns. Spawn edits through the Operator Content API change only an Authored Spawn.
+pool owns. Spawn edits through the Operator Content API change only an Authored Spawn, except that
+an update of an object a pool rolled moves that pool member.
 
 **Operator Spawn Range**:
 The creature and gameobject spawn identifiers the Operator Content API allocates. No import and no

@@ -1,3 +1,5 @@
+#[path = "world_import_gameobject_pools.rs"]
+mod gameobject_pools;
 #[path = "world_import_trainers.rs"]
 mod trainers;
 #[path = "world_import_creatures.rs"]
@@ -1383,6 +1385,7 @@ pub(crate) struct DumpPlan {
     pub(crate) spawn_row_count: usize,
     pub(crate) go_batches: Vec<String>,
     pub(crate) go_row_count: usize,
+    pub(crate) pool_roll_batches: Vec<String>,
     pub(crate) eventai_definition_batches: Vec<String>,
     pub(crate) eventai_relay_definition_batches: Vec<String>,
     pub(crate) eventai_definition_count: u64,
@@ -1410,6 +1413,9 @@ impl DumpPlan {
                     },
                     batch.as_str(),
                 ));
+            }
+            for batch in &self.pool_roll_batches {
+                batches.push(("arm_pools", batch.as_str()));
             }
         }
         if family_active(args, "creature-ai") {
@@ -1470,11 +1476,38 @@ struct GoRitual {
     casters_grouped: bool,
 }
 
+/// One source `gameobject` row the import keeps.
+struct GoPlacement {
+    db_guid: u32,
+    entry: u64,
+    map: i64,
+    position: [f64; 4],
+    initial_state: u8,
+    rotation: [f64; 4],
+    respawn: (u32, u32),
+}
+
+impl GoPlacement {
+    /// The `import_gameobjects` row of a static spawn.
+    fn packed_row(&self) -> String {
+        let [x, y, z, o] = self.position;
+        let [rot0, rot1, rot2, rot3] = self.rotation;
+        let (respawn_min, respawn_max) = self.respawn;
+        format!(
+            "{g},{id},{m},{x},{y},{z},{o},{state},{rot0},{rot1},{rot2},{rot3},{respawn_min},{respawn_max}",
+            g = go_guid(self.db_guid),
+            id = self.entry,
+            m = self.map,
+            state = self.initial_state
+        )
+    }
+}
+
 struct GameobjectSpawns {
     go_meta: std::collections::HashMap<u64, GoMeta>,
     dropped_type25: Vec<u64>,
     goober_entries: std::collections::HashSet<u64>,
-    go_packed_rows: Vec<String>,
+    placements: Vec<GoPlacement>,
     used_go: std::collections::HashSet<u64>,
     // An entry's smallest positive vmangos spawntimesecsmin, for a spawn without its own range.
     respawn_secs: std::collections::HashMap<u64, u32>,
@@ -1591,7 +1624,7 @@ fn collect_gameobject_spawns(
         .filter(|(_, m)| m.stored_type == GO_GOOBER)
         .map(|(&e, _)| e)
         .collect();
-    let mut go_packed_rows: Vec<String> = Vec::new();
+    let mut placements: Vec<GoPlacement> = Vec::new();
     let mut used_go: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut respawn_secs: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
     let mut go_slice_counts = vec![0usize; scope.bounded_slices.len()];
@@ -1631,11 +1664,15 @@ fn collect_gameobject_spawns(
         let spawn_secs = row.number::<i64>(go::SPAWN_TIME_SECS_MIN)?;
         let (respawn_min, respawn_max) =
             spawn_respawn_range(spawn_secs, row.number::<i64>(go::SPAWN_TIME_SECS_MAX)?);
-        go_packed_rows.push(format!(
-            "{g},{id},{m},{x},{y},{z},{o},{initial_state},{rot0},{rot1},{rot2},{rot3},{respawn_min},{respawn_max}",
-            g = go_guid(db_guid),
-            m = map
-        ));
+        placements.push(GoPlacement {
+            db_guid,
+            entry: id,
+            map,
+            position: [x, y, z, o],
+            initial_state,
+            rotation: [rot0, rot1, rot2, rot3],
+            respawn: (respawn_min, respawn_max),
+        });
         for (index, slice) in scope.bounded_slices.iter().enumerate() {
             if slice.contains(map, x, y, z) {
                 go_slice_counts[index] += 1;
@@ -1668,7 +1705,7 @@ fn collect_gameobject_spawns(
         go_meta,
         dropped_type25,
         goober_entries,
-        go_packed_rows,
+        placements,
         used_go,
         respawn_secs,
     })
@@ -1681,7 +1718,7 @@ fn gameobject_template_rows(
     let GameobjectSpawns {
         go_meta,
         dropped_type25,
-        go_packed_rows,
+        placements,
         respawn_secs,
         ..
     } = spawns;
@@ -1738,7 +1775,7 @@ fn gameobject_template_rows(
     eprintln!(
         "gameobject type coverage ({} templates, {} spawns):",
         go_template_rows.len(),
-        go_packed_rows.len()
+        placements.len()
     );
     for (&type_id, &count) in &go_type_histogram {
         if type_id == GO_QUESTGIVER {
@@ -2371,19 +2408,32 @@ fn transport_statements(dump: &impl TableRows, client: Option<&str>) -> Result<V
 
 fn vmangos_gameobjects_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
     let spawns = collect_gameobject_spawns(dump, &args.scope)?;
+    let pools = gameobject_pools::collect(dump, &spawns.placements)?;
     let templates = gameobject_template_rows(&spawns, &Default::default())?;
     let mut stmts = Vec::new();
     push_gameobject_statements(&mut stmts, &templates);
+    pools.push_statements(&mut stmts);
     stmts.extend(transport_statements(dump, args.dbc.as_deref())?);
-    let count = insert_row_count(&stmts) + spawns.go_packed_rows.len() as u64;
+    let static_rows: Vec<String> = spawns
+        .placements
+        .iter()
+        .filter(|placement| !pools.owns(placement.db_guid))
+        .map(GoPlacement::packed_row)
+        .collect();
+    let count = insert_row_count(&stmts) + static_rows.len() as u64;
+    let mut go_batches: Vec<String> = static_rows
+        .chunks(SPAWN_BATCH)
+        .map(|rows| rows.join(";"))
+        .collect();
+    // The first batch clears the old objects, so it runs even when every placement is pooled.
+    if go_batches.is_empty() {
+        go_batches.push(String::new());
+    }
     Ok(DumpPlan {
         stmts,
-        go_row_count: spawns.go_packed_rows.len(),
-        go_batches: spawns
-            .go_packed_rows
-            .chunks(SPAWN_BATCH)
-            .map(|rows| rows.join(";"))
-            .collect(),
+        go_row_count: static_rows.len(),
+        go_batches,
+        pool_roll_batches: pools.roll_batches,
         stamps: vec![(lyracore_package_delta::GAMEOBJECT_FAMILY, count)],
         world_source_manifest: Some(serde_json::to_string_pretty(&gameobject_findings(
             dump, args,
@@ -2428,13 +2478,11 @@ fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
             row.number::<f32>("visibility_mod")? != 0.0,
         );
     }
-    for (table, code) in [
-        ("game_event_gameobject", "gameobjects.game-event"),
-        ("pool_gameobject", "gameobjects.pool"),
-    ] {
-        for row in dump.rows(table)?.iter() {
-            add(code, placed.contains(&row.number::<u32>("guid")?));
-        }
+    for row in dump.rows("game_event_gameobject")?.iter() {
+        add(
+            "gameobjects.game-event",
+            placed.contains(&row.number::<u32>("guid")?),
+        );
     }
     for row in dump.rows("gameobject_template")?.iter() {
         let entry = row.number::<u64>("entry")?;
@@ -2582,6 +2630,7 @@ fn combined_vmangos_plan(source: &impl TableRows, args: &WorldImportArgs) -> Res
         combined.spawn_row_count += plan.spawn_row_count;
         combined.go_batches.extend(plan.go_batches);
         combined.go_row_count += plan.go_row_count;
+        combined.pool_roll_batches.extend(plan.pool_roll_batches);
         combined
             .eventai_definition_batches
             .extend(plan.eventai_definition_batches);
