@@ -1,11 +1,12 @@
 use std::sync::Barrier;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{ensure, Context, Result};
 use lyracore_test_support::{NativePacket, ReducerConnection, Standalone};
 use serde_json::json;
 use wire_client::compare::Difference;
 use wire_client::decode::{decode, Packet};
+use wire_client::rolls::PUBLIC_SEEDS;
 use wire_client::scenario::{FixtureVerb, Scenario};
 
 use super::ranged_swing_spec::{self as spec, Counts, Flight, RangedSwing};
@@ -336,6 +337,12 @@ fn collect(
         {
             break;
         }
+        for character in &mut characters {
+            character
+                .connection
+                .keep_alive()
+                .map_err(anyhow::Error::msg)?;
+        }
         let rows = advance_and_drain(&mut receiver, shooter.ticks_per_shot)?;
         for character in &mut characters {
             let packets = own_packets(character, &rows)?;
@@ -431,4 +438,51 @@ pub(super) fn merge_seed(scenario: &Scenario, seed: u64) -> Result<Vec<Differenc
         differences.extend(measurement.merge_seed(scenario, seed)?);
     }
     Ok(differences)
+}
+
+// SpacetimeDB 2.14 drops a WebSocket 40 s after the last frame from a client that reads nothing.
+const PAST_IDLE_TEARDOWN: Duration = Duration::from_secs(45);
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_shooter_whose_connection_only_waits_keeps_its_auto_repeat_past_the_idle_teardown() -> Result<()>
+{
+    let golden = wire_client::catalogue::get("white_melee_outcomes")?;
+    let mut shard = Standalone::start("ranged-swing-idle-connection");
+    shard.publish_module();
+    let shard_name = shard.shard_name().to_string();
+    let (mut receiver, mut characters) = prepare(
+        &AUTO_SHOT,
+        &shard,
+        &shard_name,
+        golden.scenario(),
+        (PUBLIC_SEEDS[0], 0, 0),
+    )?;
+    let waiting = Instant::now();
+    while waiting.elapsed() < PAST_IDLE_TEARDOWN {
+        receiver.keep_alive().map_err(anyhow::Error::msg)?;
+        for character in &mut characters {
+            character
+                .connection
+                .keep_alive()
+                .map_err(anyhow::Error::msg)?;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    for _ in 0..2 {
+        let rows = advance_and_drain(&mut receiver, AUTO_SHOT.ticks_per_shot)?;
+        for character in &mut characters {
+            let packets = own_packets(character, &rows)?;
+            character.observe(&AUTO_SHOT, &packets, u32::MAX)?;
+        }
+    }
+    let shots: Vec<_> = characters
+        .iter()
+        .map(|character| character.counts.trials())
+        .collect();
+    ensure!(
+        shots.iter().all(|shots| *shots > 0),
+        "a shooter stopped while its connection waited: {shots:?}"
+    );
+    Ok(())
 }
