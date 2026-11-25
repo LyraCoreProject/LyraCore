@@ -24,7 +24,7 @@ impl TickCadence {
     pub(crate) fn of_cycle(cycle: u64, period_micros: i64) -> Self {
         let due = |every_micros: i64| {
             let every_n = (every_micros / period_micros.max(1)).max(1) as u64;
-            cycle % every_n == 0
+            cycle.is_multiple_of(every_n)
         };
         if due(SENSE_PERIOD_MICROS) {
             TickCadence::Sense
