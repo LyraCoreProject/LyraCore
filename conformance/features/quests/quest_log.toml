@@ -11,6 +11,7 @@ deliberate_deviations = []
 prerequisites = []
 tests = [
     { path = "module/tests/native_conformance.rs", function = "quest_slots_survive_reconnect_and_reuse_only_the_abandoned_slot", rung = "durable_module" },
+    { path = "module/tests/conformance/quest_turn_in.rs", function = "abandoning_a_quest_whose_source_item_is_worn_removes_the_item_and_its_stats", rung = "durable_module" },
 ]
 
 [vmangos]
