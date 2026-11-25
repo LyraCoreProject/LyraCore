@@ -18,8 +18,14 @@ const ROOT_A: u32 = 5_090_901;
 const ROOT_B: u32 = 5_090_902;
 const SHADOWMELD: u32 = 5_090_903;
 const STEALTH: u32 = 5_090_904;
+const FROST_NOVA: u32 = 5_090_905;
+const DIVINE_SHIELD: u32 = 5_090_906;
+// Source aura SPELL_AURA_SCHOOL_IMMUNITY in an immunity effect's p1: docs/schema.md#damage-shields.
+const SCHOOL_IMMUNITY: i32 = 39;
+// A 1.5 s fall costs about 14.8% of maximum health, so a full-health Character survives it.
+const SURVIVABLE_FALL_MS: u32 = 1_500;
 
-// aura_interrupt bit 1 is break-on-move, mapped from the vanilla movement interrupt flag.
+// aura_interrupt bit 0 is break-on-damage and bit 1 break-on-move, from the vanilla interrupt flags.
 fn fixture(name: &str) -> (Standalone, [f32; 3]) {
     let mut shard = Standalone::start(name);
     shard.publish_module();
@@ -34,6 +40,7 @@ fn fixture(name: &str) -> (Standalone, [f32; 3]) {
         (ROOT_B, a_control, m_root, 0),
         (SHADOWMELD, a_stealth, 0, 2),
         (STEALTH, a_stealth, 0, 0),
+        (FROST_NOVA, a_control, m_root, 1),
     ] {
         shard.insert_row(
             "game_spell",
@@ -176,6 +183,74 @@ fn moving_ends_shadowmeld_but_keeps_stealth() {
     cast(&shard, STEALTH);
     send_move(&shard, START_FORWARD, FORWARD, [x + 6.0, y, z], 1.0, 30);
     assert_eq!(auras(&shard, STEALTH), 1, "Rogue Stealth allows movement");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_damaging_fall_breaks_an_aura_that_damage_breaks() {
+    let (shard, [x, y, z]) = fixture("movement-fall-breaks-aura");
+    let full_health = health(&shard);
+    cast(&shard, FROST_NOVA);
+
+    send_move(&shard, FALL_LAND, &landing_body(0), [x, y, z], 1.0, 10);
+    assert_eq!(auras(&shard, FROST_NOVA), 1, "a harmless landing keeps it");
+
+    send_move(
+        &shard,
+        FALL_LAND,
+        &landing_body(SURVIVABLE_FALL_MS),
+        [x, y, z],
+        1.0,
+        20,
+    );
+    let hurt = health(&shard);
+    assert!(
+        0 < hurt && hurt < full_health,
+        "the fall hurts but does not kill"
+    );
+    assert_eq!(auras(&shard, FROST_NOVA), 0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_fall_does_nothing_to_a_character_immune_to_physical_damage() {
+    let (shard, [x, y, z]) = fixture("movement-fall-immune");
+    let full_health = health(&shard);
+    cast(&shard, FROST_NOVA);
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &DIVINE_SHIELD),
+            ("name", &"Fixture Divine Shield"),
+            ("duration_ms", &600000),
+            ("school_mask", &2),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(DIVINE_SHIELD, 0)),
+            ("spell_id", &DIVINE_SHIELD),
+            ("kind", &lyracore_shared::spell::taxonomy::A_IMMUNITY),
+            ("p_0", &0x7F),
+            ("p_0_kind", &lyracore_shared::spell::taxonomy::P_SCHOOL_MASK),
+            ("p_1", &SCHOOL_IMMUNITY),
+        ],
+    );
+    cast(&shard, DIVINE_SHIELD);
+    assert_eq!(auras(&shard, DIVINE_SHIELD), 1, "the immunity must be up");
+
+    send_move(
+        &shard,
+        FALL_LAND,
+        &landing_body(SURVIVABLE_FALL_MS),
+        [x, y, z],
+        1.0,
+        10,
+    );
+
+    assert_eq!(health(&shard), full_health);
+    assert_eq!(auras(&shard, FROST_NOVA), 1, "no damage keeps the root");
 }
 
 #[test]

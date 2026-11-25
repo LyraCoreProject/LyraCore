@@ -367,6 +367,76 @@ path = "module/tests/interrupt_cast.rs"
 function = "damage_leaves_a_cast_without_the_pushback_flag_on_time"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "damage_pushes_a_cast_back_a_second_and_then_less_with_each_hit"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "a_hit_on_a_cast_with_its_full_cast_time_left_pushes_it_back_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "a_hit_a_shield_absorbs_whole_cancels_a_cast_that_damage_cancels"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "a_hit_a_shield_absorbs_whole_pushes_back_no_cast"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "a_hit_a_shield_absorbs_whole_breaks_an_aura_that_damage_breaks"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/movement_interrupts.rs"
+function = "a_damaging_fall_breaks_an_aura_that_damage_breaks"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/movement_interrupts.rs"
+function = "a_fall_does_nothing_to_a_character_immune_to_physical_damage"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "a_hit_a_shield_absorbs_whole_leaves_a_root_whose_spell_has_proc_flags"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/fatigue.rs"
+function = "exhaustion_damage_breaks_an_aura_that_damage_breaks"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/character_damage_death.rs"
+function = "a_fall_that_leaves_a_duelist_at_one_health_ends_the_duel"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/spell/control.rs"
+function = "each_hit_on_a_long_cast_pushes_it_back_by_the_next_delay_with_no_limit_on_hits"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/control.rs"
+function = "a_pushback_never_leaves_more_than_the_full_cast_time"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/tables.rs"
+function = "a_hit_absorbed_whole_cancels_hearthstone_but_not_fireball_or_drain_life"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "a_flag_aura_keeps_its_source_aura_in_p1"
+rung = "unit"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/SpellHandler.cpp"
@@ -484,25 +554,19 @@ symbol = "select_targets"
 evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::IsTargetableBy (L6115-L6177) refuses these flags for every harmful target, single or area, through Object.cpp WorldObject::IsValidAttackTarget. module/src/combat/area_target.rs targetable_by applies them to area spells only."
 
 [[known_gaps]]
-description = "Concentration Aura and Barkskin give no chance to resist pushback. vmangos adds the SPELL_AURA_RESIST_PUSHBACK (149) amount to the resist chance of a cast's pushback and a channel's delay; the importer keeps that Aura as a flag without its id, so only the SPELLMOD_NOT_LOSE_CASTING_TIME talents count."
+description = "A damage-breakable Aura whose spell has proc flags, such as a root or a fear, never breaks under a hit that a shield absorbs whole. vmangos skips it in the absorbed branch too, but can still remove it through its proc: a fear breaks with a chance from the damage before the absorb."
 path = "module/src/spell/control.rs"
-symbol = "pushback_on_damage"
-evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::Delayed and Spell::DelayedChannel add GetTotalAuraModifier(SPELL_AURA_RESIST_PUSHBACK); spell_template rows 19746 and 22812 carry aura 149, which importer/src/spell_kind.rs aura_mod_to_kind maps to A_FLAG."
+symbol = "break_auras_on_absorbed_hit"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::DealDamage calls RemoveAurasWithInterruptFlags(AURA_INTERRUPT_DAMAGE_CANCELS, ..., checkProcFlags = true), which skips a spell with procFlags. UnitAuraProcHandler.cpp HandleRemoveByDamageChanceProc (roots, aura 26) rolls amount / (25 * level - 150), so 0% at zero damage, and HandleRemoveFearByDamageChanceProc rolls on originalAmount. The Module runs no proc pass for an absorbed spell hit."
 
 [[known_gaps]]
-description = "Damage pushes a cast back 500 ms at most twice. vmangos pushes it back 1000 ms, then 200 ms less for each later hit down to 200 ms, with no limit on the count, and never past the cast's full cast time."
+description = "Damage breaks a damage-breakable Aura of the same spell that deals it. vmangos exempts the damaging spell's own Aura, landed or absorbed."
 path = "module/src/spell/control.rs"
-symbol = "CAST_PUSHBACK_MS"
-evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::Delayed takes GetNextDelayAtDamageMsTime and caps m_timer at m_casttime. The Module's pending cast does not keep its full cast time, so it cannot apply the cap."
+symbol = "break_flagged_auras"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::DealDamage passes spellProto->Id as the except argument of RemoveAurasWithInterruptFlags in both the absorbed and the landed branch."
 
 [[known_gaps]]
-description = "Falling, drowning and fatigue damage neither push back a cast, cancel a channel whose flags say damage cancels it, nor end an Aura that damage breaks. vmangos deals environmental damage through DealDamage as SELF_DAMAGE, which does all three."
-path = "module/src/world.rs"
-symbol = "resolve_environmental_damage"
-evidence = "Source reading, not measured. At d9173eca, Player.cpp Player::EnvironmentalDamage calls DealDamage(this, damage, nullptr, SELF_DAMAGE, ...). The Module's fall, breath and fatigue damage change health directly and never reach break_auras_on_damage or pushback_on_damage."
-
-[[known_gaps]]
-description = "A direct hit that a shield absorbs completely does not cancel a Character's cast whose spell has SPELL_INTERRUPT_FLAG_DAMAGE_CANCELS, such as Hearthstone or a mount, and does not end an Aura that damage breaks. vmangos does both for an absorbed non-DOT hit."
+description = "A spell hit that a shield absorbs whole puts neither the attacker nor the target into combat. vmangos does for a hit that is not from the unit itself, a proc, a damage shield or a DOT that is not channelled."
 path = "module/src/combat/damage.rs"
-symbol = "apply_hit"
-evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::DealDamage, for damage 0 with cleanDamage->absorb, calls RemoveAurasWithInterruptFlags(AURA_INTERRUPT_DAMAGE_CANCELS) and InterruptSpellsWithInterruptFlags(SPELL_INTERRUPT_FLAG_DAMAGE_CANCELS). The Module's deal_damage and apply_hit return before break_auras_on_damage and pushback_on_damage when the landed amount is 0."
+symbol = "deal_damage"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::DealDamage calls SetInCombatWithAggressor and SetInCombatWithVictim in the absorbed branch when ShouldEnterCombat holds. The Module's deal_damage calls enter_combat only for damage that lands."

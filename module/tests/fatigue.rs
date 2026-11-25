@@ -13,6 +13,9 @@ const DEEP_WATER: (f32, f32, f32) = (-8900.0, -132.0, -1.0);
 const SAFE_WATER: (f32, f32, f32) = (-9000.0, -132.0, -1.0);
 
 const STEALTH: u32 = 5_116_201;
+const FROST_NOVA: u32 = 5_116_202;
+// AURA_INTERRUPT_DAMAGE_CANCELS, kept in `aura_interrupt` bit 0.
+const BREAKS_ON_DAMAGE: u16 = 0x1;
 
 const FATIGUE_DRAIN: u8 = 3;
 const FATIGUE_STOP: u8 = 5;
@@ -186,4 +189,49 @@ fn exhaustion_damage_ends_stealth() {
         "the tick exhausts the Character"
     );
     assert_eq!(stealth_auras(), 0, "exhaustion damage ends Stealth");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn exhaustion_damage_breaks_an_aura_that_damage_breaks() {
+    let shard = fixture("fatigue-breaks-aura");
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &FROST_NOVA),
+            ("name", &"Fixture Frost Nova"),
+            ("duration_ms", &600000),
+            ("school_mask", &1),
+            ("aura_interrupt", &BREAKS_ON_DAMAGE),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(FROST_NOVA, 0)),
+            ("spell_id", &FROST_NOVA),
+            ("kind", &lyracore_shared::spell::taxonomy::A_CONTROL),
+            ("p_0", &lyracore_shared::spell::taxonomy::M_ROOT),
+            ("p_0_kind", &lyracore_shared::spell::taxonomy::P_MECHANIC),
+        ],
+    );
+    move_to(&shard, DEEP_WATER, 1000);
+    shard.assert_call("debug_force_cast", &[PLAYER, &FROST_NOVA.to_string()]);
+    let roots = || {
+        shard
+            .query_rows(&format!(
+                "SELECT id FROM game_aura WHERE target_guid = {PLAYER} AND spell_id = {FROST_NOVA}"
+            ))
+            .len()
+    };
+    assert_eq!(roots(), 1);
+
+    let max_health: u32 = number(&entity(&shard), "max_health");
+    exhaust_now(&shard);
+    assert!(
+        poll_until(POLL_TIMEOUT, || number::<u32>(&entity(&shard), "health")
+            < max_health),
+        "the tick exhausts the Character"
+    );
+    assert_eq!(roots(), 0, "exhaustion damage breaks the root");
 }

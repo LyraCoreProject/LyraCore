@@ -44,11 +44,12 @@ pub(crate) use control::breaks_on_damage;
 #[cfg(test)]
 pub(crate) use control::cc_blocks;
 pub(crate) use control::{
-    aura_survives_death, break_auras_on_damage, break_auras_on_move, break_channel, buff_status,
-    cancel_cast_attempt, control_status, effect_is_harmful, expire_cast_attempt, fear_source,
-    has_aura, interrupt_cast, interrupt_cast_and_lock, is_action_blocked, is_disarmed,
-    is_immune_to_effect, is_immune_to_spell, is_movement_blocked, is_non_melee_spell_casting,
-    is_rooted, is_self_movement_suppressed, is_stunned, pushback_on_damage, refuses_helpful_spell,
+    aura_survives_death, break_auras_on_absorbed_hit, break_auras_on_damage, break_auras_on_move,
+    break_channel, buff_status, cancel_cast_attempt, control_status, effect_is_harmful,
+    expire_cast_attempt, fear_source, has_aura, interrupt_cast, interrupt_cast_and_lock,
+    interrupt_on_absorbed_hit, is_action_blocked, is_disarmed, is_immune_to_effect,
+    is_immune_to_spell, is_movement_blocked, is_non_melee_spell_casting, is_rooted,
+    is_self_movement_suppressed, is_stunned, pushback_on_damage, refuses_helpful_spell,
     remove_auras_on_death, spell_control, spell_is_harmful,
 };
 pub use control::{BuffStatus, BuffUnavailableReason, ControlReadError, UnitControl};

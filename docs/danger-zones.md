@@ -783,6 +783,24 @@ A Package Delta written before this revision has no interrupt fields, so its new
 defaults. Emit the Package again from a Base Snapshot of this revision, or set the fields, before
 you apply it.
 
+### Damage reaction migration
+
+`game_pending_cast` gains the END-appended `cast_time_ms` (default 0), the full cast time that caps a
+pushback. A cast in flight at the publish keeps 0, which caps nothing, so a hit can push it back past
+its full cast time before it completes. No repair is needed.
+
+Reimport `spell` from this revision straight after the publish, then call
+`debug_repair_after_publish`. The reimport makes an `A_FLAG` effect keep its source aura id in `p1`,
+and the repair writes that `p1` into each live Aura of the effect. After both steps, live
+Concentration Aura, Barkskin and the other `SPELL_AURA_RESIST_PUSHBACK` Auras give their chance to
+resist a pushback; until then they give none.
+
+Four changes apply at publish. A cast pushback follows the vmangos steps instead of 500 ms twice. A
+hit absorbed whole breaks the Auras that damage breaks and cancels a Hearthstone or mount cast.
+Falling, drowning and fatigue damage break those Auras, cancel or push back a cast and end a Duel at
+1 health; a Character immune to physical damage takes none of it. The `on_damage_taken` hook now also fires for a hit absorbed whole, for the hit that ends
+a Duel, and for environmental damage, which reports attacker 0.
+
 ### Area target cap migration
 
 `game_spell.max_affected_targets` holds the source `MaxAffectedTargets`. It is END-appended with

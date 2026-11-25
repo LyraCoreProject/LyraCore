@@ -1,5 +1,6 @@
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
+use crate::combat::EnvironmentalHit;
 use crate::{game_world_entity, world::WorldEntity};
 
 const FULL_AIR_MICROS: i64 = 60_000_000;
@@ -183,48 +184,24 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
         }
         states.entity_guid().update(state);
 
-        if advanced.expired_ticks == 0 {
-            continue;
-        }
-        let mut health = entity.health;
-        let mut died = false;
-        let mut hits = 0;
         for _ in 0..advanced.expired_ticks {
-            let nominal = drowning_damage(entity.max_health);
-            let actual = nominal.min(health);
-            let (_, lethal) = crate::world::resolve_environmental_damage(nominal, health);
-            if lethal {
-                if health != entity.health {
-                    if let Some(mut pre_death) = ctx.db.game_world_entity().guid().find(entity_guid)
-                    {
-                        pre_death.health = health;
-                        pre_death.update(ctx);
-                    }
+            match crate::combat::deal_environmental_damage(
+                ctx,
+                entity_guid,
+                drowning_damage(entity.max_health),
+            ) {
+                EnvironmentalHit::Hurt(lost) => {
+                    crate::breath_relay::drowning_damage(ctx, entity_guid, lost);
+                    crate::combat::wear_for_environmental_damage(ctx, entity_guid, 1);
                 }
-                crate::combat::wear_for_environmental_damage(ctx, entity_guid, hits);
-                crate::combat::kill_player(ctx, entity_guid, entity_guid);
-                crate::breath_relay::drowning_damage(ctx, entity_guid, actual);
-                states.entity_guid().delete(entity_guid);
-                died = true;
-                break;
-            }
-            if actual > 0 {
-                health -= actual;
-                crate::breath_relay::drowning_damage(ctx, entity_guid, actual);
-                hits += 1;
+                EnvironmentalHit::Killed(health) => {
+                    crate::breath_relay::drowning_damage(ctx, entity_guid, health);
+                    states.entity_guid().delete(entity_guid);
+                    break;
+                }
+                EnvironmentalHit::Unhurt => {}
             }
         }
-        if !died && health != entity.health {
-            let mut hurt = entity;
-            hurt.health = health;
-            hurt.update(ctx);
-        }
-        if !died {
-            crate::combat::wear_for_environmental_damage(ctx, entity_guid, hits);
-        }
-        // Every expired tick is a damage event, so the victim loses stealth even on a tick that
-        // deals 0.
-        crate::spell::break_stealth(ctx, entity_guid);
     }
 }
 

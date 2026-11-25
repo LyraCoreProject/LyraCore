@@ -797,17 +797,6 @@ pub(crate) fn snapshot_needs_persist(
         || drift_sq > PERSIST_MAX_DRIFT_YD * PERSIST_MAX_DRIFT_YD
 }
 
-pub(crate) fn resolve_environmental_damage(dmg: u32, health: u32) -> (u32, bool) {
-    if dmg == 0 {
-        return (health, false);
-    }
-    if health <= dmg {
-        (health, true)
-    } else {
-        (health - dmg, false)
-    }
-}
-
 pub(crate) fn movement_is_accepted(
     last_move_ms: u32,
     move_time_ms: u32,
@@ -878,20 +867,16 @@ pub(crate) fn apply_movement_update(
     let mover_guid = mover.guid;
     let map_id = mover.map_id;
     let instance_id = mover.instance_id;
-    let mut fall_lethal = false;
-    let mut fall_hurt = false;
+    let mut fall_dmg = 0;
     if opcode as u32 == lyracore_shared::opcodes::movement::MSG_MOVE_FALL_LAND
         && !mover.dead
         && !mover.godmode
         && mover.is_player()
         && !movement.carries(movement_flags::ON_TRANSPORT)
+        && !crate::combat::immune_to_environmental_damage(ctx, &mover)
     {
-        let dmg = fall_damage(movement.fall_time_ms(), mover.max_health);
-        let (health, lethal) = resolve_environmental_damage(dmg, mover.health);
-        mover.health = health;
-        fall_lethal = lethal;
-        fall_hurt = dmg > 0;
-        crate::native::environment::fall_damage(ctx, mover.guid, dmg);
+        fall_dmg = fall_damage(movement.fall_time_ms(), mover.max_health);
+        crate::native::environment::fall_damage(ctx, mover.guid, fall_dmg);
     }
     crossing.explore(ctx, &mut mover);
     if mover.is_player() && !mover.dead && (move_time_ms / 1000 != old_move_ms / 1000) {
@@ -940,14 +925,12 @@ pub(crate) fn apply_movement_update(
     ) {
         mover.update(ctx);
     }
-    if fall_lethal {
-        crate::combat::kill_player(ctx, mover_guid, mover_guid);
-    }
-    // After the entity write: breaking stealth refreshes the entity row the write just replaced.
+    // After the entity write, which the damage and its reactions would otherwise overwrite.
     // A fall that deals 0 damage is no damage event in vmangos and keeps stealth.
-    if fall_hurt {
-        crate::spell::break_stealth(ctx, mover_guid);
-        if !fall_lethal {
+    if fall_dmg > 0 {
+        if let crate::combat::EnvironmentalHit::Hurt(_) =
+            crate::combat::deal_environmental_damage(ctx, mover_guid, fall_dmg)
+        {
             crate::combat::wear_for_environmental_damage(ctx, mover_guid, 1);
         }
     }
@@ -1074,8 +1057,8 @@ fn fall_damage(fall_time_ms: u32, max_health: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        fall_damage, movement_violation, resolve_environmental_damage, snapshot_needs_persist,
-        MOVE_VIOLATION_SPEED, MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD,
+        fall_damage, movement_violation, snapshot_needs_persist, MOVE_VIOLATION_SPEED,
+        MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD,
     };
 
     const HEARTBEAT: u16 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16;
@@ -1137,30 +1120,6 @@ mod tests {
                 "drift must stay inside melee reach (5 yd)"
             )
         };
-    }
-
-    #[test]
-    fn resolve_environmental_damage_subtracts_short_of_lethal_and_flags_lethal_without_mutating() {
-        assert_eq!(
-            resolve_environmental_damage(0, 50),
-            (50, false),
-            "a soft landing (no damage) is a no-op"
-        );
-        assert_eq!(
-            resolve_environmental_damage(20, 50),
-            (30, false),
-            "sub-lethal damage subtracts"
-        );
-        assert_eq!(
-            resolve_environmental_damage(50, 50),
-            (50, true),
-            "exactly-lethal damage is flagged, not subtracted — kill_player re-fetches fresh"
-        );
-        assert_eq!(
-            resolve_environmental_damage(80, 50),
-            (50, true),
-            "over-lethal damage is flagged, not subtracted either"
-        );
     }
 
     #[test]

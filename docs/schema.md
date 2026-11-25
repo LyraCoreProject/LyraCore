@@ -987,7 +987,13 @@ claim `gcd_category`; a Package Delta without it gives a new spell category 0.
 bits, as vmangos `Unit::DealDamage` and `Spell::EffectInterruptCast` do:
 
 - A direct hit on a Character cancels its cast in progress when `interrupt_flags` holds 0x10, and
-  otherwise pushes it back when it holds 0x02. A creature's cast is never pushed back.
+  otherwise pushes it back when it holds 0x02: by 1000 ms, then 200 ms less for each later hit,
+  down to 200 ms, but never to more time left than the cast's full cast time. A creature's cast is
+  never pushed back.
+- A hit that a shield absorbs whole cancels a Character's cast or channel whose `interrupt_flags`
+  holds 0x10, and pushes back or shortens nothing.
+- Falling, drowning and fatigue damage push back or cancel a cast and cancel a channel as a direct
+  hit does, but never shorten a channel.
 - A direct hit on a Character from another unit shortens its channel when `channel_interrupt_flags`
   holds 0x4000: by 1000 ms, then 200 ms less for each later hit, down to 200 ms. The channel's
   Auras and ground areas end that much sooner, their next tick moves so the last one falls on the
@@ -1002,6 +1008,10 @@ The defaults, 2, 4 and 1, keep the behaviour from before the columns existed: da
 cast and leaves a channel running, and an interrupt effect stops every cast and channel. A row
 written before the reimport, a test fixture and a Package Delta that omit the fields keep that
 behaviour, so none becomes uninterruptible. Packages claim all three columns.
+
+A cast's resist chance against a pushback or a channel delay is its `SPELLMOD_NOT_LOSE_CASTING_TIME`
+modifiers plus the amounts of its `SPELL_AURA_RESIST_PUSHBACK` Auras, such as Concentration Aura.
+`game_pending_cast.cast_time_ms` holds the full cast time that caps a pushback.
 
 `game_channel_delay` holds one private row per caster: the channel's spell, its end after the last
 delay, and the number of delays. Breaking or ending the channel deletes the row. A row left by a
@@ -1424,6 +1434,28 @@ periodic damage tick and a ground area tick take the test on every tick. A Spell
 `SPELL_ATTR_NO_IMMUNITIES` or the ignore-restrictions attribute skips the test, and one with
 `SPELL_ATTR_EX2_NO_SCHOOL_IMMUNITIES` skips school immunity Auras. Shield damage still lands when
 the reflected swing ended a Duel.
+
+### Environmental damage
+
+Falling, drowning and fatigue damage reach vmangos `Unit::DealDamage` as `SELF_DAMAGE`, through
+`Player::EnvironmentalDamage`. `deal_environmental_damage` in `module/src/combat/damage.rs` applies
+it for all three, in this order:
+
+1. A Character that is dead, in godmode or immune to physical damage (Divine Shield, Blessing of
+   Protection, Ice Block) takes nothing: no packet, no stealth break and no reaction. The fall also
+   sends no damage packet.
+2. Any other Character loses stealth, even to 0 damage.
+3. Damage that kills it kills it. Damage that leaves a duelist at 1 health ends the Duel, and the
+   opponent wins.
+4. A Character that lives breaks the Auras that damage breaks, and a cast is cancelled or pushed
+   back as by a direct hit. A channel whose flags say damage cancels it ends; no channel is
+   shortened.
+
+### Flag auras
+
+An `A_FLAG` effect keeps its source aura id (`EffectApplyAuraName`) in `p1`, and its Aura copies it
+to `eff_p1`. The Module reads aura 149, `SPELL_AURA_RESIST_PUSHBACK`, by this id; see
+[Interrupt flags](#interrupt-flags).
 
 ### Mechanic numbering
 
