@@ -196,17 +196,23 @@ fn release(
     current: u64,
 ) -> Result<(), Rollback> {
     open(ctx, connection, 0);
-    if guid::is_item(current) {
-        crate::loot::release_item(ctx, guid, current);
-    } else if guid::is_gameobject(current) {
-        crate::gameobject::chest_loot_released(ctx, guid, current);
-    }
+    release_source(ctx, guid, current);
     Ok(super::send(
         ctx,
         connection,
         release_response(current),
         false,
     )?)
+}
+
+/// The Loot Release of `looter_guid`'s Loot Window on `source`. A teleport or a logout that closes
+/// the window does it too, as vmangos `TeleportTo` and `LogoutPlayer` call `DoLootRelease`.
+pub(super) fn release_source(ctx: &ReducerContext, looter_guid: u64, source: u64) {
+    if guid::is_item(source) {
+        crate::loot::release_item(ctx, looter_guid, source);
+    } else if guid::is_gameobject(source) {
+        crate::gameobject::chest_loot_released(ctx, looter_guid, source);
+    }
 }
 
 pub(super) fn receive(

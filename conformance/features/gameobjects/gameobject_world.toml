@@ -7,17 +7,35 @@ replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
-deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "module/tests/conformance/item_loot.rs", function = "a_fully_looted_chest_disappears_at_its_release_and_respawns_its_delay_later", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "a_chest_left_with_loot_closes_at_its_release_and_despawns_five_minutes_later", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "a_chest_does_not_despawn_under_an_open_loot_window", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "a_partly_looted_chest_reopens_with_its_remaining_loot", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "another_character_reopens_a_partly_looted_chest_without_a_fresh_roll", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "a_chest_spawn_respawns_on_its_own_range_not_its_templates", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "a_teleport_releases_an_emptied_chest_left_open", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "a_disconnect_releases_an_emptied_chest_left_open", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "a_looted_chest_without_a_respawn_time_disappears_for_good", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "a_chest_emptied_for_its_releaser_stays_while_an_earlier_opener_needs_its_quest_item", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "a_character_with_nothing_to_take_does_not_despawn_a_chest_shown_open_with_a_quest_item", rung = "durable_module" },
+    { path = "importer/src/world_import_gameobjects_tests.rs", function = "each_chest_spawn_carries_its_own_respawn_range", rung = "unit" },
+]
 
 [vmangos]
-commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Objects/GameObject.cpp"
 symbol = "GameObject::Update"
 
 [real_client]
 status = "unverified"
+
+[[deliberate_deviations]]
+id = "chest_without_respawn_time"
+result = "A looted chest whose spawn and template have no positive respawn time, or that stands in an Instance, stays despawned until the Instance or the World Source reloads. The Reference Server keeps a world chest with a zero respawn delay in place and lets it be opened again at once, and respawns an Instance chest after its respawn delay."
+reason = "A zero-delay chest that refills the moment it is looted hands out unlimited loot. Instance chests keep the rule they had before chests respawned: their loot comes back with the next Instance."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/GameObject.cpp"
 
 [[known_gaps]]
 description = "gameobjects.animation full-world 4325, alliance-single 1414: The catalogue does not carry source animation progress."
@@ -48,12 +66,6 @@ description = "gameobjects.pool full-world 29465, alliance-single 5874: Pool mem
 path = "importer/src/world_import.rs"
 symbol = "collect_gameobject_spawns"
 evidence = "Compatibility Manifest gameobjects.pool; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
-description = "gameobjects.respawn-range full-world 10903, alliance-single 2054: Source spawn respawn ranges are not represented."
-path = "importer/src/world_import.rs"
-symbol = "collect_gameobject_spawns"
-evidence = "Compatibility Manifest gameobjects.respawn-range; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
 description = "gameobjects.script full-world 207, alliance-single 207: Source script names have no importer behavior."

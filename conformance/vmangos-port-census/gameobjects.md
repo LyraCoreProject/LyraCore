@@ -123,11 +123,6 @@ Production findings, with source keys omitted here. The import prints the full f
     },
     {
       "classification": "unsupported",
-      "code": "gameobjects.respawn-range",
-      "occurrences": 10903
-    },
-    {
-      "classification": "unsupported",
       "code": "gameobjects.script",
       "occurrences": 207
     },

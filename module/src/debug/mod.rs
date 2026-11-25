@@ -605,14 +605,16 @@ pub fn debug_spawn_gameobject(
 
 #[reducer]
 pub fn debug_force_gameobject_respawn(ctx: &ReducerContext, go_entry: u32) -> Result<(), String> {
-    let gos = ctx.db.game_gameobject();
-    let mut go = gos
+    let go = ctx
+        .db
+        .game_gameobject()
         .iter()
-        .find(|g| g.template_entry == go_entry && g.state == 1)
+        .find(|g| {
+            g.template_entry == go_entry
+                && (g.state == 1 || g.despawned || g.respawn_at_micros != 0)
+        })
         .ok_or_else(|| format!("no depleted gameobject of entry {go_entry}"))?;
-    go.state = 0;
-    go.respawn_at_micros = 0;
-    go.update(ctx);
+    crate::gameobject::respawn(ctx, go);
     Ok(())
 }
 

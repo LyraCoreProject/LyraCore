@@ -434,6 +434,12 @@ deletes it. It is the visibility source and the descriptor source for `SMSG_UPDA
 Never `.iter()` this table or the other spatial tables; see [danger zones](./danger-zones.md) §1.7.
 `game_entity_motion` and `game_creature_spline` carry the same grid and cell keys.
 `game_gameobject`'s grid key has three columns, without `instance_id`.
+`game_gameobject.respawn_min_secs` and `respawn_max_secs` END-append a source spawn's respawn range
+(0 and 0: the spawn takes its template's `respawn_secs`). `despawned` END-appends with a false
+default: AOI grants a despawned object to no viewer, and use, lock picking and loot refuse it. A
+looted chest or a gathered node stays despawned until it respawns. A chest's
+`game_corpse_loot_eligible` rows name the Characters who opened it since it rolled its loot; a quest
+row one of them can take keeps the chest from despawning at a Loot Release.
 
 `mount_display_id` carries `UNIT_FIELD_MOUNTDISPLAYID` for both mounted mechanics, and the Module
 decides which one owns it:

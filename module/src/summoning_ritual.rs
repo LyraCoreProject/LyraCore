@@ -188,6 +188,9 @@ pub(crate) fn place(ctx: &ReducerContext, caster_guid: u64, spell_id: u32, entry
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
+        respawn_min_secs: 0,
+        respawn_max_secs: 0,
+        despawned: false,
     };
     if let Err(error) = portal.try_insert(ctx) {
         log::warn!(

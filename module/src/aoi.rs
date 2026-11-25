@@ -247,6 +247,7 @@ pub(crate) fn gameobject_changed(ctx: &ReducerContext, object: &GameObject, newl
         return;
     }
     let wanted = nearby_viewers(ctx, object.map_id, object.instance_id, object.cell)
+        .filter(|_| !object.despawned)
         .map(|viewer| viewer.guid)
         .collect();
     replace_subject(ctx, GAME_OBJECT, object.guid, wanted, newly_added);
@@ -293,7 +294,12 @@ fn subjects_in(ctx: &ReducerContext, viewer: &AoiViewer, cell: i64, all: bool) -
             all || viewer.sees_entity(entity, crate::spell::is_stealthed(ctx, entity.guid))
         })
         .map(|entity| (WORLD_ENTITY, entity.guid));
-    let objects = ctx.db.game_gameobject().by_cell().filter(key);
+    let objects = ctx
+        .db
+        .game_gameobject()
+        .by_cell()
+        .filter(key)
+        .filter(|object| all || !object.despawned);
     let corpses = ctx.db.game_corpse().by_cell().filter(key);
     let dynamic = ctx.db.game_dynamic_object().by_cell().filter(key);
     entities

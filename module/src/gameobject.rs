@@ -4,6 +4,7 @@ use lyracore_shared::constants::go_type;
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::game_corpse_loot;
+use crate::game_corpse_loot_eligible;
 use crate::game_creature_spawn_map;
 use crate::game_gameobject_loot;
 use crate::game_world_entity;
@@ -149,6 +150,14 @@ pub struct GameObject {
     pub rotation_2: f32,
     #[default(0.0f32)]
     pub rotation_3: f32,
+    // The source spawn's respawn range in seconds; 0 and 0 take the template's `respawn_secs`.
+    #[default(0u32)]
+    pub respawn_min_secs: u32,
+    #[default(0u32)]
+    pub respawn_max_secs: u32,
+    // A looted chest or gathered node is hidden from every client until it respawns.
+    #[default(false)]
+    pub despawned: bool,
 }
 
 impl GameObject {
@@ -207,8 +216,13 @@ impl GameObject {
             crate::go_collider::register(ctx, &object);
         }
         if old.as_ref().is_none_or(|old| {
-            (old.map_id, old.instance_id, old.cell)
-                != (object.map_id, object.instance_id, object.cell)
+            (old.map_id, old.instance_id, old.cell, old.despawned)
+                != (
+                    object.map_id,
+                    object.instance_id,
+                    object.cell,
+                    object.despawned,
+                )
         }) {
             crate::aoi::gameobject_changed(ctx, &object, old.is_none());
         }
@@ -240,6 +254,7 @@ pub(crate) fn gameobject_destination_evidence(
         .game_gameobject()
         .by_template_scope()
         .filter((template_entry, map_id, instance_id))
+        .filter(|object| !object.despawned)
         .take(limit.min(MAX_RESULTS))
         .collect()
 }
@@ -336,6 +351,9 @@ pub(crate) fn spawn_standalone(
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
+        respawn_min_secs: 0,
+        respawn_max_secs: 0,
+        despawned: false,
     }
     .insert(ctx)
 }
@@ -403,6 +421,9 @@ fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
+        respawn_min_secs: 0,
+        respawn_max_secs: 0,
+        despawned: false,
     }
     .insert(ctx);
 }
@@ -501,48 +522,130 @@ pub(crate) fn respawn_window_micros(respawn_secs: u32) -> u64 {
     }
 }
 
-// vmangos DoLootRelease sets a partly looted chest to despawn 5 minutes after its Loot Release.
+// A rolled chest despawns 5 minutes after it opens or after a Loot Release that leaves loot, as
+// vmangos DoLootRelease.
 const PARTLY_LOOTED_CHEST_MICROS: u64 = 300_000_000;
-
-pub(crate) fn respawn_due(state: u8, respawn_at_micros: u64, now: u64) -> bool {
-    state == 1 && respawn_at_micros != 0 && now >= respawn_at_micros
-}
 
 fn now_micros(ctx: &ReducerContext) -> u64 {
     crate::time::now(ctx).to_micros_since_unix_epoch() as u64
 }
 
-/// When a chest opened or released at `now` respawns. `None` for a chest that never respawns: one
-/// in an Instance, or one whose template has no respawn time (vmangos `spawntimesecsmin` of 0 or
-/// less). vmangos GameObject::Update restocks a chest its respawn delay after it despawns.
-pub(crate) fn chest_respawn_at(
-    now: u64,
-    respawn_secs: u32,
-    instance_id: u64,
-    fully_looted: bool,
-) -> Option<u64> {
-    if instance_id != 0 || respawn_secs == 0 {
-        return None;
+/// A spawn's respawn delay in seconds: a `draw` from its own range, else `template_secs`.
+/// vmangos GetRandomRespawnTime draws between `spawntimesecsmin` and `spawntimesecsmax`.
+pub(crate) fn spawn_respawn_secs(
+    min_secs: u32,
+    max_secs: u32,
+    template_secs: u32,
+    draw: u32,
+) -> u32 {
+    if max_secs == 0 {
+        return template_secs;
     }
-    let despawn_delay = if fully_looted {
-        0
+    let low = min_secs.clamp(1, max_secs);
+    let span = u64::from(max_secs - low) + 1;
+    low + u32::try_from(u64::from(draw) % span).expect("a remainder below the span fits in u32")
+}
+
+/// Where a chest stands in its use, read from its row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChestPhase {
+    /// Closed, with no loot rolled.
+    Ready,
+    /// Loot rolled: open, or closed again by a Loot Release that left loot.
+    Opened,
+    /// Looted and hidden until it respawns.
+    Despawned,
+}
+
+pub(crate) fn chest_phase(state: u8, respawn_at_micros: u64, despawned: bool) -> ChestPhase {
+    if despawned {
+        ChestPhase::Despawned
+    } else if state == 0 && respawn_at_micros == 0 {
+        ChestPhase::Ready
     } else {
-        PARTLY_LOOTED_CHEST_MICROS
-    };
-    Some(now + despawn_delay + u64::from(respawn_secs) * 1_000_000)
+        ChestPhase::Opened
+    }
 }
 
-fn chest_is_looted_for(ctx: &ReducerContext, chest_guid: u64, looter_guid: u64) -> bool {
-    crate::loot::purse(ctx, chest_guid) == 0
-        && !ctx
-            .db
-            .game_corpse_loot()
-            .by_corpse()
-            .filter(&chest_guid)
-            .any(|row| row.takeable_by(ctx, looter_guid))
+/// When a chest that despawns at `now` respawns. `None` for a chest that never respawns: one in an
+/// Instance, or one whose respawn delay is 0 (vmangos `spawntimesecsmin` of 0 or less).
+pub(crate) fn chest_respawn_at(now: u64, respawn_secs: u32, instance_id: u64) -> Option<u64> {
+    (instance_id == 0 && respawn_secs != 0).then(|| now + u64::from(respawn_secs) * 1_000_000)
 }
 
-/// A Loot Release restamps the closed chest: earlier if emptied, later if loot is left.
+/// Records a Character the chest showed its loot to; the quest rows it needs keep the chest.
+fn record_chest_opener(ctx: &ReducerContext, chest_guid: u64, opener_guid: u64) {
+    let openers = ctx.db.game_corpse_loot_eligible();
+    if !openers
+        .by_corpse()
+        .filter(&chest_guid)
+        .any(|opener| opener.eligible_guid == opener_guid)
+    {
+        openers.insert(crate::CorpseLootEligible {
+            id: 0,
+            corpse_guid: chest_guid,
+            eligible_guid: opener_guid,
+        });
+    }
+}
+
+/// vmangos `Loot::isLooted` is false while money or a row is left for the looter or for any earlier
+/// opener, as `FillQuestLoot` counts each opener's quest items.
+fn chest_holds_loot(ctx: &ReducerContext, chest_guid: u64, looter_guid: u64) -> bool {
+    if crate::loot::purse(ctx, chest_guid) != 0 {
+        return true;
+    }
+    let takers: Vec<u64> = ctx
+        .db
+        .game_corpse_loot_eligible()
+        .by_corpse()
+        .filter(&chest_guid)
+        .map(|opener| opener.eligible_guid)
+        .chain(std::iter::once(looter_guid))
+        .collect();
+    ctx.db
+        .game_corpse_loot()
+        .by_corpse()
+        .filter(&chest_guid)
+        .any(|row| takers.iter().any(|&taker| row.takeable_by(ctx, taker)))
+}
+
+fn other_loot_window_open(ctx: &ReducerContext, go_guid: u64, character_guid: u64) -> bool {
+    ctx.db
+        .game_native_player()
+        .by_open_loot()
+        .filter(go_guid)
+        .any(|player| player.character_guid != character_guid)
+}
+
+// A despawned chest leaves no Loot Window open on it.
+fn close_loot_windows(ctx: &ReducerContext, go_guid: u64) {
+    let players = ctx.db.game_native_player();
+    let open: Vec<_> = players.by_open_loot().filter(go_guid).collect();
+    for mut player in open {
+        player.open_loot = 0;
+        players.connection_id().update(player);
+    }
+}
+
+/// Drops a looted chest's loot and hides it until its respawn, as vmangos GO_JUST_DEACTIVATED.
+fn despawn_chest(ctx: &ReducerContext, mut chest: GameObject, template: &GameObjectTemplate) {
+    crate::loot::reap_corpse_loot_family(ctx, chest.guid);
+    close_loot_windows(ctx, chest.guid);
+    let delay = spawn_respawn_secs(
+        chest.respawn_min_secs,
+        chest.respawn_max_secs,
+        template.respawn_secs,
+        ctx.random(),
+    );
+    chest.despawned = true;
+    chest.respawn_at_micros =
+        chest_respawn_at(now_micros(ctx), delay, chest.instance_id).unwrap_or(0);
+    chest.update(ctx);
+}
+
+/// A Loot Release on an opened chest: an emptied chest despawns, and one with loot left closes and
+/// despawns 5 minutes later.
 pub(crate) fn chest_loot_released(ctx: &ReducerContext, looter_guid: u64, go_guid: u64) {
     let Some(mut chest) = ctx.db.game_gameobject().guid().find(go_guid) else {
         return;
@@ -555,26 +658,17 @@ pub(crate) fn chest_loot_released(ctx: &ReducerContext, looter_guid: u64, go_gui
     else {
         return;
     };
-    if template.type_id != go_type::CHEST || chest.state != 1 {
+    if template.type_id != go_type::CHEST
+        || chest_phase(chest.state, chest.respawn_at_micros, chest.despawned) != ChestPhase::Opened
+    {
         return;
     }
-    let looted = chest_is_looted_for(ctx, go_guid, looter_guid);
-    let Some(respawn_at) = chest_respawn_at(
-        now_micros(ctx),
-        template.respawn_secs,
-        chest.instance_id,
-        looted,
-    ) else {
-        return;
-    };
-    let stamped = match (looted, chest.respawn_at_micros) {
-        (true, 0) => respawn_at,
-        (true, opened_at) => opened_at.min(respawn_at),
-        (false, opened_at) => opened_at.max(respawn_at),
-    };
-    if stamped != chest.respawn_at_micros {
-        chest.respawn_at_micros = stamped;
+    if chest_holds_loot(ctx, go_guid, looter_guid) {
+        chest.state = 0;
+        chest.respawn_at_micros = now_micros(ctx) + PARTLY_LOOTED_CHEST_MICROS;
         chest.update(ctx);
+    } else {
+        despawn_chest(ctx, chest, &template);
     }
 }
 
@@ -587,14 +681,58 @@ pub(crate) fn loot_window_open(ctx: &ReducerContext, go_guid: u64) -> bool {
         .is_some()
 }
 
-/// Clears what a use left on an object about to respawn: its loot and its picked lock.
-pub(crate) fn clear_use_state(ctx: &ReducerContext, go_guid: u64) {
-    crate::loot::reap_corpse_loot_family(ctx, go_guid);
-    ctx.db.game_gameobject_unlocked().go_guid().delete(go_guid);
+/// Runs an object's elapsed respawn timer: an opened chest despawns once no Loot Window is open on
+/// it, and a despawned or used object respawns.
+pub(crate) fn respawn_timer_elapsed(ctx: &ReducerContext, go_guid: u64) {
+    let Some(object) = ctx.db.game_gameobject().guid().find(go_guid) else {
+        return;
+    };
+    if let Some(template) = ctx
+        .db
+        .game_gameobject_template()
+        .entry()
+        .find(object.template_entry)
+        .filter(|template| template.type_id == go_type::CHEST)
+    {
+        if chest_phase(object.state, object.respawn_at_micros, object.despawned)
+            == ChestPhase::Opened
+        {
+            if !loot_window_open(ctx, go_guid) {
+                despawn_chest(ctx, object, &template);
+            }
+            return;
+        }
+    }
+    if object.despawned || object.state == 1 {
+        respawn(ctx, object);
+    }
 }
 
-/// Stamps a chest opened before chests respawned, so the respawn pass can reach it. Returns the
-/// number stamped. Idempotent: a stamped chest no longer matches.
+/// Shows the object again closed and unused; a pooled object respawns as another roll of its pool.
+pub(crate) fn respawn(ctx: &ReducerContext, mut object: GameObject) {
+    crate::loot::reap_corpse_loot_family(ctx, object.guid);
+    ctx.db
+        .game_gameobject_unlocked()
+        .go_guid()
+        .delete(object.guid);
+    match pool_point_id_of(object.guid).and_then(|point_id| {
+        ctx.db
+            .game_gameobject_pool_member()
+            .point_id()
+            .find(point_id)
+    }) {
+        Some(member) => reroll_pool(ctx, member.pool_id, object.guid),
+        None => {
+            object.state = 0;
+            object.despawned = false;
+            object.respawn_at_micros = 0;
+            object.update(ctx);
+        }
+    }
+}
+
+/// Stamps an opened or despawned world chest that has no respawn time, so the respawn pass can
+/// reach it. Returns the number stamped. Idempotent: a stamped chest no longer matches.
 pub(crate) fn stamp_opened_chests(ctx: &ReducerContext) -> u64 {
     let chest_entries: Vec<u32> = ctx
         .db
@@ -612,7 +750,10 @@ pub(crate) fn stamp_opened_chests(ctx: &ReducerContext) -> u64 {
             .by_template_scope()
             .filter(entry)
             .filter(|chest| {
-                chest.state == 1 && chest.respawn_at_micros == 0 && chest.instance_id == 0
+                chest.respawn_at_micros == 0
+                    && chest.instance_id == 0
+                    && chest_phase(chest.state, chest.respawn_at_micros, chest.despawned)
+                        != ChestPhase::Ready
             })
             .collect();
         for mut chest in opened {
@@ -690,6 +831,7 @@ fn reachable_go(
         .game_gameobject()
         .guid()
         .find(go_guid)
+        .filter(|go| !go.despawned)
         .ok_or_else(|| {
             ReachRefusal::Refused(ActionRefusal::new(
                 ActionRefusalKind::MissingTarget,
@@ -809,48 +951,7 @@ fn use_resolved_gameobject(
     let (used_go_guid, used_go_entry, used_go_instance) =
         (go.guid, go.template_entry, go.instance_id);
     match tmpl.type_id {
-        go_type::CHEST => {
-            if locked_shut(ctx, go.guid, tmpl.lock_id) {
-                return Err("it is locked".to_string());
-            }
-            if go.state != 0 {
-                return Err("chest already looted".to_string());
-            }
-            crate::loot::reap_corpse_loot_family(ctx, go.guid);
-
-            let rows: Vec<crate::loot::LootRow> = if tmpl.data1 != 0 {
-                ctx.db
-                    .game_gameobject_loot()
-                    .by_loot()
-                    .filter(&tmpl.data1)
-                    .map(crate::loot::LootRow::from)
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let mut winners = crate::loot::roll_loot_rows(ctx, go.guid, rows);
-            if winners.is_empty() && tmpl.data0 != 0 {
-                winners.push(crate::loot::LootDrop {
-                    item_entry: tmpl.data0,
-                    count: 1,
-                    quest_only: false,
-                });
-            }
-            crate::loot::insert_corpse_rows(
-                ctx,
-                go.guid,
-                winners,
-                &[],
-                crate::loot::UnneededQuestDrop::KeepShared,
-            );
-            crate::loot::stock_purse(ctx, go.guid, 0, (tmpl.money_min, tmpl.money_max));
-            let looted = chest_is_looted_for(ctx, go.guid, caster_guid);
-            go.state = 1;
-            go.respawn_at_micros =
-                chest_respawn_at(now_micros(ctx), tmpl.respawn_secs, go.instance_id, looted)
-                    .unwrap_or(0);
-            go.update(ctx);
-        }
+        go_type::CHEST => use_chest(ctx, caster_guid, go, &tmpl)?,
         go_type::GOOBER => {
             if locked_shut(ctx, go.guid, tmpl.lock_id) {
                 return Err("it is locked".to_string());
@@ -888,9 +989,15 @@ fn use_resolved_gameobject(
                     reroll_pool(ctx, member.pool_id, go.guid);
                 }
                 _ => {
+                    let delay = spawn_respawn_secs(
+                        go.respawn_min_secs,
+                        go.respawn_max_secs,
+                        tmpl.respawn_secs,
+                        ctx.random(),
+                    );
                     go.state = 1;
-                    go.respawn_at_micros =
-                        now_micros(ctx) + respawn_window_micros(tmpl.respawn_secs);
+                    go.despawned = true;
+                    go.respawn_at_micros = now_micros(ctx) + respawn_window_micros(delay);
                     go.update(ctx);
                 }
             }
@@ -915,6 +1022,66 @@ fn use_resolved_gameobject(
         },
     );
     Ok(())
+}
+
+fn use_chest(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    mut chest: GameObject,
+    template: &GameObjectTemplate,
+) -> Result<(), String> {
+    if locked_shut(ctx, chest.guid, template.lock_id) {
+        return Err("it is locked".to_string());
+    }
+    match chest_phase(chest.state, chest.respawn_at_micros, chest.despawned) {
+        ChestPhase::Despawned => return Err("chest already looted".to_string()),
+        ChestPhase::Ready => {
+            roll_chest_loot(ctx, chest.guid, template);
+            chest.respawn_at_micros = now_micros(ctx) + PARTLY_LOOTED_CHEST_MICROS;
+        }
+        // vmangos SendLoot shows an activated chest's remaining loot to any opener.
+        ChestPhase::Opened => {}
+    }
+    record_chest_opener(ctx, chest.guid, caster_guid);
+    chest.state = 1;
+    if chest_holds_loot(ctx, chest.guid, caster_guid)
+        || other_loot_window_open(ctx, chest.guid, caster_guid)
+    {
+        chest.update(ctx);
+    } else {
+        despawn_chest(ctx, chest, template);
+    }
+    Ok(())
+}
+
+fn roll_chest_loot(ctx: &ReducerContext, chest_guid: u64, template: &GameObjectTemplate) {
+    crate::loot::reap_corpse_loot_family(ctx, chest_guid);
+    let rows: Vec<crate::loot::LootRow> = if template.data1 != 0 {
+        ctx.db
+            .game_gameobject_loot()
+            .by_loot()
+            .filter(&template.data1)
+            .map(crate::loot::LootRow::from)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut winners = crate::loot::roll_loot_rows(ctx, chest_guid, rows);
+    if winners.is_empty() && template.data0 != 0 {
+        winners.push(crate::loot::LootDrop {
+            item_entry: template.data0,
+            count: 1,
+            quest_only: false,
+        });
+    }
+    crate::loot::insert_corpse_rows(
+        ctx,
+        chest_guid,
+        winners,
+        &[],
+        crate::loot::UnneededQuestDrop::KeepShared,
+    );
+    crate::loot::stock_purse(ctx, chest_guid, 0, (template.money_min, template.money_max));
 }
 
 pub(crate) fn despawn_from_relay(ctx: &ReducerContext, go_guid: u64) -> Result<(), String> {
@@ -1080,9 +1247,9 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
     let mut loaded = 0u32;
     for row in packed.split(';').filter(|r| !r.is_empty()) {
         let f: Vec<&str> = row.split(',').collect();
-        if f.len() != 12 {
+        if f.len() != 12 && f.len() != 14 {
             return Err(format!(
-                "gameobject import row needs 12 fields, got {}: {row}",
+                "gameobject import row needs 12 or 14 fields, got {}: {row}",
                 f.len()
             ));
         }
@@ -1090,6 +1257,10 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
         let pu32 = |s: &str| s.parse::<u32>().map_err(|_| format!("bad u32: {s}"));
         let pf32 = |s: &str| s.parse::<f32>().map_err(|_| format!("bad f32: {s}"));
         let pu8 = |s: &str| s.parse::<u8>().map_err(|_| format!("bad u8 state: {s}"));
+        let (respawn_min_secs, respawn_max_secs) = match f.get(12..14) {
+            Some([min, max]) => (pu32(min)?, pu32(max)?),
+            _ => (0, 0),
+        };
 
         GameObject {
             guid: pu64(f[0])?,
@@ -1110,6 +1281,9 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
             rotation_1: pf32(f[9])?,
             rotation_2: pf32(f[10])?,
             rotation_3: pf32(f[11])?,
+            respawn_min_secs,
+            respawn_max_secs,
+            despawned: false,
         }
         .try_insert(ctx)
         .map_err(|e| format!("gameobject insert failed (dup guid?): {e}"))?;
@@ -1143,6 +1317,9 @@ mod tests {
             rotation_1: 0.0,
             rotation_2: 0.0,
             rotation_3: 0.0,
+            respawn_min_secs: 0,
+            respawn_max_secs: 0,
+            despawned: false,
         };
         object.stamp_cell();
         let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(2_133.0, -4_477.0);
@@ -1233,34 +1410,49 @@ mod tests {
     }
 
     #[test]
-    fn a_fully_looted_chest_respawns_its_delay_after_release() {
-        assert_eq!(chest_respawn_at(1_000, 600, 0, true), Some(600_001_000));
-    }
-
-    #[test]
-    fn a_partly_looted_chest_despawns_five_minutes_before_its_delay_starts() {
-        assert_eq!(chest_respawn_at(1_000, 600, 0, false), Some(900_001_000));
+    fn a_despawned_chest_respawns_its_delay_later() {
+        assert_eq!(chest_respawn_at(1_000, 600, 0), Some(600_001_000));
     }
 
     #[test]
     fn a_chest_without_a_respawn_time_never_respawns() {
-        assert_eq!(chest_respawn_at(1_000, 0, 0, true), None);
-        assert_eq!(chest_respawn_at(1_000, 0, 0, false), None);
+        assert_eq!(chest_respawn_at(1_000, 0, 0), None);
     }
 
     #[test]
     fn a_chest_in_an_instance_never_respawns() {
-        assert_eq!(chest_respawn_at(1_000, 600, 7, true), None);
-        assert_eq!(chest_respawn_at(1_000, 600, 7, false), None);
+        assert_eq!(chest_respawn_at(1_000, 600, 7), None);
     }
 
     #[test]
-    fn an_opened_chest_is_due_at_its_respawn_time_and_not_before() {
-        let respawn_at = chest_respawn_at(1_000, 600, 0, true).unwrap();
+    fn a_closed_chest_without_a_timer_is_ready_and_a_rolled_one_is_opened_until_it_despawns() {
+        assert_eq!(chest_phase(0, 0, false), ChestPhase::Ready);
+        assert_eq!(chest_phase(1, 900_001_000, false), ChestPhase::Opened);
+        assert_eq!(chest_phase(0, 300_001_000, false), ChestPhase::Opened);
+        assert_eq!(chest_phase(1, 0, false), ChestPhase::Opened);
+        assert_eq!(chest_phase(1, 600_001_000, true), ChestPhase::Despawned);
+        assert_eq!(chest_phase(1, 0, true), ChestPhase::Despawned);
+    }
 
-        assert!(!respawn_due(1, respawn_at, respawn_at - 1));
-        assert!(respawn_due(1, respawn_at, respawn_at));
-        assert!(!respawn_due(0, respawn_at, respawn_at));
+    #[test]
+    fn a_spawn_without_its_own_range_takes_its_template_respawn_time() {
+        assert_eq!(spawn_respawn_secs(0, 0, 600, 12_345), 600);
+        assert_eq!(spawn_respawn_secs(0, 0, 0, 12_345), 0);
+    }
+
+    #[test]
+    fn a_spawn_draws_its_respawn_time_from_its_own_range_inclusive() {
+        assert_eq!(spawn_respawn_secs(300, 600, 7_200, 0), 300);
+        assert_eq!(spawn_respawn_secs(300, 600, 7_200, 300), 600);
+        assert_eq!(spawn_respawn_secs(300, 600, 7_200, 301), 300);
+        assert_eq!(spawn_respawn_secs(120, 120, 7_200, u32::MAX), 120);
+    }
+
+    #[test]
+    fn a_spawn_range_never_draws_zero_or_beyond_its_maximum() {
+        assert_eq!(spawn_respawn_secs(0, 60, 7_200, 0), 1);
+        assert_eq!(spawn_respawn_secs(900, 60, 7_200, 5), 60);
+        assert_eq!(spawn_respawn_secs(1, u32::MAX, 0, u32::MAX - 1), u32::MAX);
     }
 
     #[test]

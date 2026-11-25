@@ -449,7 +449,7 @@ fn create_gameobject(
 ) -> Result<String, String> {
     check_gameobject_fields(ctx, &fields)?;
     let guid = packed_gameobject_spawn_guid(ids.next_gameobject_spawn_id(ctx)?);
-    let go = insert_gameobject(ctx, guid, &fields)?;
+    let go = insert_gameobject(ctx, guid, &fields, (0, 0))?;
     Ok(format!(
         "created gameobject spawn {guid}: {}",
         describe_gameobject(&go)
@@ -464,7 +464,8 @@ fn update_gameobject(
     let old = authored_gameobject(ctx, guid)?;
     check_gameobject_fields(ctx, &fields)?;
     crate::gameobject::despawn_from_relay(ctx, guid)?;
-    let go = insert_gameobject(ctx, guid, &fields)?;
+    let respawn_range = (old.respawn_min_secs, old.respawn_max_secs);
+    let go = insert_gameobject(ctx, guid, &fields, respawn_range)?;
     Ok(format!(
         "updated gameobject spawn {guid}: {} -> {}",
         describe_gameobject(&old),
@@ -672,11 +673,14 @@ fn retire_live_creature(ctx: &ReducerContext, guid: u64) {
     }
 }
 
+/// `respawn_range` is the spawn's own respawn range in seconds; an update keeps the source's range.
 fn insert_gameobject(
     ctx: &ReducerContext,
     guid: u64,
     fields: &GameObjectSpawnFields,
+    respawn_range: (u32, u32),
 ) -> Result<GameObject, String> {
+    let (respawn_min_secs, respawn_max_secs) = respawn_range;
     GameObject {
         guid,
         template_entry: fields.template_entry,
@@ -696,6 +700,9 @@ fn insert_gameobject(
         rotation_1: fields.rotation_1,
         rotation_2: fields.rotation_2,
         rotation_3: fields.rotation_3,
+        respawn_min_secs,
+        respawn_max_secs,
+        despawned: false,
     }
     .try_insert(ctx)
     .map_err(|e| format!("gameobject spawn {guid} cannot be inserted: {e}"))

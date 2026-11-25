@@ -712,6 +712,9 @@ pub(crate) fn create_instance(
             rotation_1: src.rotation_1,
             rotation_2: src.rotation_2,
             rotation_3: src.rotation_3,
+            respawn_min_secs: src.respawn_min_secs,
+            respawn_max_secs: src.respawn_max_secs,
+            despawned: false,
         }
         .insert(ctx);
         copied += 1;

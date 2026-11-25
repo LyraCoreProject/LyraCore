@@ -80,6 +80,7 @@ pub(super) fn restore_origin(
 
 pub(crate) fn begin(ctx: &ReducerContext, guid: u64, cross_map: bool) -> Option<u32> {
     let mut player = super::world_session(ctx, guid)?;
+    super::loot::release_source(ctx, guid, player.open_loot);
     player.teleport_origin = cross_map
         .then(|| ctx.db.game_world_entity().guid().find(guid))
         .flatten()

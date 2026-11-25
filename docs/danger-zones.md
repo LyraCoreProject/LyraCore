@@ -101,13 +101,14 @@ a Transport crossing for each Transport without one. It also re-freezes Proc pro
 missing Auction expiries, re-tags legacy auction mail as Auction Mail before the Mail Timer pass
 (so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each Mail that has
 none, moves each legacy Character GM level onto its Account, stamps the current time as the
-respawn time of each opened world chest that has none and a template `respawn_secs` above 0, and
-re-seeds the curated content and fixtures `init` seeds. That chest step reaches only a Package or
-curated chest whose template already has a respawn time. An imported chest has none until the
-`gameobjects` Import Family is reimported with the updated importer, which fills `respawn_secs`
-from the smallest positive vmangos `spawntimesecsmin` of the entry; that reimport also resets every
-chest to closed and clears every picked lock. `packages apply` calls it for each Shard it publishes.
-A skipped call looks like a mid-session hang, not an error.
+respawn time of each opened or despawned world chest that has none and a template `respawn_secs`
+above 0, and re-seeds the curated content and fixtures `init` seeds. That chest step reaches only a
+Package or curated chest whose template already has a respawn time. An imported chest has none until
+the `gameobjects` Import Family is reimported with the updated importer, which fills `respawn_secs`
+from the smallest positive vmangos `spawntimesecsmin` of the entry and gives each spawn its own
+range; that reimport also resets every chest to closed and clears every picked lock. `packages
+apply` calls it for each Shard it publishes. A skipped call looks like a mid-session hang, not an
+error.
 
 Imported content wins over that re-seed. A seed that writes real ids skips once the importer has
 stamped its family in `game_import_meta`: `spell` (Weakened Soul, Frost Armor, Chilled, Drain
@@ -230,6 +231,20 @@ straight after the publish. Until then no faction template carries the respond-t
 flag, so no creature answers a Call for Assistance, including the pack mates that joined a
 proximity pull before this revision. Direct SQL INSERTs must supply `flags`; shared import SQL defaults fill
 older inserts. No repair is needed.
+
+### Chest despawn and spawn respawn range migration
+
+`game_gameobject` gains `respawn_min_secs` and `respawn_max_secs`, end-appended with default 0, and
+`despawned`, end-appended with default false. Both defaults keep a row written before the publish
+working as before: 0 and 0 mean the spawn has no range of its own and takes its template's
+`respawn_secs`, and false keeps the object shown. No backfill is needed. Reimport the `gameobjects`
+Import Family so each source spawn carries its vmangos `spawntimesecsmin` to `spawntimesecsmax`
+range; until then every spawn of a chest entry keeps the entry's smallest positive time.
+`import_gameobjects` takes a packed row of 12 fields, as before, or 14 with the range.
+
+A chest opened before the publish keeps its respawn time. When that time comes the chest despawns,
+and it respawns one respawn delay later. A Package that builds a `GameObject` row must set the three
+new fields, so its branch pins a Core revision with them.
 
 ### Chest money and item loot migration
 
