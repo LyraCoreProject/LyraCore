@@ -173,7 +173,7 @@ pub(super) fn moved(ctx: &ReducerContext, connection: u128, source: Identity, ta
         .filter(|end| end.world == source)
     {
         end.world = target;
-        owed.connection().update(end);
+        owed.scheduled_id().update(end);
     }
 }
 
