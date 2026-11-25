@@ -974,6 +974,39 @@ delay, and the number of delays. Breaking or ending the channel deletes the row.
 channel that ran out is harmless: a channel that no longer ends at that time starts again from no
 delays, and the next delay overwrites the row.
 
+### Area target cap
+
+`game_spell.max_affected_targets` is the source `MaxAffectedTargets`, kept verbatim. An instant
+area effect of a spell with a nonzero value reaches at most that many units. The cast's target is
+always kept and the rest are picked at random, as vmangos `Spell::SetTargetMap` does. A capped
+effect picks its units once, when the cast lands and before any effect runs; it later reaches only
+those units, so a picked unit that dies is not replaced and a unit that walks in is not added. One
+draw per cast ranks the units, so effects that select the same units keep the same ones. A chain
+effect stops at its jump count instead. A ground area tick has no cap, as vmangos
+`DynamicObject::Update` has none.
+
+The effect targets that select units in an area:
+
+- `T_AREA_ENEMY` (4): units the caster may attack, by vmangos `IsValidAttackTarget`.
+- `T_AREA_ALLY` (5, targets 29 and 31): units friendly to the caster, as vmangos
+  `SPELL_TARGETS_FRIENDLY`, with the caster's owner and the owner's other units.
+- `T_CHAIN_ENEMY` (6): the cast's target, then each time the nearest unit the caster may attack
+  within 10 yd. A jump count of 0 or 1 hits the target alone.
+- `T_PARTY_AREA` (9) and `T_RAID_AREA` (10): the caster's subgroup or whole raid and their pets,
+  measured from the caster, as vmangos `FillRaidOrPartyTargets`. The members come from the
+  Character that controls the caster; without one, from the caster's owner, or the caster itself
+  when it has no owner. Without a Group, that one unit and its pet. A party area includes the
+  caster and a raid area does not.
+- `T_AREA_NOT_HOSTILE` (11, target 30 and helpful targets 7 and 8): every unit not hostile to the
+  caster.
+
+An area wider than 100 grid cells (a radius above about 225 yd, up to 50,000 yd in the source
+data) reads its map partition through the `by_map` index instead of one lookup per cell.
+
+The default, 0, means no cap. A row written before the reimport, a test fixture and a Package Delta
+that omit the field reach every unit the area selects, as vmangos does for a spell without the
+field. Packages claim the column.
+
 ### Combo finishers (`module/src/combo.rs`)
 
 A finisher is a Rogue or Druid spell whose `Spell.dbc` AttributesEx carries 0x0010_0000 or

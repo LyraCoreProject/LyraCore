@@ -239,12 +239,17 @@ def check_spell_source_behavior(host):
 
     area_channel = spell(kind=0x91, amount=1000, coefficient=0, cast_flags=0x80, range_yd=1)
     host.sql(f'UPDATE game_spell_effect SET target = 5, radius_yd = 10, period_ms = 100 WHERE spell_id = {area_channel}')
+    # A friendly area helps only a friendly unit, so both Characters share the template 50908.
+    for guid in [a, b]:
+        host.sql(f'UPDATE game_world_entity SET faction_template = 50908 WHERE guid = {guid}')
     host.sql(f'UPDATE game_world_entity SET health = 100, max_health = 10000 WHERE guid = {b}')
     host.call('debug_begin_cast', [a, area_channel, a])
     host.wait_until(lambda: host.rows(f'SELECT health FROM game_world_entity WHERE guid = {b}')[0][0] >= 2100,
                     'a secondary area recipient broke the self-range channel')
     assert any(row[1] == b for row in auras(area_channel)), auras(area_channel)
     host.sql(f'DELETE FROM game_aura WHERE spell_id = {area_channel}')
+    for guid, faction in original_factions.items():
+        host.sql(f'UPDATE game_world_entity SET faction_template = {faction} WHERE guid = {guid}')
 
     before = {row[0] for row in host.rows('SELECT guid FROM game_world_entity WHERE entry = 51000')}
     host.call('debug_spawn_at_feet', [a, 51000, 4])

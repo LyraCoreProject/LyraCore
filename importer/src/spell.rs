@@ -66,7 +66,8 @@ use lyracore_shared::spell::taxonomy::{
     P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
     SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
-    T_AREA_ENEMY, T_CASTER_PET, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CASTER_PET, T_PARTY_AREA, T_RAID_AREA, T_SCRIPTED, T_SELF,
+    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 
 // AttributesEx1 bits 0x04 and 0x40 both mark a channeled spell.
@@ -457,12 +458,15 @@ fn resolve_target(target: i32, is_negative: bool) -> u8 {
             }
         }
         15 | 16 | 28 => T_AREA_ENEMY,
-        20 | 29 | 30 | 31 | 33 | 34 | 56 => T_AREA_ALLY,
+        20 | 33 | 34 => T_PARTY_AREA,
+        56 => T_RAID_AREA,
+        29 | 31 => T_AREA_ALLY,
+        30 => T_AREA_NOT_HOSTILE,
         7 | 8 => {
             if is_negative {
                 T_AREA_ENEMY
             } else {
-                T_AREA_ALLY
+                T_AREA_NOT_HOSTILE
             }
         }
         _ => T_SCRIPTED,
@@ -922,6 +926,7 @@ fn push_spell_header_row(
         interrupt_flags: s.interrupt_flags,
         channel_interrupt_flags: s.channel_interrupt_flags,
         prevention_type: s.prevention_type.min(255) as u8,
+        max_affected_targets: s.max_affected_targets,
     });
     if spell_overrides::binding_summon(
         spell_id,
@@ -1564,7 +1569,7 @@ fn assemble_spell_sql(
     push_insert(
         &mut stmts,
         "game_spell",
-        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex_2,visual_id,duration_index,category,category_cooldown_ms,equipped_item_class,equipped_item_subclass_mask,equipped_item_inventory_mask,attributes_ex_3,attributes_ex_4,damage_class,gcd_category,interrupt_flags,channel_interrupt_flags,prevention_type",
+        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex_2,visual_id,duration_index,category,category_cooldown_ms,equipped_item_class,equipped_item_subclass_mask,equipped_item_inventory_mask,attributes_ex_3,attributes_ex_4,damage_class,gcd_category,interrupt_flags,channel_interrupt_flags,prevention_type,max_affected_targets",
         &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
@@ -1982,6 +1987,7 @@ mod tests {
             (160, 3),
             (161, 0x8000_0001),
             (162, 0x1234_5678),
+            (163, 4),
             (165, 2),
         ] {
             bytes[20 + column * 4..24 + column * 4].copy_from_slice(&value.to_le_bytes());
@@ -2296,7 +2302,7 @@ mod tests {
         assert_eq!((header.duration_ms, header.max_duration_ms), (6000, 21000));
         let header_sql = header.sql_values();
         let values: Vec<_> = header_sql.trim_matches(['(', ')']).split(',').collect();
-        assert_eq!(values.len(), 46);
+        assert_eq!(values.len(), 47);
         assert_eq!(values[42], "133");
         assert_eq!(&values[25..28], &["21000", "1024", "7"]);
         let effect = &rows.effects[0];
@@ -3126,6 +3132,7 @@ mod tests {
             ),
             (99, 88, 2)
         );
+        assert_eq!(header.max_affected_targets, 4);
         assert_eq!(
             (header.family_name, header.family_flags),
             (3, 0x1234_5678_8000_0001)
@@ -4845,9 +4852,13 @@ mod tests {
         assert_eq!(resolve_target(6, false), T_TARGET_ENEMY);
         assert_eq!(resolve_target(1, false), T_SELF);
         assert_eq!(resolve_target(0, false), T_SCRIPTED);
-        assert_eq!(resolve_target(20, false), T_AREA_ALLY);
+        assert_eq!(resolve_target(20, false), T_PARTY_AREA);
+        assert_eq!(resolve_target(34, false), T_PARTY_AREA);
+        assert_eq!(resolve_target(56, false), T_RAID_AREA);
+        assert_eq!(resolve_target(31, false), T_AREA_ALLY);
+        assert_eq!(resolve_target(30, false), T_AREA_NOT_HOSTILE);
         assert_eq!(resolve_target(8, true), T_AREA_ENEMY);
-        assert_eq!(resolve_target(8, false), T_AREA_ALLY);
+        assert_eq!(resolve_target(8, false), T_AREA_NOT_HOSTILE);
         assert_eq!(resolve_target(-5, true), T_SCRIPTED);
         assert_eq!(resolve_target(999, false), T_SCRIPTED);
     }

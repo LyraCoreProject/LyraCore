@@ -960,7 +960,6 @@ mod partition_discipline_tripwire {
         ("module/src/encounter.rs", 2, "guid high-water marks over spawn/gameobject TEMPLATE rows when allocating a wave guid, not live-world reads"),
         ("module/src/creatures/pet.rs", 1, "`nearest_hostile_near` scans the map for one pet's target; pets are rare (one per online warlock)"),
         ("packages/deadmines/src/choreography.rs", 1, "single instance-scoped boss-liveness check inside one encounter"),
-        ("module/src/spell/cast/targeting.rs", 1, "AoE/chain target resolution by full-iter + squared distance"),
     ];
 
     fn opens_whole_table_read(content: &str, byte_idx: usize) -> bool {

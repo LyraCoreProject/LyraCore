@@ -1,33 +1,110 @@
-//! The faction, reputation and PvP checks of vmangos `IsValidAttackTarget` for a ground area.
+//! The checks of vmangos `IsValidAttackTarget` and `IsImmuneToAoe` for a harmful area spell.
 
+use lyracore_shared::constants::unit_flags::{NOT_SELECTABLE, TAXI_FLIGHT};
+use lyracore_shared::spell::taxonomy::TOTEM_TYPE;
 use spacetimedb::ReducerContext;
 
 use crate::pvp::Combatant;
-use crate::{game_faction_template, WorldEntity};
+use crate::{game_creature_template, game_faction_template, WorldEntity};
 
 // vmangos ReputationRank.
 const REP_HOSTILE: u8 = 1;
 const REP_NEUTRAL: u8 = 3;
 const REP_FRIENDLY: u8 = 4;
 
-/// Whether a ground area that `caster` placed harms `target`.
+// vmangos UnitDefines.h flags that `Unit::IsTargetableBy` refuses a harmful spell on.
+const UNIT_FLAG_SPAWNING: u32 = 0x0000_0002;
+const UNIT_FLAG_NOT_ATTACKABLE_1: u32 = 0x0000_0080;
+const UNIT_FLAG_IMMUNE_TO_PLAYER: u32 = 0x0000_0100;
+const UNIT_FLAG_IMMUNE_TO_NPC: u32 = 0x0000_0200;
+const UNIT_FLAG_NON_ATTACKABLE_2: u32 = 0x0001_0000;
+const UNTARGETABLE: u32 = UNIT_FLAG_SPAWNING
+    | UNIT_FLAG_NOT_ATTACKABLE_1
+    | UNIT_FLAG_NON_ATTACKABLE_2
+    | NOT_SELECTABLE
+    | TAXI_FLIGHT;
+
+/// Whether a harmful area spell of `caster`, instant or a ground area tick, harms `target`.
 pub(crate) fn area_may_harm(
     ctx: &ReducerContext,
     caster: &WorldEntity,
     target: &WorldEntity,
 ) -> bool {
-    if target.is_flying() {
-        return false;
-    }
     let by = crate::pvp::affecting_character(ctx, caster);
     let of = crate::pvp::affecting_character(ctx, target);
-    let dueling = matches!(
-        (by, of),
-        (Some(by), Some(of)) if crate::duel::active_opponents(ctx, by.guid, of.guid)
-    );
+    if !targetable_by(
+        (caster.unit_flags, by.is_some()),
+        (target.unit_flags, of.is_some()),
+    ) || is_totem(ctx, target)
+    {
+        return false;
+    }
+    let dueling = in_duel(ctx, by, of);
     let to_target = reaction(ctx, (caster, by), (target, of), dueling);
     let to_caster = reaction(ctx, (target, of), (caster, by), dueling);
     attack_allowed(by, of, to_target, to_caster, dueling)
+}
+
+/// vmangos `SPELL_TARGETS_FRIENDLY`: whether a friendly area spell of `caster` helps `target`.
+pub(crate) fn area_may_help(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    target: &WorldEntity,
+) -> bool {
+    let by = crate::pvp::affecting_character(ctx, caster);
+    let of = crate::pvp::affecting_character(ctx, target);
+    let to_target = reaction(ctx, (caster, by), (target, of), in_duel(ctx, by, of));
+    help_allowed(
+        same_master(
+            (caster.guid, caster.owner_guid),
+            (target.guid, target.owner_guid),
+        ),
+        to_target,
+    )
+}
+
+fn in_duel(ctx: &ReducerContext, by: Option<Combatant>, of: Option<Combatant>) -> bool {
+    matches!(
+        (by, of),
+        (Some(by), Some(of)) if crate::duel::active_opponents(ctx, by.guid, of.guid)
+    )
+}
+
+/// vmangos `GetReactionTo` is friendly to the unit's owner and to the owner's other units.
+fn same_master((guid, owner): (u64, u64), (other, other_owner): (u64, u64)) -> bool {
+    let master = |guid: u64, owner: u64| if owner != 0 { owner } else { guid };
+    master(guid, owner) == master(other, other_owner)
+}
+
+fn help_allowed(same_master: bool, to_target: u8) -> bool {
+    same_master || to_target >= REP_FRIENDLY
+}
+
+/// vmangos `Unit::IsTargetableBy` for harm; each side is (unit flags, controlled by a Character).
+fn targetable_by(
+    (caster_flags, caster_player): (u32, bool),
+    (target_flags, target_player): (u32, bool),
+) -> bool {
+    let immune_to = |player: bool| {
+        if player {
+            UNIT_FLAG_IMMUNE_TO_PLAYER
+        } else {
+            UNIT_FLAG_IMMUNE_TO_NPC
+        }
+    };
+    target_flags & (UNTARGETABLE | immune_to(caster_player)) == 0
+        && caster_flags & immune_to(target_player) == 0
+}
+
+/// vmangos `Creature::IsImmuneToAoe`: since patch 1.10 an area spell passes over a totem.
+fn is_totem(ctx: &ReducerContext, unit: &WorldEntity) -> bool {
+    !unit.is_player()
+        && ctx
+            .db
+            .game_creature_template()
+            .entry()
+            .find(unit.entry)
+            .is_some_and(|template| template.creature_type == TOTEM_TYPE)
 }
 
 fn reaction(
@@ -217,6 +294,80 @@ mod tests {
             hostile(),
             false
         ));
+    }
+
+    #[test]
+    fn an_area_passes_over_a_unit_that_is_not_attackable_or_not_selectable() {
+        for flags in [
+            UNIT_FLAG_SPAWNING,
+            UNIT_FLAG_NOT_ATTACKABLE_1,
+            UNIT_FLAG_NON_ATTACKABLE_2,
+            NOT_SELECTABLE,
+            TAXI_FLIGHT,
+        ] {
+            assert!(!targetable_by((0, true), (flags, false)), "{flags:#x}");
+            assert!(!targetable_by((0, false), (flags, false)), "{flags:#x}");
+        }
+        assert!(targetable_by((0, true), (0, false)));
+    }
+
+    #[test]
+    fn a_unit_immune_to_players_is_spared_only_by_a_player_controlled_caster() {
+        assert!(!targetable_by(
+            (0, true),
+            (UNIT_FLAG_IMMUNE_TO_PLAYER, false)
+        ));
+        assert!(targetable_by(
+            (0, false),
+            (UNIT_FLAG_IMMUNE_TO_PLAYER, false)
+        ));
+        assert!(!targetable_by((0, false), (UNIT_FLAG_IMMUNE_TO_NPC, false)));
+        assert!(targetable_by((0, true), (UNIT_FLAG_IMMUNE_TO_NPC, false)));
+    }
+
+    #[test]
+    fn a_caster_immune_to_players_or_creatures_cannot_harm_them() {
+        assert!(!targetable_by(
+            (UNIT_FLAG_IMMUNE_TO_PLAYER, false),
+            (0, true)
+        ));
+        assert!(targetable_by(
+            (UNIT_FLAG_IMMUNE_TO_PLAYER, false),
+            (0, false)
+        ));
+        assert!(!targetable_by((UNIT_FLAG_IMMUNE_TO_NPC, false), (0, false)));
+        assert!(targetable_by((UNIT_FLAG_IMMUNE_TO_NPC, false), (0, true)));
+    }
+
+    #[test]
+    fn a_friendly_area_helps_a_reputation_faction_only_while_not_at_war() {
+        assert!(help_allowed(false, toward_reputation_faction(false)));
+        assert!(!help_allowed(false, toward_reputation_faction(true)));
+        assert!(help_allowed(
+            false,
+            from_reputation_faction(REP_HONORED, false)
+        ));
+        assert!(!help_allowed(
+            false,
+            from_reputation_faction(REP_HONORED, true)
+        ));
+    }
+
+    #[test]
+    fn a_friendly_area_helps_a_friendly_unit_but_not_a_neutral_one() {
+        assert!(help_allowed(false, template_reaction(false, true)));
+        assert!(!help_allowed(false, neutral()));
+        assert!(!help_allowed(false, hostile()));
+    }
+
+    #[test]
+    fn a_creatures_friendly_area_helps_its_owner_and_its_owners_other_units() {
+        const OWNER: u64 = 9;
+        assert!(same_master((5, OWNER), (OWNER, 0)));
+        assert!(same_master((OWNER, 0), (5, OWNER)));
+        assert!(same_master((5, OWNER), (6, OWNER)));
+        assert!(!same_master((5, 0), (6, 0)));
+        assert!(help_allowed(true, neutral()));
     }
 
     #[test]
