@@ -3,7 +3,7 @@ use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
 use super::depth::TriggerLink;
-use super::targeting::{affected_target_cap, keep_affected_targets};
+use super::targeting::{affected_target_cap, CappedPicks};
 use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
@@ -23,7 +23,7 @@ use crate::spell::{
     E_PERSISTENT_AREA, E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE,
     E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME,
     SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY,
-    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    T_PARTY_AREA, T_RAID_AREA, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use crate::{
     game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
@@ -669,8 +669,7 @@ struct CastTargets<'a> {
     admitted: std::collections::HashMap<(u8, u64), Option<(AttackOutcome, bool)>>,
     weapon_targets: Vec<u64>,
     seen_weapon_targets: std::collections::HashSet<u64>,
-    // Drawn the first time an effect selects more units than its cap, then kept for the cast.
-    trim_seed: Option<u32>,
+    capped: CappedPicks,
 }
 
 impl<'a> CastTargets<'a> {
@@ -711,35 +710,34 @@ impl<'a> CastTargets<'a> {
             admitted: std::collections::HashMap::new(),
             weapon_targets: Vec::new(),
             seen_weapon_targets: std::collections::HashSet::new(),
-            trim_seed: None,
+            capped: CappedPicks::default(),
         }
     }
 
-    /// The units the effect reaches, cut to the spell's target cap alike on every call.
+    /// The units the effect reaches; a capped effect reaches only the units it picked at settle.
     fn select(
         &mut self,
         e: &SpellEffect,
         target_guid: u64,
         dest: Option<(f32, f32, f32)>,
     ) -> Vec<u64> {
-        let (ctx, caster_guid) = (self.ctx, self.caster_guid);
-        let hits = select_targets(ctx, caster_guid, target_guid, e, dest);
-        let cap = affected_target_cap(self.spell.header.max_affected_targets, e);
-        let Some(cap) = cap.filter(|&cap| hits.len() > cap) else {
+        let (ctx, caster_guid, spell) = (self.ctx, self.caster_guid, self.spell);
+        let level = spell.header.spell_level;
+        let hits = select_targets(ctx, caster_guid, target_guid, e, dest, level);
+        let Some(cap) = affected_target_cap(spell.header.max_affected_targets, e) else {
             return hits;
         };
-        let seed = *self.trim_seed.get_or_insert_with(|| {
-            crate::conformance_rolls::draw(
-                ctx,
-                crate::conformance_rolls::RollStream::Caster(caster_guid),
-            )
-        });
         let kept = if target_guid == 0 {
             caster_guid
         } else {
             target_guid
         };
-        keep_affected_targets(hits, cap, kept, seed)
+        self.capped.pick(e.effect_index, hits, cap, kept, || {
+            crate::conformance_rolls::draw(
+                ctx,
+                crate::conformance_rolls::RollStream::Caster(caster_guid),
+            )
+        })
     }
 
     /// Admits every target the effects select now, before any effect changes the world.
@@ -2074,7 +2072,12 @@ fn check_target_faction(
             && matches!(e.target, T_TARGET_ENEMY | T_AREA_ENEMY | T_CHAIN_ENEMY)
     });
     let hits_ally = effects.iter().any(|e| {
-        e.kind != A_FLAG && e.kind != E_DUEL && matches!(e.target, T_TARGET_ALLY | T_AREA_ALLY)
+        e.kind != A_FLAG
+            && e.kind != E_DUEL
+            && matches!(
+                e.target,
+                T_TARGET_ALLY | T_AREA_ALLY | T_PARTY_AREA | T_RAID_AREA
+            )
     });
     if !(hits_enemy || hits_ally) {
         return Ok(());
@@ -2376,7 +2379,14 @@ fn start_global_cooldown(ctx: &ReducerContext, caster_guid: u64, hdr: &Spell) {
 fn targets_unit(target: u8) -> bool {
     matches!(
         target,
-        T_TARGET_ENEMY | T_TARGET_ALLY | T_TARGET_ANY | T_AREA_ENEMY | T_AREA_ALLY | T_CHAIN_ENEMY
+        T_TARGET_ENEMY
+            | T_TARGET_ALLY
+            | T_TARGET_ANY
+            | T_AREA_ENEMY
+            | T_AREA_ALLY
+            | T_CHAIN_ENEMY
+            | T_PARTY_AREA
+            | T_RAID_AREA
     )
 }
 
@@ -3062,6 +3072,8 @@ mod companion_los_tests {
             T_AREA_ENEMY,
             T_AREA_ALLY,
             T_CHAIN_ENEMY,
+            T_PARTY_AREA,
+            T_RAID_AREA,
         ] {
             assert!(targets_unit(target));
         }

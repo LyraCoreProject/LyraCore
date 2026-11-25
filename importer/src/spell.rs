@@ -66,7 +66,8 @@ use lyracore_shared::spell::taxonomy::{
     P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
     SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
-    T_AREA_ENEMY, T_CASTER_PET, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    T_AREA_ENEMY, T_CASTER_PET, T_PARTY_AREA, T_RAID_AREA, T_SCRIPTED, T_SELF, T_TARGET_ALLY,
+    T_TARGET_ANY, T_TARGET_ENEMY,
 };
 
 // AttributesEx1 bits 0x04 and 0x40 both mark a channeled spell.
@@ -457,7 +458,9 @@ fn resolve_target(target: i32, is_negative: bool) -> u8 {
             }
         }
         15 | 16 | 28 => T_AREA_ENEMY,
-        20 | 29 | 30 | 31 | 33 | 34 | 56 => T_AREA_ALLY,
+        20 | 33 | 34 => T_PARTY_AREA,
+        56 => T_RAID_AREA,
+        29 | 30 | 31 => T_AREA_ALLY,
         7 | 8 => {
             if is_negative {
                 T_AREA_ENEMY
@@ -4848,7 +4851,10 @@ mod tests {
         assert_eq!(resolve_target(6, false), T_TARGET_ENEMY);
         assert_eq!(resolve_target(1, false), T_SELF);
         assert_eq!(resolve_target(0, false), T_SCRIPTED);
-        assert_eq!(resolve_target(20, false), T_AREA_ALLY);
+        assert_eq!(resolve_target(20, false), T_PARTY_AREA);
+        assert_eq!(resolve_target(34, false), T_PARTY_AREA);
+        assert_eq!(resolve_target(56, false), T_RAID_AREA);
+        assert_eq!(resolve_target(30, false), T_AREA_ALLY);
         assert_eq!(resolve_target(8, true), T_AREA_ENEMY);
         assert_eq!(resolve_target(8, false), T_AREA_ALLY);
         assert_eq!(resolve_target(-5, true), T_SCRIPTED);

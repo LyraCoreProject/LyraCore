@@ -6,7 +6,7 @@ use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::game_item_instance;
-use crate::{game_character, game_creature_template, game_world_entity};
+use crate::{game_character, game_creature_template, game_world_entity, WorldEntity};
 
 use crate::geometry::{distance_3d, projectile_travel_ms};
 use crate::spell::*;
@@ -146,12 +146,7 @@ pub(super) fn affected_target_cap(max_affected_targets: u32, e: &SpellEffect) ->
 }
 
 /// Keeps `cap` random units of `hits` and always `kept`; one `seed` keeps the same units each call.
-pub(super) fn keep_affected_targets(
-    mut hits: Vec<u64>,
-    cap: usize,
-    kept: u64,
-    seed: u32,
-) -> Vec<u64> {
+fn keep_affected_targets(mut hits: Vec<u64>, cap: usize, kept: u64, seed: u32) -> Vec<u64> {
     if hits.len() <= cap {
         return hits;
     }
@@ -160,6 +155,40 @@ pub(super) fn keep_affected_targets(
     ranked.truncate(cap);
     hits.retain(|guid| ranked.contains(guid));
     hits
+}
+
+/// The units each capped effect of one cast picked; vmangos fills a cast's target map once.
+#[derive(Default)]
+pub(super) struct CappedPicks {
+    seed: Option<u32>,
+    picked: std::collections::HashMap<u8, Vec<u64>>,
+}
+
+impl CappedPicks {
+    /// `hits` cut to `cap`; the first call per effect picks, a later call keeps only those picks.
+    pub(super) fn pick(
+        &mut self,
+        effect_index: u8,
+        hits: Vec<u64>,
+        cap: usize,
+        kept: u64,
+        draw: impl FnOnce() -> u32,
+    ) -> Vec<u64> {
+        if let Some(picked) = self.picked.get(&effect_index) {
+            return hits
+                .into_iter()
+                .filter(|guid| picked.contains(guid))
+                .collect();
+        }
+        let picked = if hits.len() > cap {
+            let seed = *self.seed.get_or_insert_with(draw);
+            keep_affected_targets(hits, cap, kept, seed)
+        } else {
+            hits
+        };
+        self.picked.insert(effect_index, picked.clone());
+        picked
+    }
 }
 
 // The SplitMix64 finalizer, so the rank of one guid tells nothing about another's.
@@ -191,6 +220,7 @@ pub(crate) fn select_targets(
     explicit: u64,
     e: &SpellEffect,
     dest: Option<(f32, f32, f32)>,
+    spell_level: u8,
 ) -> Vec<u64> {
     // vmangos puts a ground area on the ground, not on a unit: see `place_ground_area`.
     if e.kind == E_PERSISTENT_AREA {
@@ -212,6 +242,13 @@ pub(crate) fn select_targets(
             } else {
                 vec![one]
             }
+        }
+        T_PARTY_AREA | T_RAID_AREA => {
+            let Some(caster) = ctx.db.game_world_entity().guid().find(caster_guid) else {
+                return Vec::new();
+            };
+            let raid = e.target == T_RAID_AREA;
+            party_area_targets(ctx, &caster, raid, area_radius(e), spell_level)
         }
         T_AREA_ENEMY | T_AREA_ALLY | T_CHAIN_ENEMY => {
             let entities = ctx.db.game_world_entity();
@@ -237,34 +274,39 @@ pub(crate) fn select_targets(
                     anchor.z,
                 )
             };
-            let radius = if e.radius_yd > 0.0 {
-                e.radius_yd
-            } else {
-                MELEE_PBAOE_RADIUS_YD
-            };
+            let radius = area_radius(e);
             let r2 = radius * radius;
             let want_enemy = matches!(e.target, T_AREA_ENEMY | T_CHAIN_ENEMY);
 
-            let mut hits: Vec<u64> =
-                crate::helpers::entities_near(ctx, a_map, a_inst, ax, ay, radius)
+            let units: Vec<WorldEntity> =
+                crate::helpers::area_candidates(ctx, a_map, a_inst, ax, ay, radius)
                     .into_iter()
                     .filter(|c| !c.dead)
-                    .filter_map(|c| {
+                    .filter(|c| {
                         let (dx, dy, dz) = (c.x - ax, c.y - ay, c.z - az);
                         let d2 = dx * dx + dy * dy + dz * dz;
                         if d2 > r2 {
-                            return None;
+                            return false;
                         }
                         let (harmed, helped) = if want_enemy {
-                            (crate::combat::area_may_harm(ctx, &caster, &c), false)
+                            (crate::combat::area_may_harm(ctx, &caster, c), false)
                         } else {
-                            (false, crate::combat::may_help(ctx, &caster, &c))
+                            (false, area_may_help(ctx, &caster, c))
                         };
                         aoe_keep(d2, r2, want_enemy, c.guid == caster_guid, harmed, helped)
-                            .then_some(c.guid)
                     })
                     .collect();
 
+            if e.target == T_CHAIN_ENEMY {
+                let count = if e.chain_targets > 0 {
+                    usize::from(e.chain_targets)
+                } else {
+                    usize::MAX
+                };
+                let units = units.iter().map(|c| (c.guid, (c.x, c.y, c.z))).collect();
+                return chain_jumps(explicit, units, count);
+            }
+            let mut hits: Vec<u64> = units.iter().map(|c| c.guid).collect();
             // Missing faction data can make the caster appear unfriendly to itself.
             if !want_enemy && !hits.contains(&caster_guid) {
                 hits.push(caster_guid);
@@ -274,6 +316,100 @@ pub(crate) fn select_targets(
         }
         _ => vec![one],
     }
+}
+
+fn area_radius(e: &SpellEffect) -> f32 {
+    if e.radius_yd > 0.0 {
+        e.radius_yd
+    } else {
+        MELEE_PBAOE_RADIUS_YD
+    }
+}
+
+/// vmangos `SPELL_TARGETS_FRIENDLY`: a friendly area helps only a unit friendly to its caster.
+fn area_may_help(ctx: &ReducerContext, caster: &WorldEntity, unit: &WorldEntity) -> bool {
+    crate::combat::relation(ctx, caster, unit) == crate::combat::Relation::Friendly
+        && crate::combat::may_help(ctx, caster, unit)
+}
+
+/// vmangos `FillRaidOrPartyTargets`: the caster's subgroup or raid and their pets near the caster.
+fn party_area_targets(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    raid: bool,
+    radius: f32,
+    spell_level: u8,
+) -> Vec<u64> {
+    let leader = crate::pvp::affecting_character(ctx, caster).map_or(caster.guid, |c| c.guid);
+    let group = crate::group::group_of(ctx, leader);
+    let members: Vec<u64> = match &group {
+        Some(own) => {
+            let subgroup = crate::group::raid_slot_of(own).subgroup();
+            crate::group::members_of(ctx, own.group_id)
+                .into_iter()
+                .filter(|m| raid || crate::group::raid_slot_of(m).subgroup() == subgroup)
+                .map(|m| m.character_guid)
+                .collect()
+        }
+        None => vec![leader],
+    };
+    let entities = ctx.db.game_world_entity();
+    let mut hits = Vec::new();
+    for member in members
+        .into_iter()
+        .filter_map(|guid| entities.guid().find(guid))
+    {
+        if group.is_some() && member.level + 10 < u32::from(spell_level) {
+            continue;
+        }
+        if crate::combat::relation(ctx, caster, &member) == crate::combat::Relation::Hostile {
+            continue;
+        }
+        let pet = crate::creatures::pet_of(ctx, member.guid);
+        for unit in std::iter::once(member).chain(pet) {
+            let reached = if unit.guid == caster.guid {
+                !raid
+            } else {
+                !unit.dead
+                    && crate::helpers::in_same_partition(&unit, caster.map_id, caster.instance_id)
+                    && crate::helpers::dist_sq(caster, &unit) <= radius * radius
+            };
+            if reached {
+                hits.push(unit.guid);
+            }
+        }
+    }
+    hits
+}
+
+// vmangos CHAIN_SPELL_JUMP_RADIUS: a chain jumps at most this far from the last unit it hit.
+const CHAIN_JUMP_YD: f32 = 10.0;
+
+/// vmangos `SetTargetMap` for a chain: `first`, then each time the unit nearest the last one hit.
+fn chain_jumps(first: u64, mut units: Vec<(u64, (f32, f32, f32))>, count: usize) -> Vec<u64> {
+    let Some(start) = units.iter().position(|&(guid, _)| guid == first) else {
+        return Vec::new();
+    };
+    let (guid, mut at) = units.swap_remove(start);
+    let mut chain = vec![guid];
+    while chain.len() < count {
+        let jump = |(x, y, z): (f32, f32, f32)| {
+            (x - at.0).powi(2) + (y - at.1).powi(2) + (z - at.2).powi(2)
+        };
+        let nearest = units
+            .iter()
+            .enumerate()
+            .map(|(i, &(_, position))| (i, jump(position)))
+            .filter(|&(_, d2)| d2 <= CHAIN_JUMP_YD * CHAIN_JUMP_YD)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        let Some((next, _)) = nearest else {
+            break;
+        };
+        let (guid, position) = units.swap_remove(next);
+        chain.push(guid);
+        at = position;
+    }
+    chain
 }
 
 fn enchant_item_temporarily(
@@ -2009,6 +2145,49 @@ mod effect_handler_tests {
         let dropped = hits.iter().find(|guid| !first.contains(guid)).copied();
         let rest: Vec<u64> = hits.into_iter().filter(|&g| Some(g) != dropped).collect();
         assert_eq!(super::keep_affected_targets(rest, 4, 0, 42), first);
+    }
+
+    #[test]
+    fn a_capped_effect_never_reaches_a_unit_its_cap_did_not_pick() {
+        let mut picks = super::CappedPicks::default();
+        let first = picks.pick(0, vec![11, 12], 1, 0, || 7);
+        assert_eq!(first.len(), 1);
+        assert_eq!(
+            picks.pick(1, vec![11, 12], 1, 0, || 99),
+            first,
+            "effects agree"
+        );
+        let other = if first[0] == 11 { 12 } else { 11 };
+        assert_eq!(
+            picks.pick(1, vec![other], 1, 0, || 99),
+            Vec::<u64>::new(),
+            "the picked unit died before the later effect"
+        );
+        assert_eq!(
+            picks.pick(0, vec![other, first[0], 13], 1, 0, || 99),
+            first,
+            "a unit that walked in is not picked"
+        );
+    }
+
+    #[test]
+    fn a_capped_effect_within_its_cap_keeps_every_unit_but_no_newcomer() {
+        let mut picks = super::CappedPicks::default();
+        assert_eq!(picks.pick(0, vec![1, 2], 3, 0, || 0), vec![1, 2]);
+        assert_eq!(picks.pick(0, vec![1, 2, 3], 3, 0, || 0), vec![1, 2]);
+    }
+
+    #[test]
+    fn a_chain_jumps_from_its_target_to_the_nearest_unit_within_ten_yards() {
+        let units = vec![
+            (1, (0.0, 0.0, 0.0)),
+            (2, (9.0, 0.0, 0.0)),
+            (3, (4.0, 0.0, 0.0)),
+            (4, (30.0, 0.0, 0.0)),
+        ];
+        assert_eq!(super::chain_jumps(1, units.clone(), 2), vec![1, 3]);
+        assert_eq!(super::chain_jumps(1, units.clone(), 10), vec![1, 3, 2]);
+        assert_eq!(super::chain_jumps(5, units, 3), Vec::<u64>::new());
     }
 
     #[test]

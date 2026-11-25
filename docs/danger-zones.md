@@ -765,10 +765,14 @@ area effect and a ground area tick reach every unit they select. An instant or c
 harms picks units by the ground area's rule: it hits a neutral creature without reputation, spares
 a reputation faction the Character is not at war with, and an unflagged Character's area spares
 another Character outside a Duel. Every harmful area spell, instant or a ground area tick, now
-passes over a totem and a unit whose flags make it not attackable or not selectable.
+passes over a totem and a unit whose flags make it not attackable or not selectable. A friendly area
+(`T_AREA_ALLY`) helps only units friendly to its caster, no longer neutral ones.
 
-Until you reimport `spell`, a spell that vmangos limits with MaxAffectedTargets hits every unit in
-its area. Reimport `spell` from this revision before play resumes.
+The importer now writes vmangos party targets 20, 33 and 34 as `T_PARTY_AREA` (9) and raid target
+56 as `T_RAID_AREA` (10), which reach only the caster's Group. Until you reimport `spell`, these
+spells keep `T_AREA_ALLY` and help every friendly unit in their radius, and a spell that vmangos
+limits with MaxAffectedTargets hits every unit in its area. Reimport `spell` from this revision
+before play resumes. An Operator Content edit now accepts effect targets up to 10.
 
 A Package Delta written before this revision has no `max_affected_targets`, so its new spells have no
 cap. Emit the Package again from a Base Snapshot of this revision, or set the field, before you

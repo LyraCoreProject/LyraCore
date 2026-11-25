@@ -117,6 +117,35 @@ pub(crate) fn entities_near(
     out
 }
 
+// Past this many cells, one map-index read beats a lookup per cell; radii reach 50,000 yd.
+const AREA_CELL_LIMIT: i64 = 100;
+
+fn within_area_cell_limit(x: f32, y: f32, radius: f32) -> bool {
+    let (gx0, gx1, gy0, gy1) = lyracore_shared::spatial::covering_cell_box(x, y, radius);
+    let span = |low: i32, high: i32| i64::from(high) - i64::from(low) + 1;
+    span(gx0, gx1).saturating_mul(span(gy0, gy1)) <= AREA_CELL_LIMIT
+}
+
+/// The partition's entities that may lie within `radius` of (x, y); callers check the distance.
+pub(crate) fn area_candidates(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    x: f32,
+    y: f32,
+    radius: f32,
+) -> Vec<WorldEntity> {
+    if within_area_cell_limit(x, y, radius) {
+        return entities_near(ctx, map_id, instance_id, x, y, radius);
+    }
+    ctx.db
+        .game_world_entity()
+        .by_map()
+        .filter(&map_id)
+        .filter(|e| in_same_partition(e, map_id, instance_id))
+        .collect()
+}
+
 pub(crate) fn in_same_partition(e: &WorldEntity, map_id: u32, instance_id: u64) -> bool {
     e.map_id == map_id && e.instance_id == instance_id
 }
@@ -173,6 +202,13 @@ pub(crate) fn entity_addr(e: &WorldEntity) -> (u32, u64, i32, i32) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_200_yard_area_reads_cells_and_a_zone_wide_area_reads_its_map() {
+        assert!(within_area_cell_limit(-8920.0, -180.0, 200.0));
+        assert!(!within_area_cell_limit(-8920.0, -180.0, 50_000.0));
+        assert!(!within_area_cell_limit(0.0, 0.0, f32::INFINITY));
+    }
 
     #[test]
     fn purse_credit_pays_copper_that_fits() {

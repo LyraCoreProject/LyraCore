@@ -31,10 +31,14 @@ pub(crate) fn area_may_harm(
     target: &WorldEntity,
 ) -> bool {
     let by = crate::pvp::affecting_character(ctx, caster);
-    if !targetable_by(target.unit_flags, by.is_some()) || is_totem(ctx, target) {
+    let of = crate::pvp::affecting_character(ctx, target);
+    if !targetable_by(
+        (caster.unit_flags, by.is_some()),
+        (target.unit_flags, of.is_some()),
+    ) || is_totem(ctx, target)
+    {
         return false;
     }
-    let of = crate::pvp::affecting_character(ctx, target);
     let dueling = matches!(
         (by, of),
         (Some(by), Some(of)) if crate::duel::active_opponents(ctx, by.guid, of.guid)
@@ -44,14 +48,20 @@ pub(crate) fn area_may_harm(
     attack_allowed(by, of, to_target, to_caster, dueling)
 }
 
-/// vmangos `Unit::IsTargetableBy` for a harmful spell; a Character or its pet is player-controlled.
-fn targetable_by(unit_flags: u32, player_controlled_caster: bool) -> bool {
-    let immune = if player_controlled_caster {
-        UNIT_FLAG_IMMUNE_TO_PLAYER
-    } else {
-        UNIT_FLAG_IMMUNE_TO_NPC
+/// vmangos `Unit::IsTargetableBy` for harm; each side is (unit flags, controlled by a Character).
+fn targetable_by(
+    (caster_flags, caster_player): (u32, bool),
+    (target_flags, target_player): (u32, bool),
+) -> bool {
+    let immune_to = |player: bool| {
+        if player {
+            UNIT_FLAG_IMMUNE_TO_PLAYER
+        } else {
+            UNIT_FLAG_IMMUNE_TO_NPC
+        }
     };
-    unit_flags & (UNTARGETABLE | immune) == 0
+    target_flags & (UNTARGETABLE | immune_to(caster_player)) == 0
+        && caster_flags & immune_to(target_player) == 0
 }
 
 /// vmangos `Creature::IsImmuneToAoe`: since patch 1.10 an area spell passes over a totem.
@@ -263,18 +273,38 @@ mod tests {
             NOT_SELECTABLE,
             TAXI_FLIGHT,
         ] {
-            assert!(!targetable_by(flags, true), "{flags:#x}");
-            assert!(!targetable_by(flags, false), "{flags:#x}");
+            assert!(!targetable_by((0, true), (flags, false)), "{flags:#x}");
+            assert!(!targetable_by((0, false), (flags, false)), "{flags:#x}");
         }
-        assert!(targetable_by(0, true));
+        assert!(targetable_by((0, true), (0, false)));
     }
 
     #[test]
     fn a_unit_immune_to_players_is_spared_only_by_a_player_controlled_caster() {
-        assert!(!targetable_by(UNIT_FLAG_IMMUNE_TO_PLAYER, true));
-        assert!(targetable_by(UNIT_FLAG_IMMUNE_TO_PLAYER, false));
-        assert!(!targetable_by(UNIT_FLAG_IMMUNE_TO_NPC, false));
-        assert!(targetable_by(UNIT_FLAG_IMMUNE_TO_NPC, true));
+        assert!(!targetable_by(
+            (0, true),
+            (UNIT_FLAG_IMMUNE_TO_PLAYER, false)
+        ));
+        assert!(targetable_by(
+            (0, false),
+            (UNIT_FLAG_IMMUNE_TO_PLAYER, false)
+        ));
+        assert!(!targetable_by((0, false), (UNIT_FLAG_IMMUNE_TO_NPC, false)));
+        assert!(targetable_by((0, true), (UNIT_FLAG_IMMUNE_TO_NPC, false)));
+    }
+
+    #[test]
+    fn a_caster_immune_to_players_or_creatures_cannot_harm_them() {
+        assert!(!targetable_by(
+            (UNIT_FLAG_IMMUNE_TO_PLAYER, false),
+            (0, true)
+        ));
+        assert!(targetable_by(
+            (UNIT_FLAG_IMMUNE_TO_PLAYER, false),
+            (0, false)
+        ));
+        assert!(!targetable_by((UNIT_FLAG_IMMUNE_TO_NPC, false), (0, false)));
+        assert!(targetable_by((UNIT_FLAG_IMMUNE_TO_NPC, false), (0, true)));
     }
 
     #[test]

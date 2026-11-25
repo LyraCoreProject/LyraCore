@@ -659,7 +659,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
         let caster = entities.guid().find(a.caster_guid);
         let r2 = a.radius_yd * a.radius_yd;
         let targets: Vec<WorldEntity> =
-            crate::helpers::entities_near(ctx, a.map_id, a.instance_id, a.x, a.y, a.radius_yd)
+            crate::helpers::area_candidates(ctx, a.map_id, a.instance_id, a.x, a.y, a.radius_yd)
                 .into_iter()
                 .filter(|c| !c.dead && c.guid != a.caster_guid)
                 .filter(|c| !crate::creatures::eventai::movement::returning_home(ctx, c.guid))

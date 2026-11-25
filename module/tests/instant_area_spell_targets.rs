@@ -2,7 +2,9 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
-use lyracore_shared::spell::taxonomy::{CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, T_AREA_ENEMY};
+use lyracore_shared::spell::taxonomy::{
+    CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, E_HEAL, T_AREA_ALLY, T_AREA_ENEMY, T_PARTY_AREA,
+};
 use support::{number, Field, Standalone};
 
 const CHARACTER: u64 = 1;
@@ -10,8 +12,11 @@ const WOLF_HEALTH: u32 = 100_000;
 const AREA_BURST: u32 = 5_129_001;
 const CAPPED_BURST: u32 = 5_129_002;
 const CAPPED_TARGETS: u32 = 1;
+const PARTY_HEAL: u32 = 5_129_003;
+const FRIENDLY_HEAL: u32 = 5_129_004;
+const PARTY: u64 = 9_216;
 const AREA_RADIUS_YD: f32 = 10.0;
-// More units than the 20 an area spell used to stop at.
+// One wolf more than a cap of 20 units would hit.
 const PULL_SIZE: usize = 21;
 const CHARACTER_FACTION: u32 = 9_211;
 const WOLF_FACTION: u32 = 9_212;
@@ -135,6 +140,52 @@ fn an_instant_area_spell_with_max_affected_targets_hits_only_that_many_and_keeps
     );
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_party_area_spell_heals_the_casters_group_and_spares_every_other_unit() {
+    let (shard, wolf) = stage("party-area-group");
+    let member = provision_group_member(&shard);
+    let friend = spawn_wolf(&shard, 2.0);
+    set_faction(&shard, friend, CHARACTER_FACTION);
+    set_faction(&shard, wolf, NEUTRAL_FACTION);
+    for guid in [member, friend, wolf] {
+        wound(&shard, guid);
+    }
+    let before = [member, friend, wolf].map(|guid| health(&shard, guid));
+
+    cast(&shard, PARTY_HEAL);
+
+    assert!(
+        health(&shard, member) > before[0],
+        "the Group member is healed"
+    );
+    assert_eq!(
+        [health(&shard, friend), health(&shard, wolf)],
+        [before[1], before[2]],
+        "vmangos FillRaidOrPartyTargets: a unit outside the Group is spared"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_friendly_area_spell_heals_a_friendly_unit_and_spares_a_neutral_one() {
+    let (shard, wolf) = stage("friendly-area-neutral");
+    let friend = spawn_wolf(&shard, 2.0);
+    set_faction(&shard, friend, CHARACTER_FACTION);
+    set_faction(&shard, wolf, NEUTRAL_FACTION);
+    wound(&shard, friend);
+    wound(&shard, wolf);
+
+    cast(&shard, FRIENDLY_HEAL);
+
+    assert!(health(&shard, friend) > WOLF_HEALTH / 2);
+    assert_eq!(
+        health(&shard, wolf),
+        WOLF_HEALTH / 2,
+        "vmangos SPELL_TARGETS_FRIENDLY"
+    );
+}
+
 fn stage(name: &str) -> (Standalone, u64) {
     let mut shard = Standalone::start(name);
     shard.publish_module();
@@ -157,7 +208,86 @@ fn stage(name: &str) -> (Standalone, u64) {
         CAPPED_BURST,
         &[("max_affected_targets", &CAPPED_TARGETS)],
     );
+    insert_heal(&shard, PARTY_HEAL, T_PARTY_AREA);
+    insert_heal(&shard, FRIENDLY_HEAL, T_AREA_ALLY);
     (shard, wolf)
+}
+
+// A second Character of the fixture Account beside the caster, in one Group with it.
+fn provision_group_member(shard: &Standalone) -> u64 {
+    shard.assert_call(
+        "create_character",
+        &["1", "\"Member\"", "1", "1", "0", "0", "0", "0", "0", "0"],
+    );
+    let member: u64 = number(
+        &shard.query_rows("SELECT guid FROM game_character WHERE name = 'Member'")[0],
+        "guid",
+    );
+    let caster = shard
+        .query_rows(&format!(
+            "SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {CHARACTER}"
+        ))
+        .remove(0);
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET map_id = {}, x = {}, y = {}, z = {} WHERE guid = {member}",
+        caster["map_id"],
+        number::<f32>(&caster, "x") + 1.0,
+        caster["y"],
+        caster["z"]
+    ));
+    shard.assert_call("debug_spawn_player_entity", &[&member.to_string()]);
+    set_faction(shard, member, CHARACTER_FACTION);
+    shard.insert_row(
+        "game_group",
+        &[("group_id", &PARTY), ("leader_guid", &CHARACTER)],
+    );
+    let no_identity = format!("0x{}", "00".repeat(32));
+    for (id, guid) in [(9_216_001u64, CHARACTER), (9_216_002, member)] {
+        shard.insert_row(
+            "game_group_member",
+            &[
+                ("id", &id),
+                ("group_id", &PARTY),
+                ("character_guid", &guid),
+                ("owner_identity", &no_identity),
+            ],
+        );
+    }
+    member
+}
+
+fn wound(shard: &Standalone, guid: u64) {
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = {}, max_health = {WOLF_HEALTH} WHERE guid = {guid}",
+        WOLF_HEALTH / 2
+    ));
+}
+
+fn insert_heal(shard: &Standalone, spell_id: u32, target: u8) {
+    let name = format!("Area heal fixture {spell_id}");
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &name),
+            ("school_mask", &0x02),
+            ("range_yd", &0),
+            ("is_negative", &false),
+            ("gcd_ms", &0),
+            ("cooldown_ms", &0),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, 0)),
+            ("spell_id", &spell_id),
+            ("kind", &E_HEAL),
+            ("target", &target),
+            ("base_points", &10),
+            ("radius_yd", &AREA_RADIUS_YD),
+        ],
+    );
 }
 
 // The bare Standalone has no faction rows; the wolves are the Character's enemies.
