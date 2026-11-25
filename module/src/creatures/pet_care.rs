@@ -163,6 +163,7 @@ fn food_benefit(pet_level: u32, item_level: u8) -> u32 {
 struct FeedEligibility {
     actor_is_player: bool,
     item_owned: bool,
+    item_offered: bool,
     pet_exists: bool,
     pet_owned: bool,
     pet_is_hunter: bool,
@@ -176,6 +177,9 @@ impl FeedEligibility {
     fn validate(self) -> Result<u32, &'static str> {
         if !self.actor_is_player || !self.item_owned {
             return Err("food is not owned by the acting player");
+        }
+        if self.item_offered {
+            return Err("food offered in a trade cannot be fed");
         }
         if !self.pet_exists {
             return Err("the player has no live pet");
@@ -247,6 +251,9 @@ fn feed_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), Stri
         item_owned: item.as_ref().is_some_and(|item| {
             item.owner_guid == actor_guid && crate::items::is_carried_slot(item.slot)
         }),
+        item_offered: item
+            .as_ref()
+            .is_some_and(|item| crate::trade::item_is_offered(ctx, actor_guid, item.guid)),
         pet_exists: live.is_some(),
         pet_owned: live
             .as_ref()
@@ -308,6 +315,7 @@ mod tests {
         FeedEligibility {
             actor_is_player: true,
             item_owned: true,
+            item_offered: false,
             pet_exists: true,
             pet_owned: true,
             pet_is_hunter: true,
@@ -325,6 +333,7 @@ mod tests {
         let cases: Vec<BreakGate> = vec![
             Box::new(|v| v.actor_is_player = false),
             Box::new(|v| v.item_owned = false),
+            Box::new(|v| v.item_offered = true),
             Box::new(|v| v.pet_exists = false),
             Box::new(|v| v.pet_owned = false),
             Box::new(|v| v.pet_is_hunter = false),

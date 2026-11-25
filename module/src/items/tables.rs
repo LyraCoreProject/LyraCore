@@ -315,7 +315,7 @@ impl ItemInstance {
     pub(super) fn insert_as(ctx: &ReducerContext, row: Self, source: Option<ItemPush>) -> Self {
         let row = ctx.db.game_item_instance().insert(row);
         crate::native::inventory::item_changed(ctx, None, Some(&row), source);
-        super::equip::changed(ctx, None, Some(&row));
+        written(ctx, None, Some(&row));
         row
     }
 
@@ -333,7 +333,7 @@ impl ItemInstance {
         let previous = items.guid().find(self.guid);
         let row = items.guid().update(self);
         crate::native::inventory::item_changed(ctx, previous.as_ref(), Some(&row), source);
-        super::equip::changed(ctx, previous.as_ref(), Some(&row));
+        written(ctx, previous.as_ref(), Some(&row));
         row
     }
 
@@ -352,22 +352,23 @@ impl ItemInstance {
         }
         // Sale preserves Petitions and pauses enchantments; see docs/schema.md when changing buyback.
         crate::native::inventory::item_sold(ctx, &self, remaining.as_ref(), sold, evicted);
-        super::equip::changed(ctx, Some(&self), remaining.as_ref());
+        written(ctx, Some(&self), remaining.as_ref());
     }
 
     pub(super) fn insert_restored(self, ctx: &ReducerContext) {
         let row = ctx.db.game_item_instance().insert(self);
         crate::native::inventory::item_restored(ctx, &row, true);
-        super::equip::changed(ctx, None, Some(&row));
+        written(ctx, None, Some(&row));
     }
 
     pub(super) fn update_restored(self, ctx: &ReducerContext) {
         let previous = ctx.db.game_item_instance().guid().find(self.guid);
         let row = ctx.db.game_item_instance().guid().update(self);
         crate::native::inventory::item_restored(ctx, &row, false);
-        super::equip::changed(ctx, previous.as_ref(), Some(&row));
+        written(ctx, previous.as_ref(), Some(&row));
     }
 
+    /// Deleting a worn item rewrites its owner's Character row; re-read a row held across it.
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) -> bool {
         let items = ctx.db.game_item_instance();
         let previous = items.guid().find(guid);
@@ -379,9 +380,16 @@ impl ItemInstance {
             release_cast_item(ctx, &row);
             crate::native::realm_petition::item_removed(ctx, &row);
             crate::native::inventory::item_changed(ctx, Some(&row), None, None);
-            super::equip::changed(ctx, Some(&row), None);
+            written(ctx, Some(&row), None);
         }
         removed
+    }
+}
+
+fn written(ctx: &ReducerContext, previous: Option<&ItemInstance>, current: Option<&ItemInstance>) {
+    super::equip::changed(ctx, previous, current);
+    if let Some(previous) = previous {
+        crate::trade::offered_item_written(ctx, previous, current);
     }
 }
 
