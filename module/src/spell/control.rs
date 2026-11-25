@@ -557,19 +557,47 @@ pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
     broke_channel || broke_cast || left_ritual
 }
 
+/// Spell ids of a unit's cast in progress, channel Auras and channelled ground areas.
+fn casting_spell_ids(ctx: &ReducerContext, unit_guid: u64) -> Vec<u32> {
+    let mut spell_ids: Vec<u32> = ctx
+        .db
+        .game_pending_cast()
+        .by_caster()
+        .filter(&unit_guid)
+        .map(|cast| cast.spell_id)
+        .chain(
+            ctx.db
+                .game_aura()
+                .by_caster()
+                .filter(&unit_guid)
+                .filter(|aura| is_channel_aura(ctx, aura))
+                .map(|aura| aura.spell_id),
+        )
+        .chain(
+            ctx.db
+                .game_ground_area()
+                .by_caster()
+                .filter(&unit_guid)
+                .filter(|area| super::cast::is_channelled_area(ctx, area))
+                .map(|area| area.spell_id),
+        )
+        .collect();
+    spell_ids.sort_unstable();
+    spell_ids.dedup();
+    spell_ids
+}
+
+/// vmangos `Spell::EffectInterruptCast`: ends the target's cast or channel and locks its school.
+/// The Module imports no `PreventionType` or interrupt flags, so every cast and channel yields:
+/// see the known gap on this symbol in conformance/features/spells/cast_and_interrupt.toml.
 pub(crate) fn interrupt_cast_and_lock(
     ctx: &ReducerContext,
     target_guid: u64,
     lockout_ms: i64,
 ) -> bool {
-    let pending = ctx.db.game_pending_cast();
-    // Keep spell ids before deleting casts so the lockout can read their school headers.
-    let spell_ids: Vec<u32> = pending
-        .by_caster()
-        .filter(&target_guid)
-        .map(|p| p.spell_id)
-        .collect();
-    let interrupted = interrupt_cast(ctx, target_guid);
+    // Keep spell ids before ending the casts so the lockout can read their school headers.
+    let spell_ids = casting_spell_ids(ctx, target_guid);
+    let interrupted = break_channel(ctx, target_guid);
     // vmangos `Creature::LockOutSpells` skips a template immune to silence.
     if interrupted && !template_names_mechanic(ctx, target_guid, MECHANIC_SILENCE) {
         let until = crate::time::now(ctx)
@@ -603,7 +631,7 @@ pub(crate) fn interrupt_cast_and_lock(
             }
         }
         log::info!(
-            "kick: caster {target_guid}'s cast cancelled + school locked for {lockout_ms}ms"
+            "kick: caster {target_guid}'s cast or channel ended + school locked for {lockout_ms}ms"
         );
     }
     interrupted
