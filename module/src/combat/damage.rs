@@ -280,8 +280,8 @@ fn leaves_one_health_or_less(health: u32, dmg: u32) -> bool {
     dmg > 0 && dmg.saturating_add(1) >= health
 }
 
-/// What `dmg` does to a unit at `health`; `floored` is asked only for a lethal hit that the
-/// opponent of a duelist does not deal.
+/// What `dmg` does to a unit at `health`. `floored` is asked only for a lethal hit on a unit outside
+/// a Duel: the Lethal Damage Floor protects creatures, never a duelist.
 pub(crate) fn damage_result(
     health: u32,
     dmg: u32,
@@ -291,7 +291,7 @@ pub(crate) fn damage_result(
     let lethal = is_lethal(health, dmg);
     match duel {
         Some(finish) if leaves_one_health_or_less(health, dmg) => {
-            if finish.spares_loser || !lethal || floored() {
+            if finish.spares_loser || !lethal {
                 DamageResult::EndsDuel(finish)
             } else {
                 DamageResult::Dies
@@ -750,11 +750,12 @@ mod lethality_tests {
     }
 
     #[test]
-    fn a_lethal_hit_from_a_third_party_that_the_floor_protects_against_ends_the_duel() {
-        assert_eq!(
-            damage_result(10, 50, FROM_THIRD_PARTY, || true),
-            ends_duel(FROM_THIRD_PARTY)
-        );
+    fn the_floor_is_never_asked_for_a_hit_on_a_duelist() {
+        for finish in [FROM_OPPONENT, FROM_THIRD_PARTY] {
+            damage_result(10, 50, finish, || {
+                panic!("the floor does not protect a duelist")
+            });
+        }
     }
 
     #[test]
