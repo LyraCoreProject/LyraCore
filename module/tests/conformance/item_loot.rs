@@ -1,7 +1,7 @@
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY};
 use lyracore_test_support::{Field, ReducerConnection, Standalone};
 
-use super::buy_in_slot::request;
+use super::buy_in_slot::{delivered_until, request};
 use super::{enter, fixture};
 
 const CMSG_OPEN_ITEM: u32 = 0x0ac;
@@ -349,6 +349,19 @@ impl Stage {
         ))[0]["open_loot"]
             .clone()
     }
+
+    /// Kills the Character and returns what its client receives until the release of `source`.
+    fn die_with_window_on(&mut self, source: u64) -> Vec<(u16, Vec<u8>)> {
+        self.shard
+            .assert_call("debug_set_health", &[&self.character.to_string(), "0"]);
+        delivered_until(&mut self.connection, &release_response(source))
+    }
+}
+
+fn release_response(source: u64) -> (u16, Vec<u8>) {
+    let mut body = source.to_le_bytes().to_vec();
+    body.push(1);
+    (SMSG_LOOT_RELEASE_RESPONSE, body)
 }
 
 fn despawned(shard: &Standalone, chest: u64) -> bool {
@@ -717,6 +730,52 @@ fn a_disconnect_releases_an_emptied_chest_left_open() {
         lyracore_test_support::POLL_TIMEOUT,
         || despawned(&shard, chest)
     ));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_character_that_dies_with_an_emptied_chest_open_releases_it() {
+    let mut stage = stage("item-loot-chest-death");
+    stage
+        .shard
+        .assert_call("debug_start_virtual_clock", &[VIRTUAL_START_MICROS]);
+    let chest = stage.spawn_chest_with_jerky(RESPAWNING_CHEST);
+    window(&stage.use_chest(chest), chest);
+    request(&mut stage.connection, CMSG_AUTOSTORE_LOOT_ITEM, vec![0]);
+
+    let packets = stage.die_with_window_on(chest);
+
+    assert!(packets.contains(&release_response(chest)));
+    assert_eq!(stage.open_loot(), "0");
+    assert!(stage.despawned(chest));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_character_that_dies_with_an_emptied_opened_item_open_releases_it() {
+    let mut stage = stage("item-loot-clam-death");
+    stage.lootable_template(CLAM, 0, CLAM_COPPER);
+    stage.shard.insert_row(
+        "game_item_loot",
+        &[
+            ("id", &900_501),
+            ("lootable_entry", &CLAM),
+            ("item_entry", &FIXTURE_JERKY),
+            ("chance_bp", &10_000),
+            ("count", &1),
+            ("min_count", &1),
+        ],
+    );
+    let (clam, slot) = stage.grant(CLAM);
+    window(&stage.open(slot), clam);
+    request(&mut stage.connection, CMSG_LOOT_MONEY, Vec::new());
+    request(&mut stage.connection, CMSG_AUTOSTORE_LOOT_ITEM, vec![0]);
+
+    let packets = stage.die_with_window_on(clam);
+
+    assert!(packets.contains(&release_response(clam)));
+    assert_eq!(stage.open_loot(), "0");
+    assert_eq!(stage.held(CLAM), 0, "the emptied clam is destroyed");
 }
 
 #[test]
