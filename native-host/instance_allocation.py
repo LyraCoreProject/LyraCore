@@ -108,10 +108,18 @@ def check(host):
     side_run = cross(solo, solo_guid, first, inside)
     assert side_run != party_run
     assert host.rows(f'SELECT instance_id FROM game_instance_binding WHERE character_guid = {solo_guid} AND map_id = 36', first) == [[solo_run]]
-    for client, guid in ((leader, leader_guid), (member, member_guid)):
-        assert cross(client, guid, continent, leave) == 0
+    assert cross(leader, leader_guid, continent, leave) == 0
+    host.wait_until(lambda: host.rows(f'SELECT world FROM game_party_character WHERE guid = {member_guid}')
+                    == host.rows(f'SELECT world FROM game_character_directory WHERE guid = {member_guid}'),
+                    'member arrival in the Instance did not reach the Realm')
+    [[reported]] = host.rows(f'SELECT revision FROM game_party_character WHERE guid = {member_guid}')
+    # Pins the Realm's offline report from the Instance Shard, as when the continent's report lags.
+    host.sql(f'UPDATE game_party_character SET online = false, revision = {2 ** 63 - 1} WHERE guid = {member_guid}')
+    assert cross(member, member_guid, continent, leave) == 0
     leader.send(0x31d)
     assert received(leader, 0x31e) == [struct.pack('<I', 36)]
+    for shard in (None, *worlds):
+        host.sql(f'UPDATE game_party_character SET online = true, revision = {reported} WHERE guid = {member_guid}', shard)
     if host.rows(f'SELECT instance_id FROM game_instance WHERE instance_id = {party_run}', first):
         host.call('debug_reap_instance', [party_run], database=first)
     assert host.rows(f'SELECT instance_id FROM game_instance_binding WHERE character_guid = {solo_guid} AND map_id = 36', first) == [[solo_run]]

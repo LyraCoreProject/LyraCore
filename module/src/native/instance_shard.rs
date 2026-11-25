@@ -622,20 +622,17 @@ pub(super) fn imported(
         return Ok(());
     }
     let now = ctx.timestamp.to_micros_since_unix_epoch();
-    let lease = ctx
-        .db
-        .game_instance_entry_lease()
-        .iter()
-        .find(|lease| {
-            lease.source == ctx.sender()
-                && request_id.is_none_or(|id| lease.request_id == id)
-                && lease.guid == guid
-                && lease.connection == connection
-                && lease.map_id == map
-                && lease.instance_id == instance_id
-                && lease.expires > now
-        })
-        .ok_or("dungeon admission is missing or expired")?;
+    if !ctx.db.game_instance_entry_lease().iter().any(|lease| {
+        lease.source == ctx.sender()
+            && request_id.is_none_or(|id| lease.request_id == id)
+            && lease.guid == guid
+            && lease.connection == connection
+            && lease.map_id == map
+            && lease.instance_id == instance_id
+            && lease.expires > now
+    }) {
+        return Err("dungeon admission is missing or expired".into());
+    }
     if !ctx
         .db
         .game_instance()
@@ -647,20 +644,15 @@ pub(super) fn imported(
     }
     realm_party::restore(ctx, guid);
     instance::bind_character(ctx, guid, instance_id, map, ctx.database_identity());
-    ctx.db.game_instance_entry_lease().id().delete(lease.id);
     Ok(())
 }
 
+/// Import keeps the admission reservation; it ends here, once the Character stands in the Instance.
 pub(super) fn arrived(ctx: &ReducerContext, guid: u64, map: u32, instance: u64) {
     let leases = ctx.db.game_instance_entry_lease();
     let ids: Vec<_> = leases
         .iter()
-        .filter(|lease| {
-            lease.source == ctx.database_identity()
-                && lease.guid == guid
-                && lease.map_id == map
-                && lease.instance_id == instance
-        })
+        .filter(|lease| lease.guid == guid && lease.map_id == map && lease.instance_id == instance)
         .map(|lease| lease.id)
         .collect();
     for id in ids {

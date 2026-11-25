@@ -81,8 +81,9 @@ For a remote dungeon, `native::instance_shard::enter` queues admission before te
 checks the source World Session and supplies its current Group snapshot. The destination applies
 that snapshot, checks party capacity, resolves the party lease or personal binding, and creates
 population there when needed. A sixty-second admission reservation keeps the lease occupied until
-Transfer import. Admission refusal leaves the Character on its source Shard. A reply must match the
-pending request and connection, and the Character must still be inside the entrance Area Trigger.
+the Character stands in the Instance. Admission refusal leaves the Character on its source Shard. A
+reply must match the pending request and connection, and the Character must still be inside the
+entrance Area Trigger.
 
 Package relocation uses the same allocator and admission reservations without a World Session. The
 Realm checks Package authority and directory ownership; the source checks its saved consent revision
@@ -92,8 +93,10 @@ check covers Package Group entry, binding reuse, exits and restart settlement.
 
 The source starts its existing teleport and Transfer after admission. The destination requires a
 live reservation for that source, Character, connection, map and Instance before accepting import.
-Import consumes the reservation, binds the arriving Character and restores its Group projection.
-The Transfer fence protects the Instance until release. Admission also clears its empty stamp.
+Import checks the reservation, binds the arriving Character and restores its Group projection.
+The imported Character has no world entity until its client enters the world, or, for a Package
+Character, until Transfer release restores its body. The reservation ends there, so a reset or the
+reaper cannot take the Instance while the Character loads. Admission also clears its empty stamp.
 An expired admission cannot create an unfenced arrival: import refuses and the existing Transfer
 abort restores the source position.
 
@@ -163,6 +166,14 @@ snapshot to the Shards that own the dungeon maps. The Instance Shard applies the
 and refuses a reset if a newer projection has changed the caller's Group or leadership. It checks
 occupancy in the same transaction that sets `reset_requested`: players, admission reservations and
 Transfer fences all protect a run. The single-Shard path uses the same reset rules locally.
+
+A Transfer reports the member offline from its source Shard, and the destination reports it online
+only after its client is in the world there. The Character directory moves before the destination
+releases that client, so the source's report can be stale while the member stands in the world. The
+Realm therefore counts a member online while its World Session lives on a World Shard other than
+the one that reported it offline. A member still loading into the dungeon keeps the reset refused
+through its admission reservation. The `moved_member_counts_online` Deliberate Deviation in
+`conformance/features/world/instance_reset.toml` records the loading-screen difference.
 
 Accepted leases immediately stop admitting Characters. The existing reaper removes their population
 and bindings on its next empty observation. A stale binding carried by a Character on another World
