@@ -96,8 +96,9 @@ prerequisites ([migration](danger-zones.md#quest-retake-migration)).
 
 `game_quest_flags` is a new private companion table for the source `QuestFlags` bits returned in
 quest queries. Absence means zero; reimport quests to populate an existing Realm. The public quest
-template layout stays unchanged for Packages. Existing authored templates default to zero flags.
-These stored bits do not implement the gameplay
+template layout stays unchanged for Packages. A Package sets a quest's flags with a `game_quest_flags`
+claim ([Package API](package-api.md#package-identifier-ranges)); an authored template with no claim
+has zero flags. These stored bits do not implement the gameplay
 rules for every flag; the import Compatibility Manifest continues to report that gap.
 
 `game_quest_share` is a new private table holding each Character's Quest Share: the sharer and

@@ -730,7 +730,13 @@ identifier must fit 24 bits.
   so an inserted spell never collides with imported or fixture data. It is the worked example the
   other bands follow.
 - **Quest.** `game_quest_template` and every child table (`game_quest_text` and the rest) are
-  Package-owned exactly when their quest is, so one band covers the whole family.
+  Package-owned exactly when their quest is, so one band covers the whole family. A quest is
+  shareable only when its `game_quest_flags` row holds the shareable bit (`0x8`), and absence means
+  no flags. A Package that inserts a quest inserts that row, keyed by `quest_entry` and carrying the
+  whole `flags` value, to make the quest shareable. A Package may update the `flags` of an imported
+  quest, but cannot insert a row for one. The base import writes a flags row for every quest it
+  imports, so an update needs a Realm whose quests were imported on or after 2026-11-04. A quests
+  reimport restores the base flags before the Package replay writes its claims.
 - **Loot.** No loot table's owning entity (a creature, a gameobject or a zone) is ever
   Package-invented, so the band checks a loot row's own identifier. The four loot tables
   (pickpocket, gameobject or chest, skinning, fishing) share the band; each has its own primary-key
