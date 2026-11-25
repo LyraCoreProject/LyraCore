@@ -665,7 +665,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                     }
                     caster
                         .as_ref()
-                        .is_some_and(|caster| crate::combat::is_hostile_target(ctx, caster, &c))
+                        .is_some_and(|caster| ground_area_may_harm(ctx, caster, &c))
                         .then_some(c)
                 })
                 .take(AOE_MAX_TARGETS)
@@ -758,6 +758,28 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
         for id in ids {
             schedules.scheduled_id().delete(id);
         }
+    }
+}
+
+/// vmangos `DynamicObjectUpdater::VisitHelper`: a ground area harms what its caster may attack.
+fn ground_area_may_harm(ctx: &ReducerContext, caster: &WorldEntity, target: &WorldEntity) -> bool {
+    crate::combat::may_harm(ctx, caster, target)
+        && character_area_may_harm(
+            crate::pvp::affecting_character(ctx, caster),
+            crate::pvp::affecting_character(ctx, target),
+            |by, of| crate::duel::active_opponents(ctx, by, of),
+        )
+}
+
+/// Patch 1.7: an unflagged Character's ground area harms another Character only in a Duel.
+fn character_area_may_harm(
+    by: Option<crate::pvp::Combatant>,
+    of: Option<crate::pvp::Combatant>,
+    dueling: impl FnOnce(u64, u64) -> bool,
+) -> bool {
+    match (by, of) {
+        (Some(by), Some(of)) => by.flagged || dueling(by.guid, of.guid),
+        _ => true,
     }
 }
 
@@ -907,5 +929,59 @@ mod ground_tick_tests {
             classify_ground_tick(0, 1000, 8000, 5000),
             GroundTickStatus::Reap
         );
+    }
+}
+
+#[cfg(test)]
+mod ground_area_target_tests {
+    use super::character_area_may_harm;
+    use crate::pvp::Combatant;
+
+    const CASTER: u64 = 1;
+    const OTHER: u64 = 2;
+
+    fn character(guid: u64, flagged: bool) -> Option<Combatant> {
+        Some(Combatant { guid, flagged })
+    }
+
+    #[test]
+    fn an_unflagged_characters_area_spares_another_character() {
+        assert!(!character_area_may_harm(
+            character(CASTER, false),
+            character(OTHER, true),
+            |_, _| false
+        ));
+    }
+
+    #[test]
+    fn a_flagged_characters_area_may_harm_another_character() {
+        assert!(character_area_may_harm(
+            character(CASTER, true),
+            character(OTHER, true),
+            |_, _| false
+        ));
+    }
+
+    #[test]
+    fn an_unflagged_characters_area_may_harm_its_duel_opponent() {
+        assert!(character_area_may_harm(
+            character(CASTER, false),
+            character(OTHER, false),
+            |by, of| (by, of) == (CASTER, OTHER)
+        ));
+    }
+
+    #[test]
+    fn an_area_between_a_character_and_a_creature_is_left_to_faction_rules() {
+        assert!(character_area_may_harm(
+            character(CASTER, false),
+            None,
+            |_, _| false
+        ));
+        assert!(character_area_may_harm(
+            None,
+            character(OTHER, false),
+            |_, _| false
+        ));
     }
 }

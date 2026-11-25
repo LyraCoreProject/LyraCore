@@ -1683,6 +1683,9 @@ impl GateCheck<'_> {
         let (hdr, effects) = (&spell.header, spell.effects.as_slice());
         let (spell_id, target_guid) = (request.spell_id, request.target_guid);
         let has_effect = |kind| effects.iter().any(|effect| effect.kind == kind);
+        // A Distract needs a ground point; a ground area's ground point is optional.
+        let aims_at_ground_point =
+            has_effect(E_DISTRACT) || (has_effect(E_PERSISTENT_AREA) && request.dest.is_some());
         match gate {
             CastGate::SpellReady => check_spell_ready(ctx, caster.guid, hdr, request),
             CastGate::CasterAlive => self.check_caster_alive(),
@@ -1791,7 +1794,10 @@ impl GateCheck<'_> {
                 check_target_aura_state(ctx, spell, caster.guid, target_guid)
             }
             CastGate::Behind => self.check_behind(),
-            CastGate::GroundPointLineOfSight if has_effect(E_DISTRACT) => {
+            CastGate::GroundPointLineOfSight
+                if aims_at_ground_point
+                    && hdr.attributes_ex_2 & SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT == 0 =>
+            {
                 check_ground_point_los(ctx, caster, request.dest)
             }
             CastGate::GroundPointLineOfSight => Ok(()),
@@ -1836,7 +1842,7 @@ impl GateCheck<'_> {
                 _ => Ok(()),
             },
             CastGate::Facing => self.check_facing(),
-            CastGate::GroundPointRange if has_effect(E_DISTRACT) => {
+            CastGate::GroundPointRange if aims_at_ground_point => {
                 let (x, y, z) = ground_point(request.dest)?;
                 let dist = distance_3d(caster.x, caster.y, caster.z, x, y, z);
                 check_cast_range("ground point", dist, hdr.range_yd, self.range_leeway_yd())

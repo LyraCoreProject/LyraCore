@@ -2,9 +2,10 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::spatial::grid_cell;
 use lyracore_shared::spell::taxonomy::{
-    CAST_FLAG_CHANNELED, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, E_PERSISTENT_AREA, T_SELF,
-    T_TARGET_ENEMY,
+    CAST_FLAG_CHANNELED, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, E_PERSISTENT_AREA, T_AREA_ENEMY,
+    T_SELF, T_TARGET_ENEMY,
 };
 use support::{actor, number, Field, Row, Standalone};
 
@@ -16,11 +17,16 @@ const CHANNELLED_AREA: u32 = 5_123_401;
 const PLAIN_AREA: u32 = 5_123_402;
 const SHORT_CHANNELLED_AREA: u32 = 5_123_403;
 const LETHAL_STRIKE: u32 = 5_123_404;
+const BLIZZARD_LIKE_AREA: u32 = 5_123_405;
+const BLIZZARD_RANGE_YD: u32 = 30;
+const AREA_RADIUS_YD: f32 = 10.0;
+const OUTSIDE_YD: f32 = 2.0 * AREA_RADIUS_YD;
 const AREA_DURATION_MS: u32 = 6_000;
 const SHORT_DURATION_MS: u32 = 3_000;
 const PERIOD_MS: u32 = 1_000;
 const TICK_DAMAGE: i32 = 10;
-// 50 ms scheduler ticks: just past three periods, and past the short area's expiry and reap.
+// 50 ms scheduler ticks: past one period, past three periods, past the short area's reap.
+const ONE_PERIOD_TICKS: &str = "25";
 const THREE_PERIOD_TICKS: &str = "61";
 const PAST_SHORT_EXPIRY_TICKS: &str = "90";
 // A cast at an equal level target misses at most 4% of the time.
@@ -137,6 +143,85 @@ fn a_channelled_ground_area_deals_its_last_tick_and_removes_its_dynamic_object_a
     assert_area_gone(&shard);
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_unit_that_walks_into_a_ground_area_after_the_cast_takes_its_ticks() {
+    let (shard, wolf) = stage("ground-area-walk-in");
+    let (x, y, z) = position(&shard, CHARACTER);
+    let centre = (x + OUTSIDE_YD, y);
+    cast_area_at(&shard, BLIZZARD_LIKE_AREA, (centre.0, centre.1, z));
+    assert_area_placed(&shard);
+
+    shard.assert_call("debug_advance_roll_batch", &[ONE_PERIOD_TICKS]);
+    assert_eq!(
+        health(&shard, wolf),
+        WOLF_HEALTH,
+        "a unit outside the area takes no tick"
+    );
+
+    move_unit(&shard, wolf, centre);
+    shard.assert_call("debug_advance_roll_batch", &[ONE_PERIOD_TICKS]);
+
+    assert!(
+        health(&shard, wolf) < WOLF_HEALTH,
+        "a unit that walks in takes the next tick"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_unit_that_walks_out_of_a_ground_area_takes_no_more_ticks() {
+    let (shard, wolf) = stage("ground-area-walk-out");
+    let (x, y, z) = position(&shard, wolf);
+    cast_area_at(&shard, BLIZZARD_LIKE_AREA, (x, y, z));
+    assert_area_placed(&shard);
+    shard.assert_call("debug_advance_roll_batch", &[ONE_PERIOD_TICKS]);
+    let after_first_tick = health(&shard, wolf);
+    assert!(
+        after_first_tick < WOLF_HEALTH,
+        "a unit inside the area takes its tick"
+    );
+
+    move_unit(&shard, wolf, (x + OUTSIDE_YD, y));
+    shard.assert_call("debug_advance_roll_batch", &[THREE_PERIOD_TICKS]);
+
+    assert_eq!(areas(&shard).len(), 1, "the area is still ticking");
+    assert_eq!(
+        health(&shard, wolf),
+        after_first_tick,
+        "a unit that walked out takes no more ticks"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creatures_ground_area_without_a_ground_point_lands_on_its_target() {
+    let (shard, wolf) = stage("ground-area-creature-target");
+    shard.assert_call(
+        "debug_force_cast_at",
+        &[
+            &wolf.to_string(),
+            &BLIZZARD_LIKE_AREA.to_string(),
+            &CHARACTER.to_string(),
+        ],
+    );
+
+    let rows = shard.query_rows(&format!(
+        "SELECT x, y FROM game_ground_area WHERE caster_guid = {wolf}"
+    ));
+    assert_eq!(
+        rows.len(),
+        1,
+        "the wolf must place one ground area: {rows:?}"
+    );
+    let area: (f32, f32) = (number(&rows[0], "x"), number(&rows[0], "y"));
+    let (x, y, _) = position(&shard, CHARACTER);
+    assert!(
+        (area.0 - x).abs() < 0.01 && (area.1 - y).abs() < 0.01,
+        "the area must land on the wolf's target, not on the wolf: {area:?}"
+    );
+}
+
 fn stage(name: &str) -> (Standalone, u64) {
     let mut shard = Standalone::start(name);
     shard.publish_module();
@@ -180,6 +265,25 @@ fn stage(name: &str) -> (Standalone, u64) {
         SHORT_CHANNELLED_AREA,
         SHORT_DURATION_MS,
         CAST_FLAG_CHANNELED,
+    );
+    insert_spell(
+        &shard,
+        BLIZZARD_LIKE_AREA,
+        &[
+            ("duration_ms", &AREA_DURATION_MS),
+            (
+                "cast_flags",
+                &(CAST_FLAG_IGNORE_RESISTANCES | CAST_FLAG_CHANNELED),
+            ),
+            ("range_yd", &BLIZZARD_RANGE_YD),
+        ],
+        &[
+            ("kind", &E_PERSISTENT_AREA),
+            ("target", &T_AREA_ENEMY),
+            ("base_points", &TICK_DAMAGE),
+            ("period_ms", &PERIOD_MS),
+            ("radius_yd", &AREA_RADIUS_YD),
+        ],
     );
     insert_spell(
         &shard,
@@ -233,7 +337,7 @@ fn insert_area_spell(shard: &Standalone, spell_id: u32, duration_ms: u32, channe
             ("target", &T_SELF),
             ("base_points", &TICK_DAMAGE),
             ("period_ms", &PERIOD_MS),
-            ("radius_yd", &10.0),
+            ("radius_yd", &AREA_RADIUS_YD),
         ],
     );
 }
@@ -249,10 +353,9 @@ fn insert_spell(shard: &Standalone, spell_id: u32, spell: &[Field], effect: &[Fi
         ("is_negative", &true),
         ("gcd_ms", &0),
         ("cooldown_ms", &0),
+        ("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES),
     ];
-    if !spell.iter().any(|(column, _)| *column == "cast_flags") {
-        spell_row.push(("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES));
-    }
+    spell_row.retain(|(column, _)| !spell.iter().any(|(given, _)| given == column));
     spell_row.extend_from_slice(spell);
     shard.insert_row("game_spell", &spell_row);
     let effect_id = packed_spell_effect_id(spell_id, 0);
@@ -262,7 +365,10 @@ fn insert_spell(shard: &Standalone, spell_id: u32, spell: &[Field], effect: &[Fi
 }
 
 fn cast_area(shard: &Standalone, spell_id: u32) {
-    let (x, y, z) = position(shard, CHARACTER);
+    cast_area_at(shard, spell_id, position(shard, CHARACTER));
+}
+
+fn cast_area_at(shard: &Standalone, spell_id: u32, (x, y, z): (f32, f32, f32)) {
     shard.assert_call(
         "debug_cast_spell_at",
         &[
@@ -274,6 +380,15 @@ fn cast_area(shard: &Standalone, spell_id: u32) {
             &z.to_string(),
         ],
     );
+}
+
+// The tick finds units by their grid cell, so a move must update it with the position.
+fn move_unit(shard: &Standalone, guid: u64, (x, y): (f32, f32)) {
+    let (grid_x, grid_y) = grid_cell(x, y);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = {x}, y = {y}, grid_x = {grid_x}, grid_y = {grid_y} \
+         WHERE guid = {guid}"
+    ));
 }
 
 fn step_forward(shard: &Standalone) {

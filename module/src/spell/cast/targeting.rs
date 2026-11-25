@@ -157,6 +157,10 @@ pub(crate) fn select_targets(
     e: &SpellEffect,
     dest: Option<(f32, f32, f32)>,
 ) -> Vec<u64> {
+    // A cast places one ground area; the effect's target says only where it goes.
+    if e.kind == E_PERSISTENT_AREA {
+        return vec![caster_guid];
+    }
     let one = if explicit == 0 { caster_guid } else { explicit };
     match e.target {
         T_SELF => vec![caster_guid],
@@ -773,9 +777,16 @@ pub(crate) fn apply_effect(
         | EffectKind::Blink
         | EffectKind::RecallHome
         | EffectKind::Dismount
-        | EffectKind::PersistentArea => {
-            apply_reposition_effect(ctx, e, hdr, caster_guid, target_guid, points, dest)
-        }
+        | EffectKind::PersistentArea => apply_reposition_effect(
+            ctx,
+            e,
+            hdr,
+            caster_guid,
+            target_guid,
+            cast_target_guid,
+            points,
+            dest,
+        ),
         EffectKind::CreateItem | EffectKind::Pickpocket => {
             apply_inventory_effect(ctx, e, caster_guid, target_guid, points)
         }
@@ -1287,12 +1298,14 @@ fn apply_threat_effect(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_reposition_effect(
     ctx: &ReducerContext,
     e: &SpellEffect,
     hdr: &Spell,
     caster_guid: u64,
     target_guid: u64,
+    cast_target_guid: u64,
     points: i32,
     dest: Option<(f32, f32, f32)>,
 ) -> EffectHit {
@@ -1316,7 +1329,12 @@ fn apply_reposition_effect(
             EffectHit::none()
         }
         E_PERSISTENT_AREA => {
-            create_ground_area(ctx, e, hdr, caster_guid, target_guid, points, dest);
+            let anchor_guid = if e.target == T_SELF || cast_target_guid == 0 {
+                caster_guid
+            } else {
+                cast_target_guid
+            };
+            create_ground_area(ctx, e, hdr, caster_guid, anchor_guid, points, dest);
             EffectHit::none()
         }
         _ => EffectHit::none(),
@@ -1673,6 +1691,7 @@ pub(crate) fn blink_forward(ctx: &ReducerContext, caster_guid: u64, dist_yd: f32
     }
 }
 
+/// Places the area at the cast's ground point, else at `anchor_guid` (vmangos `setUnitTarget`).
 fn create_ground_area(
     ctx: &ReducerContext,
     e: &SpellEffect,

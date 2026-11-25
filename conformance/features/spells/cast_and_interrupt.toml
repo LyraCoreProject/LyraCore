@@ -81,6 +81,51 @@ function = "a_channelled_ground_area_deals_its_last_tick_and_removes_its_dynamic
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_unit_that_walks_into_a_ground_area_after_the_cast_takes_its_ticks"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_unit_that_walks_out_of_a_ground_area_takes_no_more_ticks"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_creatures_ground_area_without_a_ground_point_lands_on_its_target"
+rung = "durable_module"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "a_persistent_area_periodic_damage_imports_as_a_ground_area_at_its_destination"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "a_persistent_area_periodic_damage_at_the_caster_imports_as_a_ground_area_on_the_caster"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "a_persistent_area_periodic_damage_that_outlasts_leaving_stays_an_aura_on_each_unit"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "a_persistent_area_aura_without_periodic_damage_keeps_its_aura_kind"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/scheduler.rs"
+function = "an_unflagged_characters_area_spares_another_character"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/scheduler.rs"
+function = "an_unflagged_characters_area_may_harm_its_duel_opponent"
+rung = "unit"
+
+[[tests]]
 path = "module/tests/interrupt_cast.rs"
 function = "an_interrupt_ends_a_channel_aura_and_locks_its_school"
 rung = "durable_module"
@@ -187,10 +232,16 @@ symbol = "check_power"
 evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::CheckPower returns SPELL_CAST_OK only for a non-pet creature whose power type is not mana or whose create mana is 0, and Spell::TakePower spends health or power for every caster unit."
 
 [[known_gaps]]
-description = "Blizzard, Rain of Fire, Volley and Hurricane place no ground area. Their one SPELL_EFFECT_PERSISTENT_AREA_AURA (27) imports as a channel periodic damage Aura on each enemy inside the radius at the cast, so an enemy that walks in takes no damage, one that walks out keeps taking it while in the spell's range, and no DynamicObject draws the ground effect. The channel still ends on a move, death, control effect or new cast."
+description = "A SPELL_EFFECT_PERSISTENT_AREA_AURA (27) that carries no periodic damage imports as an Aura on each enemy inside the radius when the cast lands, so a unit that walks in does not get it and one that walks out keeps it. This covers Hurricane's attack speed slow (Aura 138), the snare of Frost Trap Aura, Chill, Toxin and creature Blizzard 26607 (Aura 33), Manastorm's mana drain (Aura 64), the periodic triggers of Frost Trap Aura, Air Bubbles and Summoning Portal (Aura 23), Flare (Aura 41) and the dummy visuals (Aura 4). A spell whose effects 27 carry no periodic damage, such as Frost Trap Aura, Flare or a dummy visual, also draws no DynamicObject."
 path = "importer/src/spell.rs"
-symbol = "resolve_effect_kind"
-evidence = "Source reading, not measured. vmangos reference world rows 10, 5740, 1510 and 16914 carry effect 27 with aura 3 at implicit target 28 and SPELL_ATTR_EX_CHANNELED_1, and no other channel effect. At d9173eca, SpellEffects.cpp Spell::EffectPersistentAA creates a DynamicObject, and DynamicObject::Update applies the Aura to the units inside its radius on every update. Only Consecration and Flamestrike set periodic_damage_as_persistent_area."
+symbol = "is_ground_area_damage"
+evidence = "Source reading, not measured. At d9173eca, GridNotifiersImpl.h DynamicObjectUpdater::VisitHelper adds a PersistentAreaAura of the DynamicObject's effect to each unit inside on every update, and SpellAuras.cpp PersistentAreaAura::Update removes it once the unit leaves the radius or the DynamicObject is gone. A ground area carries one damage amount, so it has no place for another Aura."
+
+[[known_gaps]]
+description = "A ground area's tick hits a unit behind a wall, and a creature immune to area damage. It deals damage on the area's own period and puts no Aura on the unit, so a unit inside shows no debuff and every unit inside takes its tick at the same moment."
+path = "module/src/spell/scheduler.rs"
+symbol = "tick_ground_areas"
+evidence = "Source reading, not measured. At d9173eca, GridNotifiersImpl.h DynamicObjectUpdater::VisitHelper skips a unit outside the DynamicObject's line of sight when a Character placed it and a creature whose IsImmuneToAoe holds, and applies a PersistentAreaAura that ticks on the unit's own Aura timer."
 
 [[known_gaps]]
 description = "Damage taken neither shortens nor cancels a channel. vmangos delays a channel on a hit, shortening its Auras and its DynamicObject, interrupts it when no time remains, and cancels it outright when its ChannelInterruptFlags say so; the Module pushes back only a cast in progress and does not import ChannelInterruptFlags."
