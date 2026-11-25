@@ -108,10 +108,30 @@ def check(host):
     side_run = cross(solo, solo_guid, first, inside)
     assert side_run != party_run
     assert host.rows(f'SELECT instance_id FROM game_instance_binding WHERE character_guid = {solo_guid} AND map_id = 36', first) == [[solo_run]]
-    for client, guid in ((leader, leader_guid), (member, member_guid)):
-        assert cross(client, guid, continent, leave) == 0
+    assert cross(leader, leader_guid, continent, leave) == 0
+
+    def reported_where_held(guid):
+        [[held]] = host.rows(f'SELECT world FROM game_character_directory WHERE guid = {guid}')
+        return host.rows(f'SELECT world, online FROM game_party_character WHERE guid = {guid}') == [[held, True]]
+
+    for guid in (leader_guid, member_guid):
+        host.wait_until(lambda: reported_where_held(guid), 'Group member reports did not reach the Realm')
+    host.restore('game_party_character', f'guid = {member_guid}', 'online', 'revision')
+    [[reported]] = host.rows(f'SELECT revision FROM game_party_character WHERE guid = {member_guid}')
+    pinned = max([reported, *(clock for [clock] in host.rows('SELECT revision FROM game_directory_clock'))]) + 300_000_000
+    # Pins the Realm's offline report from the Instance Shard, as when the continent's report lags.
+    host.sql(f'UPDATE game_party_character SET online = false, revision = {pinned} WHERE guid = {member_guid}')
+    assert cross(member, member_guid, continent, leave) == 0
     leader.send(0x31d)
     assert received(leader, 0x31e) == [struct.pack('<I', 36)]
+    host.wait_until(lambda: host.rows(f'SELECT revision FROM game_party_character WHERE guid = {member_guid}', second) == [[pinned]],
+                    'the reset did not reach the second Instance Shard')
+    for shard in (None, *worlds):
+        host.sql(f'UPDATE game_party_character SET online = true, revision = {reported} WHERE guid = {member_guid}', shard)
+    member.send(0x4b)
+    received(member, 0x4d)
+    login(member, member_guid)
+    host.wait_until(lambda: reported_where_held(member_guid), 'the member did not report from the continent')
     if host.rows(f'SELECT instance_id FROM game_instance WHERE instance_id = {party_run}', first):
         host.call('debug_reap_instance', [party_run], database=first)
     assert host.rows(f'SELECT instance_id FROM game_instance_binding WHERE character_guid = {solo_guid} AND map_id = 36', first) == [[solo_run]]
