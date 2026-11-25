@@ -774,7 +774,7 @@ pub(crate) fn apply_effect(
             apply_threat_effect(ctx, e, hdr, caster_guid, target_guid, points)
         }
         EffectKind::Charge | EffectKind::Blink | EffectKind::RecallHome | EffectKind::Dismount => {
-            apply_reposition_effect(ctx, e, hdr, caster_guid, target_guid, points, dest)
+            apply_reposition_effect(ctx, e, caster_guid, target_guid)
         }
         // A ground area has no unit target; `place_ground_area` puts it down.
         EffectKind::PersistentArea => EffectHit::none(),
@@ -1292,11 +1292,8 @@ fn apply_threat_effect(
 fn apply_reposition_effect(
     ctx: &ReducerContext,
     e: &SpellEffect,
-    hdr: &Spell,
     caster_guid: u64,
     target_guid: u64,
-    points: i32,
-    dest: Option<(f32, f32, f32)>,
 ) -> EffectHit {
     match e.kind {
         E_CHARGE => {
