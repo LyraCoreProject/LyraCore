@@ -1053,6 +1053,7 @@ mod character_fence_tripwire {
 
     const WHITELIST: &[(&str, usize, &str)] = &[
         ("module/src/native/directory.rs", 1, "FENCED: the Operator directory census skips Characters behind the Transfer Gate"),
+        ("module/src/native/instance_shard.rs", 1, "the occupancy census reads the Instance of a Character imported behind the Transfer Gate that has not entered the world; no write"),
         ("module/src/helpers.rs", 2, "`character_by_guid` and `characters_by_name` apply the Transfer Gate to raw Character reads"),
         ("module/src/transfer/mod.rs", 4, "Transfer reads the fenced Character for export, destination materialization, durability checks, and the in-transit Instance census."),
         ("module/src/world.rs", 2, "`teleport` and `is_gm_character` take a guid already resolved through a fenced live entity"),

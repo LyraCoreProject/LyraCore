@@ -24,6 +24,8 @@ const PHYSICAL: i32 = 1;
 // SPELL_AURA_SCHOOL_IMMUNITY in the low byte of an immunity Aura's p1.
 const SOURCE_SCHOOL_IMMUNITY: i32 = 39;
 const EVADE_SPELL: u32 = 5_113_303;
+const EVADING_CAST: u32 = 5_113_304;
+const EVADING_CAST_TIME_MS: u32 = 10_000;
 // AttackOutcome::wire in game_combat_event_live.hit_info, and vmangos SpellMissInfo in
 // game_spell_cast_event_live.miss_info.
 const HIT_INFO_EVADE: &str = "9";
@@ -356,6 +358,61 @@ fn a_creature_whose_only_source_turns_friendly_evades_with_full_health() {
     );
     assert_eq!(number::<u32>(&wolf, "unit_flags") & IN_COMBAT, 0);
     assert_eq!(wolf["health"], wolf["max_health"]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_that_evades_stops_the_cast_it_began() {
+    let fight = Fight::start("threat-evade-cast", 3.0);
+    let wolf = &fight.wolf;
+    fight.shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &EVADING_CAST),
+            ("name", &"Evading cast fixture"),
+            ("school_mask", &FROST),
+            ("range_yd", &EVADE_SPELL_RANGE_YD),
+            ("is_negative", &true),
+            ("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES),
+            ("cast_time_ms", &EVADING_CAST_TIME_MS),
+        ],
+    );
+    fight.shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(EVADING_CAST, 0)),
+            ("spell_id", &EVADING_CAST),
+            ("kind", &E_DAMAGE),
+            ("base_points", &50),
+            ("target", &T_TARGET_ENEMY),
+        ],
+    );
+    fight.shard.assert_call(
+        "debug_begin_cast",
+        &[wolf, &EVADING_CAST.to_string(), VICTIM],
+    );
+    let casting = format!("SELECT spell_id FROM game_pending_cast WHERE caster_guid = {wolf}");
+    assert!(
+        !fight.shard.query_rows(&casting).is_empty(),
+        "the wolf is mid-cast"
+    );
+
+    fight.befriend_wolf_to_characters();
+    fight.settle();
+
+    assert!(
+        fight
+            .shard
+            .query_rows(&format!(
+                "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {wolf}"
+            ))
+            .is_empty(),
+        "the wolf evaded"
+    );
+    assert!(
+        fight.shard.query_rows(&casting).is_empty(),
+        "the evade interrupted the cast"
+    );
 }
 
 impl Fight {

@@ -184,7 +184,52 @@ fn crossing(name: &str) -> Crossing {
     crossing_with_equipment(name, false)
 }
 
+/// A Character that left `source` for `destination` by a committed Transfer that no connection
+/// has adopted yet.
+struct Departure {
+    source: Standalone,
+    destination: Standalone,
+    source_connection: ReducerConnection,
+    guid: u64,
+    items: Vec<BTreeMap<String, String>>,
+    state: Vec<BTreeMap<String, String>>,
+    departure: Vec<(u16, Vec<u8>)>,
+    escrow_items: Vec<BTreeMap<String, String>>,
+    escrow_state: Vec<BTreeMap<String, String>>,
+    transported_equip_auras: usize,
+    cooldowns: Vec<BTreeMap<String, String>>,
+    transfer: String,
+    blob: String,
+}
+
 fn crossing_with_equipment(name: &str, equipment: bool) -> Crossing {
+    let departed = depart(name, equipment);
+    let (connection, arrival) = adopt(
+        &departed.destination,
+        account_id(&departed.source),
+        departed.guid,
+        &departed.transfer,
+        &departed.blob,
+        false,
+    );
+    Crossing {
+        source: departed.source,
+        destination: departed.destination,
+        source_connection: departed.source_connection,
+        connection,
+        guid: departed.guid,
+        items: departed.items,
+        state: departed.state,
+        arrival,
+        departure: departed.departure,
+        escrow_items: departed.escrow_items,
+        escrow_state: departed.escrow_state,
+        transported_equip_auras: departed.transported_equip_auras,
+        cooldowns: departed.cooldowns,
+    }
+}
+
+fn depart(name: &str, equipment: bool) -> Departure {
     let (source, old_connection, guid, vendor) = stage(&format!("{name}-source"));
     let mut source_connection = authenticate(&source, guid);
     drop(old_connection);
@@ -238,7 +283,7 @@ fn crossing_with_equipment(name: &str, equipment: bool) -> Crossing {
     let cooldowns = source.query_rows(&format!(
         "SELECT spell_id,ready_at,category,category_ready_micros FROM game_spell_cd WHERE caster_guid = {guid}"
     ));
-    let transfer = &out["transfer_id"];
+    let transfer = out["transfer_id"].clone();
     let blob = serde_json::to_string(out["blob"].strip_prefix("0x").unwrap()).unwrap();
     let transported_equip_auras = if equipment {
         count_transported_equip_auras(&out["blob"])
@@ -263,39 +308,81 @@ fn crossing_with_equipment(name: &str, equipment: bool) -> Crossing {
     ));
     destination.assert_call(
         "import_character_blob",
-        &[transfer, &blob, r#"{"guid":0,"ownership":null}"#],
+        &[&transfer, &blob, r#"{"guid":0,"ownership":null}"#],
     );
     source.assert_call(
         "confirm_import",
-        &[transfer, r#"{"guid":0,"ownership":null}"#],
+        &[&transfer, r#"{"guid":0,"ownership":null}"#],
     );
     source.assert_call(
         "finish_transfer",
-        &[transfer, r#"{"guid":0,"ownership":null}"#],
+        &[&transfer, r#"{"guid":0,"ownership":null}"#],
     );
-    let (connection, arrival) = adopt(
-        &destination,
-        account_id(&source),
-        guid,
-        transfer,
-        &blob,
-        false,
-    );
-    Crossing {
+    Departure {
         source,
         destination,
         source_connection,
-        connection,
         guid,
         items,
         state,
-        arrival,
         departure,
         escrow_items,
         escrow_state,
         transported_equip_auras,
         cooldowns,
+        transfer,
+        blob,
     }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_transfer_handoff_that_no_connection_adopts_expires_after_its_release() {
+    let departed = depart("transfer-handoff-expiry", false);
+    let destination = &departed.destination;
+    let (connection, result) = receive_handoff(
+        destination,
+        account_id(&departed.source),
+        departed.guid,
+        &departed.transfer,
+        &departed.blob,
+    );
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let realm = format!(r#"{{"__identity__":"0x{}"}}"#, "11".repeat(32));
+    let released = destination.call(
+        "idc_native_transfer_release",
+        &[
+            &realm,
+            &departed.transfer,
+            &departed.guid.to_string(),
+            &connection.connection_id().to_string(),
+            "true",
+        ],
+    );
+    assert!(
+        released.status.success(),
+        "{}",
+        String::from_utf8_lossy(&released.stderr)
+    );
+    let handoffs = || {
+        destination
+            .query_rows("SELECT connection_id FROM game_native_handoff")
+            .len()
+    };
+    assert_eq!(
+        handoffs(),
+        1,
+        "the released Handoff waits for its connection"
+    );
+    assert!(
+        lyracore_test_support::poll_until(std::time::Duration::from_secs(45), || handoffs() == 0),
+        "a released Transfer Handoff that no connection adopts stayed"
+    );
+    drop(connection);
 }
 
 #[test]

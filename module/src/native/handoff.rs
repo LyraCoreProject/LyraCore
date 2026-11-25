@@ -42,13 +42,22 @@ crate::outside_table_catalog!(game_native_handoff);
 /// a late world entry answer cannot write a Handoff marker for a Handoff that has already expired.
 const ADOPTION_MICROS: i64 = 30_000_000;
 
-/// Writes the Handoff that waits for its connection, replacing an earlier one. Its deadline is a
-/// `game_pending_selection` row for `request_opcode`, the client request that started the Handoff.
+/// Writes the Handoff that waits for its connection, replacing an earlier one.
 pub(super) fn expect(ctx: &ReducerContext, handoff: NativeHandoff, request_opcode: u32) {
     let connection_id = handoff.connection_id;
     let handoffs = ctx.db.game_native_handoff();
     handoffs.connection_id().delete(connection_id);
     handoffs.insert(handoff);
+    await_adoption(ctx, connection_id, request_opcode);
+}
+
+/// Gives the connection's Handoff its adoption deadline: a `game_pending_selection` row for
+/// `request_opcode`, the client request that started the Handoff.
+pub(super) fn await_adoption(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    request_opcode: u32,
+) {
     super::realm_shard::record_pending(
         ctx,
         connection_id,
@@ -70,6 +79,12 @@ pub(super) fn abandon(ctx: &ReducerContext, connection_id: ConnectionId) {
     }
     handoffs.connection_id().delete(connection_id);
     super::realm_shard::cancel_selection(ctx, connection_id);
+    if let Some(guid) = handoff
+        .character_guid
+        .filter(|guid| handoff.transfer_id != 0 && !super::has_world_session(ctx, *guid))
+    {
+        super::transfer::clear_pending_playtest(ctx, guid);
+    }
     super::realm_shard::report_closed(ctx, connection_id, handoff.account_id);
 }
 

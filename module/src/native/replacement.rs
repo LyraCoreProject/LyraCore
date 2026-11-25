@@ -1,5 +1,6 @@
 //! A newer connection for an Account replaces the Account's World Session that is away on a World
-//! Shard. See docs/architecture.md#host-listeners-and-admission for the wait and its bound.
+//! Shard. See docs/architecture.md#host-listeners-and-admission for the wait, its bound and the
+//! end that stays owed past it.
 
 use spacetimedb::{
     reducer, table, ConnectionId, Identity, ReducerContext, ScheduleAt, Table, TimeDuration,
@@ -14,7 +15,7 @@ use crate::remote_bindings::peer as remote;
 
 /// How long a newer ticket waits for the away World Session to end: two resends of a refused end.
 const END_MICROS: i64 = 90_000_000;
-/// A refused end waits before it is sent again, as a refused Transfer release does.
+/// An owed end goes out again after this, as a refused Transfer release does.
 const RESEND_MICROS: i64 = 30_000_000;
 
 #[table(accessor = game_world_session_end, outbox(remote::idc_end_world_session))]
@@ -28,8 +29,8 @@ pub struct WorldSessionEnd {
     pub account_id: u64,
 }
 
-/// The end that a newer ticket of the Account waits for. It fires to resend a refused end, and at
-/// the deadline, when the Realm Shard stops waiting.
+/// How long tickets of the Account wait for the away World Session `call` names; a newer ticket
+/// keeps the time left. It fires at the deadline and gives up only while a ticket waits.
 #[table(accessor = game_world_session_end_retry, scheduled(retry_world_session_end))]
 pub struct WorldSessionEndRetry {
     #[primary_key]
@@ -43,99 +44,162 @@ pub struct WorldSessionEndRetry {
 }
 crate::virtual_clock_exempt!(game_world_session_end_retry);
 
-crate::outside_table_catalog!(game_world_session_end, game_world_session_end_retry);
+/// An end this Realm Shard owes `world` for one connection. Every 30 seconds it goes out again
+/// unless an earlier send to `world` still waits for its answer. It lasts until `world` accepts
+/// it, reports the World Session closed, or stops being a Peer Shard.
+#[table(accessor = game_world_session_owed_end, scheduled(resend_world_session_end))]
+pub struct WorldSessionOwedEnd {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+    #[unique]
+    pub connection: u128,
+    #[index(btree)]
+    pub account_id: u64,
+    pub world: Identity,
+}
+crate::virtual_clock_exempt!(game_world_session_owed_end);
+
+crate::outside_table_catalog!(
+    game_world_session_end,
+    game_world_session_end_retry,
+    game_world_session_owed_end
+);
 
 #[derive(Debug, PartialEq, Eq)]
 enum Replacement {
-    /// Ask the World Shard to end the away World Session.
-    Send(Identity),
-    /// The end is already asked for.
-    Wait,
+    /// Owe this World Shard the end of the away World Session and wait for it.
+    Wait(Identity),
     /// No Peer World Shard can end it; stop waiting.
     GiveUp,
 }
 
-/// `sent` is the connection and World Shard of the end already asked for.
-fn replacement(
-    away_connection: u128,
-    world: Option<Identity>,
-    peer: impl Fn(Identity) -> bool,
-    sent: Option<(u128, Identity)>,
-) -> Replacement {
+fn replacement(world: Option<Identity>, peer: impl Fn(Identity) -> bool) -> Replacement {
     match world {
-        Some(world) if peer(world) => {
-            if sent == Some((away_connection, world)) {
-                Replacement::Wait
-            } else {
-                Replacement::Send(world)
-            }
-        }
+        Some(world) if peer(world) => Replacement::Wait(world),
         _ => Replacement::GiveUp,
     }
 }
 
 /// Whether an earlier World Session of the Account is still away on a World Shard. The first call
-/// for an away World Session asks that World Shard to end it. A World Session on its way back to
-/// this Shard is replaced at once.
+/// for an away World Session owes that World Shard its end and starts the bound. A World Session
+/// on its way back to this Shard is replaced at once.
 pub(super) fn replacing(ctx: &ReducerContext, account_id: u64) -> bool {
+    let waits = ctx.db.game_world_session_end_retry();
     let Some(away) = ctx.db.game_native_away().account_id().find(account_id) else {
         handoff::abandon_account(ctx, account_id);
+        waits.account_id().delete(account_id);
         return false;
     };
-    let sent = ctx
-        .db
-        .game_world_session_end_retry()
-        .account_id()
-        .find(account_id)
-        .map(|retry| (retry.call.connection, retry.call.database.0));
-    match replacement(
-        away.connection_id.to_u128(),
-        away.world.or_else(|| world_shard(ctx)),
-        |world| is_peer(ctx, world),
-        sent,
-    ) {
-        Replacement::Send(world) => {
-            let deadline = ctx.timestamp + TimeDuration::from_micros(END_MICROS);
-            send(ctx, end_of(world, &away), deadline);
-            true
-        }
-        Replacement::Wait => true,
+    let world = match replacement(away.world.or_else(|| world_shard(ctx)), |world| {
+        is_peer(ctx, world)
+    }) {
+        Replacement::Wait(world) => world,
         Replacement::GiveUp => {
             give_up(ctx, &away);
-            false
+            return false;
         }
+    };
+    let connection = away.connection_id.to_u128();
+    owe(ctx, world, connection, account_id);
+    if waits
+        .account_id()
+        .find(account_id)
+        .is_none_or(|wait| wait.call.connection != connection)
+    {
+        waits.account_id().delete(account_id);
+        let deadline = ctx.timestamp + TimeDuration::from_micros(END_MICROS);
+        waits.insert(WorldSessionEndRetry {
+            scheduled_id: 0,
+            scheduled_at: deadline.into(),
+            account_id,
+            call: WorldSessionEnd {
+                id: 0,
+                database: remote::Identity(world),
+                connection,
+                account_id,
+            },
+            deadline,
+        });
     }
+    true
 }
 
-/// Asks `world` to end the away World Session, without a ticket that waits for it.
+/// Owes `world` the end of the away World Session, without a ticket that waits for it.
 pub(super) fn end_away(ctx: &ReducerContext, world: Identity, away: &NativeAway) {
-    ctx.db.game_world_session_end().insert(end_of(world, away));
+    owe(ctx, world, away.connection_id.to_u128(), away.account_id);
 }
 
-fn end_of(world: Identity, away: &NativeAway) -> WorldSessionEnd {
-    WorldSessionEnd {
+/// Sends `world` the end of `connection` unless it is already owed to `world`. An end owed to
+/// another World Shard follows the World Session to `world`.
+fn owe(ctx: &ReducerContext, world: Identity, connection: u128, account_id: u64) {
+    let owed = ctx.db.game_world_session_owed_end();
+    if owed
+        .connection()
+        .find(connection)
+        .is_some_and(|end| end.world == world)
+    {
+        return;
+    }
+    owed.connection().delete(connection);
+    owed.insert(WorldSessionOwedEnd {
+        scheduled_id: 0,
+        scheduled_at: (ctx.timestamp + TimeDuration::from_micros(RESEND_MICROS)).into(),
+        connection,
+        account_id,
+        world,
+    });
+    send(ctx, world, connection, account_id);
+}
+
+fn send(ctx: &ReducerContext, world: Identity, connection: u128, account_id: u64) {
+    ctx.db.game_world_session_end().insert(WorldSessionEnd {
         id: 0,
         database: remote::Identity(world),
-        connection: away.connection_id.to_u128(),
-        account_id: away.account_id,
+        connection,
+        account_id,
+    });
+}
+
+/// A Character Transfer moved `connection` from `source` to `target`; an end owed to the source
+/// is owed to the target from its next send. The move arrives before the Transfer release, so the
+/// target would refuse an end sent now.
+pub(super) fn moved(ctx: &ReducerContext, connection: u128, source: Identity, target: Identity) {
+    let owed = ctx.db.game_world_session_owed_end();
+    if let Some(mut end) = owed
+        .connection()
+        .find(connection)
+        .filter(|end| end.world == source)
+    {
+        end.world = target;
+        owed.scheduled_id().update(end);
     }
 }
 
-fn send(ctx: &ReducerContext, call: WorldSessionEnd, deadline: Timestamp) {
-    let retries = ctx.db.game_world_session_end_retry();
-    retries.account_id().delete(call.account_id);
-    retries.insert(WorldSessionEndRetry {
-        scheduled_id: 0,
-        scheduled_at: deadline.into(),
-        account_id: call.account_id,
-        call: WorldSessionEnd { id: 0, ..call },
-        deadline,
-    });
-    ctx.db
-        .game_world_session_end()
-        .insert(WorldSessionEnd { id: 0, ..call });
+/// `world` no longer holds the World Session of `connection`.
+pub(super) fn closed(ctx: &ReducerContext, connection: u128, world: Identity) {
+    let owed = ctx.db.game_world_session_owed_end();
+    if owed
+        .connection()
+        .find(connection)
+        .is_some_and(|end| end.world == world)
+    {
+        owed.connection().delete(connection);
+    }
 }
 
+/// The World Shards that this Realm Shard still owes the end of a World Session of the Account.
+pub(super) fn owed_worlds(ctx: &ReducerContext, account_id: u64) -> Vec<Identity> {
+    ctx.db
+        .game_world_session_owed_end()
+        .account_id()
+        .filter(account_id)
+        .map(|end| end.world)
+        .collect()
+}
+
+/// Stops waiting for the away World Session; an end owed for it stays owed.
 fn give_up(ctx: &ReducerContext, away: &NativeAway) {
     spacetimedb::log::warn!(
         "Account {} stops waiting for its away World Session to end",
@@ -158,28 +222,45 @@ pub fn world_session_end_answered(
     call: WorldSessionEnd,
     result: Result<(), String>,
 ) {
-    let Err(error) = result else {
-        return;
-    };
-    spacetimedb::log::warn!("World Shard refused to end a World Session: {error}");
-    let retries = ctx.db.game_world_session_end_retry();
-    let Some(retry) = retries.account_id().find(call.account_id).filter(|retry| {
-        retry.call.connection == call.connection && retry.call.database == call.database
-    }) else {
-        return;
-    };
-    let resend = ctx.timestamp + TimeDuration::from_micros(RESEND_MICROS);
-    let resend = if resend < retry.deadline {
-        resend
-    } else {
-        retry.deadline
-    };
-    retries.account_id().delete(call.account_id);
-    retries.insert(WorldSessionEndRetry {
+    match result {
+        Ok(()) => closed(ctx, call.connection, call.database.0),
+        Err(error) => {
+            spacetimedb::log::warn!("World Shard refused to end a World Session: {error}")
+        }
+    }
+}
+
+#[reducer]
+pub fn resend_world_session_end(
+    ctx: &ReducerContext,
+    end: WorldSessionOwedEnd,
+) -> Result<(), String> {
+    if ctx.sender() != ctx.database_identity() {
+        return Err("scheduler only".into());
+    }
+    let owed = ctx.db.game_world_session_owed_end();
+    owed.scheduled_id().delete(end.scheduled_id);
+    if !is_peer(ctx, end.world) {
+        spacetimedb::log::warn!(
+            "an end owed for Account {} stops: its World Shard is not a Peer Shard",
+            end.account_id
+        );
+        return Ok(());
+    }
+    let answered = !ctx
+        .db
+        .game_world_session_end()
+        .iter()
+        .any(|call| call.connection == end.connection && call.database.0 == end.world);
+    let end = owed.insert(WorldSessionOwedEnd {
         scheduled_id: 0,
-        scheduled_at: resend.into(),
-        ..retry
+        scheduled_at: (ctx.timestamp + TimeDuration::from_micros(RESEND_MICROS)).into(),
+        ..end
     });
+    if answered {
+        send(ctx, end.world, end.connection, end.account_id);
+    }
+    Ok(())
 }
 
 #[reducer]
@@ -190,10 +271,8 @@ pub fn retry_world_session_end(
     if ctx.sender() != ctx.database_identity() {
         return Err("scheduler only".into());
     }
-    ctx.db
-        .game_world_session_end_retry()
-        .scheduled_id()
-        .delete(retry.scheduled_id);
+    let waits = ctx.db.game_world_session_end_retry();
+    waits.scheduled_id().delete(retry.scheduled_id);
     let Some(away) = ctx
         .db
         .game_native_away()
@@ -201,7 +280,7 @@ pub fn retry_world_session_end(
         .find(retry.account_id)
         .filter(|away| {
             away.connection_id.to_u128() == retry.call.connection
-                && away.world.or_else(|| world_shard(ctx)) == Some(retry.call.database.0)
+                && super::admission::waiting(ctx, retry.account_id)
         })
     else {
         return Ok(());
@@ -209,7 +288,12 @@ pub fn retry_world_session_end(
     if ctx.timestamp >= retry.deadline {
         give_up(ctx, &away);
     } else {
-        send(ctx, retry.call, retry.deadline);
+        // A row the previous Module wrote fires at its resend time and waits on to its deadline.
+        waits.insert(WorldSessionEndRetry {
+            scheduled_id: 0,
+            scheduled_at: retry.deadline.into(),
+            ..retry
+        });
     }
     Ok(())
 }
@@ -283,7 +367,7 @@ pub fn idc_end_world_session(
     Ok(())
 }
 
-/// Sends this Realm Shard's World Shard an end for a connection, as a late duplicate arrives.
+/// Owes this Realm Shard's World Shard the end of a connection, as a late or refused end does.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_end_world_session(
@@ -293,12 +377,7 @@ pub fn debug_end_world_session(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let world = world_shard(ctx).ok_or("this Shard has no World Shard")?;
-    ctx.db.game_world_session_end().insert(WorldSessionEnd {
-        id: 0,
-        database: remote::Identity(world),
-        connection: connection_id.to_u128(),
-        account_id,
-    });
+    owe(ctx, world, connection_id.to_u128(), account_id);
     Ok(())
 }
 
@@ -313,33 +392,13 @@ mod tests {
     }
 
     #[test]
-    fn a_newer_ticket_asks_once_for_each_away_world_session() {
-        assert_eq!(
-            replacement(5, Some(world()), |_| true, None),
-            Replacement::Send(world())
-        );
-        assert_eq!(
-            replacement(5, Some(world()), |_| true, Some((5, world()))),
-            Replacement::Wait
-        );
-        let moved = Identity::from_byte_array([2; 32]);
-        assert_eq!(
-            replacement(5, Some(moved), |_| true, Some((5, world()))),
-            Replacement::Send(moved)
-        );
-        assert_eq!(
-            replacement(6, Some(world()), |_| true, Some((5, world()))),
-            Replacement::Send(world())
-        );
-    }
-
-    #[test]
     fn a_ticket_stops_waiting_for_a_world_shard_that_is_not_a_peer() {
         assert_eq!(
-            replacement(5, Some(world()), |_| false, Some((5, world()))),
-            Replacement::GiveUp
+            replacement(Some(world()), |_| true),
+            Replacement::Wait(world())
         );
-        assert_eq!(replacement(5, None, |_| true, None), Replacement::GiveUp);
+        assert_eq!(replacement(Some(world()), |_| false), Replacement::GiveUp);
+        assert_eq!(replacement(None, |_| true), Replacement::GiveUp);
     }
 
     #[test]

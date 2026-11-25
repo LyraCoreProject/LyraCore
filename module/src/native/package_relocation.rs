@@ -55,6 +55,15 @@ pub struct PackageArrival {
     source: Identity,
 }
 
+/// Characters this Shard imported whose bodies wait for Transfer release.
+pub(super) fn arriving(ctx: &ReducerContext) -> Vec<u64> {
+    ctx.db
+        .game_package_arrival()
+        .iter()
+        .map(|arrival| arrival.crossing.guid)
+        .collect()
+}
+
 #[derive(SpacetimeType)]
 struct Import {
     crossing: Crossing,

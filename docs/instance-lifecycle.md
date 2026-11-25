@@ -93,7 +93,10 @@ check covers Package Group entry, binding reuse, exits and restart settlement.
 The source starts its existing teleport and Transfer after admission. The destination requires a
 live reservation for that source, Character, connection, map and Instance before accepting import.
 Import consumes the reservation, binds the arriving Character and restores its Group projection.
-The Transfer fence protects the Instance until release. Admission also clears its empty stamp.
+The imported Character has no world entity until its Handoff is adopted, or, for a Package
+Character, until Transfer release restores its body. Until then the Handoff or the Package arrival
+keeps the Instance occupied, so a reset or the reaper cannot take it while the Character loads.
+Admission also clears its empty stamp.
 An expired admission cannot create an unfenced arrival: import refuses and the existing Transfer
 abort restores the source position.
 
@@ -161,8 +164,16 @@ On a split Realm, the source snapshots personal bindings into the ordered Group 
 The Realm checks the current World Session, leadership and member presence, then sends its Group
 snapshot to the Shards that own the dungeon maps. The Instance Shard applies the versioned snapshot
 and refuses a reset if a newer projection has changed the caller's Group or leadership. It checks
-occupancy in the same transaction that sets `reset_requested`: players, admission reservations and
-Transfer fences all protect a run. The single-Shard path uses the same reset rules locally.
+occupancy in the same transaction that sets `reset_requested`: players, admission reservations,
+Transfer fences and imported Characters not yet in the world all protect a run. The single-Shard path uses the same reset rules locally.
+
+A Transfer reports the member offline from its source Shard, and the destination reports it online
+only after its client is in the world there. The Character directory moves before the destination
+releases that client, so the source's report can be stale while the member stands in the world. The
+Realm therefore counts a member online while its World Session lives on a World Shard other than
+the one that reported it offline. A member still loading into the dungeon keeps the reset refused
+through occupancy. The `moved_member_counts_online` Deliberate Deviation in
+`conformance/features/world/instance_reset.toml` records where this differs from vmangos.
 
 Accepted leases immediately stop admitting Characters. The existing reaper removes their population
 and bindings on its next empty observation. A stale binding carried by a Character on another World

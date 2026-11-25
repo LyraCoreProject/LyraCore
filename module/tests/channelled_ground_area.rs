@@ -16,9 +16,12 @@ const FIRE: u32 = 0x04;
 const CHANNELLED_AREA: u32 = 5_123_401;
 const PLAIN_AREA: u32 = 5_123_402;
 const SHORT_CHANNELLED_AREA: u32 = 5_123_403;
+const TIMED_AREA: u32 = 5_123_405;
+const TIMED_CAST_MS: u32 = 10_000;
+const OTHER_MAP: &str = "1";
 const LETHAL_STRIKE: u32 = 5_123_404;
-const BLIZZARD_LIKE_AREA: u32 = 5_123_405;
-const FIRE_IMMUNITY: u32 = 5_123_406;
+const BLIZZARD_LIKE_AREA: u32 = 5_123_407;
+const FIRE_IMMUNITY: u32 = 5_123_408;
 // vmangos SPELL_AURA_SCHOOL_IMMUNITY, as Divine Shield carries it.
 const SOURCE_SCHOOL_IMMUNITY: i32 = 39;
 const BLIZZARD_RANGE_YD: u32 = 30;
@@ -179,6 +182,24 @@ fn a_unit_that_walks_into_a_ground_area_after_the_cast_takes_its_ticks() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_channelled_ground_area_ends_when_its_caster_teleports_on_the_map() {
+    let (shard, wolf) = stage("channelled-area-near-teleport");
+    cast_area(&shard, CHANNELLED_AREA);
+    assert_area_placed(&shard);
+
+    teleport(&shard, None);
+
+    assert_area_gone(&shard);
+    shard.assert_call("debug_advance_roll_batch", &[THREE_PERIOD_TICKS]);
+    assert_eq!(
+        health(&shard, wolf),
+        WOLF_HEALTH,
+        "a teleported caster's channel deals no tick"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_creatures_ground_area_without_a_ground_point_lands_on_its_target() {
     let (shard, wolf) = stage("ground-area-creature-target");
     shard.assert_call(
@@ -238,6 +259,24 @@ fn a_characters_ground_area_hits_a_reputation_faction_only_at_war() {
         health(&shard, enemy) < WOLF_HEALTH,
         "a faction the Character is at war with is hit"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_ground_area_without_a_channel_survives_a_teleport_on_the_map_and_ends_at_a_map_change() {
+    let (shard, _) = stage("plain-area-teleports");
+    cast_area(&shard, PLAIN_AREA);
+    let plain = assert_area_placed(&shard);
+
+    teleport(&shard, None);
+    assert_eq!(
+        assert_area_placed(&shard),
+        plain,
+        "a same-map teleport keeps the burn"
+    );
+
+    teleport(&shard, Some(OTHER_MAP));
+    assert_area_gone(&shard);
 }
 
 #[test]
@@ -322,6 +361,64 @@ fn a_caster_under_a_school_immunity_still_places_its_ground_area() {
     assert_area_placed(&shard);
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_ground_area_without_a_channel_ends_when_its_caster_enters_another_instance_of_the_map() {
+    let (shard, _) = stage("plain-area-instance-change");
+    cast_area(&shard, PLAIN_AREA);
+    assert_area_placed(&shard);
+
+    shard.assert_call("debug_create_fixture_instance", &[&CHARACTER.to_string()]);
+
+    let instance = shard.query_rows(&format!(
+        "SELECT instance_id FROM game_world_entity WHERE guid = {CHARACTER}"
+    ))[0]["instance_id"]
+        .clone();
+    assert_ne!(instance, "0", "the caster must have entered a new Instance");
+    assert_area_gone(&shard);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_cast_in_progress_ends_when_its_caster_teleports() {
+    let (shard, _) = stage("cast-teleport");
+    begin_timed_cast(&shard);
+
+    teleport(&shard, None);
+
+    assert_eq!(pending_casts(&shard), 0, "a teleport interrupts the cast");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_logout_ends_the_casters_ground_areas() {
+    let (shard, wolf) = stage("channelled-area-logout");
+    cast_area(&shard, PLAIN_AREA);
+    cast_area(&shard, CHANNELLED_AREA);
+    assert_eq!(areas(&shard).len(), 2, "the burn and the channel's area");
+
+    shard.assert_call("debug_logout_character", &[&CHARACTER.to_string()]);
+
+    assert_area_gone(&shard);
+    shard.assert_call("debug_advance_roll_batch", &[THREE_PERIOD_TICKS]);
+    assert_eq!(
+        health(&shard, wolf),
+        WOLF_HEALTH,
+        "a logged out caster's areas deal no tick"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_logout_ends_the_casters_cast_in_progress() {
+    let (shard, _) = stage("cast-logout");
+    begin_timed_cast(&shard);
+
+    shard.assert_call("debug_logout_character", &[&CHARACTER.to_string()]);
+
+    assert_eq!(pending_casts(&shard), 0, "a logout ends the cast");
+}
+
 fn stage(name: &str) -> (Standalone, u64) {
     let mut shard = Standalone::start(name);
     shard.publish_module();
@@ -361,6 +458,22 @@ fn stage(name: &str) -> (Standalone, u64) {
         CAST_FLAG_CHANNELED,
     );
     insert_area_spell(&shard, PLAIN_AREA, AREA_DURATION_MS, 0);
+    insert_spell(
+        &shard,
+        TIMED_AREA,
+        &[
+            ("duration_ms", &AREA_DURATION_MS),
+            ("cast_time_ms", &TIMED_CAST_MS),
+            ("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES),
+        ],
+        &[
+            ("kind", &E_PERSISTENT_AREA),
+            ("target", &T_SELF),
+            ("base_points", &TICK_DAMAGE),
+            ("period_ms", &PERIOD_MS),
+            ("radius_yd", &10.0),
+        ],
+    );
     insert_area_spell(
         &shard,
         SHORT_CHANNELLED_AREA,
@@ -556,6 +669,59 @@ fn move_unit(shard: &Standalone, guid: u64, (x, y): (f32, f32)) {
         "UPDATE game_world_entity SET x = {x}, y = {y}, grid_x = {grid_x}, grid_y = {grid_y} \
          WHERE guid = {guid}"
     ));
+}
+
+// A same-map move by default; `map_id` sends the caster to that map instead.
+fn teleport(shard: &Standalone, map_id: Option<&str>) {
+    let row = shard
+        .query_rows(&format!(
+            "SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {CHARACTER}"
+        ))
+        .remove(0);
+    let (x, y, z) = (
+        number::<f32>(&row, "x"),
+        number::<f32>(&row, "y"),
+        number::<f32>(&row, "z"),
+    );
+    shard.assert_call(
+        "debug_teleport",
+        &[
+            &CHARACTER.to_string(),
+            map_id.unwrap_or(&row["map_id"]),
+            &(x + 3.0).to_string(),
+            &y.to_string(),
+            &z.to_string(),
+            "0",
+        ],
+    );
+}
+
+fn begin_timed_cast(shard: &Standalone) {
+    let (x, y, z) = position(shard, CHARACTER);
+    shard.assert_call(
+        "debug_cast_spell_at",
+        &[
+            &CHARACTER.to_string(),
+            &TIMED_AREA.to_string(),
+            "0",
+            &x.to_string(),
+            &y.to_string(),
+            &z.to_string(),
+        ],
+    );
+    assert_eq!(
+        pending_casts(shard),
+        1,
+        "the timed cast must be in progress"
+    );
+}
+
+fn pending_casts(shard: &Standalone) -> usize {
+    shard
+        .query_rows(&format!(
+            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {CHARACTER}"
+        ))
+        .len()
 }
 
 fn step_forward(shard: &Standalone) {

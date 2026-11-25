@@ -82,6 +82,41 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/channelled_ground_area.rs"
+function = "a_channelled_ground_area_ends_when_its_caster_teleports_on_the_map"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_ground_area_without_a_channel_survives_a_teleport_on_the_map_and_ends_at_a_map_change"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_ground_area_without_a_channel_ends_when_its_caster_enters_another_instance_of_the_map"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_cast_in_progress_ends_when_its_caster_teleports"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_logout_ends_the_casters_ground_areas"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_logout_ends_the_casters_cast_in_progress"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/threat_victim_margin.rs"
+function = "a_creature_that_evades_stops_the_cast_it_began"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
 function = "a_unit_that_walks_into_a_ground_area_after_the_cast_takes_its_ticks"
 rung = "durable_module"
 
@@ -289,10 +324,10 @@ symbol = "ground_area_target"
 evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::SetTargetMap sets the destination of TARGET_LOCATION_DATABASE from sSpellMgr.GetSpellTargetPosition, and SpellEffects.cpp Spell::EffectPersistentAA creates the DynamicObject at that destination."
 
 [[known_gaps]]
-description = "A ground area's tick hits a unit behind a wall, and a creature immune to area damage. It deals damage on the area's own period and puts no Aura on the unit, so a unit inside shows no debuff and every unit inside takes its tick at the same moment."
+description = "A ground area's tick hits a unit behind a wall, a creature immune to area damage, a unit whose flags make it not attackable or not selectable, and a Game Master Character, and it reads no contested PvP or forced reaction. It deals damage on the area's own period and puts no Aura on the unit, so a unit inside shows no debuff and every unit inside takes its tick at the same moment."
 path = "module/src/spell/scheduler.rs"
 symbol = "tick_ground_areas"
-evidence = "Source reading, not measured. At d9173eca, GridNotifiersImpl.h DynamicObjectUpdater::VisitHelper skips a unit outside the DynamicObject's line of sight when a Character placed it and a creature whose IsImmuneToAoe holds, and applies a PersistentAreaAura that ticks on the unit's own Aura timer."
+evidence = "Source reading, not measured. At d9173eca, GridNotifiersImpl.h DynamicObjectUpdater::VisitHelper skips a unit outside the DynamicObject's line of sight when a Character placed it, a creature whose IsImmuneToAoe holds and a Game Master; Object.cpp IsValidAttackTarget asks IsTargetableBy, and GetReactionTo reads contested PvP and forced ranks. VisitHelper applies a PersistentAreaAura that ticks on the unit's own Aura timer."
 
 [[known_gaps]]
 description = "Damage taken neither shortens nor cancels a channel. vmangos delays a channel on a hit, shortening its Auras and its DynamicObject, interrupts it when no time remains, and cancels it outright when its ChannelInterruptFlags say so; the Module pushes back only a cast in progress and does not import ChannelInterruptFlags."

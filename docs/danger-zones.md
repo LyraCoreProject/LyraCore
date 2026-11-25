@@ -958,6 +958,13 @@ Account with a World Session on that Shard then waits the full 90-second bound b
 Shard admits it, and the older World Session continues until its next request fails or it closes.
 A Realm Shard on the old Module never sends the call, so the World Shards may go first.
 
+The owed end adds the private scheduled `game_world_session_owed_end` table to the Realm Shard. It
+starts empty; no reducer argument changes. A Realm Shard on this Module sends an owed end to a World
+Shard on an older Module again every 30 seconds until that World Shard is published or the World
+Session closes, so publish the World Shards first here too. A `game_world_session_end_retry` row
+that the previous Module scheduled at a resend time waits on to its deadline, and the waiting ticket
+owes the end again on its next Login Queue pass.
+
 ## 2. Tooling gotchas
 
 - **`spacetime sql` (2.5):** no `ORDER BY`, no `IN` or subqueries, no `Timestamp` or `Identity`

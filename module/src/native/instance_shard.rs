@@ -368,7 +368,7 @@ pub fn idc_world_instance_entry(
         instance.last_empty_at_micros = 0;
         ctx.db.game_instance().instance_id().update(instance);
     }
-    // Bindings travel with the Character; the admission lease protects this allocation until import.
+    // Bindings travel with the Character; the admission reservation holds this run until import.
     ctx.db
         .game_instance_binding()
         .by_character()
@@ -668,14 +668,31 @@ pub(super) fn arrived(ctx: &ReducerContext, guid: u64, map: u32, instance: u64) 
     }
 }
 
+/// Instances a Character is entering: admitted but not imported, or imported but not in the world.
 pub(crate) fn occupied(ctx: &ReducerContext) -> Vec<u64> {
+    use super::handoff::game_native_handoff;
+    use crate::game_character;
+
     let now = ctx.timestamp.to_micros_since_unix_epoch();
-    ctx.db
-        .game_instance_entry_lease()
+    let mut entering: Vec<u64> = ctx
+        .db
+        .game_native_handoff()
         .iter()
-        .filter(|lease| lease.expires > now)
-        .map(|lease| lease.instance_id)
-        .collect()
+        .filter(|handoff| handoff.transfer_id != 0)
+        .filter_map(|handoff| handoff.character_guid)
+        .chain(super::package_relocation::arriving(ctx))
+        .filter_map(|guid| ctx.db.game_character().guid().find(guid))
+        .map(|character| character.pending_instance_id)
+        .filter(|instance| *instance != 0)
+        .collect();
+    entering.extend(
+        ctx.db
+            .game_instance_entry_lease()
+            .iter()
+            .filter(|lease| lease.expires > now)
+            .map(|lease| lease.instance_id),
+    );
+    entering
 }
 
 pub(super) fn return_from_reaped(
