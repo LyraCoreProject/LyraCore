@@ -11,11 +11,16 @@ use crate::dump::{parse_table, push_insert, TableRows};
 // Imported points sit far above the ids the member table's own sequence hands out.
 const IMPORTED_POINT_BAND: u64 = 1 << 40;
 
+// One `arm_pools` call brings up at most this many objects, as one static spawn batch loads.
+const ROLL_BATCH_OBJECTS: u64 = 250;
+
 pub(super) struct GameobjectPools {
     owned: HashSet<u32>,
     pool_rows: Vec<String>,
     member_rows: Vec<String>,
     link_rows: Vec<String>,
+    /// `arm_pools` payloads: top-level pool ids, grouped by the objects they can bring up.
+    pub(super) roll_batches: Vec<String>,
 }
 
 impl GameobjectPools {
@@ -77,7 +82,53 @@ pub(super) fn pool_weights(limit: u32, chances_bp: &[u32]) -> Vec<u32> {
         .collect()
 }
 
-/// The source pools that own placements; one under a pool without a limit never spawns.
+/// vmangos `CheckPool`: a top-level limit-1 group of only chanced entries must fill a whole roll.
+fn top_level_pool_spawns(limit: u32, groups: [&[u32]; 2]) -> bool {
+    limit != 1
+        || groups.iter().all(|chances| {
+            chances.is_empty() || chances.contains(&0) || chances.iter().sum::<u32>() == 10_000
+        })
+}
+
+/// The most objects a pool can bring up: its limit's worth of members or child pools.
+fn roll_bound(
+    pool: u64,
+    limits: &BTreeMap<u64, u32>,
+    children: &BTreeMap<u64, Vec<(u64, u32)>>,
+    member_count: &BTreeMap<u64, usize>,
+) -> u64 {
+    let kids = children.get(&pool).map_or(&[][..], Vec::as_slice);
+    let entries = kids.len() + member_count.get(&pool).copied().unwrap_or(0);
+    let slots = u64::from(limits[&pool]).min(entries as u64);
+    let widest_child = kids
+        .iter()
+        .map(|&(child, _)| roll_bound(child, limits, children, member_count))
+        .max()
+        .unwrap_or(1);
+    slots * widest_child.max(1)
+}
+
+/// `arm_pools` payloads from (top-level pool, objects it can bring up), `ROLL_BATCH_OBJECTS` each.
+pub(super) fn group_rolls(roots: impl IntoIterator<Item = (u64, u64)>) -> Vec<String> {
+    let mut batches = Vec::new();
+    let mut batch: Vec<String> = Vec::new();
+    let mut batch_objects = 0;
+    for (root, objects) in roots {
+        if !batch.is_empty() && batch_objects + objects > ROLL_BATCH_OBJECTS {
+            batches.push(batch.join(";"));
+            batch.clear();
+            batch_objects = 0;
+        }
+        batch.push(root.to_string());
+        batch_objects += objects;
+    }
+    if !batch.is_empty() {
+        batches.push(batch.join(";"));
+    }
+    batches
+}
+
+/// The source pools that own placements; one under a pool that never spawns writes no row.
 pub(super) fn collect(
     dump: &(impl TableRows + ?Sized),
     placements: &[GoPlacement],
@@ -137,6 +188,10 @@ pub(super) fn collect(
             never_spawn += 1;
             continue;
         }
+        let state = by_guid[&guid].initial_state;
+        if state != 0 {
+            bail!("gameobject {guid}: a pooled placement starts in state {state}, not ready");
+        }
         let map = by_guid[&guid].map;
         root_maps
             .entry(id)
@@ -154,6 +209,32 @@ pub(super) fn collect(
             children.entry(parent).or_default().push((child, chance));
         }
     }
+    let member_chances = |pool: u64| -> Vec<u32> {
+        pool_members.get(&pool).map_or_else(Vec::new, |members| {
+            members.iter().map(|&(_, chance)| chance).collect()
+        })
+    };
+    let child_chances = |pool: u64| -> Vec<u32> {
+        children.get(&pool).map_or_else(Vec::new, |kids| {
+            kids.iter().map(|&(_, chance)| chance).collect()
+        })
+    };
+    let silent_roots: BTreeSet<u64> = root_of
+        .values()
+        .copied()
+        .filter(|&root| {
+            !top_level_pool_spawns(limits[&root], [&member_chances(root), &child_chances(root)])
+        })
+        .collect();
+    for (pool, members) in &pool_members {
+        if silent_roots.contains(&root_of[pool]) {
+            never_spawn += members.len();
+        }
+    }
+    root_of.retain(|_, root| !silent_roots.contains(root));
+    pool_members.retain(|pool, _| root_of.contains_key(pool));
+    children.retain(|parent, _| root_of.contains_key(parent));
+
     let mut pool_rows = Vec::new();
     let mut link_rows = Vec::new();
     for (&pool, &root) in &root_of {
@@ -188,17 +269,28 @@ pub(super) fn collect(
         }
     }
     let roots: BTreeSet<u64> = root_of.values().copied().collect();
+    let member_count: BTreeMap<u64, usize> = pool_members
+        .iter()
+        .map(|(&pool, members)| (pool, members.len()))
+        .collect();
+    let roll_batches = group_rolls(
+        roots
+            .iter()
+            .map(|&root| (root, roll_bound(root, &limits, &children, &member_count))),
+    );
     eprintln!(
-        "gameobject pools: {} top-level and {} nested pools hold {} placements; {never_spawn} \
-         placements belong to a pool that never spawns",
+        "gameobject pools: {} top-level and {} nested pools hold {} placements, rolled in {} \
+         batches; {never_spawn} placements belong to a pool that never spawns",
         roots.len(),
         root_of.len() - roots.len(),
-        member_rows.len()
+        member_rows.len(),
+        roll_batches.len()
     );
     Ok(GameobjectPools {
         owned: membership.keys().copied().collect(),
         pool_rows,
         member_rows,
         link_rows,
+        roll_batches,
     })
 }

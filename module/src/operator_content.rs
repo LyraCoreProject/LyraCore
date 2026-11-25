@@ -476,7 +476,7 @@ fn update_gameobject(
     ))
 }
 
-/// Moves an open-world pool member's placement and shows its object at once with the edit.
+/// Moves an open-world pool member within its map and shows its object at once with the edit.
 fn update_pool_member(
     ctx: &ReducerContext,
     guid: u64,
@@ -489,9 +489,14 @@ fn update_pool_member(
         .guid()
         .find(guid)
         .ok_or_else(|| format!("gameobject spawn {guid} does not exist"))?;
+    if fields.map_id != member.map_id {
+        return Err(format!(
+            "gameobject {guid} is a member of pool {}; the import owns the pool's map",
+            member.pool_id
+        ));
+    }
     check_gameobject_fields(ctx, fields)?;
     member.template_entry = fields.template_entry;
-    member.map_id = fields.map_id;
     member.x = fields.x;
     member.y = fields.y;
     member.z = fields.z;

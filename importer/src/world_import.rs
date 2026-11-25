@@ -1385,6 +1385,7 @@ pub(crate) struct DumpPlan {
     pub(crate) spawn_row_count: usize,
     pub(crate) go_batches: Vec<String>,
     pub(crate) go_row_count: usize,
+    pub(crate) pool_roll_batches: Vec<String>,
     pub(crate) eventai_definition_batches: Vec<String>,
     pub(crate) eventai_relay_definition_batches: Vec<String>,
     pub(crate) eventai_definition_count: u64,
@@ -1412,6 +1413,9 @@ impl DumpPlan {
                     },
                     batch.as_str(),
                 ));
+            }
+            for batch in &self.pool_roll_batches {
+                batches.push(("arm_pools", batch.as_str()));
             }
         }
         if family_active(args, "creature-ai") {
@@ -2417,13 +2421,19 @@ fn vmangos_gameobjects_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Re
         .map(GoPlacement::packed_row)
         .collect();
     let count = insert_row_count(&stmts) + static_rows.len() as u64;
+    let mut go_batches: Vec<String> = static_rows
+        .chunks(SPAWN_BATCH)
+        .map(|rows| rows.join(";"))
+        .collect();
+    // The first batch clears the old objects, so it runs even when every placement is pooled.
+    if go_batches.is_empty() {
+        go_batches.push(String::new());
+    }
     Ok(DumpPlan {
         stmts,
         go_row_count: static_rows.len(),
-        go_batches: static_rows
-            .chunks(SPAWN_BATCH)
-            .map(|rows| rows.join(";"))
-            .collect(),
+        go_batches,
+        pool_roll_batches: pools.roll_batches,
         stamps: vec![(lyracore_package_delta::GAMEOBJECT_FAMILY, count)],
         world_source_manifest: Some(serde_json::to_string_pretty(&gameobject_findings(
             dump, args,
@@ -2620,6 +2630,7 @@ fn combined_vmangos_plan(source: &impl TableRows, args: &WorldImportArgs) -> Res
         combined.spawn_row_count += plan.spawn_row_count;
         combined.go_batches.extend(plan.go_batches);
         combined.go_row_count += plan.go_row_count;
+        combined.pool_roll_batches.extend(plan.pool_roll_batches);
         combined
             .eventai_definition_batches
             .extend(plan.eventai_definition_batches);

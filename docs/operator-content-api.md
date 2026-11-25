@@ -413,16 +413,18 @@ goobers among gameobjects, so another gameobject type created on such a map neve
 Instance.
 
 **Gameobject update.** The Module removes the old object the way a Relay despawn does
-(`despawn_from_relay`): its loot, unlock state, trap cooldown, collider and row. Then it writes the
-new row, calculates `grid_x`, `grid_y` and `cell`, and registers the collider again. The guid stays.
+(`despawn_from_relay`): its loot, open Loot Windows, unlock state, trap cooldown, collider and row.
+Then it writes the new row, calculates `grid_x`, `grid_y` and `cell`, and registers the collider
+again. The guid stays.
 
 **Gameobject delete.** The same removal, without a new row. Copies in running Instances stay until
 the Instance resets.
 
 **Pooled gameobject update.** An open-world object a pool rolled (`POOL_TAG` set, no Instance copy
-bit) is no Authored Spawn, but an update of it is allowed. The Module writes the new template,
-map, position, orientation and rotation into its pool member, so every later roll of that member
-stands there, and replaces the object as above, shown at once. The member keeps its pool, weight
+bit) is no Authored Spawn, but an update of it is allowed within its map. The Module writes the new
+template, position, orientation and rotation into its pool member, so every later roll of that
+member stands there, and replaces the object as above, shown at once. A map change is refused: the
+import owns the pool's map. The member keeps its pool, weight
 and respawn range, and a `state` of 1 lasts only until its next roll. A member that is not up has
 no object, so a tool cannot reach it.
 

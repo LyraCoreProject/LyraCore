@@ -17,11 +17,14 @@ const LEFT_POOL: u32 = 5_288_101;
 const RIGHT_POOL: u32 = 5_288_102;
 const NODE_POOL: u32 = 5_288_103;
 const SPREAD_POOL: u32 = 5_288_110;
+const MIXED_POOL: u32 = 5_288_120;
+const MIXED_CHILD_POOL: u32 = 5_288_121;
 
 const LEFT_POINT: u64 = 5_288_201;
 const RIGHT_POINT: u64 = 5_288_202;
 const NODE_POINT: u64 = 5_288_203;
 const SPREAD_POINTS: u64 = 5_288_300;
+const MIXED_POINTS: u64 = 5_288_400;
 
 struct Place {
     map_id: u32,
@@ -333,6 +336,14 @@ fn an_operator_update_moves_a_pooled_member_and_a_delete_is_refused() {
     assert_eq!(number::<f32>(object, "x"), moved_x);
     assert!(shown(object));
 
+    let mut other_map = fields.clone();
+    other_map["map_id"] = serde_json::json!(at.map_id + 1);
+    refused(
+        &shard,
+        "operator_update_gameobject",
+        &[&guid, &other_map.to_string()],
+        "the import owns the pool's map",
+    );
     refused(
         &shard,
         "operator_delete_gameobject",
@@ -340,6 +351,69 @@ fn an_operator_update_moves_a_pooled_member_and_a_delete_is_refused() {
         "the import owns the pool",
     );
     assert_eq!(objects(&shard, NODE).len(), 1);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_pools_child_pools_and_own_members_share_its_limit() {
+    let (shard, at) = realm("gameobject-pool-mixed");
+    node_template(&shard, SPREAD_NODE);
+    pool(&shard, MIXED_POOL, 1);
+    link(&shard, MIXED_POOL, 0, at.map_id);
+    pool(&shard, MIXED_CHILD_POOL, 1);
+    link(&shard, MIXED_CHILD_POOL, MIXED_POOL, at.map_id);
+    let child_place = Place {
+        x: at.x + 1.0,
+        ..at
+    };
+    member(
+        &shard,
+        MIXED_POINTS,
+        MIXED_CHILD_POOL,
+        SPREAD_NODE,
+        &child_place,
+        0,
+    );
+    let own_place = Place {
+        x: at.x + 2.0,
+        ..at
+    };
+    member(
+        &shard,
+        MIXED_POINTS + 1,
+        MIXED_POOL,
+        SPREAD_NODE,
+        &own_place,
+        0,
+    );
+
+    shard.assert_call("arm_all_pools", &[]);
+
+    assert_eq!(
+        objects(&shard, SPREAD_NODE).len(),
+        1,
+        "one object for a limit of 1"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_import_rolls_listed_top_level_pools_again_without_doubling_them() {
+    let (shard, at) = realm("gameobject-pool-arm-batch");
+    nested_chests(&shard, &at);
+    let up = || objects(&shard, CHEST_A).len() + objects(&shard, CHEST_B).len();
+
+    for _ in 0..2 {
+        shard.assert_call("arm_pools", &[&format!("\"{MOTHER_POOL}\"")]);
+        assert_eq!(up(), 1);
+    }
+    refused(
+        &shard,
+        "arm_pools",
+        &[&format!("\"{LEFT_POOL}\"")],
+        "is not a top-level pool",
+    );
+    assert_eq!(up(), 1);
 }
 
 #[test]

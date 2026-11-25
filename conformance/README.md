@@ -788,8 +788,8 @@ can reach the EventAI engine, movement and combat. `seed::seed_production_core` 
 `spellbook::grant_createinfo_spells`, which also leads to Native Host spell notices. The importer
 calls terrain, navigation, vmap, GameObject, creature-spawn and EventAI import reducers; spawn
 replacement reaches `creatures/tick/lifecycle.rs` and gameplay cleanup.
-`importer/scripts/import-world.sh` then calls `debug_repair_after_publish`, `restore_taxi_fixture`
-and `arm_all_pools`. Repair seeds catalogues and schedules and repairs legacy rows. These calls
+`importer/scripts/import-world.sh` then calls `debug_repair_after_publish` and
+`restore_taxi_fixture`. Repair seeds catalogues and schedules and repairs legacy rows. These calls
 remain intact. Tier B changes mean the restored world can differ from a fresh import.
 
 Use `--strict-world` with `--scenario ID --check` to require matching Tier B fingerprints too. A

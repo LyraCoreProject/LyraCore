@@ -300,7 +300,7 @@ pub struct GameObjectPoolMember {
     pub respawn_max_secs: u32,
 }
 
-/// A pool's parent, as vmangos `pool_pool`, and its map; a pool without a row is top-level.
+/// A pool's parent, as vmangos `pool_pool`, and its map; docs/schema.md#gameobject-pools.
 #[table(
     accessor = game_gameobject_pool_link,
     index(accessor = by_parent, btree(columns = [parent_pool_id])),
@@ -505,6 +505,14 @@ impl MapFence {
     fn load(ctx: &ReducerContext) -> Self {
         Self {
             imported: imported_spatial_maps(ctx),
+            ..Self::instanceable(ctx)
+        }
+    }
+
+    /// Fences only the maps an Instance copies, without reading terrain or navigation.
+    fn instanceable(ctx: &ReducerContext) -> Self {
+        Self {
+            imported: HashSet::new(),
             instanceable: ctx
                 .db
                 .game_map()
@@ -646,8 +654,7 @@ fn despawn_pool(ctx: &ReducerContext, scope: PoolScope, pool_id: u32, depth: u32
     }
 }
 
-/// When a member rolled now shows: after its own respawn delay, or never (0) for a chest that does
-/// not respawn.
+/// When a rolled member shows; 0, never, for a chest without a respawn time.
 fn replacement_respawn_at(
     ctx: &ReducerContext,
     member: &GameObjectPoolMember,
@@ -725,24 +732,50 @@ fn activate_point(
     .insert(ctx);
 }
 
-/// Rolls members of the pool until its limit is up, as vmangos `PoolGroup::SpawnObject`; returns
-/// how many it brought up.
+fn active_points(
+    ctx: &ReducerContext,
+    scope: PoolScope,
+    members: &[GameObjectPoolMember],
+) -> HashSet<u64> {
+    members
+        .iter()
+        .filter(|m| scope.active_guid(ctx, m.point_id).is_some())
+        .map(|m| m.point_id)
+        .collect()
+}
+
+fn active_child_pools(
+    ctx: &ReducerContext,
+    scope: PoolScope,
+    children: &[GameObjectPoolLink],
+    left_out: Option<u32>,
+    depth: u32,
+) -> HashSet<u32> {
+    children
+        .iter()
+        .filter(|child| {
+            Some(child.pool_id) != left_out && pool_is_active(ctx, scope, child.pool_id, depth + 1)
+        })
+        .map(|child| child.pool_id)
+        .collect()
+}
+
+/// Rolls the pool's members up to its limit (vmangos `PoolGroup::SpawnObject`); returns how many.
 fn fill_members(
     ctx: &ReducerContext,
     scope: PoolScope,
     pool_id: u32,
     timing: PoolTiming,
     fence: Option<&MapFence>,
+    depth: u32,
 ) -> u32 {
-    let limit = pool_limit(ctx, pool_id);
+    let limit = pool_limit(ctx, pool_id) as usize;
     let members = pool_members(ctx, pool_id);
-    let mut active: HashSet<u64> = members
-        .iter()
-        .filter(|m| scope.active_guid(ctx, m.point_id).is_some())
-        .map(|m| m.point_id)
-        .collect();
+    let mut active = active_points(ctx, scope, &members);
+    // Child pools and members share the limit, as vmangos `mSpawnedPools` counts both.
+    let children_up = active_child_pools(ctx, scope, &child_pools(ctx, pool_id), None, depth).len();
     let mut brought_up = 0;
-    while (active.len() as u32) < limit {
+    while active.len() + children_up < limit {
         let candidates = eligible_pool_candidates(&members, &active, |map_id| {
             scope.admits_map(map_id) && fence.is_none_or(|fence| fence.admits(map_id))
         });
@@ -756,8 +789,7 @@ fn fill_members(
     brought_up
 }
 
-/// Rolls child pools until the pool's limit of them is up, leaving out `left_out`; returns whether
-/// any came up.
+/// Rolls child pools, never `left_out`, up to the pool's limit; returns whether any came up.
 fn fill_children(
     ctx: &ReducerContext,
     scope: PoolScope,
@@ -771,17 +803,12 @@ fn fill_children(
     if children.is_empty() {
         return false;
     }
-    let limit = pool_limit(ctx, pool_id);
+    let limit = pool_limit(ctx, pool_id) as usize;
+    let members_up = active_points(ctx, scope, &pool_members(ctx, pool_id)).len();
+    let mut active = active_child_pools(ctx, scope, &children, left_out, depth);
     let mut tried: HashSet<u32> = left_out.into_iter().collect();
-    let mut active: HashSet<u32> = children
-        .iter()
-        .filter(|child| {
-            !tried.contains(&child.pool_id) && pool_is_active(ctx, scope, child.pool_id, depth + 1)
-        })
-        .map(|child| child.pool_id)
-        .collect();
     let mut brought_up = false;
-    while (active.len() as u32) < limit {
+    while active.len() + members_up < limit {
         let candidates: Vec<&GameObjectPoolLink> = children
             .iter()
             .filter(|child| {
@@ -803,8 +830,7 @@ fn fill_children(
     brought_up
 }
 
-/// Brings up a pool's child pools and members, as vmangos `PoolManager::SpawnPool`; returns
-/// whether anything came up.
+/// Brings up child pools, then members (vmangos `PoolManager::SpawnPool`); whether any came up.
 fn spawn_pool(
     ctx: &ReducerContext,
     scope: PoolScope,
@@ -817,13 +843,12 @@ fn spawn_pool(
         return false;
     }
     let children = fill_children(ctx, scope, pool_id, timing, fence, None, depth);
-    let members = fill_members(ctx, scope, pool_id, timing, fence) > 0;
+    let members = fill_members(ctx, scope, pool_id, timing, fence, depth) > 0;
     children || members
 }
 
-/// Takes a used pooled object out of its pool, which rolls its replacement hidden until that
-/// replacement's respawn delay passes, as vmangos `GameObject::JustDespawnedWaitingRespawn`.
-/// Returns `false`, and changes nothing, for an object in no pool.
+/// Takes a used object out of its pool and rolls a hidden replacement; `false` outside a pool.
+/// docs/schema.md#gameobject-pools gives the rule.
 pub(crate) fn pool_member_used_up(ctx: &ReducerContext, guid: u64) -> bool {
     let Some((member, scope)) = pool_point_of(ctx, guid) else {
         return false;
@@ -836,7 +861,7 @@ pub(crate) fn pool_member_used_up(ctx: &ReducerContext, guid: u64) -> bool {
         .find(member.pool_id)
         .map(|link| link.parent_pool_id)
         .filter(|&parent| parent != 0);
-    // vmangos UpdatePool hands a nested pool's place to a free sibling, else the pool rolls again.
+    // vmangos UpdatePool: a nested pool hands its place to a free sibling.
     let moved = parent.is_some_and(|parent| {
         fill_children(
             ctx,
@@ -851,12 +876,14 @@ pub(crate) fn pool_member_used_up(ctx: &ReducerContext, guid: u64) -> bool {
     if moved {
         despawn_pool(ctx, scope, member.pool_id, 0);
     } else {
+        // vmangos leaves a nested place empty with no sibling free: a Deliberate Deviation.
         fill_members(
             ctx,
             scope,
             member.pool_id,
             PoolTiming::AfterRespawnDelay,
             None,
+            0,
         );
     }
     true
@@ -866,7 +893,7 @@ pub(crate) fn pool_member_used_up(ctx: &ReducerContext, guid: u64) -> bool {
 #[cfg(feature = "debug_reducers")]
 pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64) {
     crate::GameObject::delete(ctx, gathered_guid);
-    fill_members(ctx, PoolScope::World, pool_id, PoolTiming::Now, None);
+    fill_members(ctx, PoolScope::World, pool_id, PoolTiming::Now, None, 0);
 }
 
 fn arm_world_root(ctx: &ReducerContext, pool_id: u32, fence: &MapFence) {
@@ -885,32 +912,63 @@ pub(crate) fn arm_pool(ctx: &ReducerContext, pool_id: u32) {
     arm_world_root(ctx, pool_id, &MapFence::load(ctx));
 }
 
-/// Rolls every top-level open-world pool afresh; returns how many it rolled.
-pub(crate) fn arm_world_pools(ctx: &ReducerContext) -> u64 {
-    let fence = MapFence::load(ctx);
-    let links = ctx.db.game_gameobject_pool_link();
+fn is_world_root(ctx: &ReducerContext, pool_id: u32) -> bool {
+    ctx.db
+        .game_gameobject_pool_link()
+        .pool_id()
+        .find(pool_id)
+        .is_none_or(|link| link.parent_pool_id == 0)
+}
+
+// One roll call takes at most 250 pools; the importer groups them to bring up at most 250 objects.
+const MAX_POOLS_PER_ROLL: usize = 250;
+
+/// Rolls the listed top-level open-world pools afresh, as `;`-separated pool ids.
+#[reducer]
+pub fn arm_pools(ctx: &ReducerContext, packed: String) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let pool_ids = packed
+        .split(';')
+        .filter(|id| !id.is_empty())
+        .map(|id| id.parse::<u32>().map_err(|_| format!("bad pool id: {id}")))
+        .collect::<Result<Vec<u32>, String>>()?;
+    if pool_ids.len() > MAX_POOLS_PER_ROLL {
+        return Err(format!(
+            "{} pools are more than one call rolls ({MAX_POOLS_PER_ROLL})",
+            pool_ids.len()
+        ));
+    }
+    if let Some(pool_id) = pool_ids.iter().find(|&&id| !is_world_root(ctx, id)) {
+        return Err(format!("pool {pool_id} is not a top-level pool"));
+    }
+    let fence = MapFence::instanceable(ctx);
+    for pool_id in pool_ids {
+        arm_world_root(ctx, pool_id, &fence);
+    }
+    Ok(())
+}
+
+/// Rolls every top-level open-world pool afresh; a Realm with more than one call's worth refuses.
+#[reducer]
+pub fn arm_all_pools(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
     let roots: Vec<u32> = ctx
         .db
         .game_gameobject_pool()
         .iter()
         .map(|pool| pool.pool_id)
-        .filter(|&pool_id| {
-            links
-                .pool_id()
-                .find(pool_id)
-                .is_none_or(|link| link.parent_pool_id == 0)
-        })
+        .filter(|&pool_id| is_world_root(ctx, pool_id))
         .collect();
-    for &pool_id in &roots {
+    if roots.len() > MAX_POOLS_PER_ROLL {
+        return Err(format!(
+            "{} top-level pools are more than one call rolls; roll them with arm_pools in batches",
+            roots.len()
+        ));
+    }
+    let fence = MapFence::load(ctx);
+    for pool_id in roots {
         arm_world_root(ctx, pool_id, &fence);
     }
-    roots.len() as u64
-}
-
-#[reducer]
-pub fn arm_all_pools(ctx: &ReducerContext) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    arm_world_pools(ctx);
     Ok(())
 }
 
@@ -1501,6 +1559,7 @@ pub(crate) fn despawn_from_relay(ctx: &ReducerContext, go_guid: u64) -> Result<(
         return Err(format!("relay gameobject {go_guid} is missing"));
     }
     crate::loot::reap_corpse_loot_family(ctx, go_guid);
+    close_loot_windows(ctx, go_guid);
     ctx.db.game_gameobject_unlocked().go_guid().delete(go_guid);
     ctx.db
         .game_gameobject_trap_cooldown()
@@ -1646,7 +1705,8 @@ pub fn import_gameobjects(ctx: &ReducerContext, packed: String) -> Result<(), St
     for copy_id in copy_ids {
         pool_copies.copy_id().delete(copy_id);
     }
-    if load_go_batch(ctx, &packed)? == 0 {
+    // A slice whose every placement is pooled sends an empty first batch to clear the old objects.
+    if load_go_batch(ctx, &packed)? == 0 && ctx.db.game_gameobject_pool_member().count() == 0 {
         return Err("import payload was empty".to_string());
     }
     Ok(())

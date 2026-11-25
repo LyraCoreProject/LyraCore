@@ -509,6 +509,65 @@ fn pooled_placements_import_as_pool_members_instead_of_static_spawns() {
         statics.contains(&go_guid(5_090_053)),
         "an unpooled copy stays static"
     );
+    assert_eq!(plan.pool_roll_batches, ["900"]);
+}
+
+#[test]
+fn a_top_level_pool_whose_chances_miss_a_whole_roll_never_spawns() {
+    let source = pooled_chest_source(
+        "INSERT INTO pool_template VALUES (940,1,0,0,10);
+         INSERT INTO pool_gameobject VALUES (5090050,940,60,0,0,10),(5090051,940,30,0,0,10)",
+    );
+    let plan = gameobject_plan(&source);
+
+    assert_eq!(inserted_rows(&plan, "game_gameobject_pool_member"), "");
+    assert!(plan.pool_roll_batches.is_empty());
+    let statics = static_guids(&plan);
+    assert!(!statics.contains(&go_guid(5_090_050)));
+    assert!(!statics.contains(&go_guid(5_090_051)));
+}
+
+#[test]
+fn a_slice_of_only_pooled_placements_still_sends_the_batch_that_clears_old_objects() {
+    let source = pooled_chest_source(
+        "DELETE FROM gameobject WHERE id != 5090042;
+         INSERT INTO pool_template VALUES (930,2,0,0,10);
+         INSERT INTO pool_gameobject_template VALUES (5090042,930,0,0,0,10)",
+    );
+    let plan = gameobject_plan(&source);
+
+    assert_eq!(plan.go_row_count, 0);
+    assert_eq!(plan.go_batches, [String::new()]);
+}
+
+#[test]
+fn a_pooled_placement_that_does_not_start_ready_is_refused() {
+    let source = gameobject_source();
+    edit_gameobject_source(
+        &source,
+        "INSERT INTO pool_template VALUES (950,1,0,0,10);
+         INSERT INTO pool_gameobject VALUES (2,950,0,0,0,10)",
+    );
+    let args = crate::cli::world_import_args([
+        "--dump",
+        "fixture.sqlite",
+        "--family",
+        "gameobjects",
+        "--world-profile",
+        "full-world",
+    ]);
+
+    let error = build_vmangos_plan(&source, &args).err().unwrap();
+
+    assert!(error.to_string().contains("gameobject 2"), "{error}");
+}
+
+#[test]
+fn pool_rolls_are_grouped_so_one_call_brings_up_at_most_250_objects() {
+    assert_eq!(
+        gameobject_pools::group_rolls([(1, 100), (2, 100), (3, 100), (4, 300), (5, 10)]),
+        ["1;2", "3", "4", "5"]
+    );
 }
 
 #[test]

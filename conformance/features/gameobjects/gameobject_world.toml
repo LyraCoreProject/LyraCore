@@ -33,6 +33,8 @@ tests = [
     { path = "module/tests/gameobject_pools.rs", function = "a_looted_pooled_chest_moves_its_pool_to_another_place_shown_after_its_delay", rung = "durable_module" },
     { path = "module/tests/gameobject_pools.rs", function = "a_gathered_pooled_node_comes_back_only_after_its_respawn_delay", rung = "durable_module" },
     { path = "module/tests/gameobject_pools.rs", function = "a_new_instance_rolls_its_own_pool_objects", rung = "durable_module" },
+    { path = "module/tests/gameobject_pools.rs", function = "a_pools_child_pools_and_own_members_share_its_limit", rung = "durable_module" },
+    { path = "importer/src/world_import_gameobjects_tests.rs", function = "a_top_level_pool_whose_chances_miss_a_whole_roll_never_spawns", rung = "unit" },
 ]
 
 [vmangos]
@@ -51,7 +53,7 @@ source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52da
 
 [[deliberate_deviations]]
 id = "pool_chances_short_of_a_whole_roll"
-result = "A pool with a limit of 1 whose members all carry chances that add up to less than 100 percent always rolls one of them, in proportion to their chances. The Reference Server rolls none of them for the rest of the roll, and that place stays empty until the pool is loaded again. 29 nested pools in the pinned World Source sum to 80 or 95 percent."
+result = "A nested pool with a limit of 1 whose members all carry chances that add up to less than 100 percent always rolls one of them, in proportion to their chances. The Reference Server rolls none of them for the rest of the roll, and that place stays empty until the pool is loaded again. 28 nested pools in the pinned World Source sum to 10, 80 or 95 percent. A top-level pool like this never spawns, in LyraCore as in the Reference Server's CheckPool; the pinned World Source has none."
 reason = "An empty place that never refills is a data hole, not a 1.12 rule; the chances still set which member the place shows."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Maps/Pool/PoolManager.cpp"
 

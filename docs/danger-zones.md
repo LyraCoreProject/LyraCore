@@ -259,14 +259,21 @@ rolling. One thing changes for that pool and for any pool written by hand: a use
 replacement now waits hidden for its respawn delay. A pool member's respawn no longer rolls the
 pool again.
 
-Reimport the `gameobjects` Import Family to import the pools. The reimport replaces every pool row,
-including the seeded pool, writes no static spawn for a pooled placement, and its `gameobjects`
-stamp rolls every open-world pool. Only the rolled members are up afterwards: about 6,700 of the
-32,550 pooled placements in the full world. A rerun writes the same rows. `import-world.sh` also
-calls `arm_all_pools` at its end, which rolls the open-world pools again. An Instance created after
-the reimport rolls the pools of its map; a running Instance has lost its objects to the reimport,
-as before, and gets them back when it is created again. Shared import SQL defaults are not needed:
-the importer writes every member column.
+Publish the Module before you reimport: the importer calls the new `arm_pools` reducer. Reimport
+the `gameobjects` Import Family to import the pools. The reimport replaces every pool row,
+including the seeded pool, and writes no static spawn for a pooled placement. Its first
+`import_gameobjects` batch removes every old object, also when a slice holds only pooled
+placements. The importer then rolls the open-world pools through `arm_pools`, in batches that bring
+up at most 250 objects each, like the static spawn batches. Only the rolled members are up
+afterwards: about 6,700 of the 32,550 pooled placements in the full world. A rerun writes the same
+rows and rolls each pool once again, never twice over. `arm_all_pools` refuses a Realm with more
+than 250 top-level pools, so `import-world.sh` no longer calls it. An Instance created after the
+reimport rolls the pools of its map; a running Instance has lost its objects to the reimport, as
+before, and gets them back when it is created again. Shared import SQL defaults are not needed: the
+importer writes every member column.
+
+The import floors in `importer/scripts/import-world.sh` count the GameObjects the import wrote,
+static objects plus pool members, so a roll that shows only some members does not fail them.
 
 ### Chest money and item loot migration
 
