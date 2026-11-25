@@ -373,6 +373,7 @@ fn kill_character(
     crate::spell::record_self_resurrect_option(ctx, victim_guid);
     crate::spell::remove_auras_on_death(ctx, victim_guid);
     crate::trade::cancel_trade_for(ctx, victim_guid);
+    crate::native::loot::close_window(ctx, victim_guid);
     if durability_loss == DurabilityLoss::Applied
         && crate::items::apply_death_durability_loss(ctx, victim_guid)
     {

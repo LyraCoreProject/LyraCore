@@ -4,7 +4,7 @@ use lyracore_test_support::{NativeAudience, ReducerConnection, Standalone};
 
 use serde_json::json;
 
-use super::buy_in_slot::request;
+use super::buy_in_slot::{delivered_until, request};
 use super::{enter, fixture};
 
 const CMSG_LOOT: u32 = 0x15d;
@@ -578,6 +578,22 @@ fn a_release_closes_the_stored_window_whatever_guid_the_client_names() {
     assert_eq!(stage.release(0xdead), [release_response(stage.corpse)]);
     assert_eq!(stage.open_loot(), "0");
     assert!(stage.release(stage.corpse).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_character_that_dies_with_a_creature_corpse_open_has_the_window_closed() {
+    let mut stage = stage("loot-death-corpse");
+    stage.open_corpse();
+
+    stage
+        .shard
+        .assert_call("debug_set_health", &[&stage.character.to_string(), "0"]);
+
+    let release = release_response(stage.corpse);
+    assert!(delivered_until(&mut stage.connection, &release).contains(&release));
+    assert_eq!(stage.open_loot(), "0");
+    assert_eq!(stage.loot_rows(), 1, "the loot stays on the corpse");
 }
 
 #[test]

@@ -63,15 +63,14 @@ fn show(
     target: u64,
     money: u32,
     items: &[codec::LootItemView],
-) -> Result<(), Rollback> {
+) {
     let current = open_loot(ctx, connection);
     if current != 0 && current != target {
-        release(ctx, connection, guid, current)?;
+        release(ctx, connection, guid, current);
     }
     let (opcode, body) = codec::build_loot_response_raw(target, money, items);
     super::send_raw(ctx, connection, opcode, body, false);
     open(ctx, connection, target);
-    Ok(())
 }
 
 fn loot_error(target: u64, failure: LootMethodError, refusal: LootRefusal) -> Rollback {
@@ -186,23 +185,31 @@ fn open_item(
         item_guid,
         money,
         &items(ctx, item_guid, guid),
-    )
+    );
+    Ok(())
 }
 
-fn release(
-    ctx: &ReducerContext,
-    connection: ConnectionId,
-    guid: u64,
-    current: u64,
-) -> Result<(), Rollback> {
+fn release(ctx: &ReducerContext, connection: ConnectionId, guid: u64, current: u64) {
     open(ctx, connection, 0);
     release_source(ctx, guid, current);
-    Ok(super::send(
+    super::send_to_character(
         ctx,
-        connection,
+        guid,
         release_response(current),
-        false,
-    )?)
+        super::EncodeFailure::Panic,
+    );
+}
+
+/// Closes `guid`'s open Loot Window and tells its client, as vmangos `Player::SetDeathState` calls
+/// `DoLootRelease` when a Character dies.
+pub(crate) fn close_window(ctx: &ReducerContext, guid: u64) {
+    let Some(player) = super::world_session(ctx, guid) else {
+        return;
+    };
+    if player.open_loot == 0 {
+        return;
+    }
+    release(ctx, player.connection_id, guid, player.open_loot);
 }
 
 /// The Loot Release of `looter_guid`'s Loot Window on `source`. A teleport or a logout that closes
@@ -245,7 +252,8 @@ pub(super) fn receive(
                     .into());
                 }
             }
-            show(ctx, connection, guid, target, money, &items)
+            show(ctx, connection, guid, target, money, &items);
+            Ok(())
         }
         ClientOpcodeMessage::CMSG_GAMEOBJ_USE(c) => {
             super::actor(ctx, guid)?;
@@ -254,7 +262,7 @@ pub(super) fn receive(
             let items = items(ctx, target, guid);
             let money = crate::loot::purse(ctx, target);
             if !items.is_empty() || money != 0 {
-                show(ctx, connection, guid, target, money, &items)?;
+                show(ctx, connection, guid, target, money, &items);
             }
             Ok(())
         }
@@ -310,7 +318,8 @@ pub(super) fn receive(
             if current == 0 {
                 return Ok(());
             }
-            release(ctx, connection, guid, current)
+            release(ctx, connection, guid, current);
+            Ok(())
         }
         ClientOpcodeMessage::CMSG_OPEN_ITEM(c) => open_item(
             ctx,

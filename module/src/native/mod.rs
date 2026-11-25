@@ -30,7 +30,7 @@ mod instance_reset;
 pub(crate) mod instance_shard;
 pub(crate) mod inventory;
 pub(crate) mod logon;
-mod loot;
+pub(crate) mod loot;
 pub(crate) mod mail;
 mod meeting_stone;
 pub(crate) mod member_stats;

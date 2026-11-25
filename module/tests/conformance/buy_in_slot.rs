@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use lyracore_test_support::{ReducerConnection, Standalone};
 use serde_json::json;
 
@@ -84,6 +86,24 @@ pub(super) fn delivered(connection: &mut ReducerConnection) -> Vec<(u16, Vec<u8>
         .into_iter()
         .filter_map(|packet| packet.opcode.map(|opcode| (opcode, packet.body)))
         .collect()
+}
+
+/// Packets a Module event delivers to `connection`, read until `wanted` arrives or ten seconds pass.
+pub(super) fn delivered_until(
+    connection: &mut ReducerConnection,
+    wanted: &(u16, Vec<u8>),
+) -> Vec<(u16, Vec<u8>)> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut packets = Vec::new();
+    while !packets.contains(wanted) && Instant::now() < deadline {
+        let batch = connection.wait_for_packets(Duration::from_secs(1)).unwrap();
+        packets.extend(
+            batch
+                .into_iter()
+                .filter_map(|packet| packet.opcode.map(|opcode| (opcode, packet.body))),
+        );
+    }
+    packets
 }
 
 pub(super) fn grant(shard: &Standalone, guid: u64, entry: u32, count: u32, slot: u8) -> u64 {

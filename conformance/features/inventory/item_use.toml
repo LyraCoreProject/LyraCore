@@ -10,6 +10,7 @@ scenarios = []
 prerequisites = []
 tests = [
     { path = "module/tests/conformance/item_loot.rs", function = "opening_a_clam_gives_its_item_and_money_and_destroys_the_emptied_clam", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "a_character_that_dies_with_an_emptied_opened_item_open_releases_it", rung = "durable_module" },
     { path = "module/tests/conformance/item_loot.rs", function = "opening_an_item_that_is_not_lootable_is_refused", rung = "durable_module" },
     { path = "module/tests/conformance/item_loot.rs", function = "opening_a_lockbox_that_needs_lockpicking_answers_item_locked", rung = "durable_module" },
     { path = "module/tests/conformance/item_equip.rs", function = "an_item_cast_sends_its_spell_go_before_it_destroys_the_used_up_item", rung = "durable_module" },
