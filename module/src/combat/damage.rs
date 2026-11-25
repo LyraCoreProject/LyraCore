@@ -267,6 +267,11 @@ pub(crate) enum DamageResult {
     Dies,
 }
 
+/// vmangos `Unit::DealDamage` tests `damage + 1 >= health` for a duelist, so the loser keeps 1 health.
+fn leaves_one_health_or_less(health: u32, dmg: u32) -> bool {
+    dmg > 0 && dmg.saturating_add(1) >= health
+}
+
 /// What `dmg` does to a unit at `health`; `floored` is asked only for a lethal hit outside a Duel.
 pub(crate) fn damage_result(
     health: u32,
@@ -274,10 +279,10 @@ pub(crate) fn damage_result(
     ends_duel: bool,
     floored: impl FnOnce() -> bool,
 ) -> DamageResult {
-    if !is_lethal(health, dmg) {
-        DamageResult::Survives
-    } else if ends_duel {
+    if ends_duel && leaves_one_health_or_less(health, dmg) {
         DamageResult::EndsDuel
+    } else if !is_lethal(health, dmg) {
+        DamageResult::Survives
     } else if floored() {
         DamageResult::Floored
     } else {
@@ -649,16 +654,25 @@ mod lethality_tests {
 
     #[test]
     fn damage_below_health_or_zero_leaves_the_unit_alive() {
-        assert_eq!(damage_result(10, 9, true, || true), DamageResult::Survives);
+        assert_eq!(damage_result(10, 8, true, || true), DamageResult::Survives);
+        assert_eq!(damage_result(10, 9, false, || true), DamageResult::Survives);
         assert_eq!(
             damage_result(10, 0, false, || false),
             DamageResult::Survives
         );
+        assert_eq!(damage_result(10, 0, true, || false), DamageResult::Survives);
     }
 
     #[test]
     fn a_lethal_hit_from_a_duel_opponent_ends_the_duel_before_any_floor() {
         assert_eq!(damage_result(10, 10, true, || true), DamageResult::EndsDuel);
+        assert_eq!(damage_result(10, 50, true, || true), DamageResult::EndsDuel);
+    }
+
+    #[test]
+    fn a_hit_that_leaves_a_duelist_at_one_health_ends_the_duel() {
+        assert_eq!(damage_result(10, 9, true, || true), DamageResult::EndsDuel);
+        assert_eq!(damage_result(1, 1, true, || true), DamageResult::EndsDuel);
     }
 
     #[test]
