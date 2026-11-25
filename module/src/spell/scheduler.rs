@@ -671,7 +671,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                     }
                     caster
                         .as_ref()
-                        .is_some_and(|caster| crate::combat::is_hostile_target(ctx, caster, &c))
+                        .is_some_and(|caster| crate::combat::area_may_harm(ctx, caster, &c))
                         .then_some(c)
                 })
                 .take(AOE_MAX_TARGETS)

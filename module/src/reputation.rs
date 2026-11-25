@@ -236,6 +236,27 @@ pub(crate) fn reputation(
     ))
 }
 
+/// The Character's rank with a reputation faction and whether it is at war; `None` without one.
+pub(crate) fn rank_and_war(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    faction_id: u32,
+) -> Option<(u8, bool)> {
+    let faction = ctx
+        .db
+        .game_faction()
+        .faction_id()
+        .find(faction_id)
+        .filter(|faction| faction.reputation_index >= 0)?;
+    let state = CharacterFaction::read(ctx, character_guid, &faction);
+    let row = stored_row(ctx, character_guid, faction_id);
+    let standing = row.as_ref().map_or(state.base, |row| row.standing);
+    Some((
+        reputation_rank(standing),
+        state.flags(row.as_ref()) & AT_WAR != 0,
+    ))
+}
+
 const BASE_STANDING_REPAIR_FAMILY: &str = "repair_base_standing";
 
 /// One-shot after the first `dbc` stamp with masks; see danger-zones "Base reputation migration".

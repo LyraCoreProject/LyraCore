@@ -157,6 +157,10 @@ pub(crate) fn select_targets(
     e: &SpellEffect,
     dest: Option<(f32, f32, f32)>,
 ) -> Vec<u64> {
+    // vmangos puts a ground area on the ground, not on a unit: see `place_ground_area`.
+    if e.kind == E_PERSISTENT_AREA {
+        return Vec::new();
+    }
     let one = if explicit == 0 { caster_guid } else { explicit };
     match e.target {
         T_SELF => vec![caster_guid],
@@ -769,13 +773,11 @@ pub(crate) fn apply_effect(
         | EffectKind::NextSwing => {
             apply_threat_effect(ctx, e, hdr, caster_guid, target_guid, points)
         }
-        EffectKind::Charge
-        | EffectKind::Blink
-        | EffectKind::RecallHome
-        | EffectKind::Dismount
-        | EffectKind::PersistentArea => {
-            apply_reposition_effect(ctx, e, hdr, caster_guid, target_guid, points, dest)
+        EffectKind::Charge | EffectKind::Blink | EffectKind::RecallHome | EffectKind::Dismount => {
+            apply_reposition_effect(ctx, e, caster_guid, target_guid)
         }
+        // A ground area has no unit target; `place_ground_area` puts it down.
+        EffectKind::PersistentArea => EffectHit::none(),
         EffectKind::CreateItem | EffectKind::Pickpocket => {
             apply_inventory_effect(ctx, e, caster_guid, target_guid, points)
         }
@@ -1290,11 +1292,8 @@ fn apply_threat_effect(
 fn apply_reposition_effect(
     ctx: &ReducerContext,
     e: &SpellEffect,
-    hdr: &Spell,
     caster_guid: u64,
     target_guid: u64,
-    points: i32,
-    dest: Option<(f32, f32, f32)>,
 ) -> EffectHit {
     match e.kind {
         E_CHARGE => {
@@ -1313,10 +1312,6 @@ fn apply_reposition_effect(
         }
         E_DISMOUNT => {
             crate::mount::dismount(ctx, target_guid);
-            EffectHit::none()
-        }
-        E_PERSISTENT_AREA => {
-            create_ground_area(ctx, e, hdr, caster_guid, target_guid, points, dest);
             EffectHit::none()
         }
         _ => EffectHit::none(),
@@ -1673,6 +1668,25 @@ pub(crate) fn blink_forward(ctx: &ReducerContext, caster_guid: u64, dist_yd: f32
     }
 }
 
+/// A ground point wins; else a `T_SELF` area goes on the caster, any other on the cast's target.
+pub(crate) fn place_ground_area(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    hdr: &Spell,
+    caster_guid: u64,
+    cast_target_guid: u64,
+    amount: i32,
+    dest: Option<(f32, f32, f32)>,
+) {
+    let anchor_guid = if e.target == T_SELF || cast_target_guid == 0 {
+        caster_guid
+    } else {
+        cast_target_guid
+    };
+    create_ground_area(ctx, e, hdr, caster_guid, anchor_guid, amount, dest);
+}
+
+/// Places the area at the cast's ground point, else at `anchor_guid` (vmangos `setUnitTarget`).
 fn create_ground_area(
     ctx: &ReducerContext,
     e: &SpellEffect,
@@ -1745,7 +1759,14 @@ fn create_ground_area(
         cell: 0,
     }
     .insert(ctx);
-    if hdr.cast_flags & CAST_FLAG_CHANNELED != 0 {
+    // A channel Aura from an earlier effect of the spell has already started the channel bar.
+    let bar_started = ctx
+        .db
+        .game_aura()
+        .by_caster()
+        .filter(caster_guid)
+        .any(|aura| aura.spell_id == e.spell_id);
+    if hdr.cast_flags & CAST_FLAG_CHANNELED != 0 && !bar_started {
         crate::native::aura::channel_started(ctx, caster_guid, e.spell_id, hdr.duration_ms);
     }
 }
@@ -1761,6 +1782,14 @@ pub(crate) fn is_channelled_area(ctx: &ReducerContext, area: &GroundArea) -> boo
         .spell_id()
         .find(area.spell_id)
         .is_some_and(|spell| spell.cast_flags & CAST_FLAG_CHANNELED != 0)
+}
+
+pub(crate) fn holds_channelled_area(ctx: &ReducerContext, caster_guid: u64, spell_id: u32) -> bool {
+    ctx.db
+        .game_ground_area()
+        .by_caster()
+        .filter(caster_guid)
+        .any(|area| area.spell_id == spell_id && is_channelled_area(ctx, &area))
 }
 
 /// Removes the area and its DynamicObject; the caster of a channelled area leaves its channel.

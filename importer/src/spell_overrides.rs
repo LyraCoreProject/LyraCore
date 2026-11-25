@@ -18,7 +18,6 @@ pub struct NamedSpell {
     pub kind_swap: Option<(u8, u8)>,
     /// Item entry for a create-item script effect that omits effect_item_type.
     pub created_item: Option<i32>,
-    pub periodic_damage_as_persistent_area: bool,
     pub ally_target_as_enemy: bool,
     pub direct_damage_target: Option<u8>,
 }
@@ -33,7 +32,6 @@ const NAMED: NamedSpell = NamedSpell {
     script_kind_aura: None,
     kind_swap: None,
     created_item: None,
-    periodic_damage_as_persistent_area: false,
     ally_target_as_enemy: false,
     direct_damage_target: None,
 };
@@ -142,13 +140,7 @@ pub const NAMED_SPELLS: &[NamedSpell] = &[
         ..NAMED
     },
     NamedSpell {
-        name: "Consecration",
-        periodic_damage_as_persistent_area: true,
-        ..NAMED
-    },
-    NamedSpell {
         name: "Flamestrike",
-        periodic_damage_as_persistent_area: true,
         direct_damage_target: Some(T_AREA_ENEMY),
         ..NAMED
     },

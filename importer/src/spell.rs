@@ -199,6 +199,27 @@ const EFFECT_PERSISTENT_AREA_AURA: i32 = 27;
 const EFFECT_APPLY_AREA_AURA_PARTY: i32 = 35;
 const EFFECT_APPLY_AREA_AURA_PET: i32 = 119;
 
+// vmangos `PersistentAreaAura::Update` keeps this spell's Aura on a unit that walks out.
+const SPELL_ATTR_EX3_NO_AVOIDANCE: u32 = 0x40;
+
+/// vmangos `Spell::EffectPersistentAA`: a DynamicObject that damages the units inside it.
+fn is_ground_area_damage(effect_id: i32, aura: AuraMod, attributes_ex3: u32) -> bool {
+    effect_id == EFFECT_PERSISTENT_AREA_AURA
+        && aura == AuraMod::PeriodicDamage
+        && attributes_ex3 & SPELL_ATTR_EX3_NO_AVOIDANCE == 0
+}
+
+// vmangos centres these on the cast's ground point or target; T_SELF puts the rest on the caster.
+fn ground_area_target(target_a: i32) -> u8 {
+    const ENEMY_AOE_AT_DEST_LOC: i32 = 16;
+    const ENEMY_IN_CONE: i32 = 24;
+    const ENEMY_AOE_AT_DYNOBJ_LOC: i32 = 28;
+    match target_a {
+        ENEMY_AOE_AT_DEST_LOC | ENEMY_IN_CONE | ENEMY_AOE_AT_DYNOBJ_LOC => T_AREA_ENEMY,
+        _ => T_SELF,
+    }
+}
+
 fn is_aura_effect(effect_id: i32) -> bool {
     matches!(
         effect_id,
@@ -1407,15 +1428,12 @@ fn resolve_effect_kind(
     } else {
         kind
     };
-    let kind = if kind == A_PERIODIC_DAMAGE
-        && header
-            .overrides
-            .is_some_and(|spell| spell.periodic_damage_as_persistent_area)
-    {
-        E_PERSISTENT_AREA
-    } else {
-        kind
-    };
+    let kind =
+        if kind == A_PERIODIC_DAMAGE && is_ground_area_damage(effect_id, aura, s.attributes_ex3) {
+            E_PERSISTENT_AREA
+        } else {
+            kind
+        };
     ResolvedEffect {
         kind,
         p0,
@@ -1443,9 +1461,9 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         E_CHARGE | E_JUDGEMENT | E_PICKPOCKET | E_INTERRUPT | E_NEXT_SWING | E_TAUNT
         | E_TAME_CREATURE => T_TARGET_ENEMY,
         E_RESURRECT => T_TARGET_ALLY,
+        E_PERSISTENT_AREA => ground_area_target(target_a),
         E_REDUCE_THREAT
         | E_BLINK
-        | E_PERSISTENT_AREA
         | E_SUMMON_PET
         | E_REVIVE_PET
         | E_SUMMON_HOSTILE
@@ -3819,13 +3837,66 @@ mod tests {
         rows.effects.remove(0)
     }
 
+    fn area_aura_effect(
+        effect: i32,
+        aura: u32,
+        (target_a, target_b): (i32, i32),
+        attributes_ex3: u32,
+    ) -> SpellEffectRow {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            id: 10,
+            name: "Area aura fixture".to_string(),
+            attributes_ex3,
+            duration: 1,
+            effect: [effect, 0, 0],
+            effect_aura: [aura, 0, 0],
+            effect_base_points: [24, 0, 0],
+            effect_amplitude: [1000, 0, 0],
+            implicit_target_a: [target_a, 0, 0],
+            implicit_target_b: [target_b, 0, 0],
+            ..Default::default()
+        }];
+        let (mut rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        rows.effects.remove(0)
+    }
+
     #[test]
-    fn a_persistent_area_periodic_damage_stays_a_channel_aura_without_an_override() {
-        // Blizzard 10 and its siblings: vmangos removes the dynamic object when the channel ends.
+    fn a_persistent_area_periodic_damage_imports_as_a_ground_area_at_its_destination() {
+        // Blizzard, Rain of Fire, Volley, Hurricane and Flamestrike aim at TARGET 28.
+        let effect = area_aura_effect(27, 3, (28, 0), 0);
         assert_eq!(
-            equip_review_effect(10, 3, 24, 0, (27, 18, 0)).kind,
+            (effect.kind, effect.target, effect.period_ms),
+            (E_PERSISTENT_AREA, T_AREA_ENEMY, 1000)
+        );
+    }
+
+    #[test]
+    fn a_persistent_area_periodic_damage_at_the_caster_imports_as_a_ground_area_on_the_caster() {
+        // Consecration aims at TARGET 18 then 16.
+        let effect = area_aura_effect(27, 3, (18, 16), 0);
+        assert_eq!((effect.kind, effect.target), (E_PERSISTENT_AREA, T_SELF));
+    }
+
+    #[test]
+    fn a_persistent_area_periodic_damage_that_outlasts_leaving_stays_an_aura_on_each_unit() {
+        // Explosive Trap Effect sets SPELL_ATTR_EX3_NO_AVOIDANCE.
+        assert_eq!(
+            area_aura_effect(27, 3, (28, 0), 0x40).kind,
             A_PERIODIC_DAMAGE
         );
+    }
+
+    #[test]
+    fn a_persistent_area_aura_without_periodic_damage_keeps_its_aura_kind() {
+        // Hurricane's attack speed slow and Frost Trap Aura's snare.
+        assert_eq!(area_aura_effect(27, 138, (28, 0), 0).kind, A_MOD_SPEED);
+        assert_eq!(area_aura_effect(27, 33, (28, 0), 0).kind, A_MOD_SPEED);
+    }
+
+    #[test]
+    fn periodic_damage_applied_to_units_in_an_area_stays_an_aura() {
+        assert_eq!(area_aura_effect(6, 3, (28, 0), 0).kind, A_PERIODIC_DAMAGE);
     }
 
     #[test]

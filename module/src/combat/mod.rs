@@ -1,3 +1,4 @@
+mod area_target;
 mod attack_table;
 pub(crate) mod damage;
 pub(crate) mod damage_shield;
@@ -39,6 +40,7 @@ pub(crate) use leash::{beyond_combat_backstop, pursuit_deadline_ms, should_evade
 #[cfg(test)]
 pub(crate) use tables::PURSUIT_WINDOW_MS;
 
+pub(crate) use area_target::area_may_harm;
 pub use engage::AttackStart;
 pub(crate) use engage::{
     answer_creature_assistance, answer_creature_help, apply_start_attack,
