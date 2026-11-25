@@ -1056,7 +1056,7 @@ mod character_fence_tripwire {
         ("module/src/native/instance_shard.rs", 1, "the occupancy census reads the Instance of a Character imported behind the Transfer Gate that has not entered the world; no write"),
         ("module/src/helpers.rs", 2, "`character_by_guid` and `characters_by_name` apply the Transfer Gate to raw Character reads"),
         ("module/src/transfer/mod.rs", 4, "Transfer reads the fenced Character for export, destination materialization, durability checks, and the in-transit Instance census."),
-        ("module/src/world.rs", 2, "`teleport` and `is_gm_character` take a guid already resolved through a fenced live entity"),
+        ("module/src/world.rs", 1, "`teleport` takes a guid already resolved through a fenced live entity"),
         ("module/src/character.rs", 9, "World entry carries its own `is_in_transit` fence (2 reads); `set_home` and `persist_entity` take a guid resolved through a fenced entity (`begin_transfer` calls `persist_entity`); `debug_delete_character` keeps a raw existence probe so a missing Character stays a no-op while an in-transit one is refused, and `cascade_delete_character`'s raw delete is the sweep that probe guards; creation checks name uniqueness; the deletion Gate distinguishes absence, ownership and the Transfer fence"),
         ("module/src/group.rs", 2, "Group events and departure read member identity while changing membership."),
         ("module/src/auth.rs", 2, "the guid allocator seeds from every Character guid; `adopt_character_gm_levels` is the Realm-wide repair scan that moves legacy Character GM levels onto Accounts"),

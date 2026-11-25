@@ -945,6 +945,7 @@ pub fn debug_score_movement(
         ctx,
         guid,
         &crate::world::MovementDelta {
+            opcode: lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16,
             old_x,
             old_y,
             old_z: 0.0,
@@ -953,6 +954,9 @@ pub fn debug_score_movement(
             z,
             old_move_ms,
             move_time_ms,
+            old_flags: 0,
+            flags: 0,
+            fall_time_ms: 0,
         },
     );
     Ok(())
