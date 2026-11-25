@@ -300,7 +300,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 if !crate::combat::may_harm(ctx, &caster, &target) {
                     continue;
                 }
-                let duel_finish = crate::combat::duel_finished_by(ctx, &caster, &target);
+                let duel_finish = crate::combat::duel_finished_by(ctx, Some(&caster), &target);
                 if duel_finish.is_some_and(|finish| finishing_duels.contains(&finish.duel_id)) {
                     continue;
                 }
@@ -372,24 +372,22 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                         );
                     }
                 }
-                let result = crate::combat::damage_result(
-                    cur,
-                    amount.max(0) as u32,
-                    duel_finish.is_some(),
-                    || crate::combat::lethal_floor_protects(ctx, a.target_guid),
-                );
-                match (result, duel_finish) {
-                    (crate::combat::DamageResult::EndsDuel, Some(finish)) => {
+                let result =
+                    crate::combat::damage_result(cur, amount.max(0) as u32, duel_finish, || {
+                        crate::combat::lethal_floor_protects(ctx, a.target_guid)
+                    });
+                match result {
+                    crate::combat::DamageResult::EndsDuel(finish) => {
                         pending.insert(a.target_guid, 1);
                         finishing_duels.insert(finish.duel_id);
                         duel_losers.insert(a.target_guid);
                         duel_finishes.push((finish.duel_id, finish.winner_guid, a.target_guid));
                     }
-                    (crate::combat::DamageResult::Floored, _) => {
+                    crate::combat::DamageResult::Floored => {
                         pending.insert(a.target_guid, 1);
                         crate::combat::commit_death_prevention(ctx, a.target_guid, a.caster_guid);
                     }
-                    (crate::combat::DamageResult::Dies, _) => {
+                    crate::combat::DamageResult::Dies => {
                         let death = if target.is_player() {
                             PeriodicDeath::Character {
                                 killer_guid: a.caster_guid,
@@ -403,10 +401,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                         dying.insert(a.target_guid, death);
                         pending.remove(&a.target_guid);
                     }
-                    (crate::combat::DamageResult::EndsDuel, None) => {
-                        pending.insert(a.target_guid, 1);
-                    }
-                    (crate::combat::DamageResult::Survives, _) => {
+                    crate::combat::DamageResult::Survives => {
                         pending.insert(a.target_guid, damaged_value(cur, amount));
                     }
                 }
