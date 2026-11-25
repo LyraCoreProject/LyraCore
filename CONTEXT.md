@@ -236,7 +236,7 @@ remain possible and consumers handle them explicitly.
 The client object that draws a ground spell effect. It has its own GUID, map, Instance and AOI Grant.
 The ground area's timer removes the DynamicObject when the effect expires. A channelled ground
 area and its DynamicObject also end when the caster's channel ends. Every ground area ends when its
-caster changes map, is handed to another World Shard or leaves the world.
+caster changes map or Instance, is handed to another World Shard or leaves the world.
 
 **Operator Content API**:
 The `operator_*` reducers that edit creature and gameobject spawns, item and creature templates,

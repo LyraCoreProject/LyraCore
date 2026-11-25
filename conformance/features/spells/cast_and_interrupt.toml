@@ -92,6 +92,11 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/channelled_ground_area.rs"
+function = "a_ground_area_without_a_channel_ends_when_its_caster_enters_another_instance_of_the_map"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
 function = "a_cast_in_progress_ends_when_its_caster_teleports"
 rung = "durable_module"
 

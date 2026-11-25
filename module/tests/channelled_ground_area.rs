@@ -178,6 +178,23 @@ fn a_ground_area_without_a_channel_survives_a_teleport_on_the_map_and_ends_at_a_
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_ground_area_without_a_channel_ends_when_its_caster_enters_another_instance_of_the_map() {
+    let (shard, _) = stage("plain-area-instance-change");
+    cast_area(&shard, PLAIN_AREA);
+    assert_area_placed(&shard);
+
+    shard.assert_call("debug_create_fixture_instance", &[&CHARACTER.to_string()]);
+
+    let instance = shard.query_rows(&format!(
+        "SELECT instance_id FROM game_world_entity WHERE guid = {CHARACTER}"
+    ))[0]["instance_id"]
+        .clone();
+    assert_ne!(instance, "0", "the caster must have entered a new Instance");
+    assert_area_gone(&shard);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_cast_in_progress_ends_when_its_caster_teleports() {
     let (shard, _) = stage("cast-teleport");
     begin_timed_cast(&shard);

@@ -1183,7 +1183,7 @@ and healing reductions cannot remove more than half the spell's pre-mitigation a
 Ground damage snapshots outgoing spell power and applies incoming modifiers per target on each tick.
 `game_ground_area.effect_id` END-appends a zero-default source effect key for that coefficient.
 `game_ground_area.by_caster` finds the caster's channelled ground areas when its channel ends, and
-all of its ground areas when it changes map or leaves the world.
+all of its ground areas when it changes map or Instance or leaves the world.
 The native CREATE and aura VALUES send all seven signed positive/negative damage fields and
 float percent multipliers. `game_item_template.damage_school` END-appends the source
 `dmg_type1` index (zero defaults to physical). Wand attacks use that school for spell crit,

@@ -132,9 +132,6 @@ pub(super) fn begin_character(
         .ok_or("Character vanished during departure")?;
     character.relocate(destination);
     ctx.db.game_character().guid().update(character);
-    if let Some(cast) = crate::spell::pending_cast(ctx, guid) {
-        crate::spell::cancel_cast_attempt(ctx, guid, cast.scheduled_id);
-    }
     transfer::apply_begin(&mut CtxShard { ctx }, transfer_id, guid, destination, true)?;
     let escrow = ctx
         .db

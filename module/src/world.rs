@@ -643,15 +643,9 @@ fn raid_gate(
     Ok(())
 }
 
-/// Ends the caster's channel and cast before a same-map move, as vmangos `Player::TeleportTo`.
-fn end_casts_before_moving(ctx: &ReducerContext, caster_guid: u64) {
-    crate::spell::break_channel(ctx, caster_guid);
-}
-
-/// As a move, and drops the caster's ground areas, as vmangos `RemoveAllDynObjects` does when a
-/// unit leaves its map or the world.
+/// Ends the caster's channel, cast and ground areas as it leaves its partition or the world.
 pub(crate) fn end_casts_before_leaving(ctx: &ReducerContext, caster_guid: u64) {
-    end_casts_before_moving(ctx, caster_guid);
+    crate::spell::break_channel(ctx, caster_guid);
     let areas: Vec<crate::GroundArea> = ctx
         .db
         .game_ground_area()
@@ -680,10 +674,10 @@ fn relocate(
         .find(player_guid)
         .expect("teleport Gate requires a live entity");
     let cross_map = departing.map_id != map_id || destination.is_some();
-    if cross_map {
+    if cross_map || departing.instance_id != instance_id {
         end_casts_before_leaving(ctx, player_guid);
     } else {
-        end_casts_before_moving(ctx, player_guid);
+        crate::spell::break_channel(ctx, player_guid);
     }
     // Ending a cast can rewrite the entity row.
     let e = entities
