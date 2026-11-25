@@ -121,29 +121,45 @@ fn a_debuff_after_a_lethal_hit_in_the_same_cast_stays_off_the_corpse() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_periodic_damage_tick_kills_a_character() {
     let (shard, wolf) = stage("periodic-tick-kills-character");
-    insert_spell(
-        &shard,
-        PERIODIC_FIXTURE,
-        &[("duration_ms", &30_000)],
-        &[
-            ("kind", &A_PERIODIC_DAMAGE),
-            ("base_points", &LETHAL_DAMAGE),
-            ("period_ms", &PERIOD_MS),
-        ],
-    );
-    cast_until(&shard, wolf, PERIODIC_FIXTURE, CHARACTER, || {
-        !shard
-            .query_rows(&format!(
-                "SELECT id FROM game_aura WHERE target_guid = {CHARACTER} \
-                 AND spell_id = {PERIODIC_FIXTURE}"
-            ))
-            .is_empty()
-    });
-    assert_eq!(health(&shard, CHARACTER), CHARACTER_HEALTH);
+    apply_lethal_periodic_damage(&shard, wolf);
 
     shard.assert_call("debug_advance_roll_batch", &[THREE_PERIOD_TICKS]);
 
     assert_killed(&shard, CHARACTER);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_periodic_damage_tick_from_a_dead_caster_still_kills_a_character() {
+    let (shard, wolf) = stage("periodic-tick-dead-caster-kills-character");
+    apply_lethal_periodic_damage(&shard, wolf);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET dead = true WHERE guid = {wolf}"
+    ));
+
+    shard.assert_call("debug_advance_roll_batch", &[THREE_PERIOD_TICKS]);
+
+    assert_killed(&shard, CHARACTER);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_periodic_damage_tick_from_a_gone_caster_leaves_the_character_alive() {
+    let (shard, wolf) = stage("periodic-tick-gone-caster-spares-character");
+    apply_lethal_periodic_damage(&shard, wolf);
+    shard.assert_sql(&format!(
+        "DELETE FROM game_world_entity WHERE guid = {wolf}"
+    ));
+
+    shard.assert_call("debug_advance_roll_batch", &[THREE_PERIOD_TICKS]);
+
+    assert_eq!(health(&shard, CHARACTER), CHARACTER_HEALTH);
+    assert!(!is_dead(&shard, CHARACTER));
+    assert_eq!(
+        periodic_aura_ids(&shard).len(),
+        1,
+        "the effect idles until it expires"
+    );
 }
 
 #[test]
@@ -392,6 +408,30 @@ fn cast_until(
         }
     }
     panic!("spell {spell_id} from {caster} did not land on {target} in {CAST_ATTEMPTS} casts");
+}
+
+fn apply_lethal_periodic_damage(shard: &Standalone, wolf: u64) {
+    insert_spell(
+        shard,
+        PERIODIC_FIXTURE,
+        &[("duration_ms", &30_000)],
+        &[
+            ("kind", &A_PERIODIC_DAMAGE),
+            ("base_points", &LETHAL_DAMAGE),
+            ("period_ms", &PERIOD_MS),
+        ],
+    );
+    cast_until(shard, wolf, PERIODIC_FIXTURE, CHARACTER, || {
+        !periodic_aura_ids(shard).is_empty()
+    });
+    assert_eq!(health(shard, CHARACTER), CHARACTER_HEALTH);
+}
+
+fn periodic_aura_ids(shard: &Standalone) -> Vec<support::Row> {
+    shard.query_rows(&format!(
+        "SELECT id FROM game_aura WHERE target_guid = {CHARACTER} \
+         AND spell_id = {PERIODIC_FIXTURE}"
+    ))
 }
 
 fn duel_ended(shard: &Standalone) -> bool {

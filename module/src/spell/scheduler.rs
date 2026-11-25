@@ -293,16 +293,14 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         }
         match a.eff_kind {
             A_PERIODIC_DAMAGE => {
-                let caster = entities.guid().find(a.caster_guid);
-                if caster
-                    .as_ref()
-                    .is_some_and(|caster| !crate::combat::may_harm(ctx, caster, &target))
-                {
+                // vmangos Aura::PeriodicTick: a gone caster ends the tick; a dead one still ticks.
+                let Some(caster) = entities.guid().find(a.caster_guid) else {
+                    continue;
+                };
+                if !crate::combat::may_harm(ctx, &caster, &target) {
                     continue;
                 }
-                let duel_finish = caster
-                    .as_ref()
-                    .and_then(|caster| crate::combat::duel_finished_by(ctx, caster, &target));
+                let duel_finish = crate::combat::duel_finished_by(ctx, &caster, &target);
                 if duel_finish.is_some_and(|finish| finishing_duels.contains(&finish.duel_id)) {
                     continue;
                 }
@@ -365,13 +363,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 );
                 if amount > 0 {
                     dot_damaged.insert(a.target_guid);
-                    if !target.is_player()
-                        && entities
-                            .guid()
-                            .find(a.caster_guid)
-                            .map(|c| c.is_player())
-                            .unwrap_or(false)
-                    {
+                    if !target.is_player() && caster.is_player() {
                         crate::threat::add_threat(
                             ctx,
                             a.target_guid,
@@ -405,10 +397,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                             }
                         } else {
                             PeriodicDeath::Creature {
-                                killer: caster
-                                    .as_ref()
-                                    .filter(|c| c.is_player())
-                                    .map(|_| a.caster_guid),
+                                killer: caster.is_player().then_some(a.caster_guid),
                             }
                         };
                         dying.insert(a.target_guid, death);
@@ -438,7 +427,10 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 }
             }
             A_PERIODIC_HEAL => {
-                if dying.contains_key(&a.target_guid) || duel_losers.contains(&a.target_guid) {
+                if dying.contains_key(&a.target_guid)
+                    || duel_losers.contains(&a.target_guid)
+                    || entities.guid().find(a.caster_guid).is_none()
+                {
                     continue;
                 }
                 let cur = pending
