@@ -1004,12 +1004,20 @@ owes the end again on its next Login Queue pass.
 Arrival stamps (#1286) END-append `arrival` to `game_native_away` and `arrival` and `sent` to
 `game_world_session_owed_end`, all defaulting to 0, and add the private `game_native_handed_off`
 table, which starts empty. No reducer argument changes, so the idc bindings stay as they are. Rows
-from before the publish carry arrival 0 and match each other. An answer to a send the previous Module
-made does not count, so that end goes out once more 30 seconds later. Publish the Realm Shard
-before the World Shards. A World Shard on this Module no longer reports a connection it holds
-nothing of; a Realm Shard on the previous Module needs that report to drop a stale away record, so
-a ticket waiting on one would wait the full 90-second bound. A World Shard on the previous Module
-keeps reporting it and keeps the old hazard until it is published.
+from before the publish carry arrival 0 and match each other. An owed end from the previous Module
+has `sent` 0, so no answer counts for it, and it goes out once more 30 seconds later.
+
+Either publish order is safe. Publish the World Shards first, as for the rest of this section. Until
+the second publish, each order leaves one hazard:
+
+- World Shards first: the Realm Shard on the previous Module still ends an owed end on any Ok answer
+  from its World Shard, late or not. A World Shard on this Module no longer reports a connection it
+  holds nothing of, so a stale away record that names it makes a waiting ticket wait the full
+  90-second bound.
+- Realm Shard first: World Shards on the previous Module still report a connection they hold
+  nothing of, and still report one they handed on by Transfer when the Native Host detaches it. A
+  late report can end the owed end and the away record of a World Session that came back to that
+  World Shard until it is published.
 
 ## 2. Tooling gotchas
 

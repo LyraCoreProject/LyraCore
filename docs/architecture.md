@@ -120,7 +120,7 @@ passes while no ticket waits leaves the away record.
 
 An owed end lasts past the bound, one row per connection (`game_world_session_owed_end`). Every 30
 seconds it goes out again, unless an earlier send still waits for its answer, until the World Shard
-accepts its latest send, reports the World Session closed, or leaves the Peer Shards. A Character Transfer of
+accepts the send it counts, reports the World Session closed, or leaves the Peer Shards. A Character Transfer of
 that World Session moves it to the target World Shard, which receives it at the next send, after
 the Transfer release. A newer World Session that enters another World Shard owes the end of the older one the same
 way. Account and Session changes go to every World Shard that holds an away World Session of the

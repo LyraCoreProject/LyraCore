@@ -251,7 +251,7 @@ fn an_accepted_end_drops_the_owed_end_and_the_away_record_of_its_arrival() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn an_answer_to_an_earlier_send_leaves_the_owed_end_and_the_away_record() {
+fn a_late_answer_after_the_world_session_came_back_leaves_the_owed_end_and_the_away_record() {
     let split = split("late-end-answer");
     let account = provision(&split.shard, split.shard.shard_name());
     split.shard.assert_call(
@@ -263,34 +263,24 @@ fn an_answer_to_an_earlier_send_leaves_the_owed_end_and_the_away_record() {
             "1",
         ],
     );
-    let away = split.away_connections();
     let connection = format!(r#"{{"__connection_id__":{AWAY_CONNECTION}}}"#);
-    let answered = || {
-        split
-            .shard
-            .query_rows("SELECT id FROM game_world_session_end")
-            .is_empty()
-    };
     split
         .shard
         .assert_call("debug_end_world_session", &[&connection, &account]);
-    assert!(
-        poll_until(Duration::from_secs(20), answered),
-        "the World Shard did not refuse the end"
+    split.shard.assert_call(
+        "debug_native_away_round_trip",
+        &[&account, &AWAY_CONNECTION.to_string()],
     );
+    let away = split.away_connections();
 
-    split.accept_the_realm();
-    split
-        .shard
-        .assert_call("debug_end_world_session", &[&connection, &account]);
-    assert!(
-        poll_until(Duration::from_secs(20), answered),
-        "the World Shard did not answer the late send"
+    split.shard.assert_call(
+        "debug_late_world_session_end_answer",
+        &[&account, &AWAY_CONNECTION.to_string()],
     );
     assert_eq!(split.away_connections(), away);
     assert_eq!(
         split.realm_rows("game_world_session_owed_end"),
         1,
-        "an answer to a send the owed end no longer counts ended it"
+        "an answer to a send from before the World Session came back ended its owed end"
     );
 }
