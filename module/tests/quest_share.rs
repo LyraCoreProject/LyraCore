@@ -329,7 +329,7 @@ fn a_decline_or_the_sharer_leaving_the_group_ends_the_share() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_package_quest_is_shared_only_when_its_package_marks_it_sharable() {
+fn a_package_quest_is_shared_only_when_its_package_marks_it_shareable() {
     let realm = start_party("quest-share-package");
     apply_quests(
         &realm,

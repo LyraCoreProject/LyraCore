@@ -16,7 +16,7 @@ tests = [
     { path = "module/tests/quest_share.rs", function = "a_refused_accept_ends_the_share", rung = "durable_module" },
     { path = "module/tests/quest_share.rs", function = "a_quest_without_the_shareable_flag_cannot_be_pushed", rung = "durable_module" },
     { path = "module/tests/quest_share.rs", function = "a_decline_or_the_sharer_leaving_the_group_ends_the_share", rung = "durable_module" },
-    { path = "module/tests/quest_share.rs", function = "a_package_quest_is_shared_only_when_its_package_marks_it_sharable", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "a_package_quest_is_shared_only_when_its_package_marks_it_shareable", rung = "durable_module" },
     { path = "module/tests/quest_share.rs", function = "a_package_replays_its_quest_flags_after_the_importer_refills_the_flags_table", rung = "durable_module" },
 ]
 

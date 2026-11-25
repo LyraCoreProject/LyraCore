@@ -732,8 +732,9 @@ identifier must fit 24 bits.
 - **Quest.** `game_quest_template` and every child table (`game_quest_text` and the rest) are
   Package-owned exactly when their quest is, so one band covers the whole family. A quest is
   shareable only when its `game_quest_flags` row holds the shareable bit (`0x8`), and absence means
-  no flags. A Package that inserts a quest inserts that row, keyed by `quest_entry` and carrying the
-  whole `flags` value, to make the quest shareable. A Package may update the `flags` of an imported
+  no flags. A Package that inserts a quest may also insert that row, keyed by `quest_entry` and
+  carrying the whole `flags` value, to make the quest shareable. The whole value reaches the quest
+  details sent to the client. A Package may update the `flags` of an imported
   quest, but cannot insert a row for one. The base import writes a flags row for every quest it
   imports, so an update needs a Realm whose quests were imported on or after 2026-11-04. A quests
   reimport restores the base flags before the Package replay writes its claims.
