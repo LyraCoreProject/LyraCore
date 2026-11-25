@@ -389,6 +389,19 @@ pub(crate) fn apply_hit(
         }
     }
     if dmg == 0 && !damage.lethal_prevented {
+        // vmangos `Unit::DealDamage` still breaks Auras and cancels casts under a hit absorbed whole.
+        if damage.absorbed > 0 && !target.godmode {
+            let periodic = is_periodic(ctx, hit);
+            crate::spell::break_auras_on_damage(
+                ctx,
+                target_guid,
+                if weapon { attacker_guid } else { 0 },
+                periodic,
+            );
+            if !periodic {
+                crate::spell::interrupt_on_absorbed_hit(ctx, target_guid);
+            }
+        }
         return miss;
     }
     let attacker_is_player = attacker.as_ref().map(|a| a.is_player()).unwrap_or(false);
@@ -431,7 +444,9 @@ pub(crate) fn apply_hit(
         target.health = 1;
         reward_taken_rage(&mut target, attacker_guid, before);
         target.update(ctx);
-        // vmangos `Unit::DealDamage` pushes back the loser's cast and channel before the Duel ends.
+        // vmangos `Unit::DealDamage` breaks the loser's Auras and pushes back its cast and channel
+        // before the Duel ends. No attacker: a Retaliation would proc only after the Duel ended.
+        crate::spell::break_auras_on_damage(ctx, target_guid, 0, periodic);
         if !periodic {
             crate::spell::pushback_on_damage(ctx, target_guid, attacker_guid);
         }
@@ -638,12 +653,80 @@ pub(crate) fn deal_damage(
     }
     let resolved = resolve_damage(ctx, attacker_guid, target_guid, basis.max(0) as u32);
     if resolved.amount() == 0 && !resolved.damage.lethal_prevented {
+        if resolved.absorbed() > 0 {
+            resolved.land(ctx, attacker_guid, target_guid, hit);
+        }
         return (0, resolved.absorbed());
     }
     // Enter combat before applying a lethal hit, which may remove the target.
     enter_combat(ctx, attacker_guid);
     resolved.land(ctx, attacker_guid, target_guid, hit);
     (resolved.amount(), resolved.absorbed())
+}
+
+/// What environmental damage did to a Character.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EnvironmentalHit {
+    /// Nothing landed: the Character is gone, dead or in godmode, or the damage was 0.
+    Unhurt,
+    /// The Character lost this much health and lives.
+    Hurt(u32),
+    /// The hit killed the Character, which had this much health.
+    Killed(u32),
+}
+
+/// vmangos `Player::EnvironmentalDamage`: falling, drowning and fatigue damage reach
+/// `Unit::DealDamage` as SELF_DAMAGE. Even 0 ends stealth. Damage ends a Duel at 1 health or kills,
+/// breaks the Auras that damage breaks, and cancels or pushes back the cast; a channel only ends.
+pub(crate) fn deal_environmental_damage(
+    ctx: &ReducerContext,
+    victim_guid: u64,
+    dmg: u32,
+) -> EnvironmentalHit {
+    let entities = ctx.db.game_world_entity();
+    let hurtable = || {
+        entities
+            .guid()
+            .find(victim_guid)
+            .filter(|victim| !victim.dead && !victim.godmode)
+    };
+    if hurtable().is_none() {
+        return EnvironmentalHit::Unhurt;
+    }
+    crate::spell::break_stealth(ctx, victim_guid);
+    let Some(mut victim) = hurtable().filter(|_| dmg > 0) else {
+        return EnvironmentalHit::Unhurt;
+    };
+    let before = victim.health;
+    let duel = duel_finished_by(ctx, Some(&victim), &victim);
+    let finish = match damage_result(before, dmg, duel, || false) {
+        DamageResult::Dies => {
+            super::death::kill_player(ctx, victim_guid, victim_guid);
+            return EnvironmentalHit::Killed(before);
+        }
+        DamageResult::EndsDuel(finish) => {
+            victim.health = 1;
+            Some(finish)
+        }
+        DamageResult::Survives | DamageResult::Floored => {
+            victim.health = before - dmg;
+            None
+        }
+    };
+    let lost = before - victim.health;
+    victim.update(ctx);
+    crate::spell::break_auras_on_damage(ctx, victim_guid, 0, false);
+    crate::spell::pushback_on_damage(ctx, victim_guid, victim_guid);
+    if let Some(finish) = finish {
+        crate::duel::complete_duel(
+            ctx,
+            finish.duel_id,
+            crate::duel::completion_kind::WON,
+            finish.winner_guid,
+            victim_guid,
+        );
+    }
+    EnvironmentalHit::Hurt(lost)
 }
 
 // vmangos SPELL_ATTR_EX3_TREAT_AS_PERIODIC, kept in `attributes_ex_3`.

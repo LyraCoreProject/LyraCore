@@ -7,7 +7,7 @@ use lyracore_shared::spell::taxonomy::{
     A_MOD_SPEED, A_PERIODIC_DAMAGE, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, E_PERSISTENT_AREA,
     T_TARGET_ENEMY,
 };
-use support::{number, Field, Standalone};
+use support::{actor, number, Field, Standalone};
 
 const CHARACTER: u64 = 1;
 const CHARACTER_HEALTH: u32 = 100;
@@ -29,6 +29,10 @@ const DUEL: u64 = 509_0002;
 const ACTIVE: u8 = 2;
 const MAIN_HAND_SLOT: u8 = 15;
 const BLADE_DURABILITY: u32 = 100;
+const FALL_LAND: u32 = lyracore_shared::opcodes::movement::MSG_MOVE_FALL_LAND;
+// `fall_damage_curve` in module/src/world.rs: a 1.5 s fall costs 14 of 100 health.
+const FALL_MS: u32 = 1_500;
+const FALL_DAMAGE: u32 = 14;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -220,6 +224,23 @@ fn a_lethal_spell_from_a_duel_opponents_pet_ends_the_duel_at_one_health() {
     assert_duel_loser_at_one_health(&shard);
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_fall_that_leaves_a_duelist_at_one_health_ends_the_duel() {
+    let (shard, _) = stage("duel-fall-ends-at-one-health");
+    let rival = spawn_rival(&shard);
+    start_duel(&shard, rival);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = {} WHERE guid = {CHARACTER}",
+        FALL_DAMAGE + 1
+    ));
+
+    land(&shard, FALL_MS);
+
+    assert!(duel_ended(&shard), "the fall must end the Duel");
+    assert_duel_loser_at_one_health(&shard);
+}
+
 fn stage(name: &str) -> (Standalone, u64) {
     let mut shard = Standalone::start(name);
     shard.publish_module();
@@ -327,6 +348,36 @@ fn hostile_factions(shard: &Standalone, wolf: u64) {
             "UPDATE game_world_entity SET faction_template = {faction} WHERE guid = {guid}"
         ));
     }
+}
+
+// A movement body with no transport, swimming or jumping tail: flags, timestamp, pose and fall time.
+fn land(shard: &Standalone, fall_time_ms: u32) {
+    let at = shard
+        .query_rows(&format!(
+            "SELECT x, y, z FROM game_world_entity WHERE guid = {CHARACTER}"
+        ))
+        .remove(0);
+    let [x, y, z]: [f32; 3] = ["x", "y", "z"].map(|axis| number(&at, axis));
+    let mut body = vec![0u8; 24];
+    body.extend_from_slice(&fall_time_ms.to_le_bytes());
+    let body = format!(
+        "[{}]",
+        body.iter().map(u8::to_string).collect::<Vec<_>>().join(",")
+    );
+    let args = [
+        actor(CHARACTER),
+        FALL_LAND.to_string(),
+        body,
+        x.to_string(),
+        y.to_string(),
+        z.to_string(),
+        "1.0".to_string(),
+        "10".to_string(),
+    ];
+    shard.assert_call(
+        "gw_movement_update",
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
 }
 
 fn equip_blade(shard: &Standalone) {

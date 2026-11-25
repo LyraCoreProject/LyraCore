@@ -1,6 +1,7 @@
 use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
 use crate::breath::{advance_mirror_timer, MirrorTimerAdvance};
+use crate::combat::EnvironmentalHit;
 use crate::{game_world_entity, world::WorldEntity};
 use lyracore_shared::constants::player_flags;
 
@@ -116,7 +117,7 @@ pub(crate) fn tick_fatigue(ctx: &ReducerContext) {
 }
 
 // Returns true when exhaustion ends the timer: a death, or a ghost returned to a graveyard.
-fn exhaust(ctx: &ReducerContext, mut entity: WorldEntity, ticks: u32) -> bool {
+fn exhaust(ctx: &ReducerContext, entity: WorldEntity, ticks: u32) -> bool {
     let guid = entity.guid;
     if entity.dead {
         let graveyard = crate::graveyard::resolve_graveyard(
@@ -132,34 +133,20 @@ fn exhaust(ctx: &ReducerContext, mut entity: WorldEntity, ticks: u32) -> bool {
         }
         return true;
     }
-    let start_health = entity.health;
-    let mut hits = 0;
     for _ in 0..ticks {
         let nominal = exhaustion_damage(entity.max_health, entity.level, ctx.random::<u32>());
-        let (health, lethal) = crate::world::resolve_environmental_damage(nominal, entity.health);
-        let dealt = entity.health - health;
-        if lethal {
-            let remaining_health = entity.health;
-            if remaining_health != start_health {
-                entity.update(ctx);
+        match crate::combat::deal_environmental_damage(ctx, guid, nominal) {
+            EnvironmentalHit::Hurt(lost) => {
+                crate::breath_relay::exhaustion_damage(ctx, guid, lost);
+                crate::combat::wear_for_environmental_damage(ctx, guid, 1);
             }
-            crate::combat::wear_for_environmental_damage(ctx, guid, hits);
-            crate::spell::break_stealth(ctx, guid);
-            crate::combat::kill_player(ctx, guid, guid);
-            crate::breath_relay::exhaustion_damage(ctx, guid, remaining_health);
-            return true;
-        }
-        entity.health = health;
-        if dealt > 0 {
-            crate::breath_relay::exhaustion_damage(ctx, guid, dealt);
-            hits += 1;
+            EnvironmentalHit::Killed(health) => {
+                crate::breath_relay::exhaustion_damage(ctx, guid, health);
+                return true;
+            }
+            EnvironmentalHit::Unhurt => {}
         }
     }
-    if entity.health != start_health {
-        entity.update(ctx);
-    }
-    crate::combat::wear_for_environmental_damage(ctx, guid, hits);
-    crate::spell::break_stealth(ctx, guid);
     false
 }
 

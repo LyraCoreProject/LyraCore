@@ -188,6 +188,12 @@ impl Spell {
         }
     }
 
+    /// vmangos `SpellCaster::InterruptSpellsWithInterruptFlags(SPELL_INTERRUPT_FLAG_DAMAGE_CANCELS)`,
+    /// which a hit absorbed whole calls for a cast or channel alike.
+    pub(crate) fn cancelled_by_absorbed_damage(&self) -> bool {
+        self.interrupt_flags & INTERRUPT_FLAG_DAMAGE_CANCELS != 0
+    }
+
     /// vmangos `Unit::DealDamage` on a channel.
     pub(crate) fn channel_damage_response(&self) -> DamageResponse {
         if self.channel_interrupt_flags & CHANNEL_INTERRUPT_DAMAGE_DELAYS != 0 {
@@ -1285,10 +1291,17 @@ pub struct PendingCast {
     // Zero is no cast item; item guids start above zero.
     #[default(0u64)]
     pub cast_item_guid: u64,
+    // The full cast time that caps a pushback; zero for a cast in flight when the column was added.
+    #[default(0u32)]
+    pub cast_time_ms: u32,
 }
 
 impl PendingCast {
-    pub(crate) fn scheduled(request: &CastRequest, scheduled_at: ScheduleAt) -> Self {
+    pub(crate) fn scheduled(
+        request: &CastRequest,
+        scheduled_at: ScheduleAt,
+        cast_time_ms: u32,
+    ) -> Self {
         let (has_dest, (dest_x, dest_y, dest_z)) = match request.dest {
             Some(point) => (true, point),
             None => (false, (0.0, 0.0, 0.0)),
@@ -1308,6 +1321,7 @@ impl PendingCast {
             item_target_guid: request.item_target.unwrap_or(0),
             cooldown_category: request.cooldown_category,
             cast_item_guid: request.cast_item.unwrap_or(0),
+            cast_time_ms,
         }
     }
 
@@ -1430,7 +1444,7 @@ mod pending_cast_tests {
 
     fn round_trip(request: CastRequest) -> CastRequest {
         let at = ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(1_000_000));
-        PendingCast::scheduled(&request, at).request()
+        PendingCast::scheduled(&request, at, 1500).request()
     }
 
     #[test]
@@ -1493,6 +1507,13 @@ mod interrupt_flag_tests {
             without_pushback.cast_damage_response(),
             DamageResponse::Unaffected
         );
+    }
+
+    #[test]
+    fn a_hit_absorbed_whole_cancels_hearthstone_but_not_fireball_or_drain_life() {
+        assert!(spell(0x1F, 0, 0).cancelled_by_absorbed_damage());
+        assert!(!spell(0x0F, 0, 1).cancelled_by_absorbed_damage());
+        assert!(!channel(0x0F, 0x7C0C, 1).cancelled_by_absorbed_damage());
     }
 
     #[test]

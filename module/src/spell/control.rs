@@ -406,17 +406,10 @@ pub(crate) fn is_immune_to_effect(
             ))
 }
 
-// Matches cmangos PUSHBACK_SPELL_DELAY_TIME.
-pub(crate) const CAST_PUSHBACK_MS: i64 = 500;
-
-pub(crate) const CAST_PUSHBACK_MAX: u8 = 2;
-
 // vmangos SpellModOp SPELLMOD_NOT_LOSE_CASTING_TIME.
 const SPELLMOD_OP_NOT_LOSE_CASTING_TIME: i32 = 9;
-
-pub(crate) fn should_pushback(pushback_count: u8) -> bool {
-    pushback_count < CAST_PUSHBACK_MAX
-}
+// vmangos AuraType SPELL_AURA_RESIST_PUSHBACK, kept in an A_FLAG effect's p1.
+const AURA_RESIST_PUSHBACK: i32 = 149;
 
 /// vmangos `Unit::DealDamage`: a direct hit cancels or delays the victim's cast and channel.
 pub(crate) fn pushback_on_damage(ctx: &ReducerContext, victim_guid: u64, attacker_guid: u64) {
@@ -442,9 +435,45 @@ pub(crate) fn pushback_on_damage(ctx: &ReducerContext, victim_guid: u64, attacke
     }
 }
 
+/// vmangos `Unit::DealDamage` for a non-DOT hit a shield absorbs whole: it cancels a Character's
+/// cast and channel whose spell says damage cancels it, and delays nothing.
+pub(crate) fn interrupt_on_absorbed_hit(ctx: &ReducerContext, victim_guid: u64) {
+    if !ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(victim_guid)
+        .is_some_and(|victim| victim.is_player())
+    {
+        return;
+    }
+    let cancels = |spell_id: u32| {
+        ctx.db
+            .game_spell()
+            .spell_id()
+            .find(spell_id)
+            .is_some_and(|spell| spell.cancelled_by_absorbed_damage())
+    };
+    if ctx
+        .db
+        .game_pending_cast()
+        .by_caster()
+        .filter(&victim_guid)
+        .any(|cast| cancels(cast.spell_id))
+    {
+        interrupt_cast(ctx, victim_guid);
+    }
+    for spell_id in channel_spell_ids(ctx, victim_guid) {
+        if cancels(spell_id) {
+            end_channel(ctx, victim_guid, spell_id);
+        }
+    }
+}
+
 fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
     let pending = ctx.db.game_pending_cast();
     let hits: Vec<PendingCast> = pending.by_caster().filter(&caster_guid).collect();
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     for mut p in hits {
         let Some(spell) = ctx.db.game_spell().spell_id().find(p.spell_id) else {
             continue;
@@ -457,48 +486,67 @@ fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
             DamageResponse::Unaffected => continue,
             DamageResponse::Delayed => {}
         }
-        if !should_pushback(p.pushback_count) || resists_pushback(ctx, caster_guid, &spell) {
+        if resists_pushback(ctx, caster_guid, &spell) {
             continue;
         }
         let ScheduleAt::Time(fire_at) = p.scheduled_at else {
             continue;
         };
-        let Some(new_fire_at) = crate::time::scheduled_time(ctx, fire_at)
-            .checked_add(TimeDuration::from_micros(CAST_PUSHBACK_MS * 1000))
-        else {
+        let fire_at = crate::time::scheduled_time(ctx, fire_at);
+        let delay = cast_pushback_micros(
+            p.pushback_count,
+            fire_at.to_micros_since_unix_epoch() - now_micros,
+            i64::from(p.cast_time_ms) * 1000,
+        );
+        let Some(new_fire_at) = fire_at.checked_add(TimeDuration::from_micros(delay)) else {
             continue;
         };
         let spell_id = p.spell_id;
-        p.pushback_count += 1;
+        p.pushback_count = p.pushback_count.saturating_add(1);
         let new_count = p.pushback_count;
         p.scheduled_at = crate::time::schedule_time(ctx, new_fire_at);
         pending.scheduled_id().update(p);
+        let delay_ms = (delay / 1000) as u32;
         crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
-                delay_ms: CAST_PUSHBACK_MS as u32,
+                delay_ms,
                 ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Pushback)
             },
         );
         log::info!(
-            "cast pushed back: caster {caster_guid}'s spell {spell_id} delayed {CAST_PUSHBACK_MS}ms \
-             (pushback {new_count}/{CAST_PUSHBACK_MAX})"
+            "cast pushed back: caster {caster_guid}'s spell {spell_id} delayed {delay_ms}ms \
+             (pushback {new_count})"
         );
     }
 }
 
-/// vmangos `Spell::Delayed` resist roll, without SPELL_AURA_RESIST_PUSHBACK: see the known gap
-/// on `pushback_on_damage` in conformance/features/spells/cast_and_interrupt.toml.
+/// vmangos `Spell::Delayed` and `Spell::DelayedChannel` resist roll.
 fn resists_pushback(ctx: &ReducerContext, caster_guid: u64, spell: &crate::Spell) -> bool {
     let (flat, pct) = spell_mod(ctx, caster_guid, SPELLMOD_OP_NOT_LOSE_CASTING_TIME, spell);
-    let chance = i64::from(apply_spell_mod(100, flat, pct)) - 100;
+    let from_auras: i64 = auras_on(ctx, caster_guid)
+        .filter(|aura| aura.eff_kind == A_FLAG && aura.eff_p1 == AURA_RESIST_PUSHBACK)
+        .map(|aura| i64::from(crate::modifiers::stacked_amount(aura.amount, aura.stacks)))
+        .sum();
+    let chance = i64::from(apply_spell_mod(100, flat, pct)) - 100 + from_auras;
     chance >= 100
         || (chance > 0 && i64::from(super::rolls::integer_roll(ctx, caster_guid, 99)) < chance)
 }
 
 /// vmangos `Spell::GetNextDelayAtDamageMsTime`, in microseconds.
-fn channel_delay_micros(delays: u8) -> i64 {
+fn delay_at_damage_micros(delays: u8) -> i64 {
     1_000_000 - 200_000 * i64::from(delays.min(4))
+}
+
+/// vmangos `Spell::Delayed`: a cast's time left never grows past its full cast time. A cast time
+/// of 0 is unknown, from a cast in flight at the publish that added it, and caps nothing.
+fn cast_pushback_micros(delays: u8, remaining_micros: i64, cast_time_micros: i64) -> i64 {
+    let delay = delay_at_damage_micros(delays);
+    if cast_time_micros == 0 {
+        delay
+    } else {
+        delay.min((cast_time_micros - remaining_micros).max(0))
+    }
 }
 
 /// vmangos `Aura::UpdatePeriodicTimer`: the next tick falls so that the last one ends the channel.
@@ -543,7 +591,7 @@ fn delay_channel(ctx: &ReducerContext, caster_guid: u64, spell: &crate::Spell) {
         .find(caster_guid)
         .filter(|row| row.spell_id == spell_id && row.ends_at == ends_at)
         .map_or(0, |row| row.delays);
-    let delay = channel_delay_micros(delays).min(remaining);
+    let delay = delay_at_damage_micros(delays).min(remaining);
     if delay == remaining {
         end_channel(ctx, caster_guid, spell_id);
         return;
@@ -846,8 +894,8 @@ pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::{
-        aura_survives_death, cc_blocks, channel_delay_micros, immunity_names_mechanic,
-        realigned_next_tick, CAST_PUSHBACK_MAX, CAST_PUSHBACK_MS, SPELL_ATTR_PASSIVE,
+        aura_survives_death, cast_pushback_micros, cc_blocks, delay_at_damage_micros,
+        immunity_names_mechanic, realigned_next_tick, SPELL_ATTR_PASSIVE,
     };
 
     #[test]
@@ -886,18 +934,38 @@ mod tests {
     }
 
     #[test]
-    fn pushback_constants_match_the_cmangos_convention() {
-        assert_eq!(CAST_PUSHBACK_MS, 500);
-        assert_eq!(CAST_PUSHBACK_MAX, 2);
-    }
-
-    #[test]
-    fn each_hit_delays_a_channel_two_hundred_ms_less_down_to_two_hundred() {
-        let delays: Vec<i64> = (0..7).map(channel_delay_micros).collect();
+    fn each_hit_delays_a_cast_or_channel_two_hundred_ms_less_down_to_two_hundred() {
+        let delays: Vec<i64> = (0..7).map(delay_at_damage_micros).collect();
         assert_eq!(
             delays,
             [1_000_000, 800_000, 600_000, 400_000, 200_000, 200_000, 200_000]
         );
+    }
+
+    #[test]
+    fn each_hit_on_a_long_cast_pushes_it_back_by_the_next_delay_with_no_limit_on_hits() {
+        const CAST_TIME: i64 = 10_000_000;
+        let pushbacks: Vec<i64> = (0..7)
+            .map(|hits| cast_pushback_micros(hits, 1_000_000, CAST_TIME))
+            .collect();
+        assert_eq!(
+            pushbacks,
+            [1_000_000, 800_000, 600_000, 400_000, 200_000, 200_000, 200_000]
+        );
+    }
+
+    #[test]
+    fn a_pushback_never_leaves_more_than_the_full_cast_time() {
+        // Fireball: a 3500 ms cast hit at 2900 ms left can grow only 600 ms.
+        assert_eq!(cast_pushback_micros(0, 2_900_000, 3_500_000), 600_000);
+        assert_eq!(cast_pushback_micros(1, 3_500_000, 3_500_000), 0);
+        assert_eq!(cast_pushback_micros(0, 2_000_000, 3_500_000), 1_000_000);
+    }
+
+    #[test]
+    fn a_cast_without_a_known_cast_time_takes_the_full_pushback() {
+        assert_eq!(cast_pushback_micros(0, 2_900_000, 0), 1_000_000);
+        assert_eq!(cast_pushback_micros(2, 2_900_000, 0), 600_000);
     }
 
     #[test]

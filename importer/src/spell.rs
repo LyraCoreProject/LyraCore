@@ -1098,7 +1098,10 @@ fn push_spell_effect_rows(
         }
         let effect_mechanic = s.effect_mechanic[i] as u8;
         // docs/schema.md#damage-shields gives this A_IMMUNITY p1 encoding.
-        let p1 = if kind == A_IMMUNITY {
+        let p1 = if kind == A_FLAG {
+            // docs/schema.md#flag-auras: the Module finds SPELL_AURA_RESIST_PUSHBACK by this id.
+            s.effect_aura[i] as i32
+        } else if kind == A_IMMUNITY {
             s.effect_aura[i] as i32
                 | if s.attributes_ex1 & ATTR_EX1_IMMUNITY_TO_HOSTILE_AND_FRIENDLY != 0 {
                     0x100
@@ -3203,6 +3206,19 @@ mod tests {
             ),
             (A_SPELLMOD_FLAT, 4, P_SPELLMOD_OP, 789)
         );
+    }
+
+    #[test]
+    fn a_flag_aura_keeps_its_source_aura_in_p1() {
+        let mut bytes = source_spell_fixture();
+        // Effect 0 applies SPELL_AURA_RESIST_PUSHBACK, as Concentration Aura does.
+        for (column, value) in [(61, 6u32), (91, 149)] {
+            bytes[20 + column * 4..24 + column * 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let mut dbc = fixture_tables();
+        dbc.spells = read_spells(&bytes).unwrap();
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        assert_eq!((rows.effects[0].kind, rows.effects[0].p1), (A_FLAG, 149));
     }
 
     #[test]

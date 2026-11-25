@@ -2705,6 +2705,7 @@ pub(crate) fn begin_loaded_cast(
     let cast = pending.insert(PendingCast::scheduled(
         request,
         crate::time::schedule_time(ctx, fire_at),
+        completion_ms,
     ));
     start_global_cooldown(ctx, caster_guid, hdr);
     crate::SpellCastEvent::insert(

@@ -18,8 +18,11 @@ const ROOT_A: u32 = 5_090_901;
 const ROOT_B: u32 = 5_090_902;
 const SHADOWMELD: u32 = 5_090_903;
 const STEALTH: u32 = 5_090_904;
+const FROST_NOVA: u32 = 5_090_905;
+// A 1.5 s fall costs about 14.8% of maximum health, so a full-health Character survives it.
+const SURVIVABLE_FALL_MS: u32 = 1_500;
 
-// aura_interrupt bit 1 is break-on-move, mapped from the vanilla movement interrupt flag.
+// aura_interrupt bit 0 is break-on-damage and bit 1 break-on-move, from the vanilla interrupt flags.
 fn fixture(name: &str) -> (Standalone, [f32; 3]) {
     let mut shard = Standalone::start(name);
     shard.publish_module();
@@ -34,6 +37,7 @@ fn fixture(name: &str) -> (Standalone, [f32; 3]) {
         (ROOT_B, a_control, m_root, 0),
         (SHADOWMELD, a_stealth, 0, 2),
         (STEALTH, a_stealth, 0, 0),
+        (FROST_NOVA, a_control, m_root, 1),
     ] {
         shard.insert_row(
             "game_spell",
@@ -176,6 +180,32 @@ fn moving_ends_shadowmeld_but_keeps_stealth() {
     cast(&shard, STEALTH);
     send_move(&shard, START_FORWARD, FORWARD, [x + 6.0, y, z], 1.0, 30);
     assert_eq!(auras(&shard, STEALTH), 1, "Rogue Stealth allows movement");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_damaging_fall_breaks_an_aura_that_damage_breaks() {
+    let (shard, [x, y, z]) = fixture("movement-fall-breaks-aura");
+    let full_health = health(&shard);
+    cast(&shard, FROST_NOVA);
+
+    send_move(&shard, FALL_LAND, &landing_body(0), [x, y, z], 1.0, 10);
+    assert_eq!(auras(&shard, FROST_NOVA), 1, "a harmless landing keeps it");
+
+    send_move(
+        &shard,
+        FALL_LAND,
+        &landing_body(SURVIVABLE_FALL_MS),
+        [x, y, z],
+        1.0,
+        20,
+    );
+    let hurt = health(&shard);
+    assert!(
+        0 < hurt && hurt < full_health,
+        "the fall hurts but does not kill"
+    );
+    assert_eq!(auras(&shard, FROST_NOVA), 0);
 }
 
 #[test]

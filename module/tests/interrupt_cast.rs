@@ -3,11 +3,15 @@ mod support;
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
-    A_PERIODIC_DAMAGE, CAST_FLAG_CHANNELED, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, E_INTERRUPT,
-    E_PERSISTENT_AREA, T_SELF, T_TARGET_ENEMY,
+    A_ABSORB, A_CONTROL, A_PERIODIC_DAMAGE, CAST_FLAG_CHANNELED, CAST_FLAG_IGNORE_RESISTANCES,
+    E_DAMAGE, E_INTERRUPT, E_PERSISTENT_AREA, M_ROOT, P_MECHANIC, P_SCHOOL_MASK, T_SELF,
+    T_TARGET_ENEMY,
 };
 use spacetimedb::Timestamp;
-use support::{number, Field, Row, Standalone};
+use support::{
+    event_rows, fence_subscription, number, subscribe_with_fence, Field, Row, Standalone,
+    TableSubscription,
+};
 
 const CHARACTER: u64 = 1;
 const FIRE: u8 = 0x04;
@@ -20,11 +24,24 @@ const DAMAGE_CANCELLED_CHANNEL: u32 = 5_124_106;
 const SHORT_CHANNEL: u32 = 5_124_107;
 const UNSILENCEABLE_CHANNEL: u32 = 5_124_108;
 const UNPUSHED_CAST: u32 = 5_124_109;
+const SHIELD: u32 = 5_124_110;
+const DAMAGE_CANCELLED_CAST: u32 = 5_124_111;
+const DAMAGE_BROKEN_ROOT: u32 = 5_124_112;
 // vmangos spell_template interrupt fields of Fireball 133, Drain Life 689 and First Aid 746.
 const FIREBALL_INTERRUPT_FLAGS: u32 = 0x0F;
 const DRAIN_LIFE_CHANNEL_FLAGS: u32 = 0x7C0C;
 const FIRST_AID_CHANNEL_FLAGS: u32 = 0x3C0E;
 const WITHOUT_PUSHBACK_INTERRUPT_FLAGS: u32 = 0x09;
+// vmangos spell_template InterruptFlags of Hearthstone 8690.
+const HEARTHSTONE_INTERRUPT_FLAGS: u32 = 0x1F;
+// AURA_INTERRUPT_DAMAGE_CANCELS, kept in `aura_interrupt` bit 0.
+const BREAKS_ON_DAMAGE: u16 = 0x1;
+const SHIELD_POINTS: i32 = 1_000_000;
+const ALL_SCHOOLS: i32 = 0x7F;
+const SLOW_CAST_MS: u32 = 10_000;
+const CAST_EVENTS: &str = "SELECT * FROM game_spell_cast_event_live WHERE caster_guid = 1";
+// `SpellCastEventKind::Pushback`.
+const PUSHBACK: &str = "4";
 const PREVENTION_SILENCE: u8 = 1;
 const PREVENTION_NONE: u8 = 0;
 const SHORT_CHANNEL_MS: u32 = 900;
@@ -226,6 +243,95 @@ fn damage_leaves_a_cast_without_the_pushback_flag_on_time() {
     assert_eq!(pending_casts(&shard)[0]["scheduled_at"], due);
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn damage_pushes_a_cast_back_a_second_and_then_less_with_each_hit() {
+    let (shard, wolf) = stage("damage-pushes-back-cast");
+    let events = subscribe_with_fence(&shard, &[CAST_EVENTS]);
+    begin_cast(&shard, SLOW_CAST, wolf);
+    // Three seconds into the cast, three pushbacks fit below the full cast time.
+    for _ in 0..60 {
+        shard.assert_call("debug_advance_virtual_clock", &["50000"]);
+    }
+
+    for hits in 1..=3 {
+        bite_until(&shard, wolf, || pushbacks(&shard, &events).len() == hits);
+    }
+
+    assert_eq!(pushbacks(&shard, &events), [1000, 800, 600]);
+    assert_eq!(pending_casts(&shard).len(), 1);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_hit_on_a_cast_with_its_full_cast_time_left_pushes_it_back_nothing() {
+    let (shard, wolf) = stage("damage-pushback-capped");
+    let events = subscribe_with_fence(&shard, &[CAST_EVENTS]);
+    begin_cast(&shard, SLOW_CAST, wolf);
+
+    bite_until(&shard, wolf, || !pushbacks(&shard, &events).is_empty());
+
+    assert_eq!(pushbacks(&shard, &events), [0]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_hit_a_shield_absorbs_whole_cancels_a_cast_that_damage_cancels() {
+    let (shard, wolf) = stage("absorbed-hit-cancels-cast");
+    let raised = raise_shield(&shard);
+    begin_cast(&shard, DAMAGE_CANCELLED_CAST, wolf);
+
+    bite_until(&shard, wolf, || pending_casts(&shard).is_empty());
+
+    assert!(pending_casts(&shard).is_empty());
+    assert!(shield_left(&shard) < raised, "a bite must land");
+    assert_eq!(health(&shard, CHARACTER), CHARACTER_HEALTH);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_hit_a_shield_absorbs_whole_pushes_back_no_cast() {
+    let (shard, wolf) = stage("absorbed-hit-pushes-back-nothing");
+    let events = subscribe_with_fence(&shard, &[CAST_EVENTS]);
+    let raised = raise_shield(&shard);
+    begin_cast(&shard, SLOW_CAST, wolf);
+    for _ in 0..60 {
+        shard.assert_call("debug_advance_virtual_clock", &["50000"]);
+    }
+
+    bite_until(&shard, wolf, || shield_left(&shard) < raised);
+
+    assert!(shield_left(&shard) < raised, "a bite must land");
+    assert_eq!(health(&shard, CHARACTER), CHARACTER_HEALTH);
+    assert_eq!(pending_casts(&shard).len(), 1);
+    assert!(pushbacks(&shard, &events).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_hit_a_shield_absorbs_whole_breaks_an_aura_that_damage_breaks() {
+    let (shard, wolf) = stage("absorbed-hit-breaks-aura");
+    let raised = raise_shield(&shard);
+    let roots = || {
+        shard.query_rows(&format!(
+            "SELECT id FROM game_aura WHERE target_guid = {CHARACTER} \
+             AND spell_id = {DAMAGE_BROKEN_ROOT}"
+        ))
+    };
+    cast_until(&shard, wolf, DAMAGE_BROKEN_ROOT, CHARACTER, || {
+        !roots().is_empty()
+    });
+    assert!(!roots().is_empty(), "the root must land");
+    // An Aura survives damage in the Durable Request that applies it.
+    shard.assert_call("debug_advance_virtual_clock", &["50000"]);
+
+    bite_until(&shard, wolf, || roots().is_empty());
+
+    assert!(roots().is_empty());
+    assert!(shield_left(&shard) < raised, "a bite must land");
+    assert_eq!(health(&shard, CHARACTER), CHARACTER_HEALTH);
+}
+
 fn stage(name: &str) -> (Standalone, u64) {
     let mut shard = Standalone::start(name);
     shard.publish_module();
@@ -314,7 +420,7 @@ fn stage(name: &str) -> (Standalone, u64) {
         &shard,
         SLOW_CAST,
         &[
-            ("cast_time_ms", &10_000),
+            ("cast_time_ms", &SLOW_CAST_MS),
             ("interrupt_flags", &FIREBALL_INTERRUPT_FLAGS),
             ("prevention_type", &PREVENTION_SILENCE),
         ],
@@ -329,6 +435,30 @@ fn stage(name: &str) -> (Standalone, u64) {
             ("prevention_type", &PREVENTION_SILENCE),
         ],
         damage_effect,
+    );
+    insert_spell(
+        &shard,
+        DAMAGE_CANCELLED_CAST,
+        &[
+            ("cast_time_ms", &SLOW_CAST_MS),
+            ("interrupt_flags", &HEARTHSTONE_INTERRUPT_FLAGS),
+            ("prevention_type", &PREVENTION_NONE),
+        ],
+        damage_effect,
+    );
+    insert_spell(
+        &shard,
+        DAMAGE_BROKEN_ROOT,
+        &[
+            ("duration_ms", &CHANNEL_DURATION_MS),
+            ("aura_interrupt", &BREAKS_ON_DAMAGE),
+        ],
+        &[
+            ("kind", &A_CONTROL),
+            ("target", &T_TARGET_ENEMY),
+            ("p_0", &M_ROOT),
+            ("p_0_kind", &P_MECHANIC),
+        ],
     );
     insert_spell(&shard, BITE, &[], damage_effect);
     insert_spell(
@@ -412,6 +542,57 @@ fn insert_drain_life_channel(
         ],
         effect,
     );
+}
+
+fn raise_shield(shard: &Standalone) -> i32 {
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &SHIELD),
+            ("name", &"Interrupt fixture shield"),
+            ("duration_ms", &600_000),
+            ("spell_level", &1),
+            ("gcd_ms", &0),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(SHIELD, 0)),
+            ("spell_id", &SHIELD),
+            ("kind", &A_ABSORB),
+            ("base_points", &SHIELD_POINTS),
+            ("target", &T_SELF),
+            ("p_0", &ALL_SCHOOLS),
+            ("p_0_kind", &P_SCHOOL_MASK),
+        ],
+    );
+    shard.assert_call(
+        "debug_force_cast",
+        &[&CHARACTER.to_string(), &SHIELD.to_string()],
+    );
+    let raised = shield_left(shard);
+    assert!(raised > 0, "the shield must be up");
+    raised
+}
+
+fn shield_left(shard: &Standalone) -> i32 {
+    number(
+        &shard.query_rows(&format!(
+            "SELECT amount_remaining FROM game_aura WHERE target_guid = {CHARACTER} \
+             AND spell_id = {SHIELD}"
+        ))[0],
+        "amount_remaining",
+    )
+}
+
+fn pushbacks(shard: &Standalone, events: &TableSubscription) -> Vec<u32> {
+    fence_subscription(shard, events);
+    event_rows(events, "game_spell_cast_event_live")
+        .into_iter()
+        .filter(|row| row["kind"] == PUSHBACK)
+        .map(|row| number(&row, "delay_ms"))
+        .collect()
 }
 
 // A miss changes nothing, so a cast repeats until its outcome shows.
