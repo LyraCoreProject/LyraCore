@@ -305,6 +305,7 @@ pub(super) fn leave(
         return;
     };
     let guid = player.character_guid;
+    super::loot::release_source(ctx, guid, player.open_loot);
     super::realm_party::presence(ctx, guid, false);
     super::clear_audience(ctx, connection_id);
     super::member_stats::stop(ctx, connection_id);

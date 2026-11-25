@@ -1476,8 +1476,18 @@ struct GameobjectSpawns {
     goober_entries: std::collections::HashSet<u64>,
     go_packed_rows: Vec<String>,
     used_go: std::collections::HashSet<u64>,
-    // An entry's smallest positive vmangos spawntimesecsmin; absent when none is positive.
+    // An entry's smallest positive vmangos spawntimesecsmin, for a spawn without its own range.
     respawn_secs: std::collections::HashMap<u64, u32>,
+}
+
+/// A spawn's own respawn range from vmangos `spawntimesecsmin` and `spawntimesecsmax`. A negative
+/// minimum (a summoned spawn) or a zero maximum gives none, (0, 0).
+fn spawn_respawn_range(min_secs: i64, max_secs: i64) -> (u32, u32) {
+    if min_secs < 0 || max_secs <= 0 {
+        return (0, 0);
+    }
+    let secs = |secs: i64| u32::try_from(secs.min(i64::from(u32::MAX))).unwrap_or(u32::MAX);
+    (secs(min_secs), secs(max_secs.max(min_secs)))
 }
 
 fn build_packed_spawn_payload(spawns: &[CreatureSpawnRow]) -> String {
@@ -1618,8 +1628,11 @@ fn collect_gameobject_spawns(
                 state => bail!("gameobject {db_guid}: unknown source state {state}"),
             }
         };
+        let spawn_secs = row.number::<i64>(go::SPAWN_TIME_SECS_MIN)?;
+        let (respawn_min, respawn_max) =
+            spawn_respawn_range(spawn_secs, row.number::<i64>(go::SPAWN_TIME_SECS_MAX)?);
         go_packed_rows.push(format!(
-            "{g},{id},{m},{x},{y},{z},{o},{initial_state},{rot0},{rot1},{rot2},{rot3}",
+            "{g},{id},{m},{x},{y},{z},{o},{initial_state},{rot0},{rot1},{rot2},{rot3},{respawn_min},{respawn_max}",
             g = go_guid(db_guid),
             m = map
         ));
@@ -1632,7 +1645,6 @@ fn collect_gameobject_spawns(
             *go_whole_map_counts.entry(map).or_insert(0) += 1;
         }
         used_go.insert(id);
-        let spawn_secs = row.number::<i64>(go::SPAWN_TIME_SECS_MIN)?;
         if spawn_secs > 0 {
             let spawn_secs = u32::try_from(spawn_secs).unwrap_or(u32::MAX);
             respawn_secs
@@ -2414,10 +2426,6 @@ fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
         add(
             "gameobjects.visibility",
             row.number::<f32>("visibility_mod")? != 0.0,
-        );
-        add(
-            "gameobjects.respawn-range",
-            row.number::<i32>("spawntimesecsmin")? != row.number::<i32>("spawntimesecsmax")?,
         );
     }
     for (table, code) in [

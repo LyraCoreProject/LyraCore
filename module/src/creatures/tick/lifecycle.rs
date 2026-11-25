@@ -1,7 +1,7 @@
 use lyracore_package_delta::packed_creature_spawn_guid;
 use spacetimedb::{ReducerContext, TimeDuration};
 
-use crate::{game_corpse_loot, game_gameobject, game_gameobject_pool_member, game_loot_roll};
+use crate::{game_corpse_loot, game_gameobject, game_loot_roll};
 
 use super::*;
 use crate::{game_creature_spawn, game_creature_template, CreatureSpawn};
@@ -170,30 +170,18 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
 
 pub(crate) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {
     let now = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
-    let gos = ctx.db.game_gameobject();
-    let members = ctx.db.game_gameobject_pool_member();
     let mut visited = 0usize;
-    let due: Vec<u64> = gos
+    let due: Vec<u64> = ctx
+        .db
+        .game_gameobject()
         .by_respawn_at()
         .filter(1..=now)
         .inspect(|_| visited += 1)
-        .filter(|g| crate::gameobject::respawn_due(g.state, g.respawn_at_micros, now))
         .filter(|g| !crate::gameobject::loot_window_open(ctx, g.guid))
         .map(|g| g.guid)
         .collect();
     for guid in due {
-        crate::gameobject::clear_use_state(ctx, guid);
-        match crate::gameobject::pool_point_id_of(guid).and_then(|pid| members.point_id().find(pid))
-        {
-            Some(member) => crate::gameobject::reroll_pool(ctx, member.pool_id, guid),
-            None => {
-                if let Some(mut go) = gos.guid().find(guid) {
-                    go.state = 0;
-                    go.respawn_at_micros = 0;
-                    go.update(ctx);
-                }
-            }
-        }
+        crate::gameobject::respawn_timer_elapsed(ctx, guid);
     }
     visited
 }

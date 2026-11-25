@@ -171,10 +171,22 @@ fn vmangos_gameobjects_select_versions_and_ranges_skip_disabled_and_translate_st
         .iter()
         .any(|finding| finding["code"] == "gameobjects.game-event" && finding["occurrences"] == 1));
     let rows = plan.go_batches[0].split(';').collect::<Vec<_>>();
-    assert_eq!(rows[0], format!("{},7,0,0,0,0,0,0,0,0,0,0", go_guid(1)));
-    assert_eq!(rows[1], format!("{},7,0,0,0,0,0,1,0,0,0,0", go_guid(2)));
-    assert_eq!(rows[2], format!("{},1731,0,0,0,0,0,0,0,0,0,0", go_guid(6)));
-    assert_eq!(rows[3], format!("{},7,0,0,0,0,0,2,0,0,0,0", go_guid(7)));
+    assert_eq!(
+        rows[0],
+        format!("{},7,0,0,0,0,0,0,0,0,0,0,300,300", go_guid(1))
+    );
+    assert_eq!(
+        rows[1],
+        format!("{},7,0,0,0,0,0,1,0,0,0,0,300,300", go_guid(2))
+    );
+    assert_eq!(
+        rows[2],
+        format!("{},1731,0,0,0,0,0,0,0,0,0,0,300,300", go_guid(6))
+    );
+    assert_eq!(
+        rows[3],
+        format!("{},7,0,0,0,0,0,2,0,0,0,0,300,300", go_guid(7))
+    );
     let sql = plan.stmts.join(";");
     assert!(!sql.contains("Old door"));
     assert!(!sql.contains("Fishing hole"));
@@ -216,6 +228,50 @@ fn a_chest_template_takes_the_smallest_positive_spawn_time_of_its_entry() {
     assert_eq!(
         chest_template_row(&source),
         "(5090042,3,1,'Fixture mug',0,5090042,0,120,0,0,1,40,40)"
+    );
+}
+
+fn packed_spawn_row(source: &WorldSource, db_guid: u32) -> String {
+    let scope =
+        WorldImportScope::canonical(WorldImportProfile::parse("full-world").unwrap()).unwrap();
+    let prefix = format!("{},", go_guid(db_guid));
+    collect_gameobject_spawns(source, &scope)
+        .unwrap()
+        .go_packed_rows
+        .into_iter()
+        .find(|row| row.starts_with(&prefix))
+        .unwrap()
+}
+
+#[test]
+fn each_chest_spawn_carries_its_own_respawn_range() {
+    let source = gameobject_source();
+    edit_gameobject_source(
+        &source,
+        "INSERT INTO gameobject (guid,id,map,position_x,position_y,position_z,orientation,rotation0,rotation1,rotation2,rotation3,state,spawn_flags,patch_min,patch_max,visibility_mod,spawntimesecsmin,spawntimesecsmax,animprogress)
+         SELECT 5090041,id,map,position_x,position_y,position_z,orientation,rotation0,rotation1,rotation2,rotation3,state,spawn_flags,patch_min,patch_max,visibility_mod,120,600,animprogress FROM gameobject WHERE guid = 5090040;
+         INSERT INTO gameobject (guid,id,map,position_x,position_y,position_z,orientation,rotation0,rotation1,rotation2,rotation3,state,spawn_flags,patch_min,patch_max,visibility_mod,spawntimesecsmin,spawntimesecsmax,animprogress)
+         SELECT 5090039,id,map,position_x,position_y,position_z,orientation,rotation0,rotation1,rotation2,rotation3,state,spawn_flags,patch_min,patch_max,visibility_mod,-1,-1,animprogress FROM gameobject WHERE guid = 5090040",
+    );
+
+    assert!(packed_spawn_row(&source, 5090040).ends_with(",300,300"));
+    assert!(packed_spawn_row(&source, 5090041).ends_with(",120,600"));
+    assert!(
+        packed_spawn_row(&source, 5090039).ends_with(",0,0"),
+        "a summoned spawn has no range of its own"
+    );
+}
+
+#[test]
+fn a_spawn_respawn_range_keeps_its_maximum_at_or_above_its_minimum() {
+    assert_eq!(spawn_respawn_range(300, 300), (300, 300));
+    assert_eq!(spawn_respawn_range(600, 120), (600, 600));
+    assert_eq!(spawn_respawn_range(0, 900), (0, 900));
+    assert_eq!(spawn_respawn_range(0, 0), (0, 0));
+    assert_eq!(spawn_respawn_range(-300, 300), (0, 0));
+    assert_eq!(
+        spawn_respawn_range(1, i64::from(u32::MAX) + 1),
+        (1, u32::MAX)
     );
 }
 

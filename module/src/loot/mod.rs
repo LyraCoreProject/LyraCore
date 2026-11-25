@@ -800,7 +800,13 @@ pub(crate) fn reach(
             [corpse.x, corpse.y, corpse.z],
             LootSource::Corpse(Box::new(corpse)),
         )
-    } else if let Some(go) = ctx.db.game_gameobject().guid().find(source_guid) {
+    } else if let Some(go) = ctx
+        .db
+        .game_gameobject()
+        .guid()
+        .find(source_guid)
+        .filter(|go| !go.despawned)
+    {
         (
             (go.map_id, go.instance_id),
             [go.x, go.y, go.z],
