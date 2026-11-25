@@ -19,7 +19,11 @@ fn legacy_pools_choose_one_position_and_keep_instance_lives_independent() {
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     let mut packed = Vec::new();
-    for (pool, map, count, event) in [(1069, 0, 8, ""), (46330, 230, 4, ""), (1163, 0, 3, "27")] {
+    for (pool, map, count, event) in [
+        (1069, 0, 8, None),
+        (46330, 230, 4, None),
+        (1163, 0, 3, Some(27)),
+    ] {
         let population = (2_u64 << 32) + pool;
         shard.insert_row(
             "game_creature_population",
@@ -37,9 +41,18 @@ fn legacy_pools_choose_one_position_and_keep_instance_lives_independent() {
                     ("source_guid", &guid),
                     ("population_id", &population),
                     ("entry", &TEST_WOLF_ENTRY),
-                    ("event_ids", &event),
                 ],
             );
+            if let Some(event_entry) = event {
+                shard.insert_row(
+                    "game_event_link",
+                    &[
+                        ("link_id", &guid),
+                        ("spawn_guid", &guid),
+                        ("event_entry", &event_entry),
+                    ],
+                );
+            }
             packed.push(format!("{guid},{TEST_WOLF_ENTRY},{map},10,20,30,0,0,1"));
         }
     }

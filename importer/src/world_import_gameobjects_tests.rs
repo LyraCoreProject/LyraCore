@@ -98,12 +98,6 @@ fn gameobject_source() -> WorldSource {
     };
     sqlite_fixture(&[
         FixtureTable {
-            name: "game_event_gameobject",
-            columns: &[("guid", "INTEGER"), ("event", "INTEGER")],
-            key: &["guid", "event"],
-            rows: &[&[("guid", N(1)), ("event", N(1))]],
-        },
-        FixtureTable {
             name: "pool_template",
             columns: &[
                 ("entry", "INTEGER"),
@@ -202,13 +196,6 @@ fn vmangos_gameobjects_select_versions_and_ranges_skip_disabled_and_translate_st
     let source = gameobject_source();
     let plan = gameobject_plan(&source);
     assert_eq!(plan.go_row_count, 5);
-    let manifest: serde_json::Value =
-        serde_json::from_str(plan.world_source_manifest.as_ref().unwrap()).unwrap();
-    assert!(manifest["findings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|finding| finding["code"] == "gameobjects.game-event" && finding["occurrences"] == 1));
     let rows = plan.go_batches[0].split(';').collect::<Vec<_>>();
     assert_eq!(
         rows[0],

@@ -703,13 +703,17 @@ pub(crate) fn create_instance(
         copy.life_seq = 1;
         copy.respawn_at = crate::time::timer_never(ctx);
         copy.despawn_at = crate::time::timer_never(ctx);
-        let entity =
-            crate::creatures::build_creature_entity(ctx, &copy, &tmpl, ctx.random(), instance_id);
+        // A copy whose Game Events hide it waits with its respawn off until they show it.
+        let entity = crate::game_events::spawn_shows(ctx, spawn.guid).then(|| {
+            crate::creatures::build_creature_entity(ctx, &copy, &tmpl, ctx.random(), instance_id)
+        });
         let copied_guid = copy.guid;
         ctx.db.game_creature_spawn().insert(copy);
         copy_spawn_waypoints(ctx, spawn.guid, copied_guid, &mut next_waypoint_id)?;
-        crate::creatures::insert_creature_entity(ctx, entity);
-        spawned += 1;
+        if let Some(entity) = entity {
+            crate::creatures::insert_creature_entity(ctx, entity);
+            spawned += 1;
+        }
     }
 
     let gos = ctx.db.game_gameobject();
@@ -738,6 +742,7 @@ pub(crate) fn create_instance(
                     .find(g.template_entry)
                     .map(|t| GO_COPY_TYPES.contains(&t.type_id))
                     .unwrap_or(false)
+                && crate::game_events::spawn_shows(ctx, g.guid)
         })
         .collect();
     let mut copied = 0u32;

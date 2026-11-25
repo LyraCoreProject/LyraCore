@@ -14,6 +14,9 @@ pub(crate) struct PopulationPlan {
     pub(crate) conditional_spawns: usize,
     pub(crate) event_spawns: usize,
     pub(crate) unsupported_pools: Vec<u64>,
+    /// `(spawn guid, signed vmangos event)` of each retained spawn; a pool's events reach every
+    /// member, as vmangos ties a whole top-level pool to its event.
+    pub(crate) event_links: Vec<(u64, i32)>,
 }
 
 impl PopulationPlan {
@@ -351,6 +354,7 @@ pub(crate) fn collect(
         conditional_spawns: 0,
         event_spawns: 0,
         unsupported_pools,
+        event_links: Vec::new(),
     };
     let mut used_groups = BTreeSet::new();
     let mut seen_guids = BTreeSet::new();
@@ -431,7 +435,13 @@ pub(crate) fn collect(
         plan.conditional_spawns += usize::from(conditional);
         let event_ids = events.get(&guid);
         plan.event_spawns += usize::from(event_ids.is_some_and(|ids| ids.iter().any(|id| *id > 0)));
-        if member.is_none() && direct_choices.is_none() && event_ids.is_none() {
+        plan.event_links.extend(
+            event_ids
+                .into_iter()
+                .flatten()
+                .map(|&event| (world_guid(entry, guid), event)),
+        );
+        if member.is_none() && direct_choices.is_none() {
             continue;
         }
         let (population_id, chance) = member.copied().unwrap_or(((1_u64 << 32) + guid, 0));
@@ -445,14 +455,10 @@ pub(crate) fn collect(
                     .join(",")
             })
             .unwrap_or_default();
-        let event_ids = event_ids
-            .map(|ids| ids.iter().map(i32::to_string).collect::<Vec<_>>().join(","))
-            .unwrap_or_default();
         plan.membership_rows.push(format!(
-            "({},{population_id},{raw_entry},{},{chance},{})",
+            "({},{population_id},{raw_entry},{},{chance},'')",
             world_guid(entry, guid),
             sql_str(&choices),
-            sql_str(&event_ids)
         ));
     }
     for id in used_groups {
@@ -520,10 +526,11 @@ mod tests {
         assert_eq!(
             plan.membership_rows,
             [format!(
-                "({},4294967297,10,'10,20',0,'-4')",
+                "({},4294967297,10,'10,20',0,'')",
                 world_guid(10, 1)
             )]
         );
+        assert_eq!(plan.event_links, [(world_guid(10, 1), -4)]);
     }
 
     #[test]
@@ -540,12 +547,13 @@ mod tests {
                 expected
             );
             assert_eq!(plan.referenced_entries, expected.into_iter().collect());
-            let members = if slots.starts_with("10") {
-                vec![format!("({},4294967297,10,'',0,'-4')", world_guid(10, 1))]
+            let links = if slots.starts_with("10") {
+                vec![(world_guid(10, 1), -4)]
             } else {
                 vec![]
             };
-            assert_eq!(plan.membership_rows, members);
+            assert!(plan.membership_rows.is_empty());
+            assert_eq!(plan.event_links, links);
         }
     }
 

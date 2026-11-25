@@ -165,6 +165,7 @@ mod duel;
 mod encounter;
 mod faction;
 mod form;
+mod game_events;
 mod gameobject;
 mod gc;
 mod geometry;

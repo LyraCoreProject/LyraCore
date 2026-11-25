@@ -292,6 +292,10 @@ pub(crate) mod character_owned_tripwire {
             &["game_gameobject"],
             "World GameObject state keyed by the GameObject's own guid",
         ),
+        (
+            &["game_event_link"],
+            "imported Game Event Link to a creature spawn or world GameObject, never a Character",
+        ),
     ];
 
     pub(crate) fn scanned_files() -> Vec<PathBuf> {

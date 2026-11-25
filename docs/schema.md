@@ -219,7 +219,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | Loot | `loot/*` |
 | Group, Meeting Stones and Guild | `group.rs`, `meeting_stone/mod.rs`, `guild/*` |
 | Instance and encounter | `instance.rs`, `encounter.rs` |
-| Taxi, Transport and weather | `taxi.rs`, `transport/mod.rs`, `weather.rs` |
+| Taxi, Transport, weather and Game Events | `taxi.rs`, `transport/mod.rs`, `weather.rs`, `game_events.rs` |
 | Packages | `package_account.rs`, `package_config.rs`, `package_import.rs`, `package_teardown.rs`, `script_binding.rs` |
 | Event GC | `gc.rs` |
 | Config, static data and diagnostics | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `import_meta.rs`, `debug/*` |
@@ -966,6 +966,42 @@ pool rolling again when no other is free. The replacement's object is despawned 
 own respawn delay passes. A pooled chest in an Instance, or one without a respawn time, despawns in
 place like any chest.
 
+### Game events
+
+`module/src/game_events.rs` runs vmangos Game Events for spawns, as `GameEventMgr` does.
+`game_event` holds each event's calendar: `start_secs` and `end_secs` on the Realm Clock, and every
+`occurrence_mins` the event runs for `length_mins`. An event vmangos marks `hardcoded` or
+`disabled` has `follows_calendar` false and runs only when an Operator starts it.
+`game_event_link` holds a Game Event Link: a creature spawn's source guid or a world GameObject's
+guid, its event, and `while_inactive` for a negative vmangos id. `game_event_pool` names a top-level
+GameObject pool that rolls only while its event runs.
+
+An event is running while the Realm Clock is inside its start and end and within its length of the
+latest occurrence. A yearly event shorter than a year skips each 29 February since its start, so it
+comes back on its calendar date; see the deliberate deviations in
+`conformance/features/world/game_events.toml`. An Operator's `debug_event_start` or
+`debug_event_stop` holds until `debug_event_clear` hands the event back to its calendar. An event
+neither the calendar nor an Operator runs or stops, such as a scripted one or one the World
+Source leaves out for patch 1.12, is unscheduled.
+
+A spawn shows when, of its links, one plain link's event runs (if it has any) and every
+`while_inactive` link's event is stopped. An unscheduled event shows neither kind. A spawn without
+links always shows.
+
+`tick_game_events` runs once a minute. It brings every spawn and pool of an event whose state
+differs from its `game_event_status` row to that state, then records the state; an event without a
+row is applied in full. A shown creature spawn whose respawn is off respawns on the next creature
+pass; a hidden one leaves through `despawn_creature_entity` with both timers off, together with its
+population and Instance copies. A hidden GameObject is despawned with no respawn time and shows
+again closed and unused. A pass changes at most 500 spawns and the next pass carries on. The
+Operator verbs run the same pass at once.
+
+Every path that brings a spawn up asks the same question: the creature respawn pass, the GameObject
+respawn timer and import, pool rolls (`arm_pools`, `arm_all_pools` and an Instance's rolls), and
+Instance creation. A new Instance copies a creature hidden with its respawn off and leaves out a
+hidden GameObject; a running Instance's creature copies follow their source, its GameObject copies
+keep what they had at creation. A despawned door or button has no collider.
+
 ### Global cooldowns (`module/src/spell/tables.rs`)
 
 `game_spell.gcd_ms` and `gcd_category` are the source `StartRecoveryTime` and
@@ -1178,6 +1214,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_gateway_lease_reaper_schedule` | `reap_gateway_leases` | 15 s; closes expired Account Claims | `gw.rs` |
 | `game_native_logon_reaper` | `native_reap_logon_addresses` | 60 s, armed by a logon connection | `native/logon.rs` |
 | `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs` |
+| `game_event_schedule` | `tick_game_events` | 60 s | `game_events.rs` |
 | `game_session_reaper_schedule` | `reap_sessions` | 5 min, armed by `establish_session` | `auth.rs` |
 | `game_weather_schedule` | `tick_weather` | 10 min | `weather.rs` |
 | `game_pending_cast` | `fire_pending_cast` | one-shot at cast completion | `spell/tables.rs` |

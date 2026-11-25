@@ -40,6 +40,7 @@ pub struct CreaturePopulationMember {
     pub entry: u32,
     pub choices: String,
     pub chance_bp: u32,
+    // Unused: a spawn's Game Events live in `game_event_link`.
     pub event_ids: String,
 }
 
@@ -77,7 +78,6 @@ struct Member {
     entry: u32,
     choices: Vec<u32>,
     chance_bp: u32,
-    requires_event: bool,
 }
 
 fn numbers<T: std::str::FromStr>(text: &str) -> Result<Vec<T>, String> {
@@ -116,8 +116,7 @@ fn decode_entries(text: &str) -> Result<Vec<EntryChoice>, String> {
 
 fn decode_member(member: &CreaturePopulationMember) -> Result<Member, String> {
     let choices = numbers::<u32>(&member.choices)?;
-    let events = numbers::<i32>(&member.event_ids)?;
-    if member.chance_bp > 10_000 || choices.contains(&0) || events.contains(&0) {
+    if member.chance_bp > 10_000 || choices.contains(&0) {
         return Err(format!("invalid population member {}", member.source_guid));
     }
     Ok(Member {
@@ -125,7 +124,6 @@ fn decode_member(member: &CreaturePopulationMember) -> Result<Member, String> {
         entry: member.entry,
         choices,
         chance_bp: member.chance_bp,
-        requires_event: events.iter().any(|event| *event > 0),
     })
 }
 
@@ -197,10 +195,7 @@ fn select_pool(
     members: &[Member],
     draw: &mut impl FnMut() -> u64,
 ) -> Vec<PopulationAssignment> {
-    let mut eligible: Vec<_> = members
-        .iter()
-        .filter(|member| !member.requires_event)
-        .collect();
+    let mut eligible: Vec<_> = members.iter().collect();
     for index in (1..eligible.len()).rev() {
         let other = choose_index(index + 1, draw);
         eligible.swap(index, other);
@@ -245,10 +240,7 @@ fn select(
     }
     let mut eligible: Vec<&Member> = members
         .iter()
-        .filter(|member| {
-            !member.requires_event
-                && (member.chance_bp == 0 || draw() % 10_000 < u64::from(member.chance_bp))
-        })
+        .filter(|member| member.chance_bp == 0 || draw() % 10_000 < u64::from(member.chance_bp))
         .collect();
     for index in (1..eligible.len()).rev() {
         let other = choose_index(index + 1, &mut draw);
@@ -422,7 +414,6 @@ mod tests {
             entry,
             choices: Vec::new(),
             chance_bp: 0,
-            requires_event: false,
         }
     }
 
@@ -437,18 +428,16 @@ mod tests {
     }
 
     #[test]
-    fn multi_member_pool_ignores_explicit_chances_and_preserves_event_gates() {
+    fn multi_member_pool_ignores_explicit_chances() {
         let members: Vec<_> = (1..=8)
             .map(|guid| {
                 let mut member = member(guid, 10);
                 member.chance_bp = 75;
-                member.requires_event = guid > 6;
                 member
             })
             .collect();
         let selected = select_pool(4, &members, &mut || 9_999);
         assert_eq!(selected.len(), 4);
-        assert!(selected.iter().all(|choice| choice.source_guid <= 6));
     }
 
     #[test]
@@ -507,31 +496,13 @@ mod tests {
     }
 
     #[test]
-    fn positive_event_membership_and_failed_slot_chance_remain_dormant() {
+    fn a_failed_slot_chance_remains_dormant() {
         let group = definition(0, "");
-        let mut event = member(1, 10);
-        event.requires_event = true;
         let mut chance = member(2, 20);
         chance.chance_bp = 1_000;
-        let selected = select(&group, &[event, chance, member(3, 30)], &[], || 5_000);
+        let selected = select(&group, &[chance, member(3, 30)], &[], || 5_000);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].source_guid, 3);
-    }
-
-    #[test]
-    fn negative_event_membership_spawns_when_no_events_are_active() {
-        let source = CreaturePopulationMember {
-            source_guid: 1,
-            population_id: 1,
-            entry: 10,
-            choices: String::new(),
-            chance_bp: 0,
-            event_ids: "-4".to_owned(),
-        };
-        let member = decode_member(&source).unwrap();
-        let selected = select(&definition(0, ""), &[member], &[], || 0);
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].entry, 10);
     }
 
     #[test]

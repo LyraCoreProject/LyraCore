@@ -81,7 +81,9 @@ pub(crate) use spawn::{
     scale_creature_damage_for_level, scale_health_for_rank, set_creature_gossip_menu,
 };
 
-pub(crate) use tick::{despawn_creature_entity, CREATURE_CORPSE_DECAY_MICROS};
+pub(crate) use tick::{
+    despawn_creature_entity, show_spawn_for_events, CREATURE_CORPSE_DECAY_MICROS,
+};
 
 pub(crate) use hunter_pet::{
     sweep_delete_game_hunter_pet, sweep_delete_game_hunter_pet_protocol,

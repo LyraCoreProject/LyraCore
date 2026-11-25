@@ -1426,6 +1426,7 @@ pub(crate) fn arm_interval_schedules(ctx: &ReducerContext) -> u64 {
         TimeDuration::from_micros(crate::creatures::SLICED_TICK_MICROS),
     );
     crate::weather::rearm_weather_schedule(ctx);
+    crate::game_events::rearm_schedule(ctx);
     crate::meeting_stone::rearm_reminder_schedule(ctx);
     crate::transport::arm_crossings(ctx);
     armed

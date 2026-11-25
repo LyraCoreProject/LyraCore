@@ -94,8 +94,8 @@ including a restored-copy rehearsal and the order of world import before Package
 Call `debug_repair_after_publish` as the Operator on the Shard. `init` does not run again on an
 auto-migrating publish, so this reducer arms the interval schedules `init` arms
 (`arm_interval_schedules` in `module/src/seed.rs`). It deletes and re-creates the instance reaper,
-the Gateway lease reaper, the weather schedule, the Meeting Stone reminder and the catch-all creature
-tick, which discards a cadence set with `debug_rearm_creature_tick`. It creates the event reaper,
+the Gateway lease reaper, the weather schedule, the Game Event pass, the Meeting Stone reminder and
+the catch-all creature tick, which discards a cadence set with `debug_rearm_creature_tick`. It creates the event reaper,
 melee, pet care, aura, breath, duel, ground area and motion publish schedules only when missing, and
 a Transport crossing for each Transport without one. It also re-freezes Proc profiles, restores
 missing Auction expiries, re-tags legacy auction mail as Auction Mail before the Mail Timer pass
@@ -274,6 +274,28 @@ importer writes every member column.
 
 The import floors in `importer/scripts/import-world.sh` count the GameObjects the import wrote,
 static objects plus pool members, so a roll that shows only some members does not fail them.
+
+### Game event migration
+
+The private `game_event`, `game_event_link`, `game_event_pool`, `game_event_status` and
+`game_event_override` tables and the `game_event_schedule` scheduled table are new and start empty.
+No existing column or reducer argument changes, so no Package builds a changed row.
+`game_creature_population_member.event_ids` keeps its column but nothing reads it; the importer
+writes it empty.
+
+Publish the Module before you import: the `events` Import Family writes the new tables. Call
+`debug_repair_after_publish`, which arms the Game Event pass. Until the import every spawn shows,
+since no spawn has a link: event GameObjects stay up as before, a creature tied to an event that a
+population had left parked stays parked, and a new Instance can now bring one up. Import the
+`events` family straight after the publish.
+
+`import-world.sh` imports `events` with the other families, and its links are written before the
+spawn batches, so every spawn and pool comes up in its event's state. An `events` import alone
+clears `game_event_status`, and the minute pass then brings the existing world to each event's
+state, at most 500 spawns a minute: the full world links about 12,000 GameObjects and 3,000
+creatures, so a Realm imported before this change settles within about half an hour. Reimport
+`gameobjects` and `creatures` with it to settle at once. A rerun of `events` writes the same rows.
+Operator starts and stops survive the import.
 
 ### Chest money and item loot migration
 

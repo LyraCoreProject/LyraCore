@@ -14,7 +14,9 @@ mod lifecycle;
 
 pub(crate) use lifecycle::{pass_decay, pass_gameobject_respawn, pass_respawn};
 
-pub(crate) use lifecycle::{despawn_creature_entity, CREATURE_CORPSE_DECAY_MICROS};
+pub(crate) use lifecycle::{
+    despawn_creature_entity, show_spawn_for_events, CREATURE_CORPSE_DECAY_MICROS,
+};
 
 #[table(
     accessor = game_creature_spline,

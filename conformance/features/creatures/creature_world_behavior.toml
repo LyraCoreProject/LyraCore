@@ -37,12 +37,6 @@ symbol = "plan"
 evidence = "Compatibility Manifest creatures.formation; conformance/vmangos-port-census/creatures.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
-description = "creatures.game-event full-world 2907, alliance-single 2907: event schedules do not control spawns"
-path = "importer/src/world_import_creatures.rs"
-symbol = "plan"
-evidence = "Compatibility Manifest creatures.game-event; conformance/vmangos-port-census/creatures.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
 description = "creatures.level-zero full-world 5, alliance-single 0: unplaced level-zero templates have no stat lookup and are omitted"
 path = "importer/src/world_import_creatures.rs"
 symbol = "plan"

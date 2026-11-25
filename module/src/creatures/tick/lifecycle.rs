@@ -122,6 +122,7 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
         if (spawn.instance_id == 0
             && lyracore_shared::instance::has_instance_population(spawn.map_id))
             || entities.guid().find(guid).is_some()
+            || !crate::game_events::spawn_shows(ctx, source_of(&spawn))
         {
             spawn.respawn_at = crate::time::timer_never(ctx);
             spawns.guid().update(spawn);
@@ -166,6 +167,55 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
         }
     }
     visited
+}
+
+/// The open-world spawn a population or Instance copy stands for, or the spawn itself.
+fn source_of(spawn: &CreatureSpawn) -> u64 {
+    if spawn.source_guid == 0 {
+        spawn.guid
+    } else {
+        spawn.source_guid
+    }
+}
+
+/// Shows or hides the spawn `source_guid` and its copies as its Game Events decide. A shown spawn
+/// whose respawn is off respawns on the next pass; a hidden one leaves through
+/// `despawn_creature_entity` with both timers off. Returns the spawn rows it changed.
+pub(crate) fn show_spawn_for_events(ctx: &ReducerContext, source_guid: u64, shows: bool) -> usize {
+    let spawns = ctx.db.game_creature_spawn();
+    let entities = ctx.db.game_world_entity();
+    let rows: Vec<CreatureSpawn> = spawns
+        .guid()
+        .find(source_guid)
+        .into_iter()
+        .chain(spawns.by_source_guid().filter(source_guid))
+        .collect();
+    let mut changed = 0;
+    for mut spawn in rows {
+        let in_world = entities.guid().find(spawn.guid).is_some();
+        if shows {
+            let instance_zero = spawn.instance_id == 0
+                && lyracore_shared::instance::has_instance_population(spawn.map_id);
+            if in_world || instance_zero || !crate::time::is_never(ctx, spawn.respawn_at) {
+                continue;
+            }
+            spawn.respawn_at = crate::time::now(ctx);
+        } else {
+            let timers_off = crate::time::is_never(ctx, spawn.respawn_at)
+                && crate::time::is_never(ctx, spawn.despawn_at);
+            if !in_world && timers_off {
+                continue;
+            }
+            if in_world {
+                crate::creatures::despawn_creature_entity(ctx, spawn.guid);
+            }
+            spawn.respawn_at = crate::time::timer_never(ctx);
+            spawn.despawn_at = crate::time::timer_never(ctx);
+        }
+        spawns.guid().update(spawn);
+        changed += 1;
+    }
+    changed
 }
 
 pub(crate) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {

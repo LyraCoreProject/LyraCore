@@ -1,3 +1,5 @@
+#[path = "world_import_game_events.rs"]
+mod game_events;
 #[path = "world_import_gameobject_pools.rs"]
 mod gameobject_pools;
 #[path = "world_import_trainers.rs"]
@@ -1354,6 +1356,7 @@ pub(crate) const FAMILIES: &[&str] = &[
     "creature-ai",
     "globals",
     "spellmeta",
+    game_events::FAMILY,
 ];
 
 const SPAWN_BATCH: usize = 250;
@@ -1368,7 +1371,8 @@ pub(crate) fn family_active(args: &WorldImportArgs, name: &str) -> bool {
 fn run_package_stage(args: &WorldImportArgs, family: &str) -> Result<()> {
     let quest_event_reload =
         family == "creature-ai" && args.world_profile.is_some() && family_active(args, "quests");
-    if !family_active(args, family) && !quest_event_reload {
+    // No Package claims Game Event rows.
+    if (!family_active(args, family) && !quest_event_reload) || family == game_events::FAMILY {
         return Ok(());
     }
     match &args.packages {
@@ -2449,7 +2453,6 @@ fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
             *counts.entry(code).or_default() += 1;
         }
     };
-    let mut placed = std::collections::HashSet::new();
     for row in dump.rows("gameobject")?.iter() {
         if !args.scope.contains(
             row.number("map")?,
@@ -2463,7 +2466,6 @@ fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
         if flags & 2 != 0 {
             continue;
         }
-        placed.insert(row.number::<u32>("guid")?);
         add("gameobjects.spawn-flags", flags & !2 != 0);
         add(
             "gameobjects.summoned-spawn",
@@ -2476,12 +2478,6 @@ fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
         add(
             "gameobjects.visibility",
             row.number::<f32>("visibility_mod")? != 0.0,
-        );
-    }
-    for row in dump.rows("game_event_gameobject")?.iter() {
-        add(
-            "gameobjects.game-event",
-            placed.contains(&row.number::<u32>("guid")?),
         );
     }
     for row in dump.rows("gameobject_template")?.iter() {
@@ -2578,6 +2574,7 @@ fn vmangos_family_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
         Some("items") => vmangos_items_plan(dump, args),
         Some("loot") => vmangos_loot_plan(dump, args),
         Some("gameobjects") => vmangos_gameobjects_plan(dump, args),
+        Some(game_events::FAMILY) => game_events::plan(dump, args),
         Some("trainers") => trainers::plan(dump, args),
         Some("quests") => vmangos_quests::plan(dump, args),
         Some("gossip") => vmangos_gossip::plan(dump, args),
@@ -2594,7 +2591,7 @@ fn vmangos_family_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
             })
         }
         _ => bail!(
-            "vmangos currently supports --family creatures, casts, creature-ai, dbc, globals, items, loot, gameobjects, trainers, quests, gossip, spell or spellmeta"
+            "vmangos currently supports --family creatures, casts, creature-ai, dbc, events, globals, items, loot, gameobjects, trainers, quests, gossip, spell or spellmeta"
         ),
     }
 }

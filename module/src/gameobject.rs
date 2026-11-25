@@ -205,6 +205,7 @@ impl GameObject {
                 old.x,
                 old.y,
                 old.z,
+                old.despawned,
             ) != (
                 object.template_entry,
                 object.map_id,
@@ -212,6 +213,7 @@ impl GameObject {
                 object.x,
                 object.y,
                 object.z,
+                object.despawned,
             )
         }) {
             crate::go_collider::register(ctx, &object);
@@ -898,14 +900,49 @@ pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64
 
 fn arm_world_root(ctx: &ReducerContext, pool_id: u32, fence: &MapFence) {
     despawn_pool(ctx, PoolScope::World, pool_id, 0);
-    spawn_pool(
-        ctx,
-        PoolScope::World,
-        pool_id,
-        PoolTiming::Now,
-        Some(fence),
-        0,
-    );
+    if crate::game_events::pool_shows(ctx, pool_id) {
+        spawn_pool(
+            ctx,
+            PoolScope::World,
+            pool_id,
+            PoolTiming::Now,
+            Some(fence),
+            0,
+        );
+    }
+}
+
+/// Rolls the top-level open-world pools of one Game Event, or takes them down, wherever they are
+/// not so already; `false` when `budget` ran out first. Each pool it changes spends one.
+pub(crate) fn show_event_pools(
+    ctx: &ReducerContext,
+    pool_ids: &[u32],
+    shows: bool,
+    budget: &mut usize,
+) -> bool {
+    let fence = MapFence::instanceable(ctx);
+    for &pool_id in pool_ids {
+        if pool_is_active(ctx, PoolScope::World, pool_id, 0) == shows {
+            continue;
+        }
+        if *budget == 0 {
+            return false;
+        }
+        if shows {
+            spawn_pool(
+                ctx,
+                PoolScope::World,
+                pool_id,
+                PoolTiming::Now,
+                Some(&fence),
+                0,
+            );
+        } else {
+            despawn_pool(ctx, PoolScope::World, pool_id, 0);
+        }
+        *budget -= 1;
+    }
+    true
 }
 
 pub(crate) fn arm_pool(ctx: &ReducerContext, pool_id: u32) {
@@ -985,6 +1022,7 @@ pub(crate) fn arm_instance_pools(ctx: &ReducerContext, map_id: u32, instance_id:
         .filter(&map_id)
         .filter(|link| link.parent_pool_id == 0)
         .map(|link| link.pool_id)
+        .filter(|&pool_id| crate::game_events::pool_shows(ctx, pool_id))
         .collect();
     for pool_id in roots {
         spawn_pool(ctx, scope, pool_id, PoolTiming::Now, None, 0);
@@ -1182,6 +1220,10 @@ pub(crate) fn respawn_timer_elapsed(ctx: &ReducerContext, go_guid: u64) {
     let Some(object) = ctx.db.game_gameobject().guid().find(go_guid) else {
         return;
     };
+    if !crate::game_events::spawn_shows(ctx, go_guid) {
+        hide_for_events(ctx, object);
+        return;
+    }
     if let Some(template) = ctx
         .db
         .game_gameobject_template()
@@ -1201,6 +1243,29 @@ pub(crate) fn respawn_timer_elapsed(ctx: &ReducerContext, go_guid: u64) {
     if object.despawned || object.state == 1 {
         respawn(ctx, object);
     }
+}
+
+/// Shows or hides a world object as its Game Events decide: a hidden one waits despawned with no
+/// respawn time, and shows again closed and unused. Returns whether it changed.
+pub(crate) fn show_for_events(ctx: &ReducerContext, guid: u64, shows: bool) -> bool {
+    let Some(object) = ctx.db.game_gameobject().guid().find(guid) else {
+        return false;
+    };
+    let hidden = object.despawned && object.respawn_at_micros == 0;
+    match (shows, hidden) {
+        (true, true) => respawn(ctx, object),
+        (false, false) => hide_for_events(ctx, object),
+        _ => return false,
+    }
+    true
+}
+
+fn hide_for_events(ctx: &ReducerContext, mut object: GameObject) {
+    crate::loot::reap_corpse_loot_family(ctx, object.guid);
+    close_loot_windows(ctx, object.guid);
+    object.despawned = true;
+    object.respawn_at_micros = 0;
+    object.update(ctx);
 }
 
 /// Shows the object again closed and unused.
@@ -1239,6 +1304,7 @@ pub(crate) fn stamp_opened_chests(ctx: &ReducerContext) -> u64 {
                     && chest.instance_id == 0
                     && chest_phase(chest.state, chest.respawn_at_micros, chest.despawned)
                         != ChestPhase::Ready
+                    && crate::game_events::spawn_shows(ctx, chest.guid)
             })
             .collect();
         for mut chest in opened {
@@ -1738,9 +1804,10 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
             Some([min, max]) => (pu32(min)?, pu32(max)?),
             _ => (0, 0),
         };
+        let guid = pu64(f[0])?;
 
         GameObject {
-            guid: pu64(f[0])?,
+            guid,
             template_entry: pu32(f[1])?,
             map_id: pu32(f[2])?,
             x: pf32(f[3])?,
@@ -1760,7 +1827,7 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
             rotation_3: pf32(f[11])?,
             respawn_min_secs,
             respawn_max_secs,
-            despawned: false,
+            despawned: !crate::game_events::spawn_shows(ctx, guid),
         }
         .try_insert(ctx)
         .map_err(|e| format!("gameobject insert failed (dup guid?): {e}"))?;
