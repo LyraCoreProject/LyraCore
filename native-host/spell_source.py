@@ -199,7 +199,8 @@ def check_spell_source_behavior(host):
         host.call('debug_teleport', [a, 0, 8000, 9000, 0, 0])
         host.call('debug_teleport', [b, 0, 8008, 9000, 0, 0])
         host.call('debug_begin_cast', [a, channel, b])
-        host.call('debug_teleport', [a, 0, 8000, 9000, 0, 3.14159265])
+        # A teleport would end the caster's channel.
+        host.sql(f'UPDATE game_world_entity SET orientation = 3.14159265 WHERE guid = {a}')
         host.call('debug_teleport', [b, 0, 8008, 9000, 0, 3.14159265])
         host.sql(f'UPDATE game_world_entity SET health = 100, max_health = 10000 WHERE guid = {b}')
         host.wait_until(lambda: host.rows(f'SELECT health FROM game_world_entity WHERE guid = {b}')[0][0] >= 2100,
@@ -222,7 +223,7 @@ def check_spell_source_behavior(host):
     host.sql(f'UPDATE game_world_entity SET health = 10000, max_health = 10000 WHERE guid = {victim}')
     caster.collect()
     host.call('debug_begin_cast', [a, missiles, victim])
-    host.call('debug_teleport', [a, 0, 8000, 9000, 0, 3.14159265])
+    host.sql(f'UPDATE game_world_entity SET orientation = 3.14159265 WHERE guid = {a}')
     packets = []
 
     def missile_ticks_arrived():
