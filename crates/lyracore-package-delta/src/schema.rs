@@ -344,6 +344,9 @@ impl Table {
                     | "attributes_ex_4"
                     | "damage_class"
                     | "gcd_category"
+                    | "interrupt_flags"
+                    | "channel_interrupt_flags"
+                    | "prevention_type"
             ) | (Self::SpellEffect, "bonus_coefficient" | "equip_supported")
                 | (
                     Self::Form,
@@ -453,6 +456,9 @@ const SPELL_COLUMNS: &[Column] = &[
     column("attributes_ex_4", FieldType::U32),
     column("damage_class", FieldType::U8),
     column("gcd_category", FieldType::U32),
+    column("interrupt_flags", FieldType::U32),
+    column("channel_interrupt_flags", FieldType::U32),
+    column("prevention_type", FieldType::U8),
 ];
 
 const SPELL_EFFECT_COLUMNS: &[Column] = &[

@@ -481,12 +481,17 @@ pub(crate) fn apply_hit(
         }
     }
 
+    let periodic = is_periodic(ctx, hit);
     crate::spell::break_auras_on_damage(
         ctx,
         target_guid,
         if weapon { attacker_guid } else { 0 },
-        false,
+        periodic,
     );
+    // vmangos `Unit::DealDamage` neither delays nor cancels a cast or channel for DOT damage.
+    if !periodic {
+        crate::spell::pushback_on_damage(ctx, target_guid, attacker_guid);
+    }
     if accrues_threat {
         crate::threat::add_threat(
             ctx,

@@ -11,6 +11,21 @@ pub(crate) const SPELL_ATTR_NOT_IN_COMBAT_ONLY_PEACEFUL: u32 = 0x1000_0000;
 const SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x80000;
 // SPELLCATEGORY_GLOBAL: the StartRecoveryCategory of most spells with a global cooldown.
 const GCD_CATEGORY_GLOBAL: u32 = 133;
+// vmangos SpellDefines.h SpellInterruptFlags, AuraInterruptFlags and SpellPreventionType.
+const INTERRUPT_FLAG_DAMAGE_PUSHBACK: u32 = 0x02;
+const INTERRUPT_FLAG_DAMAGE_CANCELS: u32 = 0x10;
+const CHANNEL_INTERRUPT_DAMAGE_CANCELS: u32 = 0x02;
+const CHANNEL_INTERRUPT_ACTION_CANCELS: u32 = 0x04;
+const CHANNEL_INTERRUPT_DAMAGE_DELAYS: u32 = 0x4000;
+const PREVENTION_TYPE_SILENCE: u8 = 1;
+
+/// What a direct hit on its caster does to a cast in progress or a channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DamageResponse {
+    Unaffected,
+    Delayed,
+    Cancelled,
+}
 
 #[table(accessor = game_spell, public)]
 #[derive(Clone)]
@@ -91,6 +106,13 @@ pub struct Spell {
     // Spell.dbc StartRecoveryCategory: the global cooldown this spell starts and waits on.
     #[default(0u32)]
     pub gcd_category: u32,
+    // Spell.dbc interrupt fields; docs/schema.md#interrupt-flags gives the defaults' meaning.
+    #[default(0x2u32)]
+    pub interrupt_flags: u32,
+    #[default(0x4u32)]
+    pub channel_interrupt_flags: u32,
+    #[default(1u8)]
+    pub prevention_type: u8,
 }
 
 impl Spell {
@@ -139,11 +161,52 @@ impl Spell {
             attributes_ex_4: 0,
             damage_class: 0,
             gcd_category: GCD_CATEGORY_GLOBAL,
+            interrupt_flags: INTERRUPT_FLAG_DAMAGE_PUSHBACK,
+            channel_interrupt_flags: CHANNEL_INTERRUPT_ACTION_CANCELS,
+            prevention_type: PREVENTION_TYPE_SILENCE,
         }
     }
 
     pub(crate) fn negative(&self) -> bool {
         lyracore_shared::spell_custom::is_negative(self.custom_flags, self.is_negative)
+    }
+
+    fn channelled(&self) -> bool {
+        self.cast_flags & super::CAST_FLAG_CHANNELED != 0
+    }
+
+    /// vmangos `Unit::DealDamage` on a cast in progress; a channelled spell's cast is unaffected.
+    pub(crate) fn cast_damage_response(&self) -> DamageResponse {
+        if self.channelled() {
+            DamageResponse::Unaffected
+        } else if self.interrupt_flags & INTERRUPT_FLAG_DAMAGE_CANCELS != 0 {
+            DamageResponse::Cancelled
+        } else if self.interrupt_flags & INTERRUPT_FLAG_DAMAGE_PUSHBACK != 0 {
+            DamageResponse::Delayed
+        } else {
+            DamageResponse::Unaffected
+        }
+    }
+
+    /// vmangos `Unit::DealDamage` on a channel.
+    pub(crate) fn channel_damage_response(&self) -> DamageResponse {
+        if self.channel_interrupt_flags & CHANNEL_INTERRUPT_DAMAGE_DELAYS != 0 {
+            DamageResponse::Delayed
+        } else if self.channel_interrupt_flags & CHANNEL_INTERRUPT_DAMAGE_CANCELS != 0 {
+            DamageResponse::Cancelled
+        } else {
+            DamageResponse::Unaffected
+        }
+    }
+
+    /// vmangos `Spell::EffectInterruptCast`: whether an interrupt effect stops this cast or channel.
+    pub(crate) fn yields_to_interrupt_effect(&self) -> bool {
+        let flag = if self.channelled() {
+            self.channel_interrupt_flags & CHANNEL_INTERRUPT_ACTION_CANCELS
+        } else {
+            self.interrupt_flags & INTERRUPT_FLAG_DAMAGE_PUSHBACK
+        };
+        self.prevention_type == PREVENTION_TYPE_SILENCE && flag != 0
     }
 
     /// vmangos `SpellEntry::IsNonCombatSpell`.
@@ -1393,5 +1456,97 @@ mod pending_cast_tests {
             ..CastRequest::new(1, 2, 3, 4)
         };
         assert_eq!(round_trip(request), CastRequest::new(1, 2, 3, 4));
+    }
+}
+
+#[cfg(test)]
+mod interrupt_flag_tests {
+    use super::{DamageResponse, Spell};
+
+    fn spell(interrupt_flags: u32, channel_interrupt_flags: u32, prevention_type: u8) -> Spell {
+        Spell {
+            interrupt_flags,
+            channel_interrupt_flags,
+            prevention_type,
+            ..Spell::blank(1, "Interrupt fixture")
+        }
+    }
+
+    fn channel(interrupt_flags: u32, channel_interrupt_flags: u32, prevention_type: u8) -> Spell {
+        Spell {
+            cast_flags: crate::spell::CAST_FLAG_CHANNELED,
+            ..spell(interrupt_flags, channel_interrupt_flags, prevention_type)
+        }
+    }
+
+    #[test]
+    fn damage_pushes_back_fireball_cancels_hearthstone_and_leaves_a_cast_without_either_flag() {
+        let fireball = spell(0x0F, 0, 1);
+        let hearthstone = spell(0x1F, 0, 0);
+        let without_pushback = spell(0x09, 0, 1);
+        assert_eq!(fireball.cast_damage_response(), DamageResponse::Delayed);
+        assert_eq!(
+            hearthstone.cast_damage_response(),
+            DamageResponse::Cancelled
+        );
+        assert_eq!(
+            without_pushback.cast_damage_response(),
+            DamageResponse::Unaffected
+        );
+    }
+
+    #[test]
+    fn damage_delays_drain_life_and_cancels_first_aid_but_not_a_channelled_spells_cast() {
+        let drain_life = channel(0x0F, 0x7C0C, 1);
+        let first_aid = channel(0, 0x3C0E, 0);
+        let without_damage_flags = channel(0x09, 0x3C1C, 1);
+        assert_eq!(
+            drain_life.channel_damage_response(),
+            DamageResponse::Delayed
+        );
+        assert_eq!(
+            first_aid.channel_damage_response(),
+            DamageResponse::Cancelled
+        );
+        assert_eq!(
+            without_damage_flags.channel_damage_response(),
+            DamageResponse::Unaffected
+        );
+        assert_eq!(
+            drain_life.cast_damage_response(),
+            DamageResponse::Unaffected
+        );
+    }
+
+    #[test]
+    fn an_interrupt_effect_stops_only_a_silenceable_cast_or_channel() {
+        let fireball = spell(0x0F, 0, 1);
+        let drain_life = channel(0x0F, 0x7C0C, 1);
+        let hurricane = channel(0x01, 0x7C0C, 1);
+        let evocation = channel(0x01, 0x7C0C, 0);
+        let volley = channel(0x09, 0x7C0C, 2);
+        let cast_without_pushback = spell(0x09, 0, 1);
+        assert!(fireball.yields_to_interrupt_effect());
+        assert!(drain_life.yields_to_interrupt_effect());
+        assert!(hurricane.yields_to_interrupt_effect());
+        assert!(!evocation.yields_to_interrupt_effect());
+        assert!(!volley.yields_to_interrupt_effect());
+        assert!(!cast_without_pushback.yields_to_interrupt_effect());
+    }
+
+    #[test]
+    fn a_spell_without_imported_interrupt_fields_keeps_the_behaviour_from_before_them() {
+        let cast = Spell::blank(1, "Interrupt fixture");
+        let channel = Spell {
+            cast_flags: crate::spell::CAST_FLAG_CHANNELED,
+            ..Spell::blank(2, "Interrupt fixture")
+        };
+        assert_eq!(cast.cast_damage_response(), DamageResponse::Delayed);
+        assert_eq!(
+            channel.channel_damage_response(),
+            DamageResponse::Unaffected
+        );
+        assert!(cast.yields_to_interrupt_effect());
+        assert!(channel.yields_to_interrupt_effect());
     }
 }

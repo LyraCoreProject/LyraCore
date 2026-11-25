@@ -718,6 +718,22 @@ A Package Delta written before this revision has no `gcd_category`, so its new s
 category 0: their global cooldown neither blocks nor waits for a category 133 spell. Emit the
 Package again from a Base Snapshot of this revision, or set `gcd_category`, before you apply it.
 
+### Interrupt flags migration
+
+`game_spell.interrupt_flags`, `channel_interrupt_flags` and `prevention_type` hold the source
+`InterruptFlags`, `ChannelInterruptFlags` and `PreventionType`. They are END-appended with defaults
+2, 4 and 1, and the private `game_channel_delay` table starts empty, so no repair is needed. Publish
+through a planned update; development reload requires an unchanged schema.
+
+Until you reimport `spell`, every existing spell keeps the behaviour from before the columns: damage
+pushes back a cast and leaves a channel running, and an interrupt effect stops every cast and
+channel. Damage delays or cancels a channel, and Kick or Counterspell spares a spell vmangos does not
+interrupt, only after the reimport. Reimport `spell` from this revision before play resumes.
+
+A Package Delta written before this revision has no interrupt fields, so its new spells take the
+defaults. Emit the Package again from a Base Snapshot of this revision, or set the fields, before
+you apply it.
+
 ### Melee reach migration
 
 The new `game_display_combat_reach` table starts empty after a publish, so every unit keeps the

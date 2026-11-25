@@ -1,11 +1,25 @@
-use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{log, table, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 
+use super::tables::DamageResponse;
 use super::*;
 use crate::{
     game_aura, game_creature_template, game_global_cooldown, game_ground_area, game_pending_cast,
     game_school_lockout, game_spell, game_spell_effect, game_world_entity, Aura, GroundArea,
     PendingCast, SchoolLockout, SpellCastEvent,
 };
+
+/// The delays damage has made to a caster's channel, as vmangos `Spell::m_delayAtDamageCount`.
+#[table(accessor = game_channel_delay)]
+pub struct ChannelDelay {
+    #[primary_key]
+    pub caster_guid: u64,
+    pub spell_id: u32,
+    // A channel that no longer ends at this time starts again from no delays.
+    pub ends_at: Timestamp,
+    pub delays: u8,
+}
+
+crate::outside_table_catalog!(game_channel_delay);
 
 fn has_control_mechanic(ctx: &ReducerContext, unit_guid: u64, mechanic: i32) -> bool {
     auras_on(ctx, unit_guid).any(|a| a.eff_kind == A_CONTROL && a.eff_p0 == mechanic)
@@ -143,18 +157,8 @@ pub(crate) fn is_non_melee_spell_casting(ctx: &ReducerContext, unit_guid: u64) -
         .filter(&unit_guid)
         .next()
         .is_some()
-        || ctx
-            .db
-            .game_aura()
-            .by_caster()
-            .filter(&unit_guid)
-            .any(|aura| is_channel_aura(ctx, &aura))
-        || ctx
-            .db
-            .game_ground_area()
-            .by_caster()
-            .filter(&unit_guid)
-            .any(|area| super::cast::is_channelled_area(ctx, &area))
+        || channel_auras(ctx, unit_guid).next().is_some()
+        || channelled_areas(ctx, unit_guid).next().is_some()
 }
 
 pub(crate) fn is_stunned(ctx: &ReducerContext, unit_guid: u64) -> bool {
@@ -264,10 +268,6 @@ pub(crate) fn break_auras_on_damage(
     crate::world::stand_up_on_damage(ctx, target_guid);
     break_flagged_auras(ctx, target_guid, breaks_on_damage);
     super::break_stealth(ctx, target_guid);
-    // Vanilla 1.12 periodic damage neither interrupts nor pushes back a cast.
-    if !periodic {
-        crate::spell::pushback_cast(ctx, target_guid);
-    }
     if attacker_guid != 0 {
         crate::combat::retaliate_on_hit(ctx, target_guid, attacker_guid);
     }
@@ -411,15 +411,53 @@ pub(crate) const CAST_PUSHBACK_MS: i64 = 500;
 
 pub(crate) const CAST_PUSHBACK_MAX: u8 = 2;
 
+// vmangos SpellModOp SPELLMOD_NOT_LOSE_CASTING_TIME.
+const SPELLMOD_OP_NOT_LOSE_CASTING_TIME: i32 = 9;
+
 pub(crate) fn should_pushback(pushback_count: u8) -> bool {
     pushback_count < CAST_PUSHBACK_MAX
 }
 
-pub(crate) fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
+/// vmangos `Unit::DealDamage`: a direct hit cancels or delays the victim's cast and channel.
+pub(crate) fn pushback_on_damage(ctx: &ReducerContext, victim_guid: u64, attacker_guid: u64) {
+    let Some(victim) = ctx.db.game_world_entity().guid().find(victim_guid) else {
+        return;
+    };
+    if victim.is_player() {
+        pushback_cast(ctx, victim_guid);
+    }
+    // vmangos delays only a Character's channel, and not for damage it deals itself.
+    let may_delay = victim.is_player() && attacker_guid != victim_guid;
+    for spell_id in channel_spell_ids(ctx, victim_guid) {
+        let Some(spell) = ctx.db.game_spell().spell_id().find(spell_id) else {
+            continue;
+        };
+        match spell.channel_damage_response() {
+            DamageResponse::Delayed if may_delay => delay_channel(ctx, victim_guid, &spell),
+            DamageResponse::Cancelled => {
+                end_channel(ctx, victim_guid, spell_id);
+            }
+            DamageResponse::Delayed | DamageResponse::Unaffected => {}
+        }
+    }
+}
+
+fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
     let pending = ctx.db.game_pending_cast();
     let hits: Vec<PendingCast> = pending.by_caster().filter(&caster_guid).collect();
     for mut p in hits {
-        if !should_pushback(p.pushback_count) {
+        let Some(spell) = ctx.db.game_spell().spell_id().find(p.spell_id) else {
+            continue;
+        };
+        match spell.cast_damage_response() {
+            DamageResponse::Cancelled => {
+                interrupt_cast(ctx, caster_guid);
+                return;
+            }
+            DamageResponse::Unaffected => continue,
+            DamageResponse::Delayed => {}
+        }
+        if !should_pushback(p.pushback_count) || resists_pushback(ctx, caster_guid, &spell) {
             continue;
         }
         let ScheduleAt::Time(fire_at) = p.scheduled_at else {
@@ -447,6 +485,115 @@ pub(crate) fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
              (pushback {new_count}/{CAST_PUSHBACK_MAX})"
         );
     }
+}
+
+/// vmangos `Spell::Delayed` resist roll, without SPELL_AURA_RESIST_PUSHBACK: see the known gap
+/// on `pushback_on_damage` in conformance/features/spells/cast_and_interrupt.toml.
+fn resists_pushback(ctx: &ReducerContext, caster_guid: u64, spell: &crate::Spell) -> bool {
+    let (flat, pct) = spell_mod(ctx, caster_guid, SPELLMOD_OP_NOT_LOSE_CASTING_TIME, spell);
+    let chance = i64::from(apply_spell_mod(100, flat, pct)) - 100;
+    chance >= 100
+        || (chance > 0 && i64::from(super::rolls::integer_roll(ctx, caster_guid, 99)) < chance)
+}
+
+/// vmangos `Spell::GetNextDelayAtDamageMsTime`, in microseconds.
+fn channel_delay_micros(delays: u8) -> i64 {
+    1_000_000 - 200_000 * i64::from(delays.min(4))
+}
+
+/// vmangos `Aura::UpdatePeriodicTimer`: the next tick falls so that the last one ends the channel.
+fn realigned_next_tick(now_micros: i64, remaining_micros: i64, period_micros: i64) -> i64 {
+    let first = if remaining_micros > period_micros {
+        remaining_micros % period_micros
+    } else {
+        remaining_micros
+    };
+    now_micros + if first == 0 { period_micros } else { first }
+}
+
+/// vmangos `Spell::DelayedChannel`: shortens the channel's Auras and ground areas, and ends the
+/// channel when no time remains.
+fn delay_channel(ctx: &ReducerContext, caster_guid: u64, spell: &crate::Spell) {
+    let spell_id = spell.spell_id;
+    let auras: Vec<Aura> = channel_auras(ctx, caster_guid)
+        .filter(|aura| aura.spell_id == spell_id)
+        .collect();
+    let areas: Vec<GroundArea> = channelled_areas(ctx, caster_guid)
+        .filter(|area| area.spell_id == spell_id)
+        .collect();
+    let Some(ends_at) = auras
+        .iter()
+        .map(|aura| aura.expires_at)
+        .chain(areas.iter().map(|area| area.expires_at))
+        .max()
+    else {
+        return;
+    };
+    let end_micros = ends_at.to_micros_since_unix_epoch();
+    // i64::MAX marks a channel with no end.
+    if end_micros == i64::MAX || resists_pushback(ctx, caster_guid, spell) {
+        return;
+    }
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
+    let remaining = end_micros.saturating_sub(now_micros).max(0);
+    let delays = ctx
+        .db
+        .game_channel_delay()
+        .caster_guid()
+        .find(caster_guid)
+        .filter(|row| row.spell_id == spell_id && row.ends_at == ends_at)
+        .map_or(0, |row| row.delays);
+    let delay = channel_delay_micros(delays).min(remaining);
+    if delay == remaining {
+        end_channel(ctx, caster_guid, spell_id);
+        return;
+    }
+    let shortened = |expires_at: Timestamp| {
+        let expires = expires_at.to_micros_since_unix_epoch();
+        expires.saturating_sub(delay).max(now_micros)
+    };
+    for mut aura in auras {
+        let expires = shortened(aura.expires_at);
+        aura.expires_at = Timestamp::from_micros_since_unix_epoch(expires);
+        if aura.period_ms > 0 && aura.next_tick_micros != 0 {
+            aura.next_tick_micros = realigned_next_tick(
+                now_micros,
+                expires - now_micros,
+                i64::from(aura.period_ms) * 1000,
+            );
+        }
+        aura.update(ctx);
+    }
+    for mut area in areas {
+        let expires = shortened(area.expires_at);
+        area.expires_at = Timestamp::from_micros_since_unix_epoch(expires);
+        if area.period_ms > 0 {
+            area.next_tick_micros = realigned_next_tick(
+                now_micros,
+                expires - now_micros,
+                i64::from(area.period_ms) * 1000,
+            );
+        }
+        ctx.db.game_ground_area().id().update(area);
+    }
+    let channel_delays = ctx.db.game_channel_delay();
+    channel_delays.caster_guid().delete(caster_guid);
+    channel_delays.insert(ChannelDelay {
+        caster_guid,
+        spell_id,
+        ends_at: Timestamp::from_micros_since_unix_epoch(end_micros - delay),
+        delays: delays.saturating_add(1),
+    });
+    let remaining_ms = (remaining - delay) / 1000;
+    crate::native::aura::channel_updated(
+        ctx,
+        caster_guid,
+        remaining_ms.min(i64::from(u32::MAX)) as u32,
+    );
+    log::info!(
+        "channel delayed: caster {caster_guid}'s spell {spell_id} shortened {}ms, {remaining_ms}ms left",
+        delay / 1000
+    );
 }
 
 pub(crate) fn interrupt_cast(ctx: &ReducerContext, caster_guid: u64) -> bool {
@@ -530,20 +677,28 @@ pub(crate) fn expire_cast_attempt(
     interrupt_cast_with_outcome(ctx, caster_guid, CastFinish::Expired)
 }
 
-pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
-    let auras = ctx.db.game_aura();
-    let removed: Vec<Aura> = auras
+fn channel_auras(ctx: &ReducerContext, caster_guid: u64) -> impl Iterator<Item = Aura> + '_ {
+    ctx.db
+        .game_aura()
         .by_caster()
-        .filter(&caster_guid)
-        .filter(|aura| is_channel_aura(ctx, aura))
-        .collect();
-    let channelled_areas: Vec<GroundArea> = ctx
-        .db
+        .filter(caster_guid)
+        .filter(move |aura| is_channel_aura(ctx, aura))
+}
+
+fn channelled_areas(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+) -> impl Iterator<Item = GroundArea> + '_ {
+    ctx.db
         .game_ground_area()
         .by_caster()
-        .filter(&caster_guid)
-        .filter(|area| super::cast::is_channelled_area(ctx, area))
-        .collect();
+        .filter(caster_guid)
+        .filter(move |area| super::cast::is_channelled_area(ctx, area))
+}
+
+pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
+    let removed: Vec<Aura> = channel_auras(ctx, caster_guid).collect();
+    let channelled_areas: Vec<GroundArea> = channelled_areas(ctx, caster_guid).collect();
     let broke_channel = !removed.is_empty() || !channelled_areas.is_empty();
     shed_auras(ctx, removed);
     for area in &channelled_areas {
@@ -557,54 +712,78 @@ pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
     broke_channel || broke_cast || left_ritual
 }
 
-/// Spell ids of a unit's cast in progress, channel Auras and channelled ground areas.
-fn casting_spell_ids(ctx: &ReducerContext, unit_guid: u64) -> Vec<u32> {
-    let mut spell_ids: Vec<u32> = ctx
-        .db
-        .game_pending_cast()
-        .by_caster()
-        .filter(&unit_guid)
-        .map(|cast| cast.spell_id)
-        .chain(
-            ctx.db
-                .game_aura()
-                .by_caster()
-                .filter(&unit_guid)
-                .filter(|aura| is_channel_aura(ctx, aura))
-                .map(|aura| aura.spell_id),
-        )
-        .chain(
-            ctx.db
-                .game_ground_area()
-                .by_caster()
-                .filter(&unit_guid)
-                .filter(|area| super::cast::is_channelled_area(ctx, area))
-                .map(|area| area.spell_id),
-        )
+/// Ends the caster's channel of one spell, leaving any cast in progress; returns whether it had one.
+fn end_channel(ctx: &ReducerContext, caster_guid: u64, spell_id: u32) -> bool {
+    let auras: Vec<Aura> = channel_auras(ctx, caster_guid)
+        .filter(|aura| aura.spell_id == spell_id)
+        .collect();
+    let areas: Vec<GroundArea> = channelled_areas(ctx, caster_guid)
+        .filter(|area| area.spell_id == spell_id)
+        .collect();
+    let ended = !auras.is_empty() || !areas.is_empty();
+    shed_auras(ctx, auras);
+    for area in &areas {
+        super::cast::end_ground_area(ctx, area);
+    }
+    let left_ritual = crate::summoning_ritual::channel_spell(ctx, caster_guid) == Some(spell_id)
+        && crate::summoning_ritual::leave(ctx, caster_guid);
+    if ended {
+        log::info!("channel ended: caster {caster_guid}'s spell {spell_id} channel cancelled");
+    }
+    ended || left_ritual
+}
+
+/// Spell ids of a unit's channel Auras, channelled ground areas and Summoning Ritual channel.
+fn channel_spell_ids(ctx: &ReducerContext, unit_guid: u64) -> Vec<u32> {
+    let mut spell_ids: Vec<u32> = channel_auras(ctx, unit_guid)
+        .map(|aura| aura.spell_id)
+        .chain(channelled_areas(ctx, unit_guid).map(|area| area.spell_id))
+        .chain(crate::summoning_ritual::channel_spell(ctx, unit_guid))
         .collect();
     spell_ids.sort_unstable();
     spell_ids.dedup();
     spell_ids
 }
 
-/// vmangos `Spell::EffectInterruptCast`: ends the target's cast or channel and locks its school.
-/// The Module imports no `PreventionType` or interrupt flags, so every cast and channel yields:
-/// see the known gap on this symbol in conformance/features/spells/cast_and_interrupt.toml.
+/// vmangos `Spell::EffectInterruptCast`: ends the target's cast and channel that yield to an
+/// interrupt effect and locks the school of each.
 pub(crate) fn interrupt_cast_and_lock(
     ctx: &ReducerContext,
     target_guid: u64,
     lockout_ms: i64,
 ) -> bool {
-    // Keep spell ids before ending the casts so the lockout can read their school headers.
-    let spell_ids = casting_spell_ids(ctx, target_guid);
-    let interrupted = break_channel(ctx, target_guid);
+    let yields = |spell_id: &u32| {
+        ctx.db
+            .game_spell()
+            .spell_id()
+            .find(*spell_id)
+            .is_some_and(|spell| spell.yields_to_interrupt_effect())
+    };
+    let cast_ids: Vec<u32> = ctx
+        .db
+        .game_pending_cast()
+        .by_caster()
+        .filter(&target_guid)
+        .map(|cast| cast.spell_id)
+        .filter(|spell_id| yields(spell_id))
+        .collect();
+    let mut stopped: Vec<u32> = Vec::new();
+    if !cast_ids.is_empty() && interrupt_cast(ctx, target_guid) {
+        stopped.extend(cast_ids);
+    }
+    for spell_id in channel_spell_ids(ctx, target_guid) {
+        if yields(&spell_id) && end_channel(ctx, target_guid, spell_id) {
+            stopped.push(spell_id);
+        }
+    }
+    let interrupted = !stopped.is_empty();
     // vmangos `Creature::LockOutSpells` skips a template immune to silence.
     if interrupted && !template_names_mechanic(ctx, target_guid, MECHANIC_SILENCE) {
         let until = crate::time::now(ctx)
             .checked_add(TimeDuration::from_micros(lockout_ms * 1000))
             .unwrap_or(crate::time::now(ctx));
         let locks = ctx.db.game_school_lockout();
-        for spell_id in spell_ids {
+        for spell_id in stopped {
             let Some(school) = ctx
                 .db
                 .game_spell()
@@ -659,8 +838,8 @@ pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::{
-        aura_survives_death, cc_blocks, immunity_names_mechanic, CAST_PUSHBACK_MAX,
-        CAST_PUSHBACK_MS, SPELL_ATTR_PASSIVE,
+        aura_survives_death, cc_blocks, channel_delay_micros, immunity_names_mechanic,
+        realigned_next_tick, CAST_PUSHBACK_MAX, CAST_PUSHBACK_MS, SPELL_ATTR_PASSIVE,
     };
 
     #[test]
@@ -702,6 +881,24 @@ mod tests {
     fn pushback_constants_match_the_cmangos_convention() {
         assert_eq!(CAST_PUSHBACK_MS, 500);
         assert_eq!(CAST_PUSHBACK_MAX, 2);
+    }
+
+    #[test]
+    fn each_hit_delays_a_channel_two_hundred_ms_less_down_to_two_hundred() {
+        let delays: Vec<i64> = (0..7).map(channel_delay_micros).collect();
+        assert_eq!(
+            delays,
+            [1_000_000, 800_000, 600_000, 400_000, 200_000, 200_000, 200_000]
+        );
+    }
+
+    #[test]
+    fn a_delayed_channel_ticks_so_that_its_last_tick_falls_on_its_new_end() {
+        const NOW: i64 = 5_000_000;
+        const PERIOD: i64 = 1_000_000;
+        assert_eq!(realigned_next_tick(NOW, 2_500_000, PERIOD), NOW + 500_000);
+        assert_eq!(realigned_next_tick(NOW, 3_000_000, PERIOD), NOW + PERIOD);
+        assert_eq!(realigned_next_tick(NOW, 400_000, PERIOD), NOW + 400_000);
     }
 
     #[test]

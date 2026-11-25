@@ -88,6 +88,9 @@ fn populated_old_module_upgrades_without_clearing() {
         "attributes_ex_4",
         "damage_class",
         "gcd_category",
+        "interrupt_flags",
+        "channel_interrupt_flags",
+        "prevention_type",
     ] {
         assert!(
             !spell_before[0].contains_key(column),
@@ -154,6 +157,17 @@ fn populated_old_module_upgrades_without_clearing() {
         spell_after[0].remove("equipped_item_class").as_deref(),
         Some("-1")
     );
+    for (column, default) in [
+        ("interrupt_flags", "2"),
+        ("channel_interrupt_flags", "4"),
+        ("prevention_type", "1"),
+    ] {
+        assert_eq!(
+            spell_after[0].remove(column).as_deref(),
+            Some(default),
+            "{column}"
+        );
+    }
     assert_eq!(
         spell_after, spell_before,
         "published spell columns must survive"

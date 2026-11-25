@@ -67,6 +67,9 @@ export const SPELL_COLUMNS: { readonly [K in SpellField]: Column } = {
   attributesEx4: { column: "attributes_ex_4", type: "u32", defaultValue: 0 },
   damageClass: { column: "damage_class", type: "u8", defaultValue: 0 },
   gcdCategory: { column: "gcd_category", type: "u32", defaultValue: 0 },
+  interruptFlags: { column: "interrupt_flags", type: "u32", defaultValue: 2 },
+  channelInterruptFlags: { column: "channel_interrupt_flags", type: "u32", defaultValue: 4 },
+  preventionType: { column: "prevention_type", type: "u8", defaultValue: 1 },
 };
 
 export const SPELL_EFFECT_COLUMNS: {
