@@ -40,6 +40,34 @@ pub(super) fn consume_item_stacks(
     consume_matching_stacks(items, entry, count, |_| true)
 }
 
+/// Consumes like [`consume_item_stacks`] but takes from `spared` stacks only for what the others
+/// cannot cover. A refusal leaves every stack unchanged.
+pub(super) fn consume_item_stacks_sparing(
+    items: &mut [ItemInstance],
+    entry: u32,
+    count: u32,
+    spared: impl Fn(&ItemInstance) -> bool,
+) -> Result<(), ActionRefusal> {
+    let carried = |item: &&ItemInstance| is_carried_slot(item.slot) && item.entry == entry;
+    let total: u64 = items
+        .iter()
+        .filter(carried)
+        .map(|item| u64::from(item.stack_count))
+        .sum();
+    if total < u64::from(count) {
+        return Err(format!("missing {} of item {entry}", u64::from(count) - total).into());
+    }
+    let unspared: u64 = items
+        .iter()
+        .filter(carried)
+        .filter(|item| !spared(item))
+        .map(|item| u64::from(item.stack_count))
+        .sum();
+    let from_unspared = count.min(u32::try_from(unspared).unwrap_or(u32::MAX));
+    consume_matching_stacks(items, entry, from_unspared, |item| !spared(item))?;
+    consume_matching_stacks(items, entry, count - from_unspared, spared)
+}
+
 // vmangos Player::DestroyItemCount, d9173eca: backpack, keyring and bag contents before equipment.
 fn consumption_rank(slot: u8) -> u8 {
     match slot {
@@ -895,6 +923,32 @@ mod tests {
         assert_eq!(remaining_after(3), vec![15, 120]);
         assert_eq!(remaining_after(4), vec![15]);
         assert_eq!(remaining_after(5), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn a_spared_stack_gives_up_items_only_when_the_others_run_out() {
+        let counts = |taken| {
+            let mut items = vec![item(23, 1, 3), item(24, 1, 2), item(25, 1, 4)];
+            consume_item_stacks_sparing(&mut items, 1, taken, |item| item.slot == 23).unwrap();
+            items
+                .iter()
+                .map(|item| item.stack_count)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(counts(1), vec![3, 1, 4]);
+        assert_eq!(counts(6), vec![3, 0, 0]);
+        assert_eq!(counts(7), vec![2, 0, 0]);
+        assert_eq!(counts(9), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn a_short_sparing_consumption_leaves_every_stack_unchanged() {
+        let mut items = vec![item(23, 1, 3), item(24, 1, 2)];
+        let refusal =
+            consume_item_stacks_sparing(&mut items, 1, 6, |item| item.slot == 23).unwrap_err();
+        assert_eq!(refusal.detail, "missing 1 of item 1");
+        let counts: Vec<_> = items.iter().map(|item| item.stack_count).collect();
+        assert_eq!(counts, vec![3, 2]);
     }
 
     #[test]

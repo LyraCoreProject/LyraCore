@@ -383,7 +383,9 @@ pub(crate) fn item_count(ctx: &ReducerContext, owner_guid: u64, item_entry: u32)
     )
 }
 
-// A caught Refusal must leave every stack unchanged.
+// A caught Refusal must leave every stack unchanged. Stacks offered in a Trade Session give up
+// items last; one that does is shrunk or deleted through the write path, which resets both accepts
+// and resends the offer.
 pub(crate) fn remove_items(
     ctx: &ReducerContext,
     owner_guid: u64,
@@ -397,17 +399,11 @@ pub(crate) fn remove_items(
         .filter(|i| is_carried_slot(i.slot) && i.entry == item_entry)
         .collect();
     let original_counts: Vec<u32> = stacks.iter().map(|item| item.stack_count).collect();
-    super::exchange::consume_item_stacks(&mut stacks, item_entry, count).map_err(String::from)?;
-    if stacks
-        .iter()
-        .zip(&original_counts)
-        .any(|(item, original_count)| {
-            item.stack_count != *original_count
-                && crate::trade::item_is_offered(ctx, owner_guid, item.guid)
-        })
-    {
-        return Err(super::refused(ItemRefusal::NotRightNow));
-    }
+    let offered = crate::trade::offered_items(ctx, owner_guid);
+    super::exchange::consume_item_stacks_sparing(&mut stacks, item_entry, count, |item| {
+        offered.contains(&item.guid)
+    })
+    .map_err(String::from)?;
     for (inst, original_count) in stacks.into_iter().zip(original_counts) {
         if inst.stack_count == original_count {
             continue;
