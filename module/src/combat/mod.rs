@@ -29,9 +29,9 @@ pub(crate) use attack_table::{
 pub(crate) use damage::{apply_hit, final_damage, fold_incoming_damage};
 pub(crate) use damage::{
     clear_lethal_damage_floor, clear_stale_lethal_damage_floor, commit_death_prevention,
-    damage_result, deal_damage, deal_environmental_damage, duel_finished_by, is_killing_blow,
-    lethal_floor_protects, resolve_damage, set_lethal_damage_floor, DamageResult, EnvironmentalHit,
-    FrozenDamage, Hit, HitSource,
+    damage_result, deal_damage, deal_environmental_damage, duel_finished_by,
+    immune_to_environmental_damage, is_killing_blow, lethal_floor_protects, resolve_damage,
+    set_lethal_damage_floor, DamageResult, EnvironmentalHit, FrozenDamage, Hit, HitSource,
 };
 pub(crate) use death::{
     force_creature_death, kill_creature, kill_player, kill_player_by_hit, DRAIN_SOUL_SPELL_ID,

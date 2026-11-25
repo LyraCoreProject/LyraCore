@@ -291,6 +291,16 @@ function = "a_damaging_fall_breaks_an_aura_that_damage_breaks"
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/movement_interrupts.rs"
+function = "a_fall_does_nothing_to_a_character_immune_to_physical_damage"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/interrupt_cast.rs"
+function = "a_hit_a_shield_absorbs_whole_leaves_a_root_whose_spell_has_proc_flags"
+rung = "durable_module"
+
+[[tests]]
 path = "module/tests/fatigue.rs"
 function = "exhaustion_damage_breaks_an_aura_that_damage_breaks"
 rung = "durable_module"
@@ -423,3 +433,21 @@ description = "A ground area's tick hits a unit behind a wall, a creature immune
 path = "module/src/spell/scheduler.rs"
 symbol = "tick_ground_areas"
 evidence = "Source reading, not measured. At d9173eca, GridNotifiersImpl.h DynamicObjectUpdater::VisitHelper skips a unit outside the DynamicObject's line of sight when a Character placed it, a creature whose IsImmuneToAoe holds and a Game Master; Object.cpp IsValidAttackTarget asks IsTargetableBy, and GetReactionTo reads contested PvP and forced ranks. VisitHelper applies a PersistentAreaAura that ticks on the unit's own Aura timer."
+
+[[known_gaps]]
+description = "A damage-breakable Aura whose spell has proc flags, such as a root or a fear, never breaks under a hit that a shield absorbs whole. vmangos skips it in the absorbed branch too, but can still remove it through its proc: a fear breaks with a chance from the damage before the absorb."
+path = "module/src/spell/control.rs"
+symbol = "break_auras_on_absorbed_hit"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::DealDamage calls RemoveAurasWithInterruptFlags(AURA_INTERRUPT_DAMAGE_CANCELS, ..., checkProcFlags = true), which skips a spell with procFlags. UnitAuraProcHandler.cpp HandleRemoveByDamageChanceProc (roots, aura 26) rolls amount / (25 * level - 150), so 0% at zero damage, and HandleRemoveFearByDamageChanceProc rolls on originalAmount. The Module runs no proc pass for an absorbed spell hit."
+
+[[known_gaps]]
+description = "Damage breaks a damage-breakable Aura of the same spell that deals it. vmangos exempts the damaging spell's own Aura, landed or absorbed."
+path = "module/src/spell/control.rs"
+symbol = "break_flagged_auras"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::DealDamage passes spellProto->Id as the except argument of RemoveAurasWithInterruptFlags in both the absorbed and the landed branch."
+
+[[known_gaps]]
+description = "A spell hit that a shield absorbs whole puts neither the attacker nor the target into combat. vmangos does for a hit that is not from the unit itself, a proc, a damage shield or a DOT that is not channelled."
+path = "module/src/combat/damage.rs"
+symbol = "deal_damage"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::DealDamage calls SetInCombatWithAggressor and SetInCombatWithVictim in the absorbed branch when ShouldEnterCombat holds. The Module's deal_damage calls enter_combat only for damage that lands."

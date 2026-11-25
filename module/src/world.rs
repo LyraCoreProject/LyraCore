@@ -873,6 +873,7 @@ pub(crate) fn apply_movement_update(
         && !mover.godmode
         && mover.is_player()
         && !movement.carries(movement_flags::ON_TRANSPORT)
+        && !crate::combat::immune_to_environmental_damage(ctx, &mover)
     {
         fall_dmg = fall_damage(movement.fall_time_ms(), mover.max_health);
         crate::native::environment::fall_damage(ctx, mover.guid, fall_dmg);

@@ -1368,6 +1368,22 @@ periodic damage tick and a ground area tick take the test on every tick. A Spell
 `SPELL_ATTR_EX2_NO_SCHOOL_IMMUNITIES` skips school immunity Auras. Shield damage still lands when
 the reflected swing ended a Duel.
 
+### Environmental damage
+
+Falling, drowning and fatigue damage reach vmangos `Unit::DealDamage` as `SELF_DAMAGE`, through
+`Player::EnvironmentalDamage`. `deal_environmental_damage` in `module/src/combat/damage.rs` applies
+it for all three, in this order:
+
+1. A Character that is dead, in godmode or immune to physical damage (Divine Shield, Blessing of
+   Protection, Ice Block) takes nothing: no packet, no stealth break and no reaction. The fall also
+   sends no damage packet.
+2. Any other Character loses stealth, even to 0 damage.
+3. Damage that kills it kills it. Damage that leaves a duelist at 1 health ends the Duel, and the
+   opponent wins.
+4. A Character that lives breaks the Auras that damage breaks, and a cast is cancelled or pushed
+   back as by a direct hit. A channel whose flags say damage cancels it ends; no channel is
+   shortened.
+
 ### Flag auras
 
 An `A_FLAG` effect keeps its source aura id (`EffectApplyAuraName`) in `p1`, and its Aura copies it

@@ -231,7 +231,7 @@ pub(crate) fn breaks_on_move(aura_interrupt: u16) -> bool {
 }
 
 /// Auras applied in this Durable Request survive its interruption effects.
-fn break_flagged_auras(ctx: &ReducerContext, target_guid: u64, breaks: fn(u16) -> bool) {
+fn break_flagged_auras(ctx: &ReducerContext, target_guid: u64, breaks: fn(&crate::Spell) -> bool) {
     let spells = ctx.db.game_spell();
     let to_break: Vec<_> = auras_on(ctx, target_guid)
         .filter(|a| {
@@ -239,14 +239,16 @@ fn break_flagged_auras(ctx: &ReducerContext, target_guid: u64, breaks: fn(u16) -
                 && spells
                     .spell_id()
                     .find(a.spell_id)
-                    .is_some_and(|s| breaks(s.aura_interrupt))
+                    .is_some_and(|s| breaks(&s))
         })
         .collect();
     shed_auras(ctx, to_break);
 }
 
 pub(crate) fn break_auras_on_move(ctx: &ReducerContext, mover_guid: u64) {
-    break_flagged_auras(ctx, mover_guid, breaks_on_move);
+    break_flagged_auras(ctx, mover_guid, |spell| {
+        breaks_on_move(spell.aura_interrupt)
+    });
 }
 
 // attacker_guid is zero for direct spells and periodic damage, which cannot trigger Retaliation.
@@ -255,6 +257,30 @@ pub(crate) fn break_auras_on_damage(
     target_guid: u64,
     attacker_guid: u64,
     periodic: bool,
+) {
+    react_to_damage(ctx, target_guid, attacker_guid, periodic, |spell| {
+        breaks_on_damage(spell.aura_interrupt)
+    });
+}
+
+/// For a hit absorbed whole; vmangos checkProcFlags keeps an Aura whose spell has proc flags.
+pub(crate) fn break_auras_on_absorbed_hit(
+    ctx: &ReducerContext,
+    target_guid: u64,
+    attacker_guid: u64,
+    periodic: bool,
+) {
+    react_to_damage(ctx, target_guid, attacker_guid, periodic, |spell| {
+        breaks_on_damage(spell.aura_interrupt) && spell.proc_flags == 0
+    });
+}
+
+fn react_to_damage(
+    ctx: &ReducerContext,
+    target_guid: u64,
+    attacker_guid: u64,
+    periodic: bool,
+    breaks: fn(&crate::Spell) -> bool,
 ) {
     // Hooks must observe damage before its crowd-control break effects.
     crate::hooks::fire_on_damage_taken(
@@ -266,7 +292,7 @@ pub(crate) fn break_auras_on_damage(
         },
     );
     crate::world::stand_up_on_damage(ctx, target_guid);
-    break_flagged_auras(ctx, target_guid, breaks_on_damage);
+    break_flagged_auras(ctx, target_guid, breaks);
     super::break_stealth(ctx, target_guid);
     if attacker_guid != 0 {
         crate::combat::retaliate_on_hit(ctx, target_guid, attacker_guid);

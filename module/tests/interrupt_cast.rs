@@ -27,6 +27,9 @@ const UNPUSHED_CAST: u32 = 5_124_109;
 const SHIELD: u32 = 5_124_110;
 const DAMAGE_CANCELLED_CAST: u32 = 5_124_111;
 const DAMAGE_BROKEN_ROOT: u32 = 5_124_112;
+const PROC_ROOT: u32 = 5_124_113;
+// vmangos PROC_FLAG_TAKEN_MELEE_HIT | PROC_FLAG_TAKEN_MELEE_SPELL_HIT.
+const TAKEN_MELEE_PROC_FLAGS: u32 = 0x28;
 // vmangos spell_template interrupt fields of Fireball 133, Drain Life 689 and First Aid 746.
 const FIREBALL_INTERRUPT_FLAGS: u32 = 0x0F;
 const DRAIN_LIFE_CHANNEL_FLAGS: u32 = 0x7C0C;
@@ -312,24 +315,28 @@ fn a_hit_a_shield_absorbs_whole_pushes_back_no_cast() {
 fn a_hit_a_shield_absorbs_whole_breaks_an_aura_that_damage_breaks() {
     let (shard, wolf) = stage("absorbed-hit-breaks-aura");
     let raised = raise_shield(&shard);
-    let roots = || {
-        shard.query_rows(&format!(
-            "SELECT id FROM game_aura WHERE target_guid = {CHARACTER} \
-             AND spell_id = {DAMAGE_BROKEN_ROOT}"
-        ))
-    };
-    cast_until(&shard, wolf, DAMAGE_BROKEN_ROOT, CHARACTER, || {
-        !roots().is_empty()
+    root_character(&shard, wolf, DAMAGE_BROKEN_ROOT);
+
+    bite_until(&shard, wolf, || {
+        roots(&shard, DAMAGE_BROKEN_ROOT).is_empty()
     });
-    assert!(!roots().is_empty(), "the root must land");
-    // An Aura survives damage in the Durable Request that applies it.
-    shard.assert_call("debug_advance_virtual_clock", &["50000"]);
 
-    bite_until(&shard, wolf, || roots().is_empty());
-
-    assert!(roots().is_empty());
+    assert!(roots(&shard, DAMAGE_BROKEN_ROOT).is_empty());
     assert!(shield_left(&shard) < raised, "a bite must land");
     assert_eq!(health(&shard, CHARACTER), CHARACTER_HEALTH);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_hit_a_shield_absorbs_whole_leaves_a_root_whose_spell_has_proc_flags() {
+    let (shard, wolf) = stage("absorbed-hit-keeps-proc-root");
+    let raised = raise_shield(&shard);
+    root_character(&shard, wolf, PROC_ROOT);
+
+    bite_until(&shard, wolf, || shield_left(&shard) < raised);
+
+    assert!(shield_left(&shard) < raised, "a bite must land");
+    assert_eq!(roots(&shard, PROC_ROOT).len(), 1);
 }
 
 fn stage(name: &str) -> (Standalone, u64) {
@@ -460,6 +467,21 @@ fn stage(name: &str) -> (Standalone, u64) {
             ("p_0_kind", &P_MECHANIC),
         ],
     );
+    insert_spell(
+        &shard,
+        PROC_ROOT,
+        &[
+            ("duration_ms", &CHANNEL_DURATION_MS),
+            ("aura_interrupt", &BREAKS_ON_DAMAGE),
+            ("proc_flags", &TAKEN_MELEE_PROC_FLAGS),
+        ],
+        &[
+            ("kind", &A_CONTROL),
+            ("target", &T_TARGET_ENEMY),
+            ("p_0", &M_ROOT),
+            ("p_0_kind", &P_MECHANIC),
+        ],
+    );
     insert_spell(&shard, BITE, &[], damage_effect);
     insert_spell(
         &shard,
@@ -542,6 +564,21 @@ fn insert_drain_life_channel(
         ],
         effect,
     );
+}
+
+fn roots(shard: &Standalone, spell_id: u32) -> Vec<Row> {
+    shard.query_rows(&format!(
+        "SELECT id FROM game_aura WHERE target_guid = {CHARACTER} AND spell_id = {spell_id}"
+    ))
+}
+
+fn root_character(shard: &Standalone, wolf: u64, spell_id: u32) {
+    cast_until(shard, wolf, spell_id, CHARACTER, || {
+        !roots(shard, spell_id).is_empty()
+    });
+    assert!(!roots(shard, spell_id).is_empty(), "the root must land");
+    // An Aura survives damage in the Durable Request that applies it.
+    shard.assert_call("debug_advance_virtual_clock", &["50000"]);
 }
 
 fn raise_shield(shard: &Standalone) -> i32 {

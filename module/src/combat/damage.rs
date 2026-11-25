@@ -392,7 +392,7 @@ pub(crate) fn apply_hit(
         // vmangos `Unit::DealDamage` still breaks Auras and cancels casts under a hit absorbed whole.
         if damage.absorbed > 0 && !target.godmode {
             let periodic = is_periodic(ctx, hit);
-            crate::spell::break_auras_on_damage(
+            crate::spell::break_auras_on_absorbed_hit(
                 ctx,
                 target_guid,
                 if weapon { attacker_guid } else { 0 },
@@ -675,9 +675,7 @@ pub(crate) enum EnvironmentalHit {
     Killed(u32),
 }
 
-/// vmangos `Player::EnvironmentalDamage`: falling, drowning and fatigue damage reach
-/// `Unit::DealDamage` as SELF_DAMAGE. Even 0 ends stealth. Damage ends a Duel at 1 health or kills,
-/// breaks the Auras that damage breaks, and cancels or pushes back the cast; a channel only ends.
+/// vmangos `Player::EnvironmentalDamage`; docs/schema.md#environmental-damage gives its reactions.
 pub(crate) fn deal_environmental_damage(
     ctx: &ReducerContext,
     victim_guid: u64,
@@ -685,10 +683,9 @@ pub(crate) fn deal_environmental_damage(
 ) -> EnvironmentalHit {
     let entities = ctx.db.game_world_entity();
     let hurtable = || {
-        entities
-            .guid()
-            .find(victim_guid)
-            .filter(|victim| !victim.dead && !victim.godmode)
+        entities.guid().find(victim_guid).filter(|victim| {
+            !victim.dead && !victim.godmode && !immune_to_environmental_damage(ctx, victim)
+        })
     };
     if hurtable().is_none() {
         return EnvironmentalHit::Unhurt;
@@ -727,6 +724,11 @@ pub(crate) fn deal_environmental_damage(
         );
     }
     EnvironmentalHit::Hurt(lost)
+}
+
+/// vmangos `Player::EnvironmentalDamage`: immunity to SPELL_SCHOOL_MASK_NORMAL stops all of it.
+pub(crate) fn immune_to_environmental_damage(ctx: &ReducerContext, victim: &WorldEntity) -> bool {
+    crate::spell::immune_to_school(ctx, victim, crate::spell::SCHOOL_MASK_PHYSICAL)
 }
 
 // vmangos SPELL_ATTR_EX3_TREAT_AS_PERIODIC, kept in `attributes_ex_3`.

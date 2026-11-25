@@ -1097,11 +1097,11 @@ fn push_spell_effect_rows(
             wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
         }
         let effect_mechanic = s.effect_mechanic[i] as u8;
-        // docs/schema.md#damage-shields gives this A_IMMUNITY p1 encoding.
         let p1 = if kind == A_FLAG {
             // docs/schema.md#flag-auras: the Module finds SPELL_AURA_RESIST_PUSHBACK by this id.
             s.effect_aura[i] as i32
         } else if kind == A_IMMUNITY {
+            // docs/schema.md#damage-shields gives this A_IMMUNITY p1 encoding.
             s.effect_aura[i] as i32
                 | if s.attributes_ex1 & ATTR_EX1_IMMUNITY_TO_HOSTILE_AND_FRIENDLY != 0 {
                     0x100
