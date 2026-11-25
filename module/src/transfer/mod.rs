@@ -171,9 +171,6 @@ pub(crate) fn emit_bot_transfer_intent(
         .find(bot_guid)
         .expect("the Transfer Intent Gate requires a live Character");
     let intents = ctx.db.game_bot_transfer_intent();
-    if let Some(cast) = crate::spell::pending_cast(ctx, bot_guid) {
-        crate::spell::cancel_cast_attempt(ctx, bot_guid, cast.scheduled_id);
-    }
     crate::combat::stop_attack_for(ctx, bot_guid);
     ctx.db.game_creature_spline().guid().delete(bot_guid);
     crate::world::teleport(
