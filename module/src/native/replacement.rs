@@ -29,8 +29,8 @@ pub struct WorldSessionEnd {
     pub account_id: u64,
 }
 
-/// The bound of the Account's ticket that waits for the away World Session `call` names. It fires
-/// at the deadline, when the Realm Shard stops waiting.
+/// How long tickets of the Account wait for the away World Session `call` names; a newer ticket
+/// keeps the time left. It fires at the deadline and gives up only while a ticket waits.
 #[table(accessor = game_world_session_end_retry, scheduled(retry_world_session_end))]
 pub struct WorldSessionEndRetry {
     #[primary_key]
@@ -44,8 +44,9 @@ pub struct WorldSessionEndRetry {
 }
 crate::virtual_clock_exempt!(game_world_session_end_retry);
 
-/// An end this Realm Shard owes `world` for one connection. It goes out again every 30 seconds
-/// until `world` accepts it, reports the World Session closed, or stops being a Peer Shard.
+/// An end this Realm Shard owes `world` for one connection. Every 30 seconds it goes out again
+/// unless an earlier send to `world` still waits for its answer. It lasts until `world` accepts
+/// it, reports the World Session closed, or stops being a Peer Shard.
 #[table(accessor = game_world_session_owed_end, scheduled(resend_world_session_end))]
 pub struct WorldSessionOwedEnd {
     #[primary_key]
@@ -54,6 +55,7 @@ pub struct WorldSessionOwedEnd {
     pub scheduled_at: ScheduleAt,
     #[unique]
     pub connection: u128,
+    #[index(btree)]
     pub account_id: u64,
     pub world: Identity,
 }
@@ -81,8 +83,8 @@ fn replacement(world: Option<Identity>, peer: impl Fn(Identity) -> bool) -> Repl
 }
 
 /// Whether an earlier World Session of the Account is still away on a World Shard. The first call
-/// for an away World Session owes that World Shard its end and starts the ticket's bound. A World
-/// Session on its way back to this Shard is replaced at once.
+/// for an away World Session owes that World Shard its end and starts the bound. A World Session
+/// on its way back to this Shard is replaced at once.
 pub(super) fn replacing(ctx: &ReducerContext, account_id: u64) -> bool {
     let waits = ctx.db.game_world_session_end_retry();
     let Some(away) = ctx.db.game_native_away().account_id().find(account_id) else {
@@ -124,14 +126,6 @@ pub(super) fn replacing(ctx: &ReducerContext, account_id: u64) -> bool {
     true
 }
 
-/// The ticket of the Account stops waiting, and its away World Session stays recorded.
-pub(super) fn stop_waiting(ctx: &ReducerContext, account_id: u64) {
-    ctx.db
-        .game_world_session_end_retry()
-        .account_id()
-        .delete(account_id);
-}
-
 /// Owes `world` the end of the away World Session, without a ticket that waits for it.
 pub(super) fn end_away(ctx: &ReducerContext, world: Identity, away: &NativeAway) {
     owe(ctx, world, away.connection_id.to_u128(), away.account_id);
@@ -156,6 +150,10 @@ fn owe(ctx: &ReducerContext, world: Identity, connection: u128, account_id: u64)
         account_id,
         world,
     });
+    send(ctx, world, connection, account_id);
+}
+
+fn send(ctx: &ReducerContext, world: Identity, connection: u128, account_id: u64) {
     ctx.db.game_world_session_end().insert(WorldSessionEnd {
         id: 0,
         database: remote::Identity(world),
@@ -165,16 +163,17 @@ fn owe(ctx: &ReducerContext, world: Identity, connection: u128, account_id: u64)
 }
 
 /// A Character Transfer moved `connection` from `source` to `target`; an end owed to the source
-/// goes to the target.
+/// is owed to the target from its next send. The move arrives before the Transfer release, so the
+/// target would refuse an end sent now.
 pub(super) fn moved(ctx: &ReducerContext, connection: u128, source: Identity, target: Identity) {
-    if let Some(end) = ctx
-        .db
-        .game_world_session_owed_end()
+    let owed = ctx.db.game_world_session_owed_end();
+    if let Some(mut end) = owed
         .connection()
         .find(connection)
         .filter(|end| end.world == source)
     {
-        owe(ctx, target, connection, end.account_id);
+        end.world = target;
+        owed.connection().update(end);
     }
 }
 
@@ -194,8 +193,8 @@ pub(super) fn closed(ctx: &ReducerContext, connection: u128, world: Identity) {
 pub(super) fn owed_worlds(ctx: &ReducerContext, account_id: u64) -> Vec<Identity> {
     ctx.db
         .game_world_session_owed_end()
-        .iter()
-        .filter(|end| end.account_id == account_id)
+        .account_id()
+        .filter(account_id)
         .map(|end| end.world)
         .collect()
 }
@@ -211,7 +210,10 @@ fn give_up(ctx: &ReducerContext, away: &NativeAway) {
         .game_native_away()
         .account_id()
         .delete(away.account_id);
-    stop_waiting(ctx, away.account_id);
+    ctx.db
+        .game_world_session_end_retry()
+        .account_id()
+        .delete(away.account_id);
 }
 
 #[reducer(on_result(game_world_session_end))]
@@ -245,7 +247,19 @@ pub fn resend_world_session_end(
         );
         return Ok(());
     }
-    owe(ctx, end.world, end.connection, end.account_id);
+    let answered = !ctx
+        .db
+        .game_world_session_end()
+        .iter()
+        .any(|call| call.connection == end.connection && call.database.0 == end.world);
+    let end = owed.insert(WorldSessionOwedEnd {
+        scheduled_id: 0,
+        scheduled_at: (ctx.timestamp + TimeDuration::from_micros(RESEND_MICROS)).into(),
+        ..end
+    });
+    if answered {
+        send(ctx, end.world, end.connection, end.account_id);
+    }
     Ok(())
 }
 

@@ -104,13 +104,10 @@ pub(super) fn request(
 }
 
 pub(super) fn remove(ctx: &ReducerContext, connection_id: ConnectionId) {
-    let admissions = ctx.db.game_native_admission();
-    if let Some(admission) = admissions.connection_id().find(connection_id) {
-        if !admission.admitted {
-            super::replacement::stop_waiting(ctx, admission.account_id);
-        }
-        admissions.connection_id().delete(connection_id);
-    }
+    ctx.db
+        .game_native_admission()
+        .connection_id()
+        .delete(connection_id);
 }
 
 /// Whether a ticket of the Account waits in the Login Queue.

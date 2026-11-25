@@ -147,7 +147,13 @@ fn an_end_its_world_shard_refuses_stays_owed_until_the_world_shard_accepts_it() 
     split
         .shard
         .assert_call("debug_end_world_session", &[&connection, &account]);
-    std::thread::sleep(Duration::from_secs(5));
+    assert!(
+        poll_until(Duration::from_secs(20), || split
+            .shard
+            .query_rows("SELECT id FROM game_world_session_end")
+            .is_empty()),
+        "the World Shard did not answer the end"
+    );
     assert_eq!(
         split.realm_rows("game_world_session_owed_end"),
         1,
@@ -178,7 +184,7 @@ fn an_end_its_world_shard_refuses_stays_owed_until_the_world_shard_accepts_it() 
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_waiting_ticket_whose_connection_closes_leaves_the_away_world_session_recorded() {
+fn a_bound_that_passes_while_no_ticket_waits_leaves_the_away_world_session_recorded() {
     let split = split("closed-ticket-keeps-away");
     let account = provision(&split.shard, split.shard.shard_name());
     split.shard.assert_call(
@@ -202,10 +208,10 @@ fn a_waiting_ticket_whose_connection_closes_leaves_the_away_world_session_record
 
     drop(wire);
     assert!(
-        poll_until(Duration::from_secs(10), || split
+        poll_until(Duration::from_secs(100), || split
             .realm_rows("game_world_session_end_retry")
             == 0),
-        "the bound of a closed ticket stayed"
+        "the bound did not end"
     );
     assert_eq!(split.away_connections(), away);
     assert_eq!(

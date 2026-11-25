@@ -113,13 +113,15 @@ connection (`idc_end_world_session`) and sends it. The World Shard ends only tha
 or its Handoff and always reports the World Session closed, also when it holds nothing of it. The
 report removes the away record and the Login Queue admits the ticket. The ticket waits at most 90
 seconds, and not at all when the away record names a Shard that is not a Peer Shard. At the bound
-the Realm Shard drops the away record and admits the ticket. A ticket whose connection closes stops
-waiting and leaves the away record.
+the Realm Shard drops the away record and admits the ticket. The bound belongs to the away World
+Session, not to one ticket: a newer ticket of the Account keeps the time left, and a bound that
+passes while no ticket waits leaves the away record.
 
-An owed end lasts past the bound, one row per connection (`game_world_session_owed_end`). It goes
-out again every 30 seconds until the World Shard accepts it, reports the World Session closed, or
-leaves the Peer Shards. A Character Transfer of that World Session moves it to the target World
-Shard. A newer World Session that enters another World Shard owes the end of the older one the same
+An owed end lasts past the bound, one row per connection (`game_world_session_owed_end`). Every 30
+seconds it goes out again, unless an earlier send still waits for its answer, until the World Shard
+accepts it, reports the World Session closed, or leaves the Peer Shards. A Character Transfer of
+that World Session moves it to the target World Shard, which receives it at the next send, after
+the Transfer release. A newer World Session that enters another World Shard owes the end of the older one the same
 way. Account and Session changes go to every World Shard that holds an away World Session of the
 Account or is owed an end for one. So a World Shard on an older Module, or a Transfer that fences
 the Handoff past the bound, delays the end of the older World Session but does not lose it.
