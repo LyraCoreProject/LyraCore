@@ -1,8 +1,12 @@
 mod support;
 
-use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY};
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, TEST_WOLF_ENTRY};
+use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::mail::SENDER_IS_TRADING;
+use lyracore_shared::spell::taxonomy::{
+    CAST_FLAG_ALWAYS_HIT, CAST_FLAG_CANNOT_CRIT, E_WEAPON_STRIKE, T_TARGET_ENEMY,
+};
 use lyracore_shared::trade::event_kind;
 use support::{refused, Standalone};
 
@@ -11,6 +15,14 @@ const PURSE: u32 = 1_000;
 const PARTNER_GOLD: u32 = 500;
 const STRANGE_DUST: u32 = 10_940;
 const ENCHANT: u32 = 5_091_230;
+const OFFERED_ARROWS: u32 = 5_091_231;
+const SPARE_ARROWS: u32 = 5_091_232;
+const ARROW_STACK: u32 = 20;
+const RANGED_SLOT: u8 = 17;
+const STRIKE: u32 = 5_091_233;
+// Spell.dbc Attributes of Throw; 0x02 marks the ranged slot.
+const STRIKE_ATTRIBUTES: u32 = 0x0041_0012;
+const DAMAGE_CLASS_RANGED: u8 = 3;
 
 struct Fixture {
     shard: Standalone,
@@ -64,6 +76,13 @@ impl Fixture {
         self.shard.query_rows(&format!(
             "SELECT guid, owner_guid, enchant_id FROM game_item_instance WHERE entry = {entry}"
         ))
+    }
+
+    fn stack_count(&self, entry: u32) -> String {
+        self.shard.query_rows(&format!(
+            "SELECT stack_count FROM game_item_instance WHERE entry = {entry}"
+        ))[0]["stack_count"]
+            .clone()
     }
 
     fn money(&self, guid: &str) -> u32 {
@@ -274,4 +293,99 @@ fn a_commit_whose_offered_item_is_gone_or_reowned_cancels_and_moves_no_gold() {
         }
         f.shard.assert_sql("DELETE FROM game_item_instance");
     }
+}
+
+fn stage_bow_strike(f: &Fixture) -> String {
+    f.shard.assert_sql(&format!(
+        "UPDATE game_item_template SET class = 2, subclass = 2, inventory_type = 15, \
+         damage_min = 10.0, damage_max = 10.0, delay_ms = 3000 WHERE entry = {FIXTURE_BLADE}"
+    ));
+    f.grant_at(FIXTURE_BLADE, RANGED_SLOT);
+    for (entry, name) in [
+        (OFFERED_ARROWS, "Offered Arrow"),
+        (SPARE_ARROWS, "Spare Arrow"),
+    ] {
+        f.shard.insert_row(
+            "game_item_template",
+            &[
+                ("entry", &entry),
+                ("name", &name),
+                ("class", &6u8),
+                ("subclass", &2u8),
+                ("inventory_type", &24u8),
+                ("max_stack", &200u32),
+            ],
+        );
+    }
+    f.shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &STRIKE),
+            ("name", &"Ranged strike fixture"),
+            ("range_yd", &30),
+            ("school_mask", &1),
+            ("attributes", &STRIKE_ATTRIBUTES),
+            ("damage_class", &DAMAGE_CLASS_RANGED),
+            (
+                "cast_flags",
+                &(CAST_FLAG_ALWAYS_HIT | CAST_FLAG_CANNOT_CRIT),
+            ),
+            ("is_negative", &true),
+        ],
+    );
+    f.shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(STRIKE, 0)),
+            ("spell_id", &STRIKE),
+            ("kind", &E_WEAPON_STRIKE),
+            ("base_points", &0),
+            ("target", &T_TARGET_ENEMY),
+            ("p_0", &100),
+            ("p_0_kind", &255),
+        ],
+    );
+    f.shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "1.0"],
+    );
+    let wolf = f
+        .shard
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
+        .iter()
+        .filter_map(|row| row["guid"].parse::<u64>().ok())
+        .max()
+        .expect("the spawned wolf must exist")
+        .to_string();
+    // The shooter at x = 100 faces east, toward the wolf 15 yards away.
+    f.shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET simulation_indexed = false, x = 115, y = 100, z = 100, \
+         orientation = {} WHERE guid = {wolf}",
+        std::f32::consts::PI
+    ));
+    f.shard
+        .assert_sql("UPDATE game_world_entity SET orientation = 0 WHERE guid = 1");
+    wolf
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_ranged_strike_spends_carried_ammo_and_leaves_offered_ammo_in_the_trade() {
+    let f = fixture("trade-offered-ammo");
+    let wolf = stage_bow_strike(&f);
+    for (entry, slot) in [(OFFERED_ARROWS, 23), (SPARE_ARROWS, 24)] {
+        let arrows = f.grant_at(entry, slot);
+        f.shard.assert_sql(&format!(
+            "UPDATE game_item_instance SET stack_count = {ARROW_STACK} WHERE guid = {arrows}"
+        ));
+    }
+    f.offer_for_gold(23);
+
+    f.shard
+        .assert_call("debug_cast_at", &["1", &STRIKE.to_string(), &wolf]);
+
+    assert_eq!(f.stack_count(OFFERED_ARROWS), ARROW_STACK.to_string());
+    assert_eq!(f.stack_count(SPARE_ARROWS), (ARROW_STACK - 1).to_string());
 }

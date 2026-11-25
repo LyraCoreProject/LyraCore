@@ -141,12 +141,18 @@ pub(crate) fn session_involving(ctx: &ReducerContext, guid: u64) -> Option<Trade
 }
 
 pub(crate) fn item_is_offered(ctx: &ReducerContext, owner_guid: u64, item_guid: u64) -> bool {
-    session_involving(ctx, owner_guid).is_some_and(|session| {
+    offered_items(ctx, owner_guid).contains(&item_guid)
+}
+
+pub(crate) fn offered_items(ctx: &ReducerContext, owner_guid: u64) -> Vec<u64> {
+    session_involving(ctx, owner_guid).map_or_else(Vec::new, |session| {
         ctx.db
             .game_trade_slot()
             .by_session()
             .filter(&session.id)
-            .any(|slot| slot.owner_guid == owner_guid && slot.item_guid == item_guid)
+            .filter(|slot| slot.owner_guid == owner_guid)
+            .map(|slot| slot.item_guid)
+            .collect()
     })
 }
 
@@ -341,11 +347,34 @@ fn reset_accepts(ctx: &ReducerContext, mut session: TradeSession) -> TradeSessio
     session
 }
 
-pub(crate) fn refresh_offer(ctx: &ReducerContext, owner_guid: u64) {
+fn refresh_offer(ctx: &ReducerContext, owner_guid: u64) {
     if let Some(session) = session_involving(ctx, owner_guid).filter(|session| session.open) {
         let session = reset_accepts(ctx, session);
         let session = touch_session(ctx, session);
         push_offer_events(ctx, &session, owner_guid);
+    }
+}
+
+/// Resets the accepts when an item write changes what the partner sees of an offered item.
+pub(crate) fn offered_item_written(
+    ctx: &ReducerContext,
+    previous: &crate::ItemInstance,
+    current: Option<&crate::ItemInstance>,
+) {
+    let seen = |item: &crate::ItemInstance| {
+        (
+            item.owner_guid,
+            item.entry,
+            item.stack_count,
+            item.enchant_id,
+            item.durability,
+            item.random_property_id,
+        )
+    };
+    if current.is_none_or(|current| seen(current) != seen(previous))
+        && item_is_offered(ctx, previous.owner_guid, previous.guid)
+    {
+        refresh_offer(ctx, previous.owner_guid);
     }
 }
 
@@ -752,6 +781,8 @@ fn run_trade_commit(
                 spent_charges(&acceptor_items),
                 spent_charges(&partner_items),
             );
+            // Removed before its offered items, so their removal cannot refresh the Trade Session.
+            remove_session(ctx, &session);
             // Remove both outgoing offers first; their freed slots count toward space.
             for inst in acceptor_items.iter().chain(partner_items.iter()) {
                 crate::ItemInstance::delete(ctx, inst.guid);
@@ -817,7 +848,6 @@ fn run_trade_commit(
             .ok_or("trade commit: gold arithmetic refused")?;
             partner_row.update(ctx);
 
-            remove_session(ctx, &session);
             push_trade_event(ctx, acceptor.guid, event_kind::TRADE_COMPLETE, partner.guid);
             push_trade_event(ctx, partner.guid, event_kind::TRADE_COMPLETE, acceptor.guid);
             Ok(())

@@ -171,10 +171,6 @@ pub(crate) fn apply_disenchant(
     crate::items::grant_item(ctx, guid, DISENCHANT_MATS_ENTRY, DISENCHANT_MATS_COUNT)?;
     crate::ItemInstance::delete(ctx, inst.guid);
     crate::skill::gain_profession_skill(ctx, guid, crate::skill::skill_line::ENCHANTING, 1, 0);
-    if slot <= crate::items::equip_slot::END {
-        crate::spell::recompute_vitals(ctx, guid);
-        crate::spell::recompute_sheet(ctx, guid);
-    }
     Ok(())
 }
 

@@ -683,21 +683,15 @@ impl ItemStoragePlan {
         Ok(())
     }
 
-    pub(crate) fn check_trade_offers(&self, ctx: &ReducerContext) -> Result<bool, ActionRefusal> {
-        let mut changed_offer = false;
-        for (item, &(slot, count, soulbound)) in self.items.iter().zip(&self.original_stacks) {
-            if (item.slot, item.stack_count, item.soulbound) != (slot, count, soulbound)
+    pub(crate) fn check_trade_offers(&self, ctx: &ReducerContext) -> Result<(), ActionRefusal> {
+        for (item, &(slot, count, _)) in self.items.iter().zip(&self.original_stacks) {
+            if (item.stack_count < count || item.slot != slot)
                 && crate::trade::item_is_offered(ctx, self.character_guid, item.guid)
             {
-                if item.stack_count < count || item.slot != slot {
-                    return Err(
-                        super::refused(lyracore_shared::item::ItemRefusal::NotRightNow).into(),
-                    );
-                }
-                changed_offer = true;
+                return Err(super::refused(lyracore_shared::item::ItemRefusal::NotRightNow).into());
             }
         }
-        Ok(changed_offer)
+        Ok(())
     }
 
     pub(crate) fn commit(self, ctx: &ReducerContext) -> Result<(), ActionRefusal> {
@@ -746,7 +740,7 @@ impl ItemStoragePlan {
         source: Option<ItemPush>,
         restored: bool,
     ) -> Result<(), ActionRefusal> {
-        let changed_offer = self.check_trade_offers(ctx)?;
+        self.check_trade_offers(ctx)?;
         if ctx
             .db
             .game_item_instance()
@@ -780,7 +774,6 @@ impl ItemStoragePlan {
             .filter(|item| item.guid == 0)
             .count();
         let mut guids = allocate_item_guids(ctx, new_guids)?.into_iter();
-        let mut removed_equipment = false;
         for (index, mut item) in self.items.into_iter().enumerate() {
             match self.original_stacks.get(index) {
                 Some(&(slot, count, soulbound))
@@ -788,7 +781,6 @@ impl ItemStoragePlan {
                         != (item.slot, item.stack_count, item.soulbound) =>
                 {
                     if item.stack_count == 0 {
-                        removed_equipment |= slot <= super::rules::equip_slot::END;
                         crate::ItemInstance::delete(ctx, item.guid);
                     } else if restored {
                         item.update_restored(ctx);
@@ -808,13 +800,6 @@ impl ItemStoragePlan {
                     }
                 }
             }
-        }
-        if removed_equipment {
-            crate::spell::recompute_vitals(ctx, self.character_guid);
-            crate::spell::recompute_sheet(ctx, self.character_guid);
-        }
-        if changed_offer {
-            crate::trade::refresh_offer(ctx, self.character_guid);
         }
         Ok(())
     }
