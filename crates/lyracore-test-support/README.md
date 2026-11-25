@@ -27,6 +27,9 @@ inserts across received transactions. `game_native_packet` rows arrive only deco
 `NativePacket`: `ReducerRows::packets()` for one call, `drain_packets()` across transactions.
 These methods do not read pending socket messages. A subsequent reducer call acts as a barrier;
 `wait_for_packets` reads until packets arrive or its deadline expires.
+SpacetimeDB closes a connection whose client sends nothing for 30 seconds and drops it 10 seconds
+later when the client reads nothing; the Module then closes its World Session. A test that leaves a connection waiting while another one advances the
+clock calls `keep_alive` on it each batch; it pings only after 10 seconds without a send.
 
 `WorldSessionObserver` answers which packets one World Session received. It routes `NativePacket`s
 as the Native Host does: direct packets by connection, AOI packets by the AOI Grants it has seen,
@@ -36,7 +39,7 @@ Handoff, and nothing after it. Feed it every packet from World Session entry onw
 nothing; a test checks `close_after`, `not_before_micros` and `authentication_complete` itself. The Host's own router in `native-host/src/feed.rs` cannot be linked by tests, so the two
 must change together.
 
-This uses SpacetimeDB 2.7.1's `v1.json.spacetimedb` protocol. The CLI subscription process cannot
+This uses SpacetimeDB 2.14.0's `v1.json.spacetimedb` protocol. The CLI subscription process cannot
 submit reducer calls on its existing connection. The SDK needs generated Module bindings; this
 small synchronous client keeps the test's arguments and subscribed rows explicit without those
 bindings. See [ADR 0005](../../docs/adr/0005-1-12-conformance.md) for the conformance boundary.

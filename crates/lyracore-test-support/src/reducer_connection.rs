@@ -13,6 +13,8 @@ use crate::native_packet::NativePacket;
 use crate::POLL_TIMEOUT;
 
 const PACKET_TABLE: &str = "game_native_packet";
+// SpacetimeDB 2.14 closes a WebSocket that sends nothing for 30 s and tears it down 10 s later.
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct ReducerConnection {
     socket: WebSocket<TcpStream>,
@@ -20,6 +22,7 @@ pub struct ReducerConnection {
     inserts: BTreeMap<String, Vec<Box<RawValue>>>,
     packets: Vec<NativePacket>,
     next_request: u32,
+    last_sent: Instant,
 }
 
 #[derive(Debug, Default)]
@@ -144,6 +147,7 @@ impl ReducerConnection {
             inserts: BTreeMap::new(),
             packets: Vec::new(),
             next_request: 1,
+            last_sent: Instant::now(),
         };
         let Some(ServerMessage::IdentityToken { connection_id }) =
             client.receive(Instant::now() + POLL_TIMEOUT)?
@@ -229,10 +233,22 @@ impl ReducerConnection {
         }
     }
 
+    /// Pings when nothing was sent for a while, so a connection that only waits stays open.
+    pub fn keep_alive(&mut self) -> Result<(), String> {
+        if self.last_sent.elapsed() < KEEP_ALIVE_INTERVAL {
+            return Ok(());
+        }
+        self.write(Message::Ping(Default::default()))
+    }
+
     fn send(&mut self, message: Value) -> Result<(), String> {
-        self.socket
-            .send(Message::Text(message.to_string().into()))
-            .map_err(|e| e.to_string())
+        self.write(Message::Text(message.to_string().into()))
+    }
+
+    fn write(&mut self, message: Message) -> Result<(), String> {
+        self.socket.send(message).map_err(|e| e.to_string())?;
+        self.last_sent = Instant::now();
+        Ok(())
     }
 
     fn receive(&mut self, deadline: Instant) -> Result<Option<ServerMessage>, String> {
