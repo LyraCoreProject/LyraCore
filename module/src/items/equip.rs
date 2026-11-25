@@ -108,14 +108,20 @@ pub(super) fn changed(
             cooldown(ctx, current);
         }
     }
-    if let Some((old, new)) = previous.zip(current) {
-        if old.owner_guid == new.owner_guid
-            && equipped(new)
-            && (old.durability == 0) != (new.durability == 0)
+    let stats_changed_for = match (previous, current) {
+        (Some(old), None) if equipped(old) => Some(old.owner_guid),
+        (Some(old), Some(new))
+            if old.owner_guid == new.owner_guid
+                && equipped(new)
+                && (old.durability == 0) != (new.durability == 0) =>
         {
-            crate::spell::recompute_vitals(ctx, new.owner_guid);
-            crate::spell::recompute_sheet(ctx, new.owner_guid);
+            Some(new.owner_guid)
         }
+        _ => None,
+    };
+    if let Some(owner_guid) = stats_changed_for {
+        crate::spell::recompute_vitals(ctx, owner_guid);
+        crate::spell::recompute_sheet(ctx, owner_guid);
     }
 }
 

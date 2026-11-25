@@ -315,13 +315,16 @@ pub(crate) fn equipped_ranged_weapon(
     weapon_profile_in_slot(ctx, player_guid, crate::items::equip_slot::RANGED)
 }
 
+// Skips an offered stack; see the offered_item_stays_in_the_trade Deliberate Deviation.
 pub(crate) fn find_ammo(ctx: &ReducerContext, player_guid: u64) -> Option<ItemInstance> {
     let templates = ctx.db.game_item_template();
+    let offered = crate::trade::offered_items(ctx, player_guid);
     lyracore_shared::item::loaded_ammo(
         ctx.db
             .game_item_instance()
             .by_owner_guid()
-            .filter(&player_guid),
+            .filter(&player_guid)
+            .filter(|item| !offered.contains(&item.guid)),
         |item| {
             (
                 item.slot,

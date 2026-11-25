@@ -192,7 +192,7 @@ mod fixture {
             return Err("spell rolls need a virtual clock and target level 60 or 63".into());
         }
         let entities = ctx.db.game_world_entity();
-        let mut character = entities
+        let character = entities
             .guid()
             .find(character_guid)
             .ok_or("spell Character missing")?;
@@ -216,6 +216,10 @@ mod fixture {
         {
             crate::ItemInstance::delete(ctx, item.guid);
         }
+        let mut character = entities
+            .guid()
+            .find(character_guid)
+            .ok_or("spell Character missing")?;
         character.intellect = 125;
         character.health = 1_000_000_000;
         character.max_health = 1_000_000_000;
@@ -663,7 +667,7 @@ mod fixture {
             return Err("white melee needs a virtual clock and target level 60 or 63".into());
         }
         let entities = ctx.db.game_world_entity();
-        let mut character = entities
+        let character = entities
             .guid()
             .find(character_guid)
             .ok_or("roll Character missing")?;
@@ -687,6 +691,10 @@ mod fixture {
         {
             crate::ItemInstance::delete(ctx, item.guid);
         }
+        let mut character = entities
+            .guid()
+            .find(character_guid)
+            .ok_or("roll Character missing")?;
         character.agility = 100;
         character.health = 1_000_000_000;
         character.max_health = 1_000_000_000;

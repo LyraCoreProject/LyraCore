@@ -183,10 +183,6 @@ pub(crate) fn detach_item(
         }
     }
     crate::ItemInstance::delete(ctx, item_guid);
-    if equipped {
-        crate::spell::recompute_vitals(ctx, sender_guid);
-        crate::spell::recompute_sheet(ctx, sender_guid);
-    }
     Ok(snapshot)
 }
 // vmangos Player::CanUnequipItem; the Module has no logout countdown to check.
