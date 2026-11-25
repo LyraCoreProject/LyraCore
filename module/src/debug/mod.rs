@@ -692,6 +692,12 @@ pub fn debug_setup_gather_pool(
             z,
             orientation: o,
             weight,
+            rotation_0: 0.0,
+            rotation_1: 0.0,
+            rotation_2: 0.0,
+            rotation_3: 0.0,
+            respawn_min_secs: 0,
+            respawn_max_secs: 0,
         });
         count += 1;
     }

@@ -104,13 +104,52 @@ fn gameobject_source() -> WorldSource {
             rows: &[&[("guid", N(1)), ("event", N(1))]],
         },
         FixtureTable {
+            name: "pool_template",
+            columns: &[
+                ("entry", "INTEGER"),
+                ("max_limit", "INTEGER"),
+                ("flags", "INTEGER"),
+                ("patch_min", "INTEGER"),
+                ("patch_max", "INTEGER"),
+            ],
+            key: &["entry", "patch_min", "patch_max"],
+            rows: &[],
+        },
+        FixtureTable {
+            name: "pool_pool",
+            columns: &[
+                ("pool_id", "INTEGER"),
+                ("mother_pool", "INTEGER"),
+                ("chance", "REAL"),
+                ("flags", "INTEGER"),
+            ],
+            key: &["pool_id"],
+            rows: &[],
+        },
+        FixtureTable {
             name: "pool_gameobject",
             columns: &[
                 ("guid", "INTEGER"),
+                ("pool_entry", "INTEGER"),
+                ("chance", "REAL"),
+                ("flags", "INTEGER"),
                 ("patch_min", "INTEGER"),
                 ("patch_max", "INTEGER"),
             ],
             key: &["guid"],
+            rows: &[],
+        },
+        FixtureTable {
+            name: "pool_gameobject_template",
+            columns: &[
+                ("id", "INTEGER"),
+                ("pool_entry", "INTEGER"),
+                ("chance", "REAL"),
+                ("flags", "INTEGER"),
+                ("patch_min", "INTEGER"),
+                ("patch_max", "INTEGER"),
+            ],
+            key: &["id"],
             rows: &[],
         },
         FixtureTable {
@@ -237,8 +276,9 @@ fn packed_spawn_row(source: &WorldSource, db_guid: u32) -> String {
     let prefix = format!("{},", go_guid(db_guid));
     collect_gameobject_spawns(source, &scope)
         .unwrap()
-        .go_packed_rows
-        .into_iter()
+        .placements
+        .iter()
+        .map(GoPlacement::packed_row)
         .find(|row| row.starts_with(&prefix))
         .unwrap()
 }
@@ -357,4 +397,212 @@ fn malformed_gameobject_numbers_do_not_create_an_unusable_spawn() {
         let error = collect_gameobject_spawns(&source, &scope).err().unwrap();
         assert!(error.to_string().contains(column), "{error}");
     }
+}
+
+const POOLED_CHESTS: [u32; 6] = [
+    5_090_050, 5_090_051, 5_090_052, 5_090_053, 5_090_054, 5_090_055,
+];
+
+/// Copies of the fixture chest at x = its guid, with a respawn range and a rotation of their own.
+fn pooled_chest_source(pool_sql: &str) -> WorldSource {
+    let source = gameobject_source();
+    let copies = POOLED_CHESTS
+        .iter()
+        .map(|guid| {
+            format!(
+                "INSERT INTO gameobject (guid,id,map,position_x,position_y,position_z,orientation,rotation0,rotation1,rotation2,rotation3,state,spawn_flags,patch_min,patch_max,visibility_mod,spawntimesecsmin,spawntimesecsmax,animprogress)
+                 SELECT {guid},id,map,{guid},position_y,position_z,orientation,rotation0,rotation1,rotation2,0.5,state,spawn_flags,patch_min,patch_max,visibility_mod,120,600,animprogress FROM gameobject WHERE guid = 5090040"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+    edit_gameobject_source(&source, &format!("{copies};{pool_sql}"));
+    source
+}
+
+fn pool_member_row(guid: u32, pool: u32, weight: u32) -> String {
+    format!(
+        "({},{pool},5090042,0,{guid},0,0,0,{weight},0,0,0,0.5,120,600)",
+        (1u64 << 40) | u64::from(guid)
+    )
+}
+
+fn inserted_rows(plan: &DumpPlan, table: &str) -> String {
+    plan.stmts
+        .iter()
+        .filter(|sql| sql.starts_with(&format!("INSERT INTO {table} (")))
+        .map(|sql| sql.split_once(" VALUES ").unwrap().1)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn static_guids(plan: &DumpPlan) -> Vec<u64> {
+    plan.go_batches
+        .iter()
+        .flat_map(|batch| batch.split(';'))
+        .map(|row| row.split(',').next().unwrap().parse().unwrap())
+        .collect()
+}
+
+#[test]
+fn a_limit_one_pool_gives_chanced_members_their_share_and_splits_the_rest_equally() {
+    assert_eq!(
+        gameobject_pools::pool_weights(1, &[6_000, 0, 0]),
+        [12_000, 4_000, 4_000],
+        "60 percent, then 20 and 20"
+    );
+    assert_eq!(gameobject_pools::pool_weights(1, &[10_000, 0]), [10_000, 0]);
+    assert_eq!(gameobject_pools::pool_weights(1, &[0, 0, 0]), [1, 1, 1]);
+}
+
+#[test]
+fn chances_past_a_whole_roll_leave_the_later_member_only_what_remains() {
+    assert_eq!(
+        gameobject_pools::pool_weights(1, &[9_500, 9_500]),
+        [9_500, 500]
+    );
+}
+
+#[test]
+fn a_pool_with_a_limit_above_one_ignores_chances() {
+    assert_eq!(gameobject_pools::pool_weights(2, &[6_000, 0]), [1, 1]);
+    assert_eq!(
+        gameobject_pools::pool_weights(3, &[2_500, 2_500, 0]),
+        [1, 1, 1]
+    );
+}
+
+#[test]
+fn pooled_placements_import_as_pool_members_instead_of_static_spawns() {
+    let source = pooled_chest_source(
+        "INSERT INTO pool_template VALUES (900,1,0,0,10);
+         INSERT INTO pool_gameobject VALUES (5090050,900,60,0,0,10),(5090051,900,0,0,0,10),(5090052,900,0,0,0,10)",
+    );
+    let plan = gameobject_plan(&source);
+
+    assert_eq!(
+        inserted_rows(&plan, "game_gameobject_pool"),
+        "(900,1,false)"
+    );
+    assert_eq!(
+        inserted_rows(&plan, "game_gameobject_pool_member"),
+        [
+            pool_member_row(5_090_050, 900, 12_000),
+            pool_member_row(5_090_051, 900, 4_000),
+            pool_member_row(5_090_052, 900, 4_000),
+        ]
+        .join(",")
+    );
+    assert_eq!(
+        inserted_rows(&plan, "game_gameobject_pool_link"),
+        "(900,0,0,0)"
+    );
+    let statics = static_guids(&plan);
+    assert!(statics.contains(&go_guid(5_090_040)));
+    for guid in [5_090_050, 5_090_051, 5_090_052] {
+        assert!(
+            !statics.contains(&go_guid(guid)),
+            "pooled {guid} is no static spawn"
+        );
+    }
+    assert!(
+        statics.contains(&go_guid(5_090_053)),
+        "an unpooled copy stays static"
+    );
+}
+
+#[test]
+fn a_nested_pool_imports_its_child_pools_with_their_weights_and_the_roots_map() {
+    let source = pooled_chest_source(
+        "INSERT INTO pool_template VALUES (910,1,0,0,10),(911,1,0,0,10),(912,2,0,0,10);
+         INSERT INTO pool_pool VALUES (911,910,30,0),(912,910,0,0);
+         INSERT INTO pool_gameobject VALUES (5090053,911,0,0,0,10),(5090054,912,0,0,0,10),(5090055,912,0,0,0,10)",
+    );
+    let plan = gameobject_plan(&source);
+
+    assert_eq!(
+        inserted_rows(&plan, "game_gameobject_pool"),
+        "(910,1,false),(911,1,false),(912,2,false)"
+    );
+    assert_eq!(
+        inserted_rows(&plan, "game_gameobject_pool_link"),
+        "(910,0,0,0),(911,910,3000,0),(912,910,7000,0)"
+    );
+    assert_eq!(
+        inserted_rows(&plan, "game_gameobject_pool_member"),
+        [
+            pool_member_row(5_090_053, 911, 1),
+            pool_member_row(5_090_054, 912, 1),
+            pool_member_row(5_090_055, 912, 1),
+        ]
+        .join(",")
+    );
+}
+
+#[test]
+fn a_placement_under_a_mother_pool_without_a_template_never_spawns() {
+    let source = pooled_chest_source(
+        "INSERT INTO pool_template VALUES (920,1,0,0,10);
+         INSERT INTO pool_pool VALUES (920,921,0,0);
+         INSERT INTO pool_gameobject VALUES (5090050,920,0,0,0,10)",
+    );
+    let plan = gameobject_plan(&source);
+
+    assert_eq!(inserted_rows(&plan, "game_gameobject_pool_member"), "");
+    assert!(!static_guids(&plan).contains(&go_guid(5_090_050)));
+}
+
+#[test]
+fn a_template_pool_takes_every_placement_of_its_entry() {
+    let source = pooled_chest_source(
+        "INSERT INTO pool_template VALUES (930,2,0,0,10);
+         INSERT INTO pool_gameobject_template VALUES (5090042,930,0,0,0,10)",
+    );
+    let plan = gameobject_plan(&source);
+
+    let members = inserted_rows(&plan, "game_gameobject_pool_member");
+    assert_eq!(members.matches("),(").count() + 1, 1 + POOLED_CHESTS.len());
+    let statics = static_guids(&plan);
+    assert!(!statics.contains(&go_guid(5_090_040)));
+    assert!(statics.contains(&go_guid(1)), "the door is in no pool");
+}
+
+#[test]
+fn a_gameobject_reimport_replaces_every_pool_row_before_it_writes_any() {
+    let source = pooled_chest_source(
+        "INSERT INTO pool_template VALUES (900,1,0,0,10);
+         INSERT INTO pool_gameobject VALUES (5090050,900,0,0,0,10)",
+    );
+    let plan = gameobject_plan(&source);
+
+    let position = |prefix: &str| {
+        plan.stmts
+            .iter()
+            .position(|sql| sql.starts_with(prefix))
+            .unwrap_or_else(|| panic!("no statement starts with {prefix}"))
+    };
+    let first_insert = [
+        "game_gameobject_pool",
+        "game_gameobject_pool_member",
+        "game_gameobject_pool_link",
+    ]
+    .map(|table| position(&format!("INSERT INTO {table} (")))
+    .into_iter()
+    .min()
+    .unwrap();
+    for table in [
+        "game_gameobject_pool",
+        "game_gameobject_pool_member",
+        "game_gameobject_pool_link",
+    ] {
+        assert!(
+            position(&format!("DELETE FROM {table} WHERE")) < first_insert,
+            "{table}"
+        );
+    }
+    assert_eq!(
+        gameobject_plan(&source).stmts,
+        plan.stmts,
+        "a re-run plans the same rows"
+    );
 }

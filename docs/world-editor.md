@@ -47,6 +47,8 @@ Refusal rolls back the whole save, and Meld shows its message.
   A new creature's patrol is saved by the next save, once it has a guid.
 - Fields a LyraCore spawn has no column for (scale, equipment and pose, wander distance, formations,
   pools) are listed as not written.
+- A region shows only the pooled gameobjects their pools rolled. Saving one moves its pool member,
+  so later rolls stand at the new place; deleting one is refused, because the import owns the pool.
 - A save over the call's limits (256 edits, 4,096 waypoints) is refused. Save fewer spawns at a time.
 
 ## Item and creature saves

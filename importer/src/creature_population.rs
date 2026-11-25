@@ -61,7 +61,7 @@ struct Pool {
     children: Vec<(u64, u32)>,
 }
 
-fn chance_bp(row: &crate::world_source::Row, column: &str, table: &str) -> Result<u32> {
+pub(crate) fn chance_bp(row: &crate::world_source::Row, column: &str, table: &str) -> Result<u32> {
     let chance: f64 = number(row, column, table)?;
     if !chance.is_finite() || !(0.0..=100.0).contains(&chance) {
         bail!("{table}: invalid chance {chance}");
@@ -111,6 +111,39 @@ fn flatten_pool(
     Ok(members)
 }
 
+/// Each `pool_template` entry's `max_limit`.
+pub(crate) fn pool_limits(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<BTreeMap<u64, u32>> {
+    let mut limits = BTreeMap::new();
+    for row in parse_table(dump, "pool_template")?.iter() {
+        let id: u64 = number(row, "entry", "pool_template")?;
+        if limits
+            .insert(id, number(row, "max_limit", "pool_template")?)
+            .is_some()
+        {
+            bail!("duplicate pool_template {id}");
+        }
+    }
+    Ok(limits)
+}
+
+/// Each `pool_pool` child's mother pool and its chance in basis points.
+pub(crate) fn pool_parents(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<BTreeMap<u64, (u64, u32)>> {
+    let mut parents = BTreeMap::new();
+    for row in parse_table(dump, "pool_pool")?.iter() {
+        let child: u64 = number(row, "pool_id", "pool_pool")?;
+        let parent: u64 = number(row, "mother_pool", "pool_pool")?;
+        let chance = chance_bp(row, "chance", "pool_pool")?;
+        if parents.insert(child, (parent, chance)).is_some() {
+            bail!("pool {child} has several parents");
+        }
+    }
+    Ok(parents)
+}
+
 fn add_pools(
     dump: &(impl crate::dump::TableRows + ?Sized),
     groups: &mut BTreeMap<u64, Group>,
@@ -118,23 +151,19 @@ fn add_pools(
     events: &mut BTreeMap<u64, BTreeSet<i32>>,
 ) -> Result<Vec<u64>> {
     let mut unsupported = Vec::new();
-    let mut pools = BTreeMap::new();
-    for row in parse_table(dump, "pool_template")?.iter() {
-        let id = number(row, "entry", "pool_template")?;
-        if pools
-            .insert(
+    let mut pools: BTreeMap<u64, Pool> = pool_limits(dump)?
+        .into_iter()
+        .map(|(id, limit)| {
+            (
                 id,
                 Pool {
-                    limit: number(row, "max_limit", "pool_template")?,
+                    limit,
                     members: BTreeMap::new(),
                     children: Vec::new(),
                 },
             )
-            .is_some()
-        {
-            bail!("duplicate pool_template {id}");
-        }
-    }
+        })
+        .collect();
     let creatures = parse_table(dump, "creature")?;
     let mut by_entry = BTreeMap::<u64, Vec<u64>>::new();
     let mut maps = BTreeMap::<u64, i64>::new();
@@ -179,13 +208,8 @@ fn add_pools(
         }
     }
     let mut parents = BTreeMap::new();
-    for row in parse_table(dump, "pool_pool")?.iter() {
-        let child = number(row, "pool_id", "pool_pool")?;
-        let parent = number(row, "mother_pool", "pool_pool")?;
-        let chance = chance_bp(row, "chance", "pool_pool")?;
-        if parents.insert(child, parent).is_some() {
-            bail!("pool {child} has several parents");
-        }
+    for (child, (parent, chance)) in pool_parents(dump)? {
+        parents.insert(child, parent);
         if let Some(pool) = pools.get_mut(&parent) {
             pool.children.push((child, chance));
         }

@@ -419,6 +419,13 @@ new row, calculates `grid_x`, `grid_y` and `cell`, and registers the collider ag
 **Gameobject delete.** The same removal, without a new row. Copies in running Instances stay until
 the Instance resets.
 
+**Pooled gameobject update.** An open-world object a pool rolled (`POOL_TAG` set, no Instance copy
+bit) is no Authored Spawn, but an update of it is allowed. The Module writes the new template,
+map, position, orientation and rotation into its pool member, so every later roll of that member
+stands there, and replaces the object as above, shown at once. The member keeps its pool, weight
+and respawn range, and a `state` of 1 lasts only until its next roll. A member that is not up has
+no object, so a tool cannot reach it.
+
 **Gameobject create.** The Module writes the row and registers the collider.
 
 The Module adds a `game_creature_spawn_map` row when a creature spawn goes onto a map that has none.
@@ -452,8 +459,8 @@ Spawn reducers refuse:
 
 - A guid that is not an Authored Spawn. A creature guid must have the high part `0xF130` and a
   `game_creature_spawn` row with `instance_id = 0` and `source_guid = 0`. A gameobject guid must
-  have the high part `0xF110`, no pool tag (bit 47), no Instance copy bit (bit 46), and a
-  `game_gameobject` row with `instance_id = 0`. This stops a tool from
+  have the high part `0xF110`, no pool tag (bit 47) except for a pooled update, no Instance copy
+  bit (bit 46), and a `game_gameobject` row with `instance_id = 0`. This stops a tool from
   despawning a player, a pet, a summon or an Instance creature.
 - A spawn identifier in the Package Creature Range or the Package Gameobject Range. Those rows belong
   to a Package, and the next `packages apply` writes them again.
@@ -468,6 +475,8 @@ Spawn reducers refuse:
 - A gameobject `state` other than 0 or 1.
 - A delete of a creature spawn that is a member of a population group. The group's selection names
   its members, and the import owns the group. An update of a member is allowed.
+- A delete of a gameobject a pool rolled. The import owns the pool. An update is allowed; see
+  [pooled gameobject update](#what-an-edit-does-to-the-world).
 
 `respawn_secs` takes any value. `u32::MAX` means the creature does not come back after it dies, the
 same value an encounter wave uses.

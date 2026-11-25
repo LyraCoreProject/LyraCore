@@ -51,6 +51,10 @@ pub fn stamp_import_meta(
     if family == lyracore_package_delta::DBC_FAMILY {
         crate::reputation::repair_base_standing(ctx);
     }
+    // The GameObject batches have replaced every object, pool objects included.
+    if family == lyracore_package_delta::GAMEOBJECT_FAMILY {
+        crate::gameobject::arm_world_pools(ctx);
+    }
     Ok(())
 }
 
