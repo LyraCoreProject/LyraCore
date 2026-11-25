@@ -12,17 +12,17 @@ use crate::{game_item_instance, game_item_template, game_spell_reagent};
 use crate::spell::{
     apply_effect, aura_apply, break_channel, break_stealth, cost_gate_blocks, cost_refusal_reason,
     effect_amount, faction_target_violation, is_action_blocked, is_stealthed, level_gate_blocks,
-    recipe_reagents, select_targets, CastGateRefusal, CastHandle, CastRefusalKind,
-    CastRefusalReason, CastStart, FormRefusal, ItemGrantOutcome, SpellCastEventKind, A_FLAG,
-    A_MOUNTED, CAST_FLAG_BINARY, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER,
-    CAST_FLAG_INCAP_OPENER, CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND, CAST_FLAG_REQ_DAGGER,
-    CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH, CAST_FLAG_STEALTH_SAFE,
-    CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT, E_DUEL,
-    E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING, E_PERSISTENT_AREA,
-    E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE, E_WEAPON_STRIKE,
-    HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME, SPELL_ATTR_PASSIVE,
-    SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY, T_TARGET_ALLY,
-    T_TARGET_ANY, T_TARGET_ENEMY,
+    place_ground_area, recipe_reagents, select_targets, CastGateRefusal, CastHandle,
+    CastRefusalKind, CastRefusalReason, CastStart, FormRefusal, ItemGrantOutcome,
+    SpellCastEventKind, A_FLAG, A_MOUNTED, CAST_FLAG_BINARY, CAST_FLAG_CHANNELED,
+    CAST_FLAG_COMBO_FINISHER, CAST_FLAG_INCAP_OPENER, CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND,
+    CAST_FLAG_REQ_DAGGER, CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH,
+    CAST_FLAG_STEALTH_SAFE, CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT,
+    E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING,
+    E_PERSISTENT_AREA, E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE,
+    E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME,
+    SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY,
+    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use crate::{
     game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
@@ -886,6 +886,10 @@ fn run_spell_effects(
             hdr.max_level,
             draw,
         );
+        if e.kind == E_PERSISTENT_AREA {
+            place_ground_area(ctx, e, hdr, caster_guid, target_guid, points, dest);
+            continue;
+        }
         for t in select_targets(ctx, caster_guid, target_guid, e, dest) {
             // vmangos applies a cast's auras before its damage, and the death strips them.
             let aura_on_slain = e.kind & KIND_AURA_BIT != 0 && slain.contains(&t);
@@ -1683,9 +1687,7 @@ impl GateCheck<'_> {
         let (hdr, effects) = (&spell.header, spell.effects.as_slice());
         let (spell_id, target_guid) = (request.spell_id, request.target_guid);
         let has_effect = |kind| effects.iter().any(|effect| effect.kind == kind);
-        // A Distract needs a ground point; a ground area's ground point is optional.
-        let aims_at_ground_point =
-            has_effect(E_DISTRACT) || (has_effect(E_PERSISTENT_AREA) && request.dest.is_some());
+        let aims_at_ground_point = checks_ground_point(effects, request.dest);
         match gate {
             CastGate::SpellReady => check_spell_ready(ctx, caster.guid, hdr, request),
             CastGate::CasterAlive => self.check_caster_alive(),
@@ -2435,6 +2437,12 @@ fn check_ground_point_los(
     Ok(())
 }
 
+/// A Distract needs a ground point; a ground area is checked only when its cast names one.
+fn checks_ground_point(effects: &[SpellEffect], dest: Option<(f32, f32, f32)>) -> bool {
+    let has_effect = |kind| effects.iter().any(|effect| effect.kind == kind);
+    has_effect(E_DISTRACT) || (has_effect(E_PERSISTENT_AREA) && dest.is_some())
+}
+
 fn ground_point(dest: Option<(f32, f32, f32)>) -> Result<(f32, f32, f32), CastGateRefusal> {
     dest.ok_or_else(|| {
         CastGateRefusal::new(
@@ -2733,6 +2741,28 @@ mod ground_point_tests {
                 .contains("only target a ground point"),
             "{refusal}"
         );
+    }
+
+    fn effects(kind: u8) -> Vec<SpellEffect> {
+        let mut effect = SpellEffect::blank(1, 0);
+        effect.kind = kind;
+        vec![effect]
+    }
+
+    #[test]
+    fn a_ground_area_cast_at_a_ground_point_takes_the_ground_point_gates() {
+        // Blizzard, Flamestrike and the other ground areas a client places.
+        assert!(checks_ground_point(
+            &effects(E_PERSISTENT_AREA),
+            Some((0.0, 0.0, 0.0))
+        ));
+        // A creature's cast at a unit, and Consecration.
+        assert!(!checks_ground_point(&effects(E_PERSISTENT_AREA), None));
+        assert!(checks_ground_point(&effects(E_DISTRACT), None));
+        assert!(!checks_ground_point(
+            &effects(E_DAMAGE),
+            Some((0.0, 0.0, 0.0))
+        ));
     }
 
     #[test]

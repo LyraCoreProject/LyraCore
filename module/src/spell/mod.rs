@@ -35,10 +35,10 @@ pub(crate) use cast::{
     apply_direct_heal, apply_effect, apply_item_auras, apply_spell_auras, aura_apply, begin_cast,
     begin_loaded_cast, cast_aura_triggered, cast_triggered, charge_spell_cost,
     check_cast_start_gates, clear_dead_callback_cast_admission, complete_cast,
-    faction_target_violation, recipe_reagents, record_spell_cooldown, resolve_cast, revive_amount,
-    select_targets, start_creature_spell, start_spell_cooldown, CastRequest,
-    CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
-    ItemGrantOutcome, LoadedSpell,
+    faction_target_violation, place_ground_area, recipe_reagents, record_spell_cooldown,
+    resolve_cast, revive_amount, select_targets, start_creature_spell, start_spell_cooldown,
+    CastRequest, CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode,
+    CreatureSpellTarget, ItemGrantOutcome, LoadedSpell,
 };
 pub(crate) use control::breaks_on_damage;
 #[cfg(test)]

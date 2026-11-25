@@ -209,7 +209,7 @@ fn is_ground_area_damage(effect_id: i32, aura: AuraMod, attributes_ex3: u32) -> 
         && attributes_ex3 & SPELL_ATTR_EX3_NO_AVOIDANCE == 0
 }
 
-// vmangos centres these on the cast's ground point or target, and the others on the caster.
+// vmangos centres these on the cast's ground point or target; T_SELF puts the rest on the caster.
 fn ground_area_target(target_a: i32) -> u8 {
     const ENEMY_AOE_AT_DEST_LOC: i32 = 16;
     const ENEMY_IN_CONE: i32 = 24;

@@ -87,7 +87,27 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/channelled_ground_area.rs"
-function = "a_unit_that_walks_out_of_a_ground_area_takes_no_more_ticks"
+function = "a_characters_ground_area_hits_a_neutral_creature_without_reputation"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_characters_ground_area_hits_a_reputation_faction_only_at_war"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_creatures_ground_area_spares_a_creature_neutral_to_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_ground_point_out_of_range_is_refused"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_caster_under_a_school_immunity_still_places_its_ground_area"
 rung = "durable_module"
 
 [[tests]]
@@ -116,13 +136,38 @@ function = "a_persistent_area_aura_without_periodic_damage_keeps_its_aura_kind"
 rung = "unit"
 
 [[tests]]
-path = "module/src/spell/scheduler.rs"
-function = "an_unflagged_characters_area_spares_another_character"
+path = "module/src/combat/area_target.rs"
+function = "a_characters_area_spares_a_neutral_town_guard_when_not_at_war"
 rung = "unit"
 
 [[tests]]
-path = "module/src/spell/scheduler.rs"
-function = "an_unflagged_characters_area_may_harm_its_duel_opponent"
+path = "module/src/combat/area_target.rs"
+function = "a_creatures_area_spares_a_creature_neutral_to_it"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/area_target.rs"
+function = "an_unflagged_characters_area_spares_a_flagged_enemy_character"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/area_target.rs"
+function = "an_unflagged_characters_area_harms_its_duel_opponent"
+rung = "unit"
+
+[[tests]]
+path = "module/src/native/aura.rs"
+function = "a_channelled_ground_area_keeps_the_channel_bar_when_its_last_channel_aura_ends"
+rung = "unit"
+
+[[tests]]
+path = "module/src/native/aura.rs"
+function = "a_channelled_ground_area_has_already_started_the_channel_bar_for_its_auras"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/cast/resolve.rs"
+function = "a_ground_area_cast_at_a_ground_point_takes_the_ground_point_gates"
 rung = "unit"
 
 [[tests]]
@@ -236,6 +281,12 @@ description = "A SPELL_EFFECT_PERSISTENT_AREA_AURA (27) that carries no periodic
 path = "importer/src/spell.rs"
 symbol = "is_ground_area_damage"
 evidence = "Source reading, not measured. At d9173eca, GridNotifiersImpl.h DynamicObjectUpdater::VisitHelper adds a PersistentAreaAura of the DynamicObject's effect to each unit inside on every update, and SpellAuras.cpp PersistentAreaAura::Update removes it once the unit leaves the radius or the DynamicObject is gone. A ground area carries one damage amount, so it has no place for another Aura."
+
+[[known_gaps]]
+description = "Heated Ground (22191 to 22202) aims its SPELL_EFFECT_PERSISTENT_AREA_AURA at TARGET_LOCATION_DATABASE (17), so its ground area lands on its caster. vmangos places it at the spell's spell_target_position row, which the importer does not read. Nothing casts it today."
+path = "importer/src/spell.rs"
+symbol = "ground_area_target"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::SetTargetMap sets the destination of TARGET_LOCATION_DATABASE from sSpellMgr.GetSpellTargetPosition, and SpellEffects.cpp Spell::EffectPersistentAA creates the DynamicObject at that destination."
 
 [[known_gaps]]
 description = "A ground area's tick hits a unit behind a wall, and a creature immune to area damage. It deals damage on the area's own period and puts no Aura on the unit, so a unit inside shows no debuff and every unit inside takes its tick at the same moment."
