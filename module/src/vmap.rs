@@ -730,6 +730,25 @@ pub(crate) fn vmap_enabled(ctx: &ReducerContext, map_id: u32) -> bool {
     rays_enabled(ctx) && active_generation_id(ctx, map_id).is_some()
 }
 
+/// Whether the active generation of `map_id` holds collision rows for the terrain cell at (x, y).
+pub(crate) fn has_collision_cell(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> bool {
+    let Some(generation_id) = active_generation_id(ctx, map_id) else {
+        return false;
+    };
+    let (Some(cell_x), Some(cell_y)) = (
+        lyracore_shared::terrain::cell_index(x),
+        lyracore_shared::terrain::cell_index(y),
+    ) else {
+        return false;
+    };
+    ctx.db
+        .game_vmap_generation_chunk()
+        .by_generation_cell()
+        .filter((generation_id, cell_key(map_id, cell_x, cell_y)))
+        .next()
+        .is_some()
+}
+
 pub(crate) fn rays_enabled(ctx: &ReducerContext) -> bool {
     crate::config::server_config(ctx).vmap_enabled
 }

@@ -1098,6 +1098,13 @@ the second publish, each order leaves one hazard:
   late report can end the owed end and the away record of a World Session that came back to that
   World Shard until it is published.
 
+### Movement height check migration
+
+`game_config` gains `movement_height_checks_enabled`, end-appended with default false. The Flight
+and Under-world movement violations stay off until an Operator turns the Gate on after a live
+measurement ([vmap rollout](operations/vmap-rollout.md#movement-height-checks)). No repair is
+needed.
+
 ## 2. Tooling gotchas
 
 - **`spacetime sql` (2.5):** no `ORDER BY`, no `IN` or subqueries, no `Timestamp` or `Identity`

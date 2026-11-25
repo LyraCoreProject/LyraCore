@@ -941,10 +941,17 @@ pub fn debug_score_movement(
     old_move_ms: u32,
     move_time_ms: u32,
 ) -> Result<(), String> {
+    let mover = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(guid)
+        .ok_or_else(|| format!("no entity {guid}"))?;
     crate::world::score_and_log_movement(
         ctx,
-        guid,
+        &mover,
         &crate::world::MovementDelta {
+            opcode: lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16,
             old_x,
             old_y,
             old_z: 0.0,
@@ -953,6 +960,9 @@ pub fn debug_score_movement(
             z,
             old_move_ms,
             move_time_ms,
+            old_flags: 0,
+            flags: 0,
+            fall_time_ms: 0,
         },
     );
     Ok(())

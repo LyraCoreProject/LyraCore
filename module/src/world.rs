@@ -9,11 +9,13 @@ use crate::game_ground_area;
 
 mod character_entity;
 mod placement;
+mod plausibility;
 pub(crate) mod power_pool;
 mod simulation;
 
 pub(crate) use character_entity::build_player_entity;
 pub(crate) use placement::MoveClock;
+pub(crate) use plausibility::{score_and_log_movement, MovementDelta};
 pub(crate) use simulation::backfill_simulation;
 
 #[table(accessor = game_world_state_name)]
@@ -421,84 +423,6 @@ pub struct EntityMotion {
     pub cell: i64,
 }
 
-pub const MOVE_VIOLATION_SPEED: u8 = 1;
-pub const MOVE_VIOLATION_TELEPORT: u8 = 2;
-
-const SPEED_LEEWAY: f32 = 1.8;
-const TELEPORT_MAX_YD: f32 = 60.0;
-const MIN_DT_S: f32 = 0.05;
-
-pub(crate) fn movement_violation(dist_2d: f32, dt_s: f32, max_speed: f32) -> Option<(u8, f32)> {
-    if dist_2d > TELEPORT_MAX_YD {
-        return Some((MOVE_VIOLATION_TELEPORT, dist_2d));
-    }
-    if dt_s >= MIN_DT_S && max_speed > 0.0 {
-        let observed = dist_2d / dt_s;
-        if observed > max_speed * SPEED_LEEWAY {
-            return Some((MOVE_VIOLATION_SPEED, observed / max_speed));
-        }
-    }
-    None
-}
-
-fn is_gm_character(ctx: &ReducerContext, guid: u64) -> bool {
-    ctx.db
-        .game_character()
-        .guid()
-        .find(guid)
-        .is_some_and(|c| crate::auth::gm_level(ctx, c.account_id) != 0)
-}
-
-pub(crate) struct MovementDelta {
-    pub old_x: f32,
-    pub old_y: f32,
-    pub old_z: f32,
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub old_move_ms: u32,
-    pub move_time_ms: u32,
-}
-
-impl MovementDelta {
-    pub(crate) fn moved(&self) -> bool {
-        (self.x - self.old_x).powi(2)
-            + (self.y - self.old_y).powi(2)
-            + (self.z - self.old_z).powi(2)
-            > 0.0001
-    }
-}
-
-pub(crate) fn score_and_log_movement(ctx: &ReducerContext, guid: u64, delta: &MovementDelta) {
-    let dist_2d = ((delta.x - delta.old_x).powi(2) + (delta.y - delta.old_y).powi(2)).sqrt();
-    let dt_s = (delta.move_time_ms.wrapping_sub(delta.old_move_ms) as i32).max(0) as f32 / 1000.0;
-    if dist_2d <= TELEPORT_MAX_YD && dt_s < MIN_DT_S {
-        return;
-    }
-    let max_speed =
-        crate::modifiers::effective_move_speed(ctx, guid, lyracore_shared::constants::speeds::RUN);
-    let Some((kind, magnitude)) = movement_violation(dist_2d, dt_s, max_speed) else {
-        return;
-    };
-    match ctx.db.game_world_entity().guid().find(guid) {
-        Some(e) if e.is_player() && !e.godmode => {}
-        _ => return,
-    }
-    if is_gm_character(ctx, guid) {
-        return;
-    }
-    ctx.db.game_movement_violation().insert(MovementViolation {
-        id: 0,
-        guid,
-        kind,
-        magnitude,
-        x: delta.x,
-        y: delta.y,
-        z: delta.z,
-        created_at: crate::time::now(ctx),
-    });
-}
-
 #[table(accessor = game_movement_violation)]
 pub struct MovementViolation {
     #[primary_key]
@@ -856,7 +780,13 @@ pub(crate) fn apply_movement_update(
     let old_move_ms = mover.last_move_ms;
     let (old_flags, old_resting, old_health) = (mover.movement_flags, mover.resting, mover.health);
 
-    let crossing = mover.place(x, y, z, MoveClock::At(move_time_ms));
+    // A zero client time keeps the stored clock, so only a new entity has a zero clock.
+    let clock = if move_time_ms == 0 {
+        MoveClock::Unchanged
+    } else {
+        MoveClock::At(move_time_ms)
+    };
+    let crossing = mover.place(x, y, z, clock);
     let (grid_x, grid_y) = (mover.grid_x, mover.grid_y);
     mover.orientation = o;
     mover.movement_flags = movement.flags();
@@ -905,6 +835,7 @@ pub(crate) fn apply_movement_update(
         && crate::mount::indoor_check_is_due(old_move_ms, move_time_ms);
     let drift_sq = (x - old_x).powi(2) + (y - old_y).powi(2) + (z - old_z).powi(2);
     let delta = MovementDelta {
+        opcode,
         old_x,
         old_y,
         old_z,
@@ -913,18 +844,23 @@ pub(crate) fn apply_movement_update(
         z,
         old_move_ms,
         move_time_ms,
+        old_flags,
+        flags: mover.movement_flags,
+        fall_time_ms: movement.fall_time_ms(),
     };
     let moved = delta.moved();
 
-    if snapshot_needs_persist(
+    let mover = if snapshot_needs_persist(
         opcode,
         grid_x != old_gx || grid_y != old_gy,
         mover.movement_flags != old_flags,
         mover.resting != old_resting || mover.health != old_health,
         drift_sq,
     ) {
-        mover.update(ctx);
-    }
+        mover.update(ctx)
+    } else {
+        mover
+    };
     // After the entity write, which the damage and its reactions would otherwise overwrite.
     // A fall that deals 0 damage is no damage event in vmangos and keeps stealth.
     if fall_dmg > 0 {
@@ -949,7 +885,7 @@ pub(crate) fn apply_movement_update(
     }
 
     if moved && boarding == crate::transport::Boarding::Ashore {
-        score_and_log_movement(ctx, mover_guid, &delta);
+        score_and_log_movement(ctx, &mover, &delta);
     }
 
     if let Some(relay_body) = relay_body {
@@ -1043,10 +979,12 @@ pub(crate) fn sweep_expired(ctx: &ReducerContext) {
     }
 }
 
-// Client fall_time_ms includes jump ascent; gravity is about 19.29 yd/s^2.
+const GRAVITY_YD_PER_S2: f32 = 19.29;
+
+// Client fall_time_ms includes jump ascent.
 fn fall_damage(fall_time_ms: u32, max_health: u32) -> u32 {
     let t = fall_time_ms as f32 / 1000.0;
-    let height_yd = 0.5 * 19.29 * t * t;
+    let height_yd = 0.5 * GRAVITY_YD_PER_S2 * t * t;
     let perc = 0.018 * height_yd - 0.2426;
     if perc <= 0.0 {
         return 0;
@@ -1056,10 +994,7 @@ fn fall_damage(fall_time_ms: u32, max_health: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        fall_damage, movement_violation, snapshot_needs_persist, MOVE_VIOLATION_SPEED,
-        MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD,
-    };
+    use super::{fall_damage, snapshot_needs_persist, PERSIST_MAX_DRIFT_YD};
 
     const HEARTBEAT: u16 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16;
 
@@ -1168,26 +1103,5 @@ mod tests {
             3.0,
             f32::NAN
         ));
-    }
-
-    #[test]
-    fn movement_violation_flags_speed_and_teleport_but_not_legit_motion() {
-        let run = lyracore_shared::constants::speeds::RUN;
-        assert_eq!(movement_violation(3.5, 0.5, run), None);
-        assert_eq!(movement_violation(run * 1.5 * 0.5, 0.5, run), None);
-        let (k, mag) = movement_violation(run * 3.0 * 0.5, 0.5, run).unwrap();
-        assert_eq!(k, MOVE_VIOLATION_SPEED);
-        assert!(
-            (mag - 3.0).abs() < 1e-3,
-            "magnitude is the ×-normal multiple"
-        );
-        let (k, mag) = movement_violation(100.0, 0.0, run).unwrap();
-        assert_eq!(k, MOVE_VIOLATION_TELEPORT);
-        assert_eq!(mag, 100.0);
-        assert_eq!(movement_violation(5.0, 0.01, run), None);
-        assert!(
-            movement_violation(run * 2.0 * 0.5, 0.5, run / 2.0).is_some(),
-            "snared mover flagged sooner"
-        );
     }
 }
