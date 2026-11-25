@@ -746,7 +746,13 @@ fn validate_giver(
         )?;
         return Ok(GiverKind::Creature(giver.entry));
     }
-    if let Some(go) = ctx.db.game_gameobject().guid().find(giver_guid) {
+    if let Some(go) = ctx
+        .db
+        .game_gameobject()
+        .guid()
+        .find(giver_guid)
+        .filter(|go| !go.despawned)
+    {
         if go.map_id != player.map_id || go.instance_id != player.instance_id {
             return Err(ActionRefusal::new(
                 ActionRefusalKind::OtherPartition,

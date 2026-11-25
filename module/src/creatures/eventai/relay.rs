@@ -2155,7 +2155,11 @@ fn live_gameobject_in_run(
         .game_gameobject()
         .guid()
         .find(guid)
-        .filter(|object| object.map_id == run.map_id && object.instance_id == run.instance_id)
+        .filter(|object| {
+            !object.despawned
+                && object.map_id == run.map_id
+                && object.instance_id == run.instance_id
+        })
         .ok_or_else(|| format!("relay gameobject participant {guid} is missing"))
 }
 
@@ -2216,7 +2220,8 @@ fn nearby_gameobjects(ctx: &ReducerContext, run: &RelayRun, nearby: RelayNearby)
                     .by_cell()
                     .filter((run.map_id, run.instance_id, cell))
                     .filter(|object| {
-                        object.template_entry == nearby.entry
+                        !object.despawned
+                            && object.template_entry == nearby.entry
                             && distance_sq(
                                 (center.x, center.y, center.z),
                                 (object.x, object.y, object.z),

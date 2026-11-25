@@ -609,7 +609,10 @@ pub fn debug_force_gameobject_respawn(ctx: &ReducerContext, go_entry: u32) -> Re
         .db
         .game_gameobject()
         .iter()
-        .find(|g| g.template_entry == go_entry && (g.state == 1 || g.despawned))
+        .find(|g| {
+            g.template_entry == go_entry
+                && (g.state == 1 || g.despawned || g.respawn_at_micros != 0)
+        })
         .ok_or_else(|| format!("no depleted gameobject of entry {go_entry}"))?;
     crate::gameobject::respawn(ctx, go);
     Ok(())

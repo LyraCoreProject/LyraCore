@@ -177,7 +177,6 @@ pub(crate) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {
         .by_respawn_at()
         .filter(1..=now)
         .inspect(|_| visited += 1)
-        .filter(|g| !crate::gameobject::loot_window_open(ctx, g.guid))
         .map(|g| g.guid)
         .collect();
     for guid in due {

@@ -4,6 +4,7 @@ use lyracore_shared::constants::go_type;
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::game_corpse_loot;
+use crate::game_corpse_loot_eligible;
 use crate::game_creature_spawn_map;
 use crate::game_gameobject_loot;
 use crate::game_world_entity;
@@ -253,6 +254,7 @@ pub(crate) fn gameobject_destination_evidence(
         .game_gameobject()
         .by_template_scope()
         .filter((template_entry, map_id, instance_id))
+        .filter(|object| !object.despawned)
         .take(limit.min(MAX_RESULTS))
         .collect()
 }
@@ -520,7 +522,8 @@ pub(crate) fn respawn_window_micros(respawn_secs: u32) -> u64 {
     }
 }
 
-// vmangos DoLootRelease sets a partly looted chest to despawn 5 minutes after its Loot Release.
+// A rolled chest despawns 5 minutes after it opens or after a Loot Release that leaves loot, as
+// vmangos DoLootRelease.
 const PARTLY_LOOTED_CHEST_MICROS: u64 = 300_000_000;
 
 fn now_micros(ctx: &ReducerContext) -> u64 {
@@ -570,19 +573,65 @@ pub(crate) fn chest_respawn_at(now: u64, respawn_secs: u32, instance_id: u64) ->
     (instance_id == 0 && respawn_secs != 0).then(|| now + u64::from(respawn_secs) * 1_000_000)
 }
 
-fn chest_is_looted_for(ctx: &ReducerContext, chest_guid: u64, looter_guid: u64) -> bool {
-    crate::loot::purse(ctx, chest_guid) == 0
-        && !ctx
-            .db
-            .game_corpse_loot()
-            .by_corpse()
-            .filter(&chest_guid)
-            .any(|row| row.takeable_by(ctx, looter_guid))
+/// Records a Character the chest showed its loot to; the quest rows it needs keep the chest.
+fn record_chest_opener(ctx: &ReducerContext, chest_guid: u64, opener_guid: u64) {
+    let openers = ctx.db.game_corpse_loot_eligible();
+    if !openers
+        .by_corpse()
+        .filter(&chest_guid)
+        .any(|opener| opener.eligible_guid == opener_guid)
+    {
+        openers.insert(crate::CorpseLootEligible {
+            id: 0,
+            corpse_guid: chest_guid,
+            eligible_guid: opener_guid,
+        });
+    }
+}
+
+/// vmangos `Loot::isLooted` is false while money or a row is left for the looter or for any earlier
+/// opener, as `FillQuestLoot` counts each opener's quest items.
+fn chest_holds_loot(ctx: &ReducerContext, chest_guid: u64, looter_guid: u64) -> bool {
+    if crate::loot::purse(ctx, chest_guid) != 0 {
+        return true;
+    }
+    let takers: Vec<u64> = ctx
+        .db
+        .game_corpse_loot_eligible()
+        .by_corpse()
+        .filter(&chest_guid)
+        .map(|opener| opener.eligible_guid)
+        .chain(std::iter::once(looter_guid))
+        .collect();
+    ctx.db
+        .game_corpse_loot()
+        .by_corpse()
+        .filter(&chest_guid)
+        .any(|row| takers.iter().any(|&taker| row.takeable_by(ctx, taker)))
+}
+
+fn other_loot_window_open(ctx: &ReducerContext, go_guid: u64, character_guid: u64) -> bool {
+    ctx.db
+        .game_native_player()
+        .by_open_loot()
+        .filter(go_guid)
+        .any(|player| player.character_guid != character_guid)
+}
+
+// A despawned chest leaves no Loot Window open on it.
+fn close_loot_windows(ctx: &ReducerContext, go_guid: u64) {
+    let players = ctx.db.game_native_player();
+    let open: Vec<_> = players.by_open_loot().filter(go_guid).collect();
+    for mut player in open {
+        player.open_loot = 0;
+        players.connection_id().update(player);
+    }
 }
 
 /// Drops a looted chest's loot and hides it until its respawn, as vmangos GO_JUST_DEACTIVATED.
 fn despawn_chest(ctx: &ReducerContext, mut chest: GameObject, template: &GameObjectTemplate) {
     crate::loot::reap_corpse_loot_family(ctx, chest.guid);
+    close_loot_windows(ctx, chest.guid);
     let delay = spawn_respawn_secs(
         chest.respawn_min_secs,
         chest.respawn_max_secs,
@@ -614,12 +663,12 @@ pub(crate) fn chest_loot_released(ctx: &ReducerContext, looter_guid: u64, go_gui
     {
         return;
     }
-    if chest_is_looted_for(ctx, go_guid, looter_guid) {
-        despawn_chest(ctx, chest, &template);
-    } else {
+    if chest_holds_loot(ctx, go_guid, looter_guid) {
         chest.state = 0;
         chest.respawn_at_micros = now_micros(ctx) + PARTLY_LOOTED_CHEST_MICROS;
         chest.update(ctx);
+    } else {
+        despawn_chest(ctx, chest, &template);
     }
 }
 
@@ -632,8 +681,8 @@ pub(crate) fn loot_window_open(ctx: &ReducerContext, go_guid: u64) -> bool {
         .is_some()
 }
 
-/// Runs an object's elapsed respawn timer: an opened chest despawns, and a despawned or used object
-/// respawns.
+/// Runs an object's elapsed respawn timer: an opened chest despawns once no Loot Window is open on
+/// it, and a despawned or used object respawns.
 pub(crate) fn respawn_timer_elapsed(ctx: &ReducerContext, go_guid: u64) {
     let Some(object) = ctx.db.game_gameobject().guid().find(go_guid) else {
         return;
@@ -648,7 +697,9 @@ pub(crate) fn respawn_timer_elapsed(ctx: &ReducerContext, go_guid: u64) {
         if chest_phase(object.state, object.respawn_at_micros, object.despawned)
             == ChestPhase::Opened
         {
-            despawn_chest(ctx, object, &template);
+            if !loot_window_open(ctx, go_guid) {
+                despawn_chest(ctx, object, &template);
+            }
             return;
         }
     }
@@ -991,11 +1042,14 @@ fn use_chest(
         // vmangos SendLoot shows an activated chest's remaining loot to any opener.
         ChestPhase::Opened => {}
     }
+    record_chest_opener(ctx, chest.guid, caster_guid);
     chest.state = 1;
-    if chest_is_looted_for(ctx, chest.guid, caster_guid) {
-        despawn_chest(ctx, chest, template);
-    } else {
+    if chest_holds_loot(ctx, chest.guid, caster_guid)
+        || other_loot_window_open(ctx, chest.guid, caster_guid)
+    {
         chest.update(ctx);
+    } else {
+        despawn_chest(ctx, chest, template);
     }
     Ok(())
 }
@@ -1204,7 +1258,7 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
         let pf32 = |s: &str| s.parse::<f32>().map_err(|_| format!("bad f32: {s}"));
         let pu8 = |s: &str| s.parse::<u8>().map_err(|_| format!("bad u8 state: {s}"));
         let (respawn_min_secs, respawn_max_secs) = match f.get(12..14) {
-            Some([min, max]) => (pu32(*min)?, pu32(*max)?),
+            Some([min, max]) => (pu32(min)?, pu32(max)?),
             _ => (0, 0),
         };
 

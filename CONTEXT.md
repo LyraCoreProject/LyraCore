@@ -548,8 +548,9 @@ _Avoid_: loot target
 
 **Loot Release**:
 Closing a Loot Window. Makes the Loot Source available to the next eligible looter. A teleport or a
-logout that closes the window releases it too. An emptied chest despawns at its release; a chest
-with loot left closes and despawns 5 minutes later, and anyone may open it again meanwhile.
+logout that closes the window releases it too. A chest despawns at a release that leaves nothing
+for the releaser or for any Character who opened it; otherwise it closes and despawns 5 minutes
+later, and anyone may open it again meanwhile.
 
 **Loot Roll**:
 A group's roll on one item from a Loot Source.
