@@ -251,14 +251,25 @@ pub(crate) enum InstanceRoute {
     Create,
 }
 
-pub(crate) fn route_instance(
-    own_binding_live: Option<u64>,
-    party_live: Option<u64>,
-) -> InstanceRoute {
-    match (own_binding_live, party_live) {
+/// The live Instance a Character's binding names, with the Group that owns it (0 for a solo run).
+#[derive(Clone, Copy)]
+pub(crate) struct BoundRun {
+    pub(crate) instance_id: u64,
+    pub(crate) party_id: u64,
+}
+
+/// A binding to a Group's run never routes: vmangos keeps that run with the Group, not its members.
+pub(crate) fn route_instance(bound: Option<BoundRun>, party_live: Option<u64>) -> InstanceRoute {
+    match (bound, party_live) {
         (_, Some(id)) => InstanceRoute::Party(id),
-        (Some(id), None) => InstanceRoute::Own(id),
-        (None, None) => InstanceRoute::Create,
+        (
+            Some(BoundRun {
+                instance_id,
+                party_id: 0,
+            }),
+            None,
+        ) => InstanceRoute::Own(instance_id),
+        _ => InstanceRoute::Create,
     }
 }
 
@@ -400,13 +411,21 @@ fn binding_is_local(ctx: &ReducerContext, map: u32, world: Option<spacetimedb::I
         .is_none_or(|world| world == ctx.database_identity())
 }
 
-fn live_instance_for(ctx: &ReducerContext, instance_id: u64, map_id: u32) -> bool {
+fn live_instance_for(ctx: &ReducerContext, instance_id: u64, map_id: u32) -> Option<GameInstance> {
     ctx.db
         .game_instance()
         .instance_id()
         .find(instance_id)
-        .map(|i| i.map_id == map_id && !i.reset_requested)
-        .unwrap_or(false)
+        .filter(|i| i.map_id == map_id && !i.reset_requested)
+}
+
+fn party_run(ctx: &ReducerContext, party_id: u64, map_id: u32) -> Option<u64> {
+    ctx.db
+        .game_instance()
+        .by_party()
+        .filter(&party_id)
+        .find(|i| i.map_id == map_id && !i.reset_requested)
+        .map(|i| i.instance_id)
 }
 
 pub(crate) fn bind_character(
@@ -457,31 +476,27 @@ pub(crate) fn resolve_or_create_instance(
         .by_character()
         .filter(&character_guid)
         .find(|b| b.map_id == target_map);
-    let own_live = match own_binding {
-        Some(b)
-            if binding_is_local(ctx, b.map_id, b.world)
-                && live_instance_for(ctx, b.instance_id, target_map) =>
-        {
-            Some(b.instance_id)
-        }
-        Some(b) => {
-            bindings.id().delete(b.id);
+    let bound = own_binding.and_then(|b| {
+        let live = if binding_is_local(ctx, b.map_id, b.world) {
+            live_instance_for(ctx, b.instance_id, target_map)
+        } else {
             None
+        };
+        if live.is_none() {
+            bindings.id().delete(b.id);
         }
-        None => None,
-    };
-
-    let party_live = group.as_ref().and_then(|g| {
-        ctx.db
-            .game_instance()
-            .by_party()
-            .filter(&g.group_id)
-            .find(|i| i.map_id == target_map && !i.reset_requested)
-            .map(|i| i.instance_id)
+        live.map(|instance| BoundRun {
+            instance_id: instance.instance_id,
+            party_id: instance.party_id,
+        })
     });
 
+    let party_live = group
+        .as_ref()
+        .and_then(|g| party_run(ctx, g.group_id, target_map));
+
     let party_id = group.as_ref().map(|g| g.group_id).unwrap_or(0);
-    match route_instance(own_live, party_live) {
+    match route_instance(bound, party_live) {
         InstanceRoute::Own(id) => {
             adopt_instance_for_party(ctx, id, party_id);
             Ok(id)
@@ -519,19 +534,10 @@ pub(crate) fn admit_existing_party_instance(
             instance_capacity(target_map)
         ));
     }
-    let instance = ctx
-        .db
-        .game_instance()
-        .instance_id()
-        .find(expected_instance)
-        .filter(|instance| instance.map_id == target_map && !instance.reset_requested)
+    live_instance_for(ctx, expected_instance, target_map)
         .ok_or("expected party instance is unavailable")?;
-    if instance.party_id != group.group_id && !instance_is_ownerless(ctx, instance.party_id) {
-        return Err("expected instance belongs to another party".to_string());
-    }
-
-    if instance.party_id != group.group_id {
-        adopt_instance_for_party(ctx, expected_instance, group.group_id);
+    if !adopt_instance_for_party(ctx, expected_instance, group.group_id) {
+        return Err("expected instance cannot be the party's run".to_string());
     }
     bind_character(
         ctx,
@@ -547,16 +553,59 @@ fn instance_is_ownerless(ctx: &ReducerContext, party_id: u64) -> bool {
     party_id == 0 || ctx.db.game_group().group_id().find(party_id).is_none()
 }
 
-fn adopt_instance_for_party(ctx: &ReducerContext, instance_id: u64, party_id: u64) {
+/// True when the Group owns the run afterwards; a Group never takes a second run of one map.
+fn adopt_instance_for_party(ctx: &ReducerContext, instance_id: u64, party_id: u64) -> bool {
     if party_id == 0 {
-        return;
+        return false;
     }
     let instances = ctx.db.game_instance();
-    if let Some(mut inst) = instances.instance_id().find(instance_id) {
-        if instance_is_ownerless(ctx, inst.party_id) {
-            inst.party_id = party_id;
-            instances.instance_id().update(inst);
-            log::info!("instance {instance_id} adopted by party {party_id}");
+    let Some(mut inst) = instances.instance_id().find(instance_id) else {
+        return false;
+    };
+    if inst.party_id == party_id {
+        return true;
+    }
+    if !instance_is_ownerless(ctx, inst.party_id) || party_run(ctx, party_id, inst.map_id).is_some()
+    {
+        return false;
+    }
+    inst.party_id = party_id;
+    instances.instance_id().update(inst);
+    log::info!("instance {instance_id} adopted by party {party_id}");
+    true
+}
+
+/// vmangos `Group::AddMember` resets a joining member's own runs, except on the map it stands on.
+pub(crate) fn unbind_joining_member(ctx: &ReducerContext, character_guid: u64) {
+    let Some(member) = crate::group::group_of(ctx, character_guid) else {
+        return;
+    };
+    if ctx
+        .db
+        .game_group()
+        .group_id()
+        .find(member.group_id)
+        .is_none_or(|group| group.leader_guid == character_guid)
+    {
+        return;
+    }
+    let Some(character) = crate::helpers::character_by_guid(ctx, character_guid) else {
+        return;
+    };
+    let standing_map = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(character_guid)
+        .map(|entity| entity.map_id);
+    let bindings = ctx.db.game_instance_binding();
+    for binding in bindings
+        .by_character()
+        .filter(&character_guid)
+        .collect::<Vec<_>>()
+    {
+        if binding.map_id != character.map_id && Some(binding.map_id) != standing_map {
+            bindings.id().delete(binding.id);
         }
     }
 }
@@ -1093,11 +1142,7 @@ fn instance_removal_standing(ctx: &ReducerContext, character_guid: u64) -> Optio
 fn adopt_for_regrouped_member(ctx: &ReducerContext, character_guid: u64) -> Option<u64> {
     let standing = instance_removal_standing(ctx, character_guid)?;
     let own_group = crate::group::group_of(ctx, character_guid)?.group_id;
-    if !instance_is_ownerless(ctx, standing.group_id) {
-        return None;
-    }
-    adopt_instance_for_party(ctx, standing.instance_id, own_group);
-    Some(own_group)
+    adopt_instance_for_party(ctx, standing.instance_id, own_group).then_some(own_group)
 }
 
 pub(crate) fn reconcile_instance_removal(ctx: &ReducerContext, character_guid: u64) {
@@ -1188,6 +1233,45 @@ mod tests {
             assert!(is_dungeon_map(dungeon.map_id));
             assert!(!is_dungeon_map(dungeon.entrance.0));
         }
+    }
+
+    fn bound(instance_id: u64, party_id: u64) -> Option<BoundRun> {
+        Some(BoundRun {
+            instance_id,
+            party_id,
+        })
+    }
+
+    #[test]
+    fn a_character_without_a_run_starts_a_fresh_one() {
+        assert_eq!(route_instance(None, None), InstanceRoute::Create);
+    }
+
+    #[test]
+    fn a_solo_run_takes_its_holder_back() {
+        assert_eq!(route_instance(bound(7, 0), None), InstanceRoute::Own(7));
+    }
+
+    #[test]
+    fn the_groups_run_comes_before_a_members_solo_run() {
+        assert_eq!(
+            route_instance(bound(7, 0), Some(9)),
+            InstanceRoute::Party(9)
+        );
+        assert_eq!(route_instance(None, Some(9)), InstanceRoute::Party(9));
+    }
+
+    #[test]
+    fn a_binding_to_a_groups_run_starts_a_fresh_run_outside_that_group() {
+        assert_eq!(route_instance(bound(7, 42), None), InstanceRoute::Create);
+    }
+
+    #[test]
+    fn a_binding_to_a_former_groups_run_gives_way_to_the_new_groups_run() {
+        assert_eq!(
+            route_instance(bound(7, 42), Some(9)),
+            InstanceRoute::Party(9)
+        );
     }
 
     #[test]

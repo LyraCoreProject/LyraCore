@@ -816,6 +816,11 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
             continue;
         }
         let member = roster.members.iter().find(|member| member.guid == guid);
+        let joined = member.is_some()
+            && memberships
+                .guid()
+                .find(guid)
+                .is_none_or(|old| old.group_id != roster.group_id);
         memberships.guid().delete(guid);
         memberships.insert(PartyMembership {
             guid,
@@ -825,6 +830,9 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
         });
         restore(ctx, guid);
         package::membership_changed(ctx, guid);
+        if joined {
+            crate::instance::unbind_joining_member(ctx, guid);
+        }
         crate::instance::reconcile_instance_removal(ctx, guid);
     }
     projections.group_id().delete(roster.group_id);
