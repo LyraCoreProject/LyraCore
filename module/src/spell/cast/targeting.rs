@@ -291,11 +291,10 @@ pub(crate) fn select_targets(
                         let (harmed, helped) = if want_enemy {
                             (crate::combat::area_may_harm(ctx, &caster, c), false)
                         } else {
-                            let helped = if e.target == T_AREA_NOT_HOSTILE {
-                                crate::combat::may_help(ctx, &caster, c)
-                            } else {
-                                crate::combat::area_may_help(ctx, &caster, c)
-                            };
+                            // `may_help` also keeps an outsider from helping a duelist.
+                            let helped = crate::combat::may_help(ctx, &caster, c)
+                                && (e.target == T_AREA_NOT_HOSTILE
+                                    || crate::combat::area_may_help(ctx, &caster, c));
                             (false, helped)
                         };
                         aoe_keep(d2, r2, want_enemy, c.guid == caster_guid, harmed, helped)
