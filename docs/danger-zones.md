@@ -913,9 +913,14 @@ before moving active World Sessions.
 The private `game_quest_share` table is new and starts empty, so no Quest Share survives the
 publish. A Character takes a quest from a Group member only through that member's Quest Share, and
 a push needs the source shareable bit in `game_quest_flags`. #977 added that table on 2026-11-04,
-and only the world importer fills it. Sharing works only on a Realm whose quests were imported on
-or after that date; a quest with no flags row, such as an authored or Package quest, is not
-shareable.
+and the world importer fills it. Sharing works only on a Realm whose quests were imported on
+or after that date; a quest with no flags row, such as an authored quest, is not shareable. A
+Package quest is shareable when its Package Delta claims a `game_quest_flags` row with the shareable
+bit. The claim adds a table to the quest Package Delta family and changes no row layout; a Package
+Delta written before it applies unchanged, and its quests stay unshareable. The importer clears and
+refills `game_quest_flags` with the quest import, and the Package replay that follows writes the
+claims back, so a quests reimport restores the base flags of a quest whose Package claim was
+removed.
 
 ### Quest reward migration
 
@@ -1017,6 +1022,24 @@ Shard on an older Module again every 30 seconds until that World Shard is publis
 Session closes, so publish the World Shards first here too. A `game_world_session_end_retry` row
 that the previous Module scheduled at a resend time waits on to its deadline, and the waiting ticket
 owes the end again on its next Login Queue pass.
+
+Arrival stamps (#1286) END-append `arrival` to `game_native_away` and `arrival` and `sent` to
+`game_world_session_owed_end`, all defaulting to 0, and add the private `game_native_handed_off`
+table, which starts empty. No reducer argument changes, so the idc bindings stay as they are. Rows
+from before the publish carry arrival 0 and match each other. An owed end from the previous Module
+has `sent` 0, so no answer counts for it, and it goes out once more 30 seconds later.
+
+Either publish order is safe. Publish the World Shards first, as for the rest of this section. Until
+the second publish, each order leaves one hazard:
+
+- World Shards first: the Realm Shard on the previous Module still ends an owed end on any Ok answer
+  from its World Shard, late or not. A World Shard on this Module no longer reports a connection it
+  holds nothing of, so a stale away record that names it makes a waiting ticket wait the full
+  90-second bound.
+- Realm Shard first: World Shards on the previous Module still report a connection they hold
+  nothing of, and still report one they handed on by Transfer when the Native Host detaches it. A
+  late report can end the owed end and the away record of a World Session that came back to that
+  World Shard until it is published.
 
 ## 2. Tooling gotchas
 

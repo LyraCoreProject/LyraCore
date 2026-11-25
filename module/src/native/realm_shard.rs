@@ -35,6 +35,10 @@ pub struct NativeAway {
     pub world: Option<Identity>,
     #[default(0u64)]
     pub character_guid: u64,
+    /// This Realm Shard's stamp for the arrival of the World Session on `world`, unique per
+    /// arrival; 0 for a record from before arrivals were stamped.
+    #[default(0u64)]
+    pub arrival: u64,
 }
 
 pub(crate) fn away_accounts(ctx: &ReducerContext) -> Vec<u64> {
@@ -304,6 +308,7 @@ pub fn world_entry_answered(ctx: &ReducerContext, entry: WorldEntry, result: Res
         connection_id,
         world: Some(entry.database.0),
         character_guid: entry.character_guid,
+        arrival: directory::revision(ctx),
     });
     super::handoff::write_marker(ctx, connection_id, entry.database.0);
 }
@@ -575,13 +580,15 @@ pub struct WorldSessionClosed {
     pub account_id: u64,
 }
 
-/// Tells the Realm Shard that a World Session it handed here ended in the world.
+/// Tells the Realm Shard that a World Session it handed here ended in the world. A World Session
+/// this Shard handed on lives on elsewhere, so its close here is not reported.
 pub(super) fn closing(ctx: &ReducerContext, connection_id: ConnectionId) {
     let Some(connection) = ctx
         .db
         .game_native_world_connection()
         .connection_id()
         .find(connection_id)
+        .filter(|_| !super::handoff::handed_off(ctx, connection_id))
     else {
         return;
     };
@@ -685,16 +692,28 @@ pub fn idc_world_session_closed(
     account_id: u64,
 ) -> Result<(), String> {
     directory::require_world(ctx)?;
-    super::replacement::closed(ctx, connection, ctx.sender());
+    super::replacement::closed(ctx, connection, account_id, ctx.sender());
+    Ok(())
+}
+
+/// Drops the away record of `connection` on `world`; with `arrival`, only the record of that
+/// arrival.
+pub(super) fn drop_away(
+    ctx: &ReducerContext,
+    account_id: u64,
+    connection: u128,
+    world: Identity,
+    arrival: Option<u64>,
+) {
     let aways = ctx.db.game_native_away();
     if let Some(away) = aways.account_id().find(account_id).filter(|away| {
         away.connection_id == ConnectionId::from_u128(connection)
-            && away.world.or_else(|| world_shard(ctx)) == Some(ctx.sender())
+            && away.world.or_else(|| world_shard(ctx)) == Some(world)
+            && arrival.is_none_or(|arrival| arrival == away.arrival)
     }) {
         crate::meeting_stone::remove_solo_seeker(ctx, away.character_guid);
         aways.account_id().delete(account_id);
     }
-    Ok(())
 }
 
 /// A request of a connection that waits on another Shard: a Character selection request, a

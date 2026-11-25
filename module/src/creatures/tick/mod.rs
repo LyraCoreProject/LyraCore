@@ -161,29 +161,26 @@ fn creature_pass(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
     );
     let period_micros = interval_micros * i64::from(slice.count);
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
-    let sense = match tick_number {
-        Some(tick) => {
-            let every_n = (cadence::SENSE_PERIOD_MICROS / period_micros).max(1) as u64;
-            (tick / u64::from(slice.count)) % every_n == 0
-        }
-        None => is_sense_tick_for_interval(now_micros, interval_micros),
+    let cadence = match tick_number {
+        Some(tick) => TickCadence::of_cycle(tick / u64::from(slice.count), period_micros),
+        None => TickCadence::for_interval(now_micros, interval_micros),
     };
     let tick = crate::creatures::cycle::TickContext {
         now_micros: now_micros as u64,
         now_ms: (now_micros / 1000) as u32,
         tick_secs: tick_secs_for_interval(period_micros),
-        sense,
+        cadence,
         sense_secs: sense_period_secs_for_interval(period_micros),
         scope,
     };
-    let (sense, scope_label) = (tick.sense, scope_label(&tick.scope));
+    let scope_label = scope_label(&tick.scope);
 
     let outcome = crate::creatures::cycle::run(ctx, tick);
 
     log_pass_stats(
         ctx,
         &scope_label,
-        sense,
+        cadence,
         outcome.awake,
         &outcome.rows_visited,
         interval_micros,
@@ -321,7 +318,7 @@ fn scope_label(scope: &TickScope) -> String {
 fn log_pass_stats(
     ctx: &ReducerContext,
     scope_label: &str,
-    sense: bool,
+    cadence: TickCadence,
     awake: usize,
     rows_visited: &[(&'static str, u64)],
     interval_micros: i64,
@@ -336,7 +333,7 @@ fn log_pass_stats(
         .collect::<Vec<_>>()
         .join(" ");
     log::info!(
-        "tick_creatures pass rows-visited: scope={scope_label} sense={sense} awake={awake} {body} (*=global pass)"
+        "tick_creatures pass rows-visited: scope={scope_label} cadence={cadence:?} awake={awake} {body} (*=global pass)"
     );
 }
 

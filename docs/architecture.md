@@ -110,8 +110,9 @@ to Character selection takes the slot back without queueing. A new authenticated
 an older one for the same Account and joins behind existing waiters. When the older one is away, the
 new ticket waits. The Realm Shard then owes the World Shard that holds the older one the end of that
 connection (`idc_end_world_session`) and sends it. The World Shard ends only that connection
-or its Handoff and always reports the World Session closed, also when it holds nothing of it. The
-report removes the away record and the Login Queue admits the ticket. The ticket waits at most 90
+or its Handoff and reports the World Session closed. When it holds nothing of the connection,
+including a connection it has handed to another Shard, it only accepts the end. The report, or the
+accepted end, removes the away record and the Login Queue admits the ticket. The ticket waits at most 90
 seconds, and not at all when the away record names a Shard that is not a Peer Shard. At the bound
 the Realm Shard drops the away record and admits the ticket. The bound belongs to the away World
 Session, not to one ticket: a newer ticket of the Account keeps the time left, and a bound that
@@ -119,12 +120,22 @@ passes while no ticket waits leaves the away record.
 
 An owed end lasts past the bound, one row per connection (`game_world_session_owed_end`). Every 30
 seconds it goes out again, unless an earlier send still waits for its answer, until the World Shard
-accepts it, reports the World Session closed, or leaves the Peer Shards. A Character Transfer of
+accepts the send it counts, reports the World Session closed, or leaves the Peer Shards. A Character Transfer of
 that World Session moves it to the target World Shard, which receives it at the next send, after
 the Transfer release. A newer World Session that enters another World Shard owes the end of the older one the same
 way. Account and Session changes go to every World Shard that holds an away World Session of the
 Account or is owed an end for one. So a World Shard on an older Module, or a Transfer that fences
 the Handoff past the bound, delays the end of the older World Session but does not lose it.
+
+A connection can leave a World Shard and come back to it, so a late message about its earlier
+arrival must not end the current one. The Realm Shard stamps each arrival on a World Shard, at
+world entry and at each Transfer move, with a new directory clock value
+(`game_native_away.arrival`). An owed end names its arrival and the send whose answer counts, and a
+move clears that send. An accepted end removes the owed end and the away record of its arrival
+only when it answers the counted send. A World Shard reports a World Session closed only when the
+connection ends for good there: a connection it has handed to another Shard, whose socket the
+Native Host then detaches from it, is not reported. No later arrival can follow a report, so a
+report needs no stamp.
 
 Session revocation Gates run before admission and before every authenticated request, including
 ignored controls. The one-hour Session expiry limits new world authentication only. An established
@@ -698,6 +709,31 @@ The Realm checks current connection ownership before accepting those facts. Worl
 remote Member Stats for their local party frames. Group chat selects the authoritative Realm
 audience and uses the same connection-bound delivery and ignore Gates as whispers. Group events
 are delivered only to their original connection; login restores the roster and pending invite.
+
+A Transfer's source reports the Character offline when it departs, and the destination reports it
+online only once its client is in the world there. The Character directory moves in between, so
+the source's report goes stale. The Realm Shard counts a Character online while its World Session
+lives on a World Shard other than the one that reported it offline. Group invites, invites by name,
+promotion to leader, the inviter check when an invite is accepted, Meeting Stone Seekers and
+Instance resets use this rule. The move republishes the Character, and the Realm sends World
+Shards a stale report with the rule applied:
+
+- While the moved World Session lives, the copy is online at the revision of the Character's
+  directory version. The directory owner set or observed that revision, so the presence reports it
+  computes later are newer. The copy has no Member Stats, so party frames show the member as
+  loading and friends see no change until the destination reports.
+- While a newer World Session of the Character exists, the Realm sends the stale report unchanged,
+  and World Shards keep their copy until that session reports.
+- While no World Session of the Character exists, the copy is offline at that revision plus one. A
+  new World Session reports its profile, which advances the directory version, before it reports
+  presence, so its presence is newer than that copy.
+
+A presence report that the owner computed before a later directory change of its own can arrive
+after a copy at that change's revision; World Shards then keep the copy until the owner's next
+report. Until the move reaches the Realm, the source's report stands and the Character counts
+offline. A Character that disconnects after the move counts online on the Realm until its World
+Session close arrives; World Shards keep the online copy until the Realm next publishes the
+Character. Package Characters have no World Session and keep their reports.
 
 Shard-local Group mutations are refused when a World Shard has a Realm Shard. Sessionless Group
 actions are not supported in this topology; single-Shard behavior is unchanged. An existing multi-Shard Realm requires migration of its Group state before

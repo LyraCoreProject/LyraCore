@@ -1,11 +1,13 @@
 mod common;
 
 use common::{
-    artifact, quest_cast_objective_claim, quest_claim, quest_objective_claim,
+    artifact, quest_cast_objective_claim, quest_claim, quest_flags_claim, quest_objective_claim,
     quest_reward_choice_claim, quest_text_claim, WHOLE_QUEST_ROW,
 };
 use lyracore_package_delta::ids::PackageRange;
-use lyracore_package_delta::{is_package_quest_id, DeltaError, PackageDelta, PrimaryKey, Table};
+use lyracore_package_delta::{
+    is_package_quest_id, DeltaError, FieldValue, PackageDelta, PrimaryKey, Table,
+};
 
 const A_TITLE: &str = r#"{"title":{"type":"string","value":"A Kindled Errand, Retitled"}}"#;
 
@@ -168,6 +170,67 @@ fn quest_text_outside_the_package_range_may_not_be_inserted() {
             id: 1
         }
     );
+}
+
+const SHARABLE_FLAGS: &str = r#"{"flags":{"type":"u32","value":8}}"#;
+
+#[test]
+fn quest_flags_round_trip_through_the_canonical_artifact() {
+    let json = artifact(
+        "example.pkg",
+        &format!(
+            "{},{}",
+            quest_claim(8_000_000u32, "insert", WHOLE_QUEST_ROW),
+            quest_flags_claim(8_000_000u32, "insert", SHARABLE_FLAGS),
+        ),
+    );
+
+    let delta = PackageDelta::parse(&json).expect("a Package quest inserts its flags");
+    let reparsed = PackageDelta::parse(&delta.to_canonical_json()).expect("canonical bytes parse");
+
+    assert_eq!(reparsed, delta);
+    let flags = delta
+        .claims()
+        .iter()
+        .find(|claim| claim.table() == Table::QuestFlags)
+        .expect("the flags claim survives");
+    assert_eq!(flags.key(), PrimaryKey::quest_flags(8_000_000u32).unwrap());
+    assert_eq!(flags.key().row_id(), 8_000_000);
+    assert_eq!(flags.fields()["flags"], FieldValue::U32(8));
+}
+
+#[test]
+fn quest_flags_outside_the_package_range_may_be_tuned_but_not_inserted() {
+    let tuned = artifact(
+        "example.pkg",
+        &quest_flags_claim(1, "update", SHARABLE_FLAGS),
+    );
+    PackageDelta::parse(&tuned).expect("a real quest's flags are updatable");
+
+    let inserted = artifact(
+        "example.pkg",
+        &quest_flags_claim(1, "insert", SHARABLE_FLAGS),
+    );
+    assert_eq!(
+        PackageDelta::parse(&inserted).expect_err("the insert must be refused"),
+        DeltaError::IdOutsidePackageRange {
+            range: PackageRange::Quest,
+            id: 1
+        }
+    );
+}
+
+#[test]
+fn quest_flags_refuse_their_own_key_column_as_a_field() {
+    let json = artifact(
+        "example.pkg",
+        &quest_flags_claim(1, "update", r#"{"quest_entry":{"type":"u32","value":1}}"#),
+    );
+
+    assert!(matches!(
+        PackageDelta::parse(&json).expect_err("the claim must be refused"),
+        DeltaError::KeyColumnClaimed { .. }
+    ));
 }
 
 #[test]

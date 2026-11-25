@@ -650,6 +650,7 @@ mod tests {
             connection_id: spacetimedb::ConnectionId::from_u128(CONNECTION),
             world: Some(world(1)),
             character_guid: GUID,
+            arrival: 1,
         }
     }
 

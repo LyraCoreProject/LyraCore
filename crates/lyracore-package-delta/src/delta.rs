@@ -143,6 +143,9 @@ pub enum PrimaryKey {
         quest_entry: u32,
         choice_index: u8,
     },
+    QuestFlags {
+        quest_entry: u32,
+    },
     PickpocketLoot {
         id: u64,
     },
@@ -309,6 +312,16 @@ impl PrimaryKey {
             u64::from(quest_entry),
         )?;
         Ok(Self::QuestText { quest_entry })
+    }
+
+    pub fn quest_flags(quest_entry: u32) -> Result<Self, DeltaError> {
+        check_claimable(
+            PackageRange::Quest,
+            Table::QuestFlags,
+            "quest_entry",
+            u64::from(quest_entry),
+        )?;
+        Ok(Self::QuestFlags { quest_entry })
     }
 
     pub fn quest_objective(quest_entry: u32, obj_index: u8) -> Result<Self, DeltaError> {
@@ -673,6 +686,7 @@ impl PrimaryKey {
             Self::Item { entry } => (PackageRange::Item, u64::from(entry)),
             Self::Quest { entry: quest_entry }
             | Self::QuestText { quest_entry }
+            | Self::QuestFlags { quest_entry }
             | Self::QuestObjective { quest_entry, .. }
             | Self::QuestCastObjective { quest_entry, .. }
             | Self::QuestRewardItem { quest_entry, .. }
@@ -731,6 +745,7 @@ impl PrimaryKey {
             Self::QuestCastObjective { .. } => Table::QuestCastObjective,
             Self::QuestRewardItem { .. } => Table::QuestRewardItem,
             Self::QuestRewardChoice { .. } => Table::QuestRewardChoice,
+            Self::QuestFlags { .. } => Table::QuestFlags,
             Self::PickpocketLoot { .. } => Table::PickpocketLoot,
             Self::GameobjectLoot { .. } => Table::GameobjectLoot,
             Self::SkinningLoot { .. } => Table::SkinningLoot,
@@ -784,6 +799,7 @@ impl PrimaryKey {
             | Self::QuestCastObjective { .. }
             | Self::QuestRewardItem { .. }
             | Self::QuestRewardChoice { .. }
+            | Self::QuestFlags { .. }
             | Self::PickpocketLoot { .. }
             | Self::GameobjectLoot { .. }
             | Self::SkinningLoot { .. }
@@ -849,6 +865,7 @@ impl PrimaryKey {
         match self {
             Self::Quest { entry } => entry,
             Self::QuestText { quest_entry }
+            | Self::QuestFlags { quest_entry }
             | Self::QuestObjective { quest_entry, .. }
             | Self::QuestCastObjective { quest_entry, .. }
             | Self::QuestRewardItem { quest_entry, .. }
@@ -873,7 +890,9 @@ impl PrimaryKey {
             Self::Item { entry } | Self::Quest { entry } | Self::GossipMenu { entry } => {
                 entry as u64
             }
-            Self::QuestText { quest_entry } => quest_entry as u64,
+            Self::QuestText { quest_entry } | Self::QuestFlags { quest_entry } => {
+                quest_entry as u64
+            }
             Self::QuestObjective {
                 quest_entry,
                 obj_index,
@@ -939,7 +958,9 @@ impl fmt::Display for PrimaryKey {
             Self::Item { entry } | Self::Quest { entry } | Self::GossipMenu { entry } => {
                 write!(f, "{{entry={entry}}}")
             }
-            Self::QuestText { quest_entry } => write!(f, "{{quest_entry={quest_entry}}}"),
+            Self::QuestText { quest_entry } | Self::QuestFlags { quest_entry } => {
+                write!(f, "{{quest_entry={quest_entry}}}")
+            }
             Self::QuestObjective {
                 quest_entry,
                 obj_index,
@@ -1255,7 +1276,7 @@ fn is_key_column(table: Table, name: &str) -> bool {
         | Table::CreatureTemplate
         | Table::GameobjectTemplate
         | Table::GameobjectTrap => name == "entry",
-        Table::QuestText => name == "quest_entry",
+        Table::QuestText | Table::QuestFlags => name == "quest_entry",
         Table::QuestObjective | Table::QuestCastObjective => {
             matches!(name, "id" | "quest_entry" | "obj_index")
         }
@@ -1420,6 +1441,7 @@ impl PackageDelta {
                     | Table::QuestCastObjective
                     | Table::QuestRewardItem
                     | Table::QuestRewardChoice
+                    | Table::QuestFlags
                     | Table::PickpocketLoot
                     | Table::GameobjectLoot
                     | Table::SkinningLoot
@@ -1512,7 +1534,7 @@ fn expected_key_members(table: Table) -> &'static [&'static str] {
         | Table::CreatureTemplate
         | Table::GameobjectTemplate
         | Table::GameobjectTrap => &["entry"],
-        Table::QuestText => &["quest_entry"],
+        Table::QuestText | Table::QuestFlags => &["quest_entry"],
         Table::QuestObjective | Table::QuestCastObjective => &["obj_index", "quest_entry"],
         Table::QuestRewardItem => &["item_entry", "quest_entry"],
         Table::QuestRewardChoice => &["choice_index", "quest_entry"],
@@ -1582,6 +1604,7 @@ fn build_key(key: &Map<String, Value>, table: Table) -> Result<PrimaryKey, Delta
         Table::Item => PrimaryKey::item(key_u32(key, table, "entry")?),
         Table::Quest => PrimaryKey::quest(key_u32(key, table, "entry")?),
         Table::QuestText => PrimaryKey::quest_text(key_u32(key, table, "quest_entry")?),
+        Table::QuestFlags => PrimaryKey::quest_flags(key_u32(key, table, "quest_entry")?),
         Table::QuestObjective => PrimaryKey::quest_objective(
             key_u32(key, table, "quest_entry")?,
             key_u8(key, table, "obj_index")?,

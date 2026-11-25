@@ -16,7 +16,9 @@ use spacetimedb::{
     Table, TimeDuration,
 };
 
-use super::directory::game_character_directory;
+use super::directory::{
+    game_character_directory, game_character_directory_version, CharacterDirectoryVersion,
+};
 use super::{directory, realm_shard::game_native_away, Rollback};
 use crate::{
     group::{
@@ -144,14 +146,85 @@ pub(super) fn current(ctx: &ReducerContext, character: &PartyCharacter) -> Optio
     )
 }
 
+/// Why a report can be stale after a Transfer: docs/architecture.md, "Groups across World Shards".
 pub(crate) fn online(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db
         .game_party_character()
         .guid()
         .find(guid)
         .is_some_and(|character| {
-            character.online && (world_shard(ctx).is_none() || current(ctx, &character).is_some())
+            if world_shard(ctx).is_none() {
+                return character.online;
+            }
+            counts_online(character.online, character.world, current(ctx, &character))
         })
+}
+
+fn counts_online(reported_online: bool, reported_by: Identity, holder: Option<Identity>) -> bool {
+    holder.is_some_and(|holder| reported_online || holder != reported_by)
+}
+
+/// The World Session of a stored report, as the Realm's away record sees it.
+#[derive(Clone, Copy)]
+enum ReportedSession {
+    Held,
+    /// A newer World Session of the Character, which sends its own report.
+    Newer,
+    Ended,
+}
+
+/// The copy of a Character that World Shards store.
+fn projected(ctx: &ReducerContext, character: PartyCharacter) -> PartyCharacter {
+    let version = ctx
+        .db
+        .game_character_directory_version()
+        .guid()
+        .find(character.guid);
+    let session = if current(ctx, &character).is_some() {
+        ReportedSession::Held
+    } else if has_world_session_in_realm(ctx, character.guid) {
+        ReportedSession::Newer
+    } else {
+        ReportedSession::Ended
+    };
+    world_copy(character, version.as_ref(), session)
+}
+
+fn world_copy(
+    mut character: PartyCharacter,
+    version: Option<&CharacterDirectoryVersion>,
+    session: ReportedSession,
+) -> PartyCharacter {
+    let Some(version) =
+        version.filter(|version| character.connection != 0 && version.world != character.world)
+    else {
+        return character;
+    };
+    let online = match session {
+        ReportedSession::Held => true,
+        ReportedSession::Newer => return character,
+        ReportedSession::Ended => false,
+    };
+    character.online = online;
+    if !online {
+        character.stats = None;
+    }
+    // Revision order: docs/architecture.md, "Groups across World Shards".
+    character.revision = version.revision + u64::from(!online);
+    character
+}
+
+/// Republishes a moved Character whose report says offline, since the move made that report stale.
+pub(super) fn moved(ctx: &ReducerContext, guid: u64) {
+    if ctx
+        .db
+        .game_party_character()
+        .guid()
+        .find(guid)
+        .is_some_and(|character| character.connection != 0 && !character.online)
+    {
+        publish(ctx, BTreeSet::new(), &[guid], event_mark(ctx));
+    }
 }
 
 pub(super) fn named(ctx: &ReducerContext, name: &str) -> Option<u64> {
@@ -614,6 +687,7 @@ pub(crate) fn publish(
     let characters = guids
         .into_iter()
         .filter_map(|guid| ctx.db.game_party_character().guid().find(guid))
+        .map(|character| projected(ctx, character))
         .collect();
     let update = encode(&Update {
         revision: directory::revision(ctx),
@@ -816,6 +890,11 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
             continue;
         }
         let member = roster.members.iter().find(|member| member.guid == guid);
+        let joined = member.is_some()
+            && memberships
+                .guid()
+                .find(guid)
+                .is_none_or(|old| old.group_id != roster.group_id);
         memberships.guid().delete(guid);
         memberships.insert(PartyMembership {
             guid,
@@ -825,6 +904,9 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
         });
         restore(ctx, guid);
         package::membership_changed(ctx, guid);
+        if joined {
+            crate::instance::unbind_joining_member(ctx, guid);
+        }
         crate::instance::reconcile_instance_removal(ctx, guid);
     }
     projections.group_id().delete(roster.group_id);
@@ -972,6 +1054,7 @@ pub(super) fn snapshot(ctx: &ReducerContext, guid: u64) -> Vec<u8> {
         characters: guids
             .into_iter()
             .filter_map(|guid| ctx.db.game_party_character().guid().find(guid))
+            .map(|character| projected(ctx, character))
             .collect(),
         events: Vec::new(),
         absent: if group::group_of(ctx, guid).is_none() {
@@ -1068,4 +1151,108 @@ pub(crate) fn has_world_session_in_realm(ctx: &ReducerContext, guid: u64) -> boo
                 .find(entry.account_id)
         })
         .is_some_and(|away| away.character_guid == guid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shard(byte: u8) -> Identity {
+        Identity::from_byte_array([byte; 32])
+    }
+
+    fn report(online: bool, world: Identity, connection: u128) -> PartyCharacter {
+        PartyCharacter {
+            guid: 7,
+            account_id: 3,
+            connection,
+            world,
+            name: "Mover".into(),
+            race: 1,
+            class: 1,
+            chat_tag: 0,
+            identity: shard(9),
+            online,
+            stats: None,
+            revision: 100,
+        }
+    }
+
+    fn moved_to(world: Identity) -> CharacterDirectoryVersion {
+        CharacterDirectoryVersion {
+            guid: 7,
+            revision: 150,
+            world,
+        }
+    }
+
+    #[test]
+    fn a_member_reported_offline_by_the_shard_it_left_counts_online() {
+        assert!(counts_online(false, shard(1), Some(shard(2))));
+    }
+
+    #[test]
+    fn a_member_reported_offline_by_the_shard_that_holds_it_counts_offline() {
+        assert!(!counts_online(false, shard(1), Some(shard(1))));
+    }
+
+    #[test]
+    fn a_member_without_a_world_session_counts_offline_even_when_reported_online() {
+        assert!(!counts_online(true, shard(1), None));
+    }
+
+    #[test]
+    fn world_shards_see_a_moved_character_online_at_the_move_revision() {
+        let copy = world_copy(
+            report(false, shard(1), 5),
+            Some(&moved_to(shard(2))),
+            ReportedSession::Held,
+        );
+        assert!(copy.online);
+        assert_eq!(copy.revision, 150);
+    }
+
+    #[test]
+    fn world_shards_see_a_moved_character_offline_after_its_world_session_ends() {
+        let copy = world_copy(
+            report(true, shard(1), 5),
+            Some(&moved_to(shard(2))),
+            ReportedSession::Ended,
+        );
+        assert!(!copy.online);
+        assert_eq!(copy.revision, 151);
+    }
+
+    #[test]
+    fn world_shards_wait_for_the_report_of_a_newer_world_session() {
+        let copy = world_copy(
+            report(false, shard(1), 5),
+            Some(&moved_to(shard(2))),
+            ReportedSession::Newer,
+        );
+        assert!(!copy.online);
+        assert_eq!(copy.revision, 100);
+    }
+
+    #[test]
+    fn world_shards_see_the_report_of_the_shard_that_holds_the_character() {
+        let copy = world_copy(
+            report(false, shard(2), 5),
+            Some(&moved_to(shard(2))),
+            ReportedSession::Held,
+        );
+        assert!(!copy.online);
+        assert_eq!(copy.revision, 100);
+    }
+
+    #[test]
+    fn world_shards_see_a_package_character_as_reported() {
+        let copy = world_copy(
+            report(false, shard(1), 0),
+            Some(&moved_to(shard(2))),
+            ReportedSession::Ended,
+        );
+        assert!(!copy.online);
+        assert_eq!(copy.revision, 100);
+    }
 }

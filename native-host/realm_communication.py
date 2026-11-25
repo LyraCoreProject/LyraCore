@@ -336,7 +336,8 @@ def check_contacts(host, worlds, character, enter, received):
         if opcode == 0x3e:
             target.send(0xdc)
     target.collect()
-    host.wait_until(lambda: host.rows(f'SELECT online FROM game_party_character WHERE guid = {target_guid}', western) == [[True]]
+    [[held]] = host.rows(f'SELECT world FROM game_character_directory WHERE guid = {target_guid}')
+    host.wait_until(lambda: host.rows(f'SELECT world, online FROM game_party_character WHERE guid = {target_guid}', western) == [[held, True]]
         and not host.rows('SELECT connection_id FROM game_native_transfer_pending', western),
         'contact target did not finish Transfer', timeout=TRANSFER_SECONDS)
     contacts = host.rows(f'SELECT target_guid, is_ignore FROM game_character_contact WHERE owner_guid = {guid}', western)

@@ -141,7 +141,7 @@
     "weapon_strike": 2,
     "weather": 3,
     "white_melee": 6,
-    "world_session_replacement": 100,
+    "world_session_replacement": 140,
     "xp_cap": 3,
     "zone_transition": 3
   }

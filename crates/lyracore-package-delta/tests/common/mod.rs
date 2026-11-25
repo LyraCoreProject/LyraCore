@@ -195,6 +195,13 @@ pub fn quest_text_claim(quest_entry: u32, operation: &str, fields: &str) -> Stri
 }
 
 #[must_use]
+pub fn quest_flags_claim(quest_entry: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_quest_flags","key":{{"quest_entry":{quest_entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+#[must_use]
 pub fn quest_objective_claim(
     quest_entry: u32,
     obj_index: u8,

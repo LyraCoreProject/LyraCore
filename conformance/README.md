@@ -376,9 +376,10 @@ no mount template is needed.
 The base scenario also places fixture creature 990002 at route vertex id 44 (index 9) with aggro range 80
 and hostile faction template 14. The fixture installs the numeric relations for faction templates
 1 and 14 from the pinned World Source. The creature is outside takeoff and landing range;
-its only nearby Character is in flight. The range spans the four-second sensing period at
-32 yards per second. The existing Golden Trace therefore still requires
-no passenger combat. Observer and reconnect scenarios retain their original sparse worlds.
+its only nearby Character is in flight. At 32 yards per second the passenger stays in range for
+five seconds, across a four-second sense period and several one-second proximity checks. The
+existing Golden Trace therefore still requires no passenger combat. Observer and reconnect
+scenarios retain their original sparse worlds.
 
 `route_fixture_matches_every_recorded_route_point_and_mount` checks all 27 serialized spline
 destinations exactly against vertices 1 through 27, including their wire precision. The trace

@@ -5,14 +5,10 @@ use lyracore_protocol::messages::vanilla::{
     SMSG_INSTANCE_RESET_FAILED,
 };
 use spacetimedb::{
-    reducer, sats::bsatn, table, ConnectionId, Identity, ReducerContext, SpacetimeType, Table,
+    reducer, sats::bsatn, table, ConnectionId, ReducerContext, SpacetimeType, Table,
 };
 
-use super::{
-    directory, realm_party,
-    realm_party::{game_party_character, PartyCharacter},
-    Rollback,
-};
+use super::{directory, realm_party, realm_party::PartyCharacter, Rollback};
 use crate::{
     group::{self, game_group},
     instance::{self, ResetBinding, ResetFailure, ResetOutcome},
@@ -85,7 +81,7 @@ pub(super) fn dispatch(
     let group_id = group.map_or(0, |group| group.group_id);
     let offline = group::members_of(ctx, group_id)
         .iter()
-        .any(|member| !online(ctx, member.character_guid));
+        .any(|member| !realm_party::online(ctx, member.character_guid));
     let targets: BTreeSet<_> = if group_id != 0 {
         ctx.db
             .game_map_owner()
@@ -139,25 +135,6 @@ pub(super) fn dispatch(
             });
     }
     Ok(())
-}
-
-/// Why a Transfer source's offline report can be stale: docs/instance-lifecycle.md, Manual resets.
-fn online(ctx: &ReducerContext, guid: u64) -> bool {
-    ctx.db
-        .game_party_character()
-        .guid()
-        .find(guid)
-        .is_some_and(|member| {
-            counts_online(
-                member.online,
-                member.world,
-                realm_party::current(ctx, &member),
-            )
-        })
-}
-
-fn counts_online(reported_online: bool, reported_by: Identity, holder: Option<Identity>) -> bool {
-    holder.is_some_and(|holder| reported_online || holder != reported_by)
 }
 
 #[table(accessor = game_world_instance_reset, outbox(remote::idc_world_instance_reset))]
@@ -319,28 +296,4 @@ fn reply(
         super::send(ctx, connection, message, false)?;
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn shard(byte: u8) -> Identity {
-        Identity::from_byte_array([byte; 32])
-    }
-
-    #[test]
-    fn a_member_reported_offline_by_the_shard_it_left_counts_online() {
-        assert!(counts_online(false, shard(1), Some(shard(2))));
-    }
-
-    #[test]
-    fn a_member_reported_offline_by_the_shard_that_holds_it_counts_offline() {
-        assert!(!counts_online(false, shard(1), Some(shard(1))));
-    }
-
-    #[test]
-    fn a_member_without_a_world_session_counts_offline_even_when_reported_online() {
-        assert!(!counts_online(true, shard(1), None));
-    }
 }

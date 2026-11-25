@@ -38,6 +38,7 @@ pub enum Table {
     QuestCastObjective,
     QuestRewardItem,
     QuestRewardChoice,
+    QuestFlags,
     PickpocketLoot,
     GameobjectLoot,
     SkinningLoot,
@@ -86,6 +87,7 @@ impl Table {
         Self::QuestCastObjective,
         Self::QuestRewardItem,
         Self::QuestRewardChoice,
+        Self::QuestFlags,
         Self::PickpocketLoot,
         Self::GameobjectLoot,
         Self::SkinningLoot,
@@ -135,6 +137,7 @@ impl Table {
             Self::QuestCastObjective => "game_quest_cast_objective",
             Self::QuestRewardItem => "game_quest_reward_item",
             Self::QuestRewardChoice => "game_quest_reward_choice",
+            Self::QuestFlags => "game_quest_flags",
             Self::PickpocketLoot => "game_pickpocket_loot",
             Self::GameobjectLoot => "game_gameobject_loot",
             Self::SkinningLoot => "game_skinning_loot",
@@ -188,7 +191,8 @@ impl Table {
             | Self::QuestObjective
             | Self::QuestCastObjective
             | Self::QuestRewardItem
-            | Self::QuestRewardChoice => QUEST_FAMILY,
+            | Self::QuestRewardChoice
+            | Self::QuestFlags => QUEST_FAMILY,
             Self::PickpocketLoot
             | Self::GameobjectLoot
             | Self::SkinningLoot
@@ -231,6 +235,7 @@ impl Table {
             "game_quest_cast_objective" => Some(Self::QuestCastObjective),
             "game_quest_reward_item" => Some(Self::QuestRewardItem),
             "game_quest_reward_choice" => Some(Self::QuestRewardChoice),
+            "game_quest_flags" => Some(Self::QuestFlags),
             "game_pickpocket_loot" => Some(Self::PickpocketLoot),
             "game_gameobject_loot" => Some(Self::GameobjectLoot),
             "game_skinning_loot" => Some(Self::SkinningLoot),
@@ -282,6 +287,7 @@ impl Table {
             Self::QuestCastObjective => QUEST_CAST_OBJECTIVE_COLUMNS,
             Self::QuestRewardItem => QUEST_REWARD_ITEM_COLUMNS,
             Self::QuestRewardChoice => QUEST_REWARD_CHOICE_COLUMNS,
+            Self::QuestFlags => QUEST_FLAGS_COLUMNS,
             Self::PickpocketLoot => PICKPOCKET_LOOT_COLUMNS,
             Self::GameobjectLoot => GAMEOBJECT_LOOT_COLUMNS,
             Self::SkinningLoot => SKINNING_LOOT_COLUMNS,
@@ -601,6 +607,8 @@ const QUEST_REWARD_CHOICE_COLUMNS: &[Column] = &[
     column("item_entry", FieldType::U32),
     column("count", FieldType::U32),
 ];
+
+const QUEST_FLAGS_COLUMNS: &[Column] = &[column("flags", FieldType::U32)];
 
 const PICKPOCKET_LOOT_COLUMNS: &[Column] = &[
     column("creature_entry", FieldType::U32),

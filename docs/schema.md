@@ -96,8 +96,9 @@ prerequisites ([migration](danger-zones.md#quest-retake-migration)).
 
 `game_quest_flags` is a new private companion table for the source `QuestFlags` bits returned in
 quest queries. Absence means zero; reimport quests to populate an existing Realm. The public quest
-template layout stays unchanged for Packages. Existing authored templates default to zero flags.
-These stored bits do not implement the gameplay
+template layout stays unchanged for Packages. A Package sets a quest's flags with a `game_quest_flags`
+claim ([Package API](package-api.md#package-identifier-ranges)); an authored template with no claim
+has zero flags. These stored bits do not implement the gameplay
 rules for every flag; the import Compatibility Manifest continues to report that gap.
 
 `game_quest_share` is a new private table holding each Character's Quest Share: the sharer and
@@ -270,6 +271,12 @@ at most one row per connection. It holds an end the Realm Shard owes a World Sha
 30 seconds to send it again when the earlier send has its answer. All start empty. See
 [the admission rules](architecture.md#host-listeners-and-admission) and
 [the deploy order](danger-zones.md#world-session-end-migration).
+
+`game_native_away.arrival` and `game_world_session_owed_end.arrival` and `.sent` are END-appended
+with default 0. `arrival` stamps each arrival of a World Session on a World Shard, and `sent` is the
+id of the `game_world_session_end` send whose answer counts. `game_native_handed_off` is a new
+private table, one row per connection whose Handoff marker this Shard wrote, until the connection
+closes here or this Shard adopts it again.
 
 `game_character_name` is a new private Realm table keyed by the lowercased name. A pending row
 has guid zero. Its selection id is nonzero for native creation and zero for Package creation;
@@ -1090,7 +1097,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_taxi_flight_schedule` | `advance_taxi_flight` | 100 ms while a passenger is active | `taxi.rs` |
 | `game_transport_carry_schedule` | `carry_transport_passengers` | 500 ms per Transport while it has Passengers, armed by boarding | `transport/mod.rs` |
 | `game_transport_crossing` | `cross_transport_map` | one-shot at a route's next map change, armed by `init`, `debug_repair_after_publish` and each firing | `transport/mod.rs` |
-| `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass, about 4 s) | `creatures/tick/mod.rs` |
+| `game_creature_move_schedule` | `tick_creatures` | 500 ms (proximity aggro every 2nd pass, 1 s; sensing every 8th, about 4 s) | `creatures/tick/mod.rs` |
 | `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs` |
 | `game_native_admission_tick` | `native_admission_tick` | 1 s while the Login Queue holds waiters | `native/admission.rs` |
 | `game_aura_schedule` | `tick_auras` | 1 s | `spell/tables.rs` |

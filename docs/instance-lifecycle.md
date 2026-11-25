@@ -4,9 +4,28 @@
 Instance zero is the open world. SpacetimeDB allocates `game_instance.instance_id` from one.
 
 `resolve_or_create_instance` handles dungeon Area Trigger entry. It resolves the Group's live
-Instance first, then the Character's live binding, then creates an Instance. A solo Instance can be
-adopted by a Group its holder joins, so the other members enter the same run. Character bindings
-survive Group disband and expire when the Instance is reaped.
+Instance first, then the Character's live binding to a solo run, then creates an Instance. A run
+belongs to the Group that entered it, as in vmangos `DungeonMap::BindPlayerOrGroupOnEnter`. A
+binding to a Group's run never routes a Character outside that Group: after leaving the Group,
+or after the Group disbands, the Character enters a fresh run alone or its new Group's run. A
+member who enters its solo run while its Group has no run of that map gives the run to the Group,
+which is how a leader's earlier solo run becomes the Group's run. Adoption refuses a run when the
+Group already has a live run of that map on the same Shard. It cannot see the Group's runs on
+other Instance Shards, so on a split Realm a member standing in a disbanded Group's run can still
+give that run to a Group whose run is on another Instance Shard.
+
+A Character who joins a Group without leading it loses its bindings, except for the map it stands
+on, as vmangos `Group::AddMember` resets a joining member's runs. The Group plane does this on one
+Shard; on a split Realm the World Shard that holds the Character does it when the Group projection
+first names it a member. Teardown deletes the bindings on the Shard that hosts the Instance. On a
+split Realm the Character's copy on its World Shard stays until its next entry to that map deletes
+it.
+
+vmangos `Group::Disband` hands the last member standing in the Group's run that run as its own.
+Here that member counts down and is removed like the one who left, unless the two form a Group
+again inside, which adopts the run. The known gaps in
+`conformance/features/world/map_and_trigger_rules.toml` record this and the other places where
+dungeon run ownership differs from vmangos.
 
 `create_instance` builds creature entities from the map's authored spawn rows and makes copies of
 doors, buttons, chests and goobers. Templates and authored spawn rows are shared. With
@@ -171,7 +190,8 @@ A Transfer reports the member offline from its source Shard, and the destination
 only after its client is in the world there. The Character directory moves before the destination
 releases that client, so the source's report can be stale while the member stands in the world. The
 Realm therefore counts a member online while its World Session lives on a World Shard other than
-the one that reported it offline. A member still loading into the dungeon keeps the reset refused
+the one that reported it offline, the rule [Groups across World Shards](architecture.md#groups-across-world-shards)
+gives for every Group reader. A member still loading into the dungeon keeps the reset refused
 through occupancy. The `moved_member_counts_online` Deliberate Deviation in
 `conformance/features/world/instance_reset.toml` records where this differs from vmangos.
 
