@@ -1080,7 +1080,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_taxi_flight_schedule` | `advance_taxi_flight` | 100 ms while a passenger is active | `taxi.rs` |
 | `game_transport_carry_schedule` | `carry_transport_passengers` | 500 ms per Transport while it has Passengers, armed by boarding | `transport/mod.rs` |
 | `game_transport_crossing` | `cross_transport_map` | one-shot at a route's next map change, armed by `init`, `debug_repair_after_publish` and each firing | `transport/mod.rs` |
-| `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass, about 4 s) | `creatures/tick/mod.rs` |
+| `game_creature_move_schedule` | `tick_creatures` | 500 ms (proximity aggro every 2nd pass, 1 s; sensing every 8th, about 4 s) | `creatures/tick/mod.rs` |
 | `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs` |
 | `game_native_admission_tick` | `native_admission_tick` | 1 s while the Login Queue holds waiters | `native/admission.rs` |
 | `game_aura_schedule` | `tick_auras` | 1 s | `spell/tables.rs` |

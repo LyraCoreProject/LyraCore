@@ -6,6 +6,49 @@ pub(crate) const SENSE_EVERY_N_TICKS: i64 = 8;
 
 pub(crate) const SENSE_PERIOD_MICROS: i64 = MOVE_TICK_MICROS * SENSE_EVERY_N_TICKS;
 
+// vmangos `Visibility.AIRelocationNotifyDelay`: a creature reacts to nearby movement once a second.
+pub(crate) const PROXIMITY_PERIOD_MICROS: i64 = 1_000_000;
+
+/// The steps a firing runs besides movement.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum TickCadence {
+    Move,
+    /// Movement plus proximity aggro.
+    Proximity,
+    /// Every step, proximity aggro included.
+    Sense,
+}
+
+impl TickCadence {
+    /// `cycle` counts firings of `period_micros` each.
+    pub(crate) fn of_cycle(cycle: u64, period_micros: i64) -> Self {
+        let due = |every_micros: i64| {
+            let every_n = (every_micros / period_micros.max(1)).max(1) as u64;
+            cycle % every_n == 0
+        };
+        if due(SENSE_PERIOD_MICROS) {
+            TickCadence::Sense
+        } else if due(PROXIMITY_PERIOD_MICROS) {
+            TickCadence::Proximity
+        } else {
+            TickCadence::Move
+        }
+    }
+
+    pub(crate) fn for_interval(now_micros: i64, interval_micros: i64) -> Self {
+        let interval = interval_or_default(interval_micros);
+        Self::of_cycle((now_micros / interval).max(0) as u64, interval)
+    }
+
+    pub(crate) fn proximity(self) -> bool {
+        self != TickCadence::Move
+    }
+
+    pub(crate) fn sense(self) -> bool {
+        self == TickCadence::Sense
+    }
+}
+
 // A schedule row without a positive interval runs at the default cadence.
 fn interval_or_default(interval_micros: i64) -> i64 {
     if interval_micros > 0 {
@@ -13,12 +56,6 @@ fn interval_or_default(interval_micros: i64) -> i64 {
     } else {
         MOVE_TICK_MICROS
     }
-}
-
-pub(crate) fn is_sense_tick_for_interval(now_micros: i64, interval_micros: i64) -> bool {
-    let interval = interval_or_default(interval_micros);
-    let every_n = (SENSE_PERIOD_MICROS / interval).max(1);
-    (now_micros / interval) % every_n == 0
 }
 
 pub(crate) fn tick_secs_for_interval(interval_micros: i64) -> f32 {
@@ -221,28 +258,28 @@ mod tests {
     #[test]
     fn sense_tick_for_interval_fires_on_the_documented_boundary_at_default_cadence() {
         for now in [0, 499_999, 4_000_000, 4_499_999, 8_000_000] {
-            assert!(is_sense_tick_for_interval(now, 500_000), "{now}");
+            assert!(TickCadence::for_interval(now, 500_000).sense(), "{now}");
         }
         for now in [500_000, 1_234_567, 3_999_999, 4_500_000, 7_999_999] {
-            assert!(!is_sense_tick_for_interval(now, 500_000), "{now}");
+            assert!(!TickCadence::for_interval(now, 500_000).sense(), "{now}");
         }
     }
 
     #[test]
     fn sense_tick_for_interval_keeps_the_4s_cadence_for_fast_and_slow_rows() {
         let hits = (0..40i64)
-            .filter(|t| is_sense_tick_for_interval(t * 100_000, 100_000))
+            .filter(|t| TickCadence::for_interval(t * 100_000, 100_000).sense())
             .count();
         assert_eq!(hits, 1, "a 100ms row senses once per ~4s, not per firing");
-        assert!(is_sense_tick_for_interval(10_000_000, 10_000_000));
-        assert!(is_sense_tick_for_interval(20_000_000, 10_000_000));
+        assert!(TickCadence::for_interval(10_000_000, 10_000_000).sense());
+        assert!(TickCadence::for_interval(20_000_000, 10_000_000).sense());
         assert_eq!(
-            is_sense_tick_for_interval(0, 0),
-            is_sense_tick_for_interval(0, MOVE_TICK_MICROS)
+            TickCadence::for_interval(0, 0),
+            TickCadence::for_interval(0, MOVE_TICK_MICROS)
         );
         assert_eq!(
-            is_sense_tick_for_interval(4_000_000, -5),
-            is_sense_tick_for_interval(4_000_000, MOVE_TICK_MICROS)
+            TickCadence::for_interval(4_000_000, -5),
+            TickCadence::for_interval(4_000_000, MOVE_TICK_MICROS)
         );
     }
 
@@ -267,7 +304,7 @@ mod tests {
         let spacing_micros = |interval: i64| {
             let mut firings = (0..).map(|n| n * interval);
             firings
-                .find(|&now| now > 0 && is_sense_tick_for_interval(now, interval))
+                .find(|&now| now > 0 && TickCadence::for_interval(now, interval).sense())
                 .expect("every cadence senses again")
         };
         for (interval, period_secs) in [
@@ -288,7 +325,7 @@ mod tests {
     #[test]
     fn sense_tick_is_one_in_eight() {
         let hits: Vec<bool> = (0..16)
-            .map(|t| is_sense_tick_for_interval(t * MOVE_TICK_MICROS, MOVE_TICK_MICROS))
+            .map(|t| TickCadence::for_interval(t * MOVE_TICK_MICROS, MOVE_TICK_MICROS).sense())
             .collect();
         assert_eq!(
             hits.iter().filter(|&&h| h).count(),
@@ -296,6 +333,39 @@ mod tests {
             "2 sense ticks in 16 (1-in-8)"
         );
         assert!(hits[0] && hits[8], "ticks 0 and 8 are sense ticks");
-        assert!(!hits[1] && !hits[7], "the 7 between are movement-only");
+        assert!(!hits[1] && !hits[7], "the 7 between do not sense");
+    }
+
+    #[test]
+    fn proximity_aggro_runs_every_second_tick_and_on_each_sense_tick() {
+        use TickCadence::{Move, Proximity, Sense};
+        let cadences: Vec<TickCadence> = (0..8)
+            .map(|t| TickCadence::for_interval(t * MOVE_TICK_MICROS, MOVE_TICK_MICROS))
+            .collect();
+        assert_eq!(
+            cadences,
+            [Sense, Move, Proximity, Move, Proximity, Move, Proximity, Move]
+        );
+        assert!(Sense.proximity() && Proximity.proximity() && !Move.proximity());
+    }
+
+    #[test]
+    fn proximity_aggro_keeps_the_one_second_cadence_for_fast_and_slow_rows() {
+        let hits = (0..40i64)
+            .filter(|t| TickCadence::for_interval(t * 100_000, 100_000).proximity())
+            .count();
+        assert_eq!(
+            hits, 4,
+            "a 100ms row notices once per second, not per firing"
+        );
+        assert!(
+            (0..4).all(|t| TickCadence::for_interval(t * 1_500_000, 1_500_000).proximity()),
+            "a row slower than a second notices on every firing"
+        );
+        assert_eq!(
+            TickCadence::of_cycle(13, 300_000),
+            TickCadence::Sense,
+            "a sense tick off the proximity rhythm still notices"
+        );
     }
 }

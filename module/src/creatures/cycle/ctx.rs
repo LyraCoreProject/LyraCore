@@ -606,13 +606,13 @@ impl IdleSink for CtxWorld<'_> {
 }
 
 impl EngageSink for CtxWorld<'_> {
-    fn players(&self) -> Vec<AggroTarget> {
+    fn players(&self, scope: &TickScope) -> Vec<AggroTarget> {
         self.ctx
             .db
             .game_world_entity()
             .by_entry()
             .filter(0u32)
-            .filter(|e| e.is_player())
+            .filter(|e| e.is_player() && scope.covers(e.instance_id))
             .map(|entity| aggro_target(self.ctx, &entity))
             .collect()
     }

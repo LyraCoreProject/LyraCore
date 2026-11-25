@@ -161,22 +161,19 @@ fn creature_pass(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
     );
     let period_micros = interval_micros * i64::from(slice.count);
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
-    let sense = match tick_number {
-        Some(tick) => {
-            let every_n = (cadence::SENSE_PERIOD_MICROS / period_micros).max(1) as u64;
-            (tick / u64::from(slice.count)) % every_n == 0
-        }
-        None => is_sense_tick_for_interval(now_micros, interval_micros),
+    let cadence = match tick_number {
+        Some(tick) => TickCadence::of_cycle(tick / u64::from(slice.count), period_micros),
+        None => TickCadence::for_interval(now_micros, interval_micros),
     };
     let tick = crate::creatures::cycle::TickContext {
         now_micros: now_micros as u64,
         now_ms: (now_micros / 1000) as u32,
         tick_secs: tick_secs_for_interval(period_micros),
-        sense,
+        cadence,
         sense_secs: sense_period_secs_for_interval(period_micros),
         scope,
     };
-    let (sense, scope_label) = (tick.sense, scope_label(&tick.scope));
+    let (sense, scope_label) = (cadence.sense(), scope_label(&tick.scope));
 
     let outcome = crate::creatures::cycle::run(ctx, tick);
 

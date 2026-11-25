@@ -36,8 +36,8 @@ pub(crate) use eventai::{
     run_relay_arrival, stage_script_failure_policies_for_debug, start_imported_relay,
 };
 pub(crate) use tick::cadence::{
-    is_sense_tick_for_interval, sense_period_secs_for_interval, tick_secs_for_interval, TickScope,
-    TickSlice, GLOBAL_TICK_INSTANCE, MOVE_TICK_MICROS, SLICED_TICK_MICROS,
+    sense_period_secs_for_interval, tick_secs_for_interval, TickCadence, TickScope, TickSlice,
+    GLOBAL_TICK_INSTANCE, MOVE_TICK_MICROS, SLICED_TICK_MICROS,
 };
 #[cfg(test)]
 pub(crate) use tick::cadence::{MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};
