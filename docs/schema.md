@@ -967,6 +967,18 @@ delay, and the number of delays. Breaking or ending the channel deletes the row.
 channel that ran out is harmless: a channel that no longer ends at that time starts again from no
 delays, and the next delay overwrites the row.
 
+### Area target cap
+
+`game_spell.max_affected_targets` is the source `MaxAffectedTargets`, kept verbatim. An instant
+area effect of a spell with a nonzero value reaches at most that many units. The cast's target is
+always kept and the rest are picked at random, as vmangos `Spell::SetTargetMap` does. One draw per
+cast ranks the units, so every effect of the cast keeps the same units. A chain effect stops at its
+jump count instead. A ground area tick has no cap, as vmangos `DynamicObject::Update` has none.
+
+The default, 0, means no cap. A row written before the reimport, a test fixture and a Package Delta
+that omit the field reach every unit the area selects, as vmangos does for a spell without the
+field. Packages claim the column.
+
 ### Combo finishers (`module/src/combo.rs`)
 
 A finisher is a Rogue or Druid spell whose `Spell.dbc` AttributesEx carries 0x0010_0000 or

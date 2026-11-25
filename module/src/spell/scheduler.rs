@@ -632,7 +632,6 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
     if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    const AOE_MAX_TARGETS: usize = 20;
     let now = crate::time::now(ctx);
     let now_micros = now.to_micros_since_unix_epoch();
     let areas = ctx.db.game_ground_area();
@@ -674,7 +673,6 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                         .is_some_and(|caster| crate::combat::area_may_harm(ctx, caster, &c))
                         .then_some(c)
                 })
-                .take(AOE_MAX_TARGETS)
                 .collect();
 
         let source = ctx

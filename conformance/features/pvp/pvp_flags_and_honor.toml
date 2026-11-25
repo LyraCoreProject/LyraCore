@@ -17,7 +17,7 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/pvp.rs"
-function = "an_unflagged_enemy_character_is_outside_an_area_spell_until_it_flags"
+function = "an_area_spell_hits_an_enemy_character_only_when_both_characters_are_flagged"
 rung = "durable_module"
 
 [[tests]]

@@ -1,25 +1,39 @@
-//! The faction, reputation and PvP checks of vmangos `IsValidAttackTarget` for a ground area.
+//! The checks of vmangos `IsValidAttackTarget` and `IsImmuneToAoe` for a harmful area spell.
 
+use lyracore_shared::constants::unit_flags::{NOT_SELECTABLE, TAXI_FLIGHT};
+use lyracore_shared::spell::taxonomy::TOTEM_TYPE;
 use spacetimedb::ReducerContext;
 
 use crate::pvp::Combatant;
-use crate::{game_faction_template, WorldEntity};
+use crate::{game_creature_template, game_faction_template, WorldEntity};
 
 // vmangos ReputationRank.
 const REP_HOSTILE: u8 = 1;
 const REP_NEUTRAL: u8 = 3;
 const REP_FRIENDLY: u8 = 4;
 
-/// Whether a ground area that `caster` placed harms `target`.
+// vmangos UnitDefines.h flags that `Unit::IsTargetableBy` refuses a harmful spell on.
+const UNIT_FLAG_SPAWNING: u32 = 0x0000_0002;
+const UNIT_FLAG_NOT_ATTACKABLE_1: u32 = 0x0000_0080;
+const UNIT_FLAG_IMMUNE_TO_PLAYER: u32 = 0x0000_0100;
+const UNIT_FLAG_IMMUNE_TO_NPC: u32 = 0x0000_0200;
+const UNIT_FLAG_NON_ATTACKABLE_2: u32 = 0x0001_0000;
+const UNTARGETABLE: u32 = UNIT_FLAG_SPAWNING
+    | UNIT_FLAG_NOT_ATTACKABLE_1
+    | UNIT_FLAG_NON_ATTACKABLE_2
+    | NOT_SELECTABLE
+    | TAXI_FLIGHT;
+
+/// Whether a harmful area spell of `caster`, instant or a ground area tick, harms `target`.
 pub(crate) fn area_may_harm(
     ctx: &ReducerContext,
     caster: &WorldEntity,
     target: &WorldEntity,
 ) -> bool {
-    if target.is_flying() {
+    let by = crate::pvp::affecting_character(ctx, caster);
+    if !targetable_by(target.unit_flags, by.is_some()) || is_totem(ctx, target) {
         return false;
     }
-    let by = crate::pvp::affecting_character(ctx, caster);
     let of = crate::pvp::affecting_character(ctx, target);
     let dueling = matches!(
         (by, of),
@@ -28,6 +42,27 @@ pub(crate) fn area_may_harm(
     let to_target = reaction(ctx, (caster, by), (target, of), dueling);
     let to_caster = reaction(ctx, (target, of), (caster, by), dueling);
     attack_allowed(by, of, to_target, to_caster, dueling)
+}
+
+/// vmangos `Unit::IsTargetableBy` for a harmful spell; a Character or its pet is player-controlled.
+fn targetable_by(unit_flags: u32, player_controlled_caster: bool) -> bool {
+    let immune = if player_controlled_caster {
+        UNIT_FLAG_IMMUNE_TO_PLAYER
+    } else {
+        UNIT_FLAG_IMMUNE_TO_NPC
+    };
+    unit_flags & (UNTARGETABLE | immune) == 0
+}
+
+/// vmangos `Creature::IsImmuneToAoe`: since patch 1.10 an area spell passes over a totem.
+fn is_totem(ctx: &ReducerContext, unit: &WorldEntity) -> bool {
+    !unit.is_player()
+        && ctx
+            .db
+            .game_creature_template()
+            .entry()
+            .find(unit.entry)
+            .is_some_and(|template| template.creature_type == TOTEM_TYPE)
 }
 
 fn reaction(
@@ -217,6 +252,29 @@ mod tests {
             hostile(),
             false
         ));
+    }
+
+    #[test]
+    fn an_area_passes_over_a_unit_that_is_not_attackable_or_not_selectable() {
+        for flags in [
+            UNIT_FLAG_SPAWNING,
+            UNIT_FLAG_NOT_ATTACKABLE_1,
+            UNIT_FLAG_NON_ATTACKABLE_2,
+            NOT_SELECTABLE,
+            TAXI_FLIGHT,
+        ] {
+            assert!(!targetable_by(flags, true), "{flags:#x}");
+            assert!(!targetable_by(flags, false), "{flags:#x}");
+        }
+        assert!(targetable_by(0, true));
+    }
+
+    #[test]
+    fn a_unit_immune_to_players_is_spared_only_by_a_player_controlled_caster() {
+        assert!(!targetable_by(UNIT_FLAG_IMMUNE_TO_PLAYER, true));
+        assert!(targetable_by(UNIT_FLAG_IMMUNE_TO_PLAYER, false));
+        assert!(!targetable_by(UNIT_FLAG_IMMUNE_TO_NPC, false));
+        assert!(targetable_by(UNIT_FLAG_IMMUNE_TO_NPC, true));
     }
 
     #[test]

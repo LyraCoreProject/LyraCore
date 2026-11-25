@@ -3,6 +3,7 @@ use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
 use super::depth::TriggerLink;
+use super::targeting::{affected_target_cap, keep_affected_targets};
 use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
@@ -668,6 +669,8 @@ struct CastTargets<'a> {
     admitted: std::collections::HashMap<(u8, u64), Option<(AttackOutcome, bool)>>,
     weapon_targets: Vec<u64>,
     seen_weapon_targets: std::collections::HashSet<u64>,
+    // Drawn the first time an effect selects more units than its cap, then kept for the cast.
+    trim_seed: Option<u32>,
 }
 
 impl<'a> CastTargets<'a> {
@@ -708,14 +711,42 @@ impl<'a> CastTargets<'a> {
             admitted: std::collections::HashMap::new(),
             weapon_targets: Vec::new(),
             seen_weapon_targets: std::collections::HashSet::new(),
+            trim_seed: None,
         }
+    }
+
+    /// The units the effect reaches, cut to the spell's target cap alike on every call.
+    fn select(
+        &mut self,
+        e: &SpellEffect,
+        target_guid: u64,
+        dest: Option<(f32, f32, f32)>,
+    ) -> Vec<u64> {
+        let (ctx, caster_guid) = (self.ctx, self.caster_guid);
+        let hits = select_targets(ctx, caster_guid, target_guid, e, dest);
+        let cap = affected_target_cap(self.spell.header.max_affected_targets, e);
+        let Some(cap) = cap.filter(|&cap| hits.len() > cap) else {
+            return hits;
+        };
+        let seed = *self.trim_seed.get_or_insert_with(|| {
+            crate::conformance_rolls::draw(
+                ctx,
+                crate::conformance_rolls::RollStream::Caster(caster_guid),
+            )
+        });
+        let kept = if target_guid == 0 {
+            caster_guid
+        } else {
+            target_guid
+        };
+        keep_affected_targets(hits, cap, kept, seed)
     }
 
     /// Admits every target the effects select now, before any effect changes the world.
     fn settle(&mut self, target_guid: u64, dest: Option<(f32, f32, f32)>) {
         let spell = self.spell;
         for e in &spell.effects {
-            for t in select_targets(self.ctx, self.caster_guid, target_guid, e, dest) {
+            for t in self.select(e, target_guid, dest) {
                 if self.may_reach(t) {
                     self.admit(e, t);
                 }
@@ -892,7 +923,7 @@ fn run_spell_effects(
             }
             continue;
         }
-        for t in select_targets(ctx, caster_guid, target_guid, e, dest) {
+        for t in targets.select(e, target_guid, dest) {
             // vmangos applies a cast's auras before its damage, and the death strips them.
             let aura_on_slain = e.kind & KIND_AURA_BIT != 0 && slain.contains(&t);
             if !targets.may_reach(t) || aura_on_slain {

@@ -7,7 +7,9 @@ replies = ["0x0131", "0x02A6", "0x0130", "0x0132", "0x0166", "0x024C", "0x0250"]
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["cast_and_interrupt", "spell_direct_damage_outcomes"]
-deliberate_deviations = []
+deliberate_deviations = [
+  { id = "capped_area_effects_share_units", result = "Every effect of a spell with MaxAffectedTargets keeps the same units, MaxAffectedTargets 1 included. vmangos copies the units of an earlier effect with the same targets only when MaxAffectedTargets is above 1, so with 1 each effect picks its own random unit.", reason = "vmangos SetTargetMap says the copy exists so an area fear's speed and fear land on one unit, and its check of above 1 misses that case. One random draw per cast ranks the units for every effect.", source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp#L190-L193" },
+]
 prerequisites = []
 
 [[tests]]
@@ -191,6 +193,61 @@ function = "an_unflagged_characters_area_harms_its_duel_opponent"
 rung = "unit"
 
 [[tests]]
+path = "module/src/combat/area_target.rs"
+function = "an_area_passes_over_a_unit_that_is_not_attackable_or_not_selectable"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/area_target.rs"
+function = "a_unit_immune_to_players_is_spared_only_by_a_player_controlled_caster"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/cast/targeting.rs"
+function = "a_capped_area_keeps_its_cap_and_always_the_casts_target"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/cast/targeting.rs"
+function = "one_cast_keeps_the_same_units_when_another_unit_drops_out"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/cast/targeting.rs"
+function = "only_a_chain_or_a_spell_with_max_affected_targets_has_a_target_cap"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/vmangos_spell.rs"
+function = "a_spells_max_affected_targets_reaches_the_source_spell"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/instant_area_spell_targets.rs"
+function = "an_instant_area_spell_hits_a_neutral_beast_and_draws_it_into_combat"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/instant_area_spell_targets.rs"
+function = "an_instant_area_spell_spares_a_neutral_town_guard_and_hits_a_faction_at_war"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/instant_area_spell_targets.rs"
+function = "an_instant_area_spell_spares_an_evading_creature"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/instant_area_spell_targets.rs"
+function = "an_instant_area_spell_without_max_affected_targets_hits_every_unit_in_a_large_pull"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/instant_area_spell_targets.rs"
+function = "an_instant_area_spell_with_max_affected_targets_hits_only_that_many_and_keeps_its_target"
+rung = "durable_module"
+
+[[tests]]
 path = "module/src/native/aura.rs"
 function = "a_channelled_ground_area_keeps_the_channel_bar_when_its_last_channel_aura_ends"
 rung = "unit"
@@ -359,10 +416,16 @@ symbol = "ground_area_target"
 evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::SetTargetMap sets the destination of TARGET_LOCATION_DATABASE from sSpellMgr.GetSpellTargetPosition, and SpellEffects.cpp Spell::EffectPersistentAA creates the DynamicObject at that destination."
 
 [[known_gaps]]
-description = "A ground area's tick hits a unit behind a wall, a creature immune to area damage, a unit whose flags make it not attackable or not selectable, and a Game Master Character, and it reads no contested PvP or forced reaction. It deals damage on the area's own period and puts no Aura on the unit, so a unit inside shows no debuff and every unit inside takes its tick at the same moment."
+description = "A ground area's tick hits a unit behind a wall, a creature with the CREATURE_IMMUNITY_AOE flag and a Game Master Character, and it reads no contested PvP or forced reaction. It deals damage on the area's own period and puts no Aura on the unit, so a unit inside shows no debuff and every unit inside takes its tick at the same moment."
 path = "module/src/spell/scheduler.rs"
 symbol = "tick_ground_areas"
-evidence = "Source reading, not measured. At d9173eca, GridNotifiersImpl.h DynamicObjectUpdater::VisitHelper skips a unit outside the DynamicObject's line of sight when a Character placed it, a creature whose IsImmuneToAoe holds and a Game Master; Object.cpp IsValidAttackTarget asks IsTargetableBy, and GetReactionTo reads contested PvP and forced ranks. VisitHelper applies a PersistentAreaAura that ticks on the unit's own Aura timer."
+evidence = "Source reading, not measured. At d9173eca, GridNotifiersImpl.h DynamicObjectUpdater::VisitHelper skips a unit outside the DynamicObject's line of sight when a Character placed it, a creature whose IsImmuneToAoe holds and a Game Master; GetReactionTo reads contested PvP and forced ranks. VisitHelper applies a PersistentAreaAura that ticks on the unit's own Aura timer."
+
+[[known_gaps]]
+description = "An instant area spell hits a unit behind a wall, a creature with the CREATURE_IMMUNITY_AOE flag and a Game Master Character, and it reads no contested PvP or forced reaction. Its radius does not grow by a creature's combat reach, and a caster-centred area adds no leeway for a moving caster. A cone (targets 24 and 54) and an enemy area around the caster (targets 2 and 36) import as scripted effects, a chain such as Chain Lightning or Multi-Shot hits only its first target, and a harmful script area (targets 7 and 8) hits by the attack-target rule where vmangos hits the spell's script targets, or every unit when it has none."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "select_targets"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp SpellNotifierCreatureAndPlayer skips a unit out of line of sight unless SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT and adds GetCombatReach to the radius for a unit no Character controls; SetTargetMap adds GetLeewayBonusRadius for targets 15, 20 and 24, fills targets 2 and 6 by chain jumps and targets 7 and 8 from spell_script_target. importer/src/spell.rs resolve_target maps none of 2, 24, 36 and 54, and maps 6 to T_TARGET_ENEMY."
 
 [[known_gaps]]
 description = "Concentration Aura and Barkskin give no chance to resist pushback. vmangos adds the SPELL_AURA_RESIST_PUSHBACK (149) amount to the resist chance of a cast's pushback and a channel's delay; the importer keeps that Aura as a flag without its id, so only the SPELLMOD_NOT_LOSE_CASTING_TIME talents count."

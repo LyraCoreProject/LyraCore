@@ -754,6 +754,26 @@ A Package Delta written before this revision has no interrupt fields, so its new
 defaults. Emit the Package again from a Base Snapshot of this revision, or set the fields, before
 you apply it.
 
+### Area target cap migration
+
+`game_spell.max_affected_targets` holds the source `MaxAffectedTargets`. It is END-appended with
+default 0, which means no cap, so no repair is needed. Publish through a planned update; development
+reload requires an unchanged schema.
+
+These changes apply at publish, without the reimport. No area spell stops at 20 units: an instant
+area effect and a ground area tick reach every unit they select. An instant or chain area spell that
+harms picks units by the ground area's rule: it hits a neutral creature without reputation, spares
+a reputation faction the Character is not at war with, and an unflagged Character's area spares
+another Character outside a Duel. Every harmful area spell, instant or a ground area tick, now
+passes over a totem and a unit whose flags make it not attackable or not selectable.
+
+Until you reimport `spell`, a spell that vmangos limits with MaxAffectedTargets hits every unit in
+its area. Reimport `spell` from this revision before play resumes.
+
+A Package Delta written before this revision has no `max_affected_targets`, so its new spells have no
+cap. Emit the Package again from a Base Snapshot of this revision, or set the field, before you
+apply it.
+
 ### Melee reach migration
 
 The new `game_display_combat_reach` table starts empty after a publish, so every unit keeps the

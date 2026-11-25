@@ -115,24 +115,59 @@ pub(crate) fn gain_recipe_skill(ctx: &ReducerContext, caster_guid: u64, spell_id
 }
 
 const MELEE_PBAOE_RADIUS_YD: f32 = 8.0;
-const AOE_MAX_TARGETS: usize = 20;
 
 fn aoe_keep(
     d2: f32,
     r2: f32,
     want_enemy: bool,
     is_caster: bool,
-    hostile: bool,
-    friendly: bool,
+    harmed: bool,
+    helped: bool,
 ) -> bool {
     if d2 > r2 {
         return false;
     }
     if want_enemy {
-        !is_caster && hostile
+        !is_caster && harmed
     } else {
-        is_caster || friendly
+        is_caster || helped
     }
+}
+
+/// vmangos `SetTargetMap`: a chain's jump count, else the spell's `MaxAffectedTargets` (0: none).
+pub(super) fn affected_target_cap(max_affected_targets: u32, e: &SpellEffect) -> Option<usize> {
+    if e.target == T_CHAIN_ENEMY && e.chain_targets > 0 {
+        Some(usize::from(e.chain_targets))
+    } else if max_affected_targets > 0 {
+        Some(max_affected_targets as usize)
+    } else {
+        None
+    }
+}
+
+/// Keeps `cap` random units of `hits` and always `kept`; one `seed` keeps the same units each call.
+pub(super) fn keep_affected_targets(
+    mut hits: Vec<u64>,
+    cap: usize,
+    kept: u64,
+    seed: u32,
+) -> Vec<u64> {
+    if hits.len() <= cap {
+        return hits;
+    }
+    let mut ranked = hits.clone();
+    ranked.sort_by_key(|&guid| (guid != kept, affected_target_rank(guid, seed)));
+    ranked.truncate(cap);
+    hits.retain(|guid| ranked.contains(guid));
+    hits
+}
+
+// The SplitMix64 finalizer, so the rank of one guid tells nothing about another's.
+fn affected_target_rank(guid: u64, seed: u32) -> u64 {
+    let mut z = guid ^ u64::from(seed).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 pub(crate) fn faction_target_violation(
@@ -210,35 +245,30 @@ pub(crate) fn select_targets(
             let r2 = radius * radius;
             let want_enemy = matches!(e.target, T_AREA_ENEMY | T_CHAIN_ENEMY);
 
-            let mut hits: Vec<u64> = entities
-                .iter()
-                .filter(|c| c.map_id == a_map && c.instance_id == a_inst && !c.dead)
-                .filter_map(|c| {
-                    let (dx, dy, dz) = (c.x - ax, c.y - ay, c.z - az);
-                    let d2 = dx * dx + dy * dy + dz * dz;
-                    if d2 > r2 {
-                        return None;
-                    }
-                    let (hostile, friendly) = if want_enemy {
-                        (crate::combat::is_hostile_target(ctx, &caster, &c), false)
-                    } else {
-                        (false, crate::combat::may_help(ctx, &caster, &c))
-                    };
-                    aoe_keep(d2, r2, want_enemy, c.guid == caster_guid, hostile, friendly)
-                        .then_some(c.guid)
-                })
-                .collect();
+            let mut hits: Vec<u64> =
+                crate::helpers::entities_near(ctx, a_map, a_inst, ax, ay, radius)
+                    .into_iter()
+                    .filter(|c| !c.dead)
+                    .filter_map(|c| {
+                        let (dx, dy, dz) = (c.x - ax, c.y - ay, c.z - az);
+                        let d2 = dx * dx + dy * dy + dz * dz;
+                        if d2 > r2 {
+                            return None;
+                        }
+                        let (harmed, helped) = if want_enemy {
+                            (crate::combat::area_may_harm(ctx, &caster, &c), false)
+                        } else {
+                            (false, crate::combat::may_help(ctx, &caster, &c))
+                        };
+                        aoe_keep(d2, r2, want_enemy, c.guid == caster_guid, harmed, helped)
+                            .then_some(c.guid)
+                    })
+                    .collect();
 
             // Missing faction data can make the caster appear unfriendly to itself.
             if !want_enemy && !hits.contains(&caster_guid) {
                 hits.push(caster_guid);
             }
-            let cap = if e.target == T_CHAIN_ENEMY && e.chain_targets > 0 {
-                e.chain_targets as usize
-            } else {
-                AOE_MAX_TARGETS
-            };
-            hits.truncate(cap);
             // Falling back to the explicit target on an empty enemy AoE would damage the caster.
             hits
         }
@@ -1951,6 +1981,56 @@ mod effect_handler_tests {
         assert!(super::aoe_keep(4.0, r2, false, true, false, false));
         assert!(!super::aoe_keep(4.0, r2, false, false, true, false));
         assert!(!super::aoe_keep(100.0, r2, false, false, false, true));
+    }
+
+    #[test]
+    fn a_capped_area_keeps_its_cap_and_always_the_casts_target() {
+        let hits: Vec<u64> = (1..=25).collect();
+        for seed in [0, 1, 7, 0xDEAD_BEEF, u32::MAX] {
+            let kept = super::keep_affected_targets(hits.clone(), 3, 19, seed);
+            assert_eq!(kept.len(), 3, "seed {seed}");
+            assert!(kept.contains(&19), "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn a_capped_area_does_not_always_keep_the_same_units() {
+        let hits: Vec<u64> = (1..=25).collect();
+        let picks: std::collections::BTreeSet<Vec<u64>> = (0..20)
+            .map(|seed| super::keep_affected_targets(hits.clone(), 2, 0, seed))
+            .collect();
+        assert!(picks.len() > 1, "{picks:?}");
+    }
+
+    #[test]
+    fn one_cast_keeps_the_same_units_when_another_unit_drops_out() {
+        let hits: Vec<u64> = (100..120).collect();
+        let first = super::keep_affected_targets(hits.clone(), 4, 0, 42);
+        let dropped = hits.iter().find(|guid| !first.contains(guid)).copied();
+        let rest: Vec<u64> = hits.into_iter().filter(|&g| Some(g) != dropped).collect();
+        assert_eq!(super::keep_affected_targets(rest, 4, 0, 42), first);
+    }
+
+    #[test]
+    fn an_area_within_its_cap_keeps_every_unit_in_order() {
+        let hits = vec![9, 3, 5];
+        assert_eq!(super::keep_affected_targets(hits.clone(), 3, 5, 1), hits);
+    }
+
+    #[test]
+    fn only_a_chain_or_a_spell_with_max_affected_targets_has_a_target_cap() {
+        let area = super::SpellEffect {
+            target: super::T_AREA_ENEMY,
+            ..super::SpellEffect::blank(1, 0)
+        };
+        let chain = super::SpellEffect {
+            target: super::T_CHAIN_ENEMY,
+            chain_targets: 3,
+            ..super::SpellEffect::blank(1, 0)
+        };
+        assert_eq!(super::affected_target_cap(0, &area), None);
+        assert_eq!(super::affected_target_cap(5, &area), Some(5));
+        assert_eq!(super::affected_target_cap(5, &chain), Some(3));
     }
 
     #[test]

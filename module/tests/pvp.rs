@@ -44,7 +44,7 @@ const PVP_FLAG_TICKS: u32 = 6000;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn an_unflagged_enemy_character_is_outside_an_area_spell_until_it_flags() {
+fn an_area_spell_hits_an_enemy_character_only_when_both_characters_are_flagged() {
     let (shard, account) = realm("pvp-area-spell");
     let mage = character(&shard, &account, "Mage", HUMAN);
     let rival = character(&shard, &account, "Rival", HUMAN);
@@ -52,28 +52,35 @@ fn an_unflagged_enemy_character_is_outside_an_area_spell_until_it_flags() {
         shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
     }
     hostile_factions(&shard, mage, rival);
-    area_spell(&shard, ARCANE_BURST, 0);
+    damage_spell(&shard, ARCANE_BURST, 0, T_AREA_ENEMY);
     let mage_flags = flags(&shard, mage).0;
-    let rival_flags = flags(&shard, rival).0;
     let rival_health = health(&shard, rival);
+    let burst = |shard: &Standalone| {
+        for _ in 0..5 {
+            shard.assert_call(
+                "debug_force_cast",
+                &[&mage.to_string(), &ARCANE_BURST.to_string()],
+            );
+        }
+    };
 
-    for _ in 0..5 {
-        shard.assert_call(
-            "debug_force_cast",
-            &[&mage.to_string(), &ARCANE_BURST.to_string()],
-        );
-    }
+    burst(&shard);
     assert_eq!(
         health(&shard, rival),
         rival_health,
         "vmangos IsValidAttackTarget"
     );
+
+    set_flagged(&shard, rival);
+    burst(&shard);
+    assert_eq!(
+        health(&shard, rival),
+        rival_health,
+        "vmangos CanAttackWithoutEnablingPvP: an unflagged caster's area spares Characters"
+    );
     assert_eq!(flags(&shard, mage).0, mage_flags);
 
-    shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET unit_flags = {} WHERE guid = {rival}",
-        rival_flags | unit_flags::PVP
-    ));
+    set_flagged(&shard, mage);
     let mut casts = 0;
     while health(&shard, rival) == rival_health {
         casts += 1;
@@ -83,15 +90,6 @@ fn an_unflagged_enemy_character_is_outside_an_area_spell_until_it_flags() {
             &[&mage.to_string(), &ARCANE_BURST.to_string()],
         );
     }
-    assert_ne!(
-        flags(&shard, mage).0 & unit_flags::PVP,
-        0,
-        "harm to a flagged enemy flags the attacker"
-    );
-    shard.assert_call(
-        "debug_force_cast",
-        &[&mage.to_string(), &ARCANE_BURST.to_string()],
-    );
     assert!(
         timer(&shard, rival).is_some(),
         "harm from a flagged Character refreshes the victim's flag"
@@ -108,16 +106,17 @@ fn a_spell_with_a_cost_on_a_flagged_enemy_flags_its_caster() {
         shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
     }
     hostile_factions(&shard, warrior, rival);
-    area_spell(&shard, RAGE_BURST, 100);
-    shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET unit_flags = {} WHERE guid = {rival}",
-        flags(&shard, rival).0 | unit_flags::PVP
-    ));
+    damage_spell(&shard, RAGE_BURST, 100, T_TARGET_ENEMY);
+    set_flagged(&shard, rival);
     shard.assert_call("debug_set_power", &[&warrior.to_string(), "1000"]);
 
     shard.assert_call(
-        "debug_force_cast",
-        &[&warrior.to_string(), &RAGE_BURST.to_string()],
+        "debug_force_cast_at",
+        &[
+            &warrior.to_string(),
+            &RAGE_BURST.to_string(),
+            &rival.to_string(),
+        ],
     );
     assert!(power(&shard, warrior) <= 900, "the cast spends its rage");
     assert_ne!(
@@ -523,8 +522,15 @@ fn hostile_factions(shard: &Standalone, alliance: u64, horde: u64) {
     }
 }
 
-/// An enemy-area damage spell; a nonzero cost is in rage, power type 1.
-fn area_spell(shard: &Standalone, spell: u32, rage_cost: u32) {
+fn set_flagged(shard: &Standalone, guid: u64) {
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags = {} WHERE guid = {guid}",
+        flags(shard, guid).0 | unit_flags::PVP
+    ));
+}
+
+/// A damage spell aimed at `target`; a nonzero cost is in rage, power type 1.
+fn damage_spell(shard: &Standalone, spell: u32, rage_cost: u32, target: u8) {
     let power_type = u8::from(rage_cost > 0);
     shard.insert_row(
         "game_spell",
@@ -547,7 +553,7 @@ fn area_spell(shard: &Standalone, spell: u32, rage_cost: u32) {
             ("spell_id", &spell),
             ("kind", &E_DAMAGE),
             ("base_points", &5),
-            ("target", &T_AREA_ENEMY),
+            ("target", &target),
             ("radius_yd", &10.0),
         ],
     );
