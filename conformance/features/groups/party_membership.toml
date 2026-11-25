@@ -20,7 +20,7 @@ status = "unverified"
 
 [[deliberate_deviations]]
 id = "moved_character_counts_online"
-result = "A Character whose World Session a cross-Shard Transfer has moved counts as online once the Character directory names the destination, before it is in the world there: an invite by name finds it, an invite is not refused as offline, and Group frames on other World Shards show it online without Member Stats. A Character that disconnects after that move counts as online until its World Session close reaches the Realm Shard. The Reference Server counts a Character offline whenever it is not in the world. Package Characters have no World Session and keep the Reference result."
+result = "A Character whose World Session a cross-Shard Transfer has moved counts as online once the Character directory names the destination, before it is in the world there: an invite by name finds it, an invite to it and a promotion of it to leader are not refused as offline, and Group frames on other World Shards show it online without Member Stats. A Character that disconnects after that move counts as online until its World Session close reaches the Realm Shard. The Reference Server counts a Character offline whenever it is not in the world. Package Characters have no World Session and keep the Reference result. Accepting an invite it sent is not refused either, which agrees with the Reference Server, whose accept does not check the inviter."
 reason = "The Realm Shard hears that the Character is in the world only after its client is. Counting the moved World Session online keeps a Character that has just arrived from being refused or shown offline."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/ObjectAccessor.cpp"
 

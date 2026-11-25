@@ -164,6 +164,15 @@ fn counts_online(reported_online: bool, reported_by: Identity, holder: Option<Id
     holder.is_some_and(|holder| reported_online || holder != reported_by)
 }
 
+/// The World Session of a stored report, as the Realm's away record sees it.
+#[derive(Clone, Copy)]
+enum ReportedSession {
+    Held,
+    /// A newer World Session of the Character, which sends its own report.
+    Newer,
+    Ended,
+}
+
 /// The copy of a Character that World Shards store.
 fn projected(ctx: &ReducerContext, character: PartyCharacter) -> PartyCharacter {
     let version = ctx
@@ -171,26 +180,37 @@ fn projected(ctx: &ReducerContext, character: PartyCharacter) -> PartyCharacter 
         .game_character_directory_version()
         .guid()
         .find(character.guid);
-    let holder = current(ctx, &character);
-    project(character, version.as_ref(), holder)
+    let session = if current(ctx, &character).is_some() {
+        ReportedSession::Held
+    } else if has_world_session_in_realm(ctx, character.guid) {
+        ReportedSession::Newer
+    } else {
+        ReportedSession::Ended
+    };
+    world_copy(character, version.as_ref(), session)
 }
 
-fn project(
+fn world_copy(
     mut character: PartyCharacter,
     version: Option<&CharacterDirectoryVersion>,
-    holder: Option<Identity>,
+    session: ReportedSession,
 ) -> PartyCharacter {
     let Some(version) =
         version.filter(|version| character.connection != 0 && version.world != character.world)
     else {
         return character;
     };
-    character.online = counts_online(character.online, character.world, holder);
-    if !character.online {
+    let online = match session {
+        ReportedSession::Held => true,
+        ReportedSession::Newer => return character,
+        ReportedSession::Ended => false,
+    };
+    character.online = online;
+    if !online {
         character.stats = None;
     }
-    // Later reports come from the directory owner, which set or observed this revision.
-    character.revision = version.revision + u64::from(!character.online);
+    // Revision order: docs/architecture.md, "Groups across World Shards".
+    character.revision = version.revision + u64::from(!online);
     character
 }
 
@@ -1175,10 +1195,10 @@ mod tests {
 
     #[test]
     fn world_shards_see_a_moved_character_online_at_the_move_revision() {
-        let copy = project(
+        let copy = world_copy(
             report(false, shard(1), 5),
             Some(&moved_to(shard(2))),
-            Some(shard(2)),
+            ReportedSession::Held,
         );
         assert!(copy.online);
         assert_eq!(copy.revision, 150);
@@ -1186,17 +1206,32 @@ mod tests {
 
     #[test]
     fn world_shards_see_a_moved_character_offline_after_its_world_session_ends() {
-        let copy = project(report(true, shard(1), 5), Some(&moved_to(shard(2))), None);
+        let copy = world_copy(
+            report(true, shard(1), 5),
+            Some(&moved_to(shard(2))),
+            ReportedSession::Ended,
+        );
         assert!(!copy.online);
         assert_eq!(copy.revision, 151);
     }
 
     #[test]
+    fn world_shards_wait_for_the_report_of_a_newer_world_session() {
+        let copy = world_copy(
+            report(false, shard(1), 5),
+            Some(&moved_to(shard(2))),
+            ReportedSession::Newer,
+        );
+        assert!(!copy.online);
+        assert_eq!(copy.revision, 100);
+    }
+
+    #[test]
     fn world_shards_see_the_report_of_the_shard_that_holds_the_character() {
-        let copy = project(
+        let copy = world_copy(
             report(false, shard(2), 5),
             Some(&moved_to(shard(2))),
-            Some(shard(2)),
+            ReportedSession::Held,
         );
         assert!(!copy.online);
         assert_eq!(copy.revision, 100);
@@ -1204,7 +1239,11 @@ mod tests {
 
     #[test]
     fn world_shards_see_a_package_character_as_reported() {
-        let copy = project(report(false, shard(1), 0), Some(&moved_to(shard(2))), None);
+        let copy = world_copy(
+            report(false, shard(1), 0),
+            Some(&moved_to(shard(2))),
+            ReportedSession::Ended,
+        );
         assert!(!copy.online);
         assert_eq!(copy.revision, 100);
     }

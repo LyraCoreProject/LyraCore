@@ -703,14 +703,26 @@ A Transfer's source reports the Character offline when it departs, and the desti
 online only once its client is in the world there. The Character directory moves in between, so
 the source's report goes stale. The Realm Shard counts a Character online while its World Session
 lives on a World Shard other than the one that reported it offline. Group invites, invites by name,
-Meeting Stone Seekers and Instance resets use this rule. The Realm sends World Shards a stale
-report with the rule applied, at the revision of the Character's directory version, which every
-later report of the directory owner exceeds; the move itself republishes the Character. That copy
-has no Member Stats, so party frames show the member as loading and friends see no change until
-the destination reports. Until the move reaches the Realm, the source's report stands and the
-Character counts offline. A Character that disconnects after the move counts online on the Realm
-until its World Session close arrives; World Shards keep the online copy until the Realm next
-publishes the Character. Package Characters have no World Session and keep their reports.
+promotion to leader, the inviter check when an invite is accepted, Meeting Stone Seekers and
+Instance resets use this rule. The move republishes the Character, and the Realm sends World
+Shards a stale report with the rule applied:
+
+- While the moved World Session lives, the copy is online at the revision of the Character's
+  directory version. The directory owner set or observed that revision, so the presence reports it
+  computes later are newer. The copy has no Member Stats, so party frames show the member as
+  loading and friends see no change until the destination reports.
+- While a newer World Session of the Character exists, the Realm sends the stale report unchanged,
+  and World Shards keep their copy until that session reports.
+- While no World Session of the Character exists, the copy is offline at that revision plus one. A
+  new World Session reports its profile, which advances the directory version, before it reports
+  presence, so its presence is newer than that copy.
+
+A presence report that the owner computed before a later directory change of its own can arrive
+after a copy at that change's revision; World Shards then keep the copy until the owner's next
+report. Until the move reaches the Realm, the source's report stands and the Character counts
+offline. A Character that disconnects after the move counts online on the Realm until its World
+Session close arrives; World Shards keep the online copy until the Realm next publishes the
+Character. Package Characters have no World Session and keep their reports.
 
 Shard-local Group mutations are refused when a World Shard has a Realm Shard. Sessionless Group
 actions are not supported in this topology; single-Shard behavior is unchanged. An existing multi-Shard Realm requires migration of its Group state before
