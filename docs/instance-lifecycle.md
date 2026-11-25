@@ -9,18 +9,23 @@ belongs to the Group that entered it, as in vmangos `DungeonMap::BindPlayerOrGro
 binding to a Group's run never routes a Character outside that Group: after leaving the Group,
 or after the Group disbands, the Character enters a fresh run alone or its new Group's run. A
 member who enters its solo run while its Group has no run of that map gives the run to the Group,
-which is how a leader's earlier solo run becomes the Group's run. A Group never adopts a second run
-of one map.
+which is how a leader's earlier solo run becomes the Group's run. Adoption refuses a run when the
+Group already has a live run of that map on the same Shard. It cannot see the Group's runs on
+other Instance Shards, so on a split Realm a member standing in a disbanded Group's run can still
+give that run to a Group whose run is on another Instance Shard.
 
 A Character who joins a Group without leading it loses its bindings, except for the map it stands
 on, as vmangos `Group::AddMember` resets a joining member's runs. The Group plane does this on one
 Shard; on a split Realm the World Shard that holds the Character does it when the Group projection
-first names it a member. Bindings expire when the Instance is reaped.
+first names it a member. Teardown deletes the bindings on the Shard that hosts the Instance. On a
+split Realm the Character's copy on its World Shard stays until its next entry to that map deletes
+it.
 
 vmangos `Group::Disband` hands the last member standing in the Group's run that run as its own.
 Here that member counts down and is removed like the one who left, unless the two form a Group
-again inside, which adopts the run. A known gap in
-`conformance/features/world/map_and_trigger_rules.toml` records this.
+again inside, which adopts the run. The known gaps in
+`conformance/features/world/map_and_trigger_rules.toml` record this and the other places where
+dungeon run ownership differs from vmangos.
 
 `create_instance` builds creature entities from the map's authored spawn rows and makes copies of
 doors, buttons, chests and goobers. Templates and authored spawn rows are shared. With

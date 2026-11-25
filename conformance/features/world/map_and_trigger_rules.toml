@@ -78,3 +78,27 @@ description = "When a Group disbands, vmangos Group::Disband hands the last memb
 path = "module/src/group.rs"
 symbol = "remove_member"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
+
+[[known_gaps]]
+description = "vmangos Group::Create calls Player::ConvertInstancesToGroup, so the leader's solo runs become the Group's runs when the Group forms. LyraCore gives a leader's solo run to the Group only when the leader enters it first; a member who enters first gets the Group a fresh run, and the leader's solo run is left to be reaped."
+path = "module/src/instance.rs"
+symbol = "resolve_or_create_instance"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
+
+[[known_gaps]]
+description = "vmangos Group::_setLeader replaces the Group's run of a map with the new leader's personal run when the new leader has one, and gives the old run to the old leader. LyraCore keeps the Group's run through a leader change."
+path = "module/src/group.rs"
+symbol = "set_leader_on"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
+
+[[known_gaps]]
+description = "A join that reaches the Shards while the joiner is between them skips the vmangos Player::ResetInstances(INSTANCE_RESET_GROUP_JOIN) reset. The joiner, with a solo run R0, is exported from one World Shard and not yet imported on the next; the joiner accepts an invite; each Shard projects the membership but holds no Character to reset; the joiner arrives with its R0 binding, later projections see no change of Group, and the Group adopts R0 when the joiner enters it."
+path = "module/src/native/realm_party.rs"
+symbol = "project"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"
+
+[[known_gaps]]
+description = "A join that crosses an in-flight dungeon admission gives the joiner's solo run to the Group, where vmangos Player::ResetInstances(INSTANCE_RESET_GROUP_JOIN) would have reset it. The entry is queued with the binding to the solo run R0; the joiner joins a Group before the Realm Shard handles the entry; the Instance Shard applies the snapshot that makes the joiner a member, binds the carried R0 binding, routes the joiner into R0 and gives R0 to the Group."
+path = "module/src/native/instance_shard.rs"
+symbol = "idc_world_instance_entry"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"

@@ -1,6 +1,6 @@
 mod support;
 
-use support::{actor, Standalone};
+use support::{group_op, Standalone};
 
 const LEADER: u64 = 1;
 const DEADMINES: u32 = 36;
@@ -76,23 +76,9 @@ fn create_character(shard: &Standalone, name: &str) -> u64 {
     guid
 }
 
-fn group_op(shard: &Standalone, op: &str, actor_guid: u64, target_guid: u64) {
-    shard.assert_call(
-        "realm_group_op",
-        &[
-            op,
-            &actor(actor_guid),
-            &target_guid.to_string(),
-            "0",
-            "0",
-            "0",
-        ],
-    );
-}
-
 fn join(shard: &Standalone, inviter: u64, guid: u64) {
-    group_op(shard, INVITE, inviter, guid);
-    group_op(shard, ACCEPT, guid, 0);
+    group_op(shard, INVITE, inviter, guid, 0);
+    group_op(shard, ACCEPT, guid, 0, 0);
 }
 
 fn group_of(shard: &Standalone, guid: u64) -> String {
@@ -143,7 +129,7 @@ fn a_character_who_left_the_group_enters_a_fresh_run_alone() {
     assert_eq!(enter(&shard, leaver), run);
 
     walk_out(&shard, leaver);
-    group_op(&shard, LEAVE, leaver, 0);
+    group_op(&shard, LEAVE, leaver, 0, 0);
     let fresh = enter(&shard, leaver);
 
     assert_ne!(fresh, run, "the Group's run stays with the Group");
@@ -165,7 +151,7 @@ fn a_character_who_joined_another_group_enters_that_groups_run() {
     assert_eq!(enter(&shard, leaver), run);
 
     walk_out(&shard, leaver);
-    group_op(&shard, LEAVE, leaver, 0);
+    group_op(&shard, LEAVE, leaver, 0, 0);
     join(&shard, other_leader, leaver);
     let other_group = group_of(&shard, leaver);
     let other_run = enter(&shard, leaver);
