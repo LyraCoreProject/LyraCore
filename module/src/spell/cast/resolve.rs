@@ -22,8 +22,8 @@ use crate::spell::{
     E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING,
     E_PERSISTENT_AREA, E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE,
     E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME,
-    SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY,
-    T_PARTY_AREA, T_RAID_AREA, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_AREA_NOT_HOSTILE,
+    T_CHAIN_ENEMY, T_PARTY_AREA, T_RAID_AREA, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use crate::{
     game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
@@ -2076,7 +2076,7 @@ fn check_target_faction(
             && e.kind != E_DUEL
             && matches!(
                 e.target,
-                T_TARGET_ALLY | T_AREA_ALLY | T_PARTY_AREA | T_RAID_AREA
+                T_TARGET_ALLY | T_AREA_ALLY | T_AREA_NOT_HOSTILE | T_PARTY_AREA | T_RAID_AREA
             )
     });
     if !(hits_enemy || hits_ally) {
@@ -2387,6 +2387,7 @@ fn targets_unit(target: u8) -> bool {
             | T_CHAIN_ENEMY
             | T_PARTY_AREA
             | T_RAID_AREA
+            | T_AREA_NOT_HOSTILE
     )
 }
 
@@ -3074,6 +3075,7 @@ mod companion_los_tests {
             T_CHAIN_ENEMY,
             T_PARTY_AREA,
             T_RAID_AREA,
+            T_AREA_NOT_HOSTILE,
         ] {
             assert!(targets_unit(target));
         }

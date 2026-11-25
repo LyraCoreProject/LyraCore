@@ -39,13 +39,45 @@ pub(crate) fn area_may_harm(
     {
         return false;
     }
-    let dueling = matches!(
-        (by, of),
-        (Some(by), Some(of)) if crate::duel::active_opponents(ctx, by.guid, of.guid)
-    );
+    let dueling = in_duel(ctx, by, of);
     let to_target = reaction(ctx, (caster, by), (target, of), dueling);
     let to_caster = reaction(ctx, (target, of), (caster, by), dueling);
     attack_allowed(by, of, to_target, to_caster, dueling)
+}
+
+/// vmangos `SPELL_TARGETS_FRIENDLY`: whether a friendly area spell of `caster` helps `target`.
+pub(crate) fn area_may_help(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    target: &WorldEntity,
+) -> bool {
+    let by = crate::pvp::affecting_character(ctx, caster);
+    let of = crate::pvp::affecting_character(ctx, target);
+    let to_target = reaction(ctx, (caster, by), (target, of), in_duel(ctx, by, of));
+    help_allowed(
+        same_master(
+            (caster.guid, caster.owner_guid),
+            (target.guid, target.owner_guid),
+        ),
+        to_target,
+    )
+}
+
+fn in_duel(ctx: &ReducerContext, by: Option<Combatant>, of: Option<Combatant>) -> bool {
+    matches!(
+        (by, of),
+        (Some(by), Some(of)) if crate::duel::active_opponents(ctx, by.guid, of.guid)
+    )
+}
+
+/// vmangos `GetReactionTo` is friendly to the unit's owner and to the owner's other units.
+fn same_master((guid, owner): (u64, u64), (other, other_owner): (u64, u64)) -> bool {
+    let master = |guid: u64, owner: u64| if owner != 0 { owner } else { guid };
+    master(guid, owner) == master(other, other_owner)
+}
+
+fn help_allowed(same_master: bool, to_target: u8) -> bool {
+    same_master || to_target >= REP_FRIENDLY
 }
 
 /// vmangos `Unit::IsTargetableBy` for harm; each side is (unit flags, controlled by a Character).
@@ -305,6 +337,37 @@ mod tests {
         ));
         assert!(!targetable_by((UNIT_FLAG_IMMUNE_TO_NPC, false), (0, false)));
         assert!(targetable_by((UNIT_FLAG_IMMUNE_TO_NPC, false), (0, true)));
+    }
+
+    #[test]
+    fn a_friendly_area_helps_a_reputation_faction_only_while_not_at_war() {
+        assert!(help_allowed(false, toward_reputation_faction(false)));
+        assert!(!help_allowed(false, toward_reputation_faction(true)));
+        assert!(help_allowed(
+            false,
+            from_reputation_faction(REP_HONORED, false)
+        ));
+        assert!(!help_allowed(
+            false,
+            from_reputation_faction(REP_HONORED, true)
+        ));
+    }
+
+    #[test]
+    fn a_friendly_area_helps_a_friendly_unit_but_not_a_neutral_one() {
+        assert!(help_allowed(false, template_reaction(false, true)));
+        assert!(!help_allowed(false, neutral()));
+        assert!(!help_allowed(false, hostile()));
+    }
+
+    #[test]
+    fn a_creatures_friendly_area_helps_its_owner_and_its_owners_other_units() {
+        const OWNER: u64 = 9;
+        assert!(same_master((5, OWNER), (OWNER, 0)));
+        assert!(same_master((OWNER, 0), (5, OWNER)));
+        assert!(same_master((5, OWNER), (6, OWNER)));
+        assert!(!same_master((5, 0), (6, 0)));
+        assert!(help_allowed(true, neutral()));
     }
 
     #[test]

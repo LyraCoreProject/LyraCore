@@ -196,6 +196,8 @@ pub const T_CASTER_PET: u8 = 8;
 // vmangos FillRaidOrPartyTargets: the caster's subgroup, or its whole raid, and their pets.
 pub const T_PARTY_AREA: u8 = 9;
 pub const T_RAID_AREA: u8 = 10;
+// Every unit not hostile to the caster: helpful script areas (7, 8) and target 30.
+pub const T_AREA_NOT_HOSTILE: u8 = 11;
 pub const COMBAT_ATTACK_POWER: u8 = 0;
 pub const COMBAT_CRIT: u8 = 1;
 pub const COMBAT_HIT: u8 = 2;

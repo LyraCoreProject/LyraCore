@@ -4,7 +4,7 @@ use lyracore_package_delta::ids::{
     is_fixture_reserved_spell_id, is_fixture_reserved_trainer_id, is_operator_spell_id,
     is_package_spell_id, is_package_trainer_id, packed_spell_effect_id,
 };
-use lyracore_shared::spell::taxonomy::{EffectKind, P_RAW, T_RAID_AREA};
+use lyracore_shared::spell::taxonomy::{EffectKind, P_RAW, T_AREA_NOT_HOSTILE};
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table};
 
 use crate::game_item_template;
@@ -156,7 +156,7 @@ fn check_children(
             return Err("invalid or duplicate effect key".into());
         }
         if EffectKind::try_from(row.kind).is_err()
-            || row.target > T_RAID_AREA
+            || row.target > T_AREA_NOT_HOSTILE
             || (row.p0_kind > 16 && row.p0_kind != P_RAW)
             || ![
                 row.per_level,

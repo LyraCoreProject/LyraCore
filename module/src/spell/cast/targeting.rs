@@ -136,8 +136,8 @@ fn aoe_keep(
 
 /// vmangos `SetTargetMap`: a chain's jump count, else the spell's `MaxAffectedTargets` (0: none).
 pub(super) fn affected_target_cap(max_affected_targets: u32, e: &SpellEffect) -> Option<usize> {
-    if e.target == T_CHAIN_ENEMY && e.chain_targets > 0 {
-        Some(usize::from(e.chain_targets))
+    if e.target == T_CHAIN_ENEMY {
+        Some(chain_length(e.chain_targets))
     } else if max_affected_targets > 0 {
         Some(max_affected_targets as usize)
     } else {
@@ -250,7 +250,7 @@ pub(crate) fn select_targets(
             let raid = e.target == T_RAID_AREA;
             party_area_targets(ctx, &caster, raid, area_radius(e), spell_level)
         }
-        T_AREA_ENEMY | T_AREA_ALLY | T_CHAIN_ENEMY => {
+        T_AREA_ENEMY | T_AREA_ALLY | T_AREA_NOT_HOSTILE | T_CHAIN_ENEMY => {
             let entities = ctx.db.game_world_entity();
             let Some(caster) = entities.guid().find(caster_guid) else {
                 return vec![one];
@@ -291,20 +291,28 @@ pub(crate) fn select_targets(
                         let (harmed, helped) = if want_enemy {
                             (crate::combat::area_may_harm(ctx, &caster, c), false)
                         } else {
-                            (false, area_may_help(ctx, &caster, c))
+                            let helped = if e.target == T_AREA_NOT_HOSTILE {
+                                crate::combat::may_help(ctx, &caster, c)
+                            } else {
+                                crate::combat::area_may_help(ctx, &caster, c)
+                            };
+                            (false, helped)
                         };
                         aoe_keep(d2, r2, want_enemy, c.guid == caster_guid, harmed, helped)
                     })
                     .collect();
 
             if e.target == T_CHAIN_ENEMY {
-                let count = if e.chain_targets > 0 {
-                    usize::from(e.chain_targets)
-                } else {
-                    usize::MAX
+                let Some(first) = entities
+                    .guid()
+                    .find(explicit)
+                    .filter(|first| first.guid != caster_guid)
+                else {
+                    return Vec::new();
                 };
+                let first = (first.guid, (first.x, first.y, first.z));
                 let units = units.iter().map(|c| (c.guid, (c.x, c.y, c.z))).collect();
-                return chain_jumps(explicit, units, count);
+                return chain_jumps(first, units, chain_length(e.chain_targets));
             }
             let mut hits: Vec<u64> = units.iter().map(|c| c.guid).collect();
             // Missing faction data can make the caster appear unfriendly to itself.
@@ -326,12 +334,6 @@ fn area_radius(e: &SpellEffect) -> f32 {
     }
 }
 
-/// vmangos `SPELL_TARGETS_FRIENDLY`: a friendly area helps only a unit friendly to its caster.
-fn area_may_help(ctx: &ReducerContext, caster: &WorldEntity, unit: &WorldEntity) -> bool {
-    crate::combat::relation(ctx, caster, unit) == crate::combat::Relation::Friendly
-        && crate::combat::may_help(ctx, caster, unit)
-}
-
 /// vmangos `FillRaidOrPartyTargets`: the caster's subgroup or raid and their pets near the caster.
 fn party_area_targets(
     ctx: &ReducerContext,
@@ -340,8 +342,16 @@ fn party_area_targets(
     radius: f32,
     spell_level: u8,
 ) -> Vec<u64> {
-    let leader = crate::pvp::affecting_character(ctx, caster).map_or(caster.guid, |c| c.guid);
-    let group = crate::group::group_of(ctx, leader);
+    // vmangos `GetCharmerOrOwnerPlayerOrPlayerItself`, else `GetCharmerOrOwnerOrSelf`.
+    let master = crate::pvp::affecting_character(ctx, caster).map_or(
+        if caster.owner_guid != 0 {
+            caster.owner_guid
+        } else {
+            caster.guid
+        },
+        |character| character.guid,
+    );
+    let group = crate::group::group_of(ctx, master);
     let members: Vec<u64> = match &group {
         Some(own) => {
             let subgroup = crate::group::raid_slot_of(own).subgroup();
@@ -351,7 +361,7 @@ fn party_area_targets(
                 .map(|m| m.character_guid)
                 .collect()
         }
-        None => vec![leader],
+        None => vec![master],
     };
     let entities = ctx.db.game_world_entity();
     let mut hits = Vec::new();
@@ -385,13 +395,19 @@ fn party_area_targets(
 // vmangos CHAIN_SPELL_JUMP_RADIUS: a chain jumps at most this far from the last unit it hit.
 const CHAIN_JUMP_YD: f32 = 10.0;
 
-/// vmangos `SetTargetMap` for a chain: `first`, then each time the unit nearest the last one hit.
-fn chain_jumps(first: u64, mut units: Vec<(u64, (f32, f32, f32))>, count: usize) -> Vec<u64> {
-    let Some(start) = units.iter().position(|&(guid, _)| guid == first) else {
-        return Vec::new();
-    };
-    let (guid, mut at) = units.swap_remove(start);
-    let mut chain = vec![guid];
+/// vmangos `EffectChainTarget` 0 or 1 hits the cast's target alone.
+fn chain_length(chain_targets: u8) -> usize {
+    usize::from(chain_targets.max(1))
+}
+
+/// vmangos `SetTargetMap` for a chain: the cast's target, then each time the unit nearest the last.
+fn chain_jumps(
+    (first, mut at): (u64, (f32, f32, f32)),
+    mut units: Vec<(u64, (f32, f32, f32))>,
+    count: usize,
+) -> Vec<u64> {
+    units.retain(|&(guid, _)| guid != first);
+    let mut chain = vec![first];
     while chain.len() < count {
         let jump = |(x, y, z): (f32, f32, f32)| {
             (x - at.0).powi(2) + (y - at.1).powi(2) + (z - at.2).powi(2)
@@ -2185,9 +2201,29 @@ mod effect_handler_tests {
             (3, (4.0, 0.0, 0.0)),
             (4, (30.0, 0.0, 0.0)),
         ];
-        assert_eq!(super::chain_jumps(1, units.clone(), 2), vec![1, 3]);
-        assert_eq!(super::chain_jumps(1, units.clone(), 10), vec![1, 3, 2]);
-        assert_eq!(super::chain_jumps(5, units, 3), Vec::<u64>::new());
+        let target = (1, (0.0, 0.0, 0.0));
+        assert_eq!(super::chain_jumps(target, units.clone(), 2), vec![1, 3]);
+        assert_eq!(super::chain_jumps(target, units, 10), vec![1, 3, 2]);
+    }
+
+    #[test]
+    fn a_chain_starts_at_its_target_even_when_the_area_rule_skips_it() {
+        let units = vec![(2, (9.0, 0.0, 0.0)), (3, (4.0, 0.0, 0.0))];
+        let totem = (7, (0.0, 0.0, 0.0));
+        assert_eq!(super::chain_jumps(totem, units, 3), vec![7, 3, 2]);
+    }
+
+    #[test]
+    fn a_chain_without_a_jump_count_hits_its_target_alone() {
+        assert_eq!(super::chain_length(0), 1);
+        assert_eq!(super::chain_length(1), 1);
+        assert_eq!(super::chain_length(3), 3);
+        let units = vec![(2, (1.0, 0.0, 0.0))];
+        let target = (1, (0.0, 0.0, 0.0));
+        assert_eq!(
+            super::chain_jumps(target, units, super::chain_length(0)),
+            vec![1]
+        );
     }
 
     #[test]
