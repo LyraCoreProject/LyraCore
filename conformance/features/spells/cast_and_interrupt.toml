@@ -80,6 +80,36 @@ path = "module/tests/channelled_ground_area.rs"
 function = "a_channelled_ground_area_deals_its_last_tick_and_removes_its_dynamic_object_at_expiry"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_channelled_ground_area_ends_when_its_caster_teleports_on_the_map"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_ground_area_without_a_channel_survives_a_teleport_on_the_map_and_ends_at_a_map_change"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_cast_in_progress_ends_when_its_caster_teleports"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_logout_ends_the_casters_ground_areas"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_logout_ends_the_casters_cast_in_progress"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/threat_victim_margin.rs"
+function = "a_creature_that_evades_stops_the_cast_it_began"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/SpellHandler.cpp"

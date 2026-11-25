@@ -857,6 +857,7 @@ fn finish_logout(
     keep_corpse: bool,
     departure: CharacterDeparture,
 ) {
+    crate::world::end_casts_before_leaving(ctx, guid);
     crate::combat::disengage(ctx, guid);
     crate::trade::cancel_trade_for(ctx, guid);
     crate::quest::share::forget_quest_shares(ctx, guid);

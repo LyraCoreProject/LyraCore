@@ -5,6 +5,7 @@ use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::character::{persist_entity, RUN_SPEED_BP_1X};
 use crate::game_character;
+use crate::game_ground_area;
 
 mod character_entity;
 mod placement;
@@ -642,6 +643,26 @@ fn raid_gate(
     Ok(())
 }
 
+/// Ends the caster's channel and cast before a same-map move, as vmangos `Player::TeleportTo`.
+fn end_casts_before_moving(ctx: &ReducerContext, caster_guid: u64) {
+    crate::spell::break_channel(ctx, caster_guid);
+}
+
+/// As a move, and drops the caster's ground areas, as vmangos `RemoveAllDynObjects` does when a
+/// unit leaves its map or the world.
+pub(crate) fn end_casts_before_leaving(ctx: &ReducerContext, caster_guid: u64) {
+    end_casts_before_moving(ctx, caster_guid);
+    let areas: Vec<crate::GroundArea> = ctx
+        .db
+        .game_ground_area()
+        .by_caster()
+        .filter(&caster_guid)
+        .collect();
+    for area in &areas {
+        crate::spell::cast::end_ground_area(ctx, area);
+    }
+}
+
 fn relocate(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -654,12 +675,22 @@ fn relocate(
     crate::corpse::revive_ghost_bound_for_corpse_map(ctx, player_guid, map_id);
     raid_gate(ctx, player_guid, map_id)?;
     let entities = ctx.db.game_world_entity();
+    let departing = entities
+        .guid()
+        .find(player_guid)
+        .expect("teleport Gate requires a live entity");
+    let cross_map = departing.map_id != map_id || destination.is_some();
+    if cross_map {
+        end_casts_before_leaving(ctx, player_guid);
+    } else {
+        end_casts_before_moving(ctx, player_guid);
+    }
+    // Ending a cast can rewrite the entity row.
     let e = entities
         .guid()
         .find(player_guid)
         .expect("teleport Gate requires a live entity");
     let recipient_identity = e.owner_identity;
-    let cross_map = e.map_id != map_id || destination.is_some();
     let sessionless = crate::helpers::character_by_guid(ctx, player_guid)
         .is_some_and(|character| !character.online);
     let changes_partition = e.map_id != map_id || e.instance_id != instance_id;

@@ -75,6 +75,7 @@ fn leash_pass(ctx: &ReducerContext) {
 }
 
 pub(crate) fn evade(ctx: &ReducerContext, creature: u64) {
+    stop_casting_for_evade(ctx, creature);
     let at_home = crate::creatures::eventai_on_evade(ctx, creature);
     disengage(ctx, creature);
     if let Some(mut c) = ctx.db.game_world_entity().guid().find(creature) {
@@ -86,6 +87,11 @@ pub(crate) fn evade(ctx: &ReducerContext, creature: u64) {
     if at_home {
         crate::creatures::eventai_arrived_home(ctx, creature);
     }
+}
+
+/// vmangos `CombatStop(true)` interrupts the evading creature's own cast and channel.
+pub(crate) fn stop_casting_for_evade(ctx: &ReducerContext, creature: u64) {
+    crate::spell::break_channel(ctx, creature);
 }
 
 fn aggro_pass(ctx: &ReducerContext) {
