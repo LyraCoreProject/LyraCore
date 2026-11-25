@@ -20,6 +20,7 @@ const SPARE_ARROWS: u32 = 5_091_232;
 const ARROW_STACK: u32 = 20;
 const RANGED_SLOT: u8 = 17;
 const STRIKE: u32 = 5_091_233;
+const SOURCE_ITEM_QUEST: u32 = 5_091_234;
 // Spell.dbc Attributes of Throw; 0x02 marks the ranged slot.
 const STRIKE_ATTRIBUTES: u32 = 0x0041_0012;
 const DAMAGE_CLASS_RANGED: u8 = 3;
@@ -293,6 +294,105 @@ fn a_commit_whose_offered_item_is_gone_or_reowned_cancels_and_moves_no_gold() {
         }
         f.shard.assert_sql("DELETE FROM game_item_instance");
     }
+}
+
+impl Fixture {
+    /// The Character takes a quest whose source item is `FIXTURE_JERKY`, then offers every jerky.
+    fn offer_quest_source_item(&self, extra_jerky: u32) -> u8 {
+        self.shard.insert_row(
+            "game_quest_template",
+            &[
+                ("entry", &SOURCE_ITEM_QUEST),
+                ("quest_level", &2),
+                ("title", &"Source item quest"),
+                ("zone_or_sort", &12),
+                ("src_item", &FIXTURE_JERKY),
+                ("src_item_count", &1u32),
+            ],
+        );
+        self.shard
+            .assert_call("debug_grant_quest", &["1", &SOURCE_ITEM_QUEST.to_string()]);
+        if extra_jerky > 0 {
+            self.shard.assert_call(
+                "debug_grant_item",
+                &["1", &FIXTURE_JERKY.to_string(), &extra_jerky.to_string()],
+            );
+        }
+        let stacks = self.shard.query_rows(&format!(
+            "SELECT slot FROM game_item_instance WHERE entry = {FIXTURE_JERKY}"
+        ));
+        assert_eq!(stacks.len(), 1, "the jerky is one stack: {stacks:?}");
+        let slot: u8 = support::number(&stacks[0], "slot");
+        self.offer_for_gold(slot);
+        self.shard.assert_call("gw_accept_trade", &[ACTOR]);
+        assert_eq!(self.accepts(), (true, false));
+        slot
+    }
+
+    fn accepts(&self) -> (bool, bool) {
+        let sessions = self
+            .shard
+            .query_rows("SELECT initiator_accepted, target_accepted FROM game_trade_session");
+        assert_eq!(sessions.len(), 1, "the trade is still open: {sessions:?}");
+        (
+            sessions[0]["initiator_accepted"] == "true",
+            sessions[0]["target_accepted"] == "true",
+        )
+    }
+
+    fn quest_rows(&self) -> usize {
+        self.shard
+            .query_rows(&format!(
+                "SELECT id FROM game_character_quest WHERE quest_entry = {SOURCE_ITEM_QUEST}"
+            ))
+            .len()
+    }
+
+    fn offered_slots(&self) -> usize {
+        self.shard
+            .query_rows("SELECT id FROM game_trade_slot")
+            .len()
+    }
+
+    fn abandon_source_item_quest(&self) {
+        self.shard
+            .assert_call("gw_abandon_quest", &[ACTOR, &SOURCE_ITEM_QUEST.to_string()]);
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn abandoning_a_quest_takes_its_offered_source_item_out_of_the_trade() {
+    let f = fixture("trade-abandon-offered-source");
+    f.offer_quest_source_item(0);
+    let partner_resets = f.events(&f.other, event_kind::BACK_TO_TRADE);
+
+    f.abandon_source_item_quest();
+
+    assert_eq!(f.quest_rows(), 0, "the quest left the log");
+    assert!(f.item(FIXTURE_JERKY).is_empty(), "the source item is gone");
+    assert_eq!(f.offered_slots(), 0, "the trade window shows no item");
+    assert_eq!(f.accepts(), (false, false));
+    assert_eq!(
+        f.events(&f.other, event_kind::BACK_TO_TRADE),
+        partner_resets + 1,
+        "the partner is sent back to the trade window"
+    );
+    assert_eq!(f.money("1"), PURSE);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn abandoning_a_quest_shrinks_an_offered_stack_that_holds_more_than_the_source_item() {
+    let f = fixture("trade-abandon-offered-stack");
+    f.offer_quest_source_item(2);
+
+    f.abandon_source_item_quest();
+
+    assert_eq!(f.quest_rows(), 0);
+    assert_eq!(f.stack_count(FIXTURE_JERKY), "2");
+    assert_eq!(f.offered_slots(), 1, "the smaller stack stays offered");
+    assert_eq!(f.accepts(), (false, false));
 }
 
 fn stage_bow_strike(f: &Fixture) -> String {
