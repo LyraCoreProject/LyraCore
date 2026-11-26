@@ -105,9 +105,11 @@ fn an_instant_area_spell_logs_the_damage_it_deals_each_unit() {
     cast(&shard, AREA_BURST);
     fence_subscription(&shard, &logs);
 
+    // The seeded trainer and flight master stand in the area too, neutral without faction rows.
     let mut logged: Vec<(u64, u32)> = event_rows(&logs, "game_spell_cast_event_live")
         .iter()
         .map(|row| (number(row, "target_guid"), number(row, "damage")))
+        .filter(|&(guid, _)| guid == wolf || guid == second)
         .collect();
     logged.sort_unstable();
     let mut dealt = [wolf, second].map(|guid| (guid, WOLF_HEALTH - health(&shard, guid)));
