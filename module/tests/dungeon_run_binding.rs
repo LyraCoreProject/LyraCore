@@ -209,8 +209,34 @@ fn the_last_member_in_the_groups_run_keeps_it_when_the_group_disbands() {
     assert_eq!(holder_of(&shard, &run), survivor);
     assert_eq!(holders_of(&shard, &run), [survivor]);
     walk_out(&shard, survivor);
+    shard.insert_row(
+        "game_instance_binding",
+        &[
+            ("id", &9_001u64),
+            ("character_guid", &LEADER),
+            ("instance_id", &run.parse::<u64>().unwrap()),
+            ("map_id", &DEADMINES),
+        ],
+    );
+    assert!(
+        !shard
+            .call("debug_reset_instance", &[&LEADER.to_string()])
+            .status
+            .success(),
+        "a binding the leaver carried cannot reset the survivor's run"
+    );
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT reset_requested FROM game_instance WHERE instance_id = {run}"
+        ))[0]["reset_requested"],
+        "false"
+    );
     assert_eq!(enter(&shard, survivor), run);
-    assert_ne!(enter(&shard, LEADER), run, "the leaver starts a fresh run");
+    assert_ne!(
+        enter(&shard, LEADER),
+        run,
+        "the leaver's carried binding does not route into the survivor's run"
+    );
 }
 
 #[test]

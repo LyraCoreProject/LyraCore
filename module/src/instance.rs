@@ -934,6 +934,7 @@ pub fn ensure_instance(
         }
         if party_id != 0 && instance_is_ownerless(ctx, existing.party_id) {
             existing.party_id = party_id;
+            existing.holder_guid = 0;
             ctx.db.game_instance().instance_id().update(existing);
             return Ok(());
         }
@@ -1188,6 +1189,7 @@ pub(crate) fn reset_instances(
                     .filter(|instance| {
                         instance.map_id == binding.map
                             && instance_is_ownerless(ctx, instance.party_id)
+                            && !held_by_another(instance, guid)
                     })
             })
             .collect()

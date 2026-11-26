@@ -86,6 +86,12 @@ symbol = "hand_runs_to_leader"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
 
 [[known_gaps]]
+description = "vmangos Group::_setLeader gives the Group's run to the old leader only when the old leader is online. LyraCore gives it to an offline old leader whose Character is on the Shard that runs the leader change."
+path = "module/src/instance.rs"
+symbol = "hand_runs_to_leader"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
+
+[[known_gaps]]
 description = "When the leader leaves the Group while it stands in the Group's run and the new leader holds its own run of that map, the leaver keeps the run as in vmangos Group::_setLeader. vmangos Group::_homebindIfInstance then counts the leaver down, because its bind is not permanent. LyraCore lets the holder stay, so the leaver gets no countdown."
 path = "module/src/instance.rs"
 symbol = "instance_removal_standing"

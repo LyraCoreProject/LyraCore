@@ -17,13 +17,16 @@ A solo run has `party_id` 0. Its `holder_guid` names the Character that holds it
 handover gave it a holder; such a run routes whoever is bound to it. A binding to a solo run that
 another Character holds does not route, also when that binding came with the Character on a
 Transfer. A Character may stand in its Group's run, or in a solo run that it or a member of its
-Group holds; a solo run without a holder sends nobody home. A run changes owner at three moments,
+Group holds; a solo run without a holder sends nobody home. `holder_guid` is not swept with its
+Character, because the Transfer cascade runs the deletion sweeps whenever the holder leaves the
+Instance Shard. A deleted holder's run routes nobody, no other Character can reset it, and it is
+reaped when empty. A run changes owner at three moments,
 as in vmangos `Group.cpp`:
 
 - When a Group forms, the leader's solo runs become the Group's (`Player::ConvertInstancesToGroup`).
 - When the leader changes, each Group run of a map where the new leader holds a solo run passes to
-  the old leader as its solo run, unless the old leader holds one of that map; then that run is
-  reset. The new leader's solo runs then become the Group's (`Group::_setLeader`). The remaining
+  the old leader as its solo run. When the old leader holds one of that map, or its Character is
+  not on this Shard, that run is reset instead. The new leader's solo runs then become the Group's (`Group::_setLeader`). The remaining
   members are checked for Instance Removal again.
 - When a Group disbands, the Group's run the last member stands in becomes that member's solo run
   and its other bindings on that Shard are dropped (`Group::Disband`). That member gets no
