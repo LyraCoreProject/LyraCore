@@ -318,6 +318,21 @@ function = "a_healing_chain_skips_a_unit_it_may_not_jump_to"
 rung = "unit"
 
 [[tests]]
+path = "module/src/spell/cast/targeting.rs"
+function = "an_enemy_chain_skips_a_unit_the_last_link_cannot_see"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/cast/targeting.rs"
+function = "an_enemy_chain_that_only_hits_players_skips_a_creature"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/cast/targeting.rs"
+function = "a_melee_enemy_chain_gathers_within_its_reach_and_any_other_chain_ten_yards_more_a_jump"
+rung = "unit"
+
+[[tests]]
 path = "module/tests/selected_unit_spell_targets.rs"
 function = "a_subgroup_spell_reaches_the_selected_characters_subgroup_and_pets_near_it"
 rung = "durable_module"
@@ -582,10 +597,10 @@ symbol = "tick_ground_areas"
 evidence = "Source reading, not measured. At d9173eca, GridNotifiersImpl.h DynamicObjectUpdater::VisitHelper skips a unit outside the DynamicObject's line of sight when a Character placed it, a creature whose IsImmuneToAoe holds and a Game Master; GetReactionTo reads contested PvP and forced ranks. VisitHelper applies a PersistentAreaAura that ticks on the unit's own Aura timer."
 
 [[known_gaps]]
-description = "An instant area spell hits a unit behind a wall, a creature with the CREATURE_IMMUNITY_AOE flag and a Game Master Character, and it reads no contested PvP or forced reaction. Its radius does not grow by a creature's combat reach, and a caster-centred area adds no leeway for a moving caster. A cone (targets 24 and 54) and an enemy area around the caster (targets 2 and 36) import as scripted effects, a source chain such as Chain Lightning or Multi-Shot (target 6) imports as a single target, and a script area (targets 7 and 8) ignores spell_script_target: a harmful one hits by the attack-target rule and a helpful one every unit not hostile to the caster, where vmangos hits only the spell's script targets, or every unit when it has none. Target 30 (FRIEND_AOE_AT_SRC_LOC) helps every unit not hostile to the caster where vmangos helps only friendly ones, because the caster of its world buffs cannot be told from the data (Spirit of Zandalar 24425 comes from a gameobject). A friendly area (targets 29 and 31) reads no forced reaction, contested PvP or Game Master state and treats a Character's cross-faction Group member by faction. A Package chain (T_CHAIN_ENEMY) finds its jumps only inside the effect's radius around its target and ignores line of sight between jumps. A friendly or party area does not check the unit flags that IsTargetableBy refuses help on."
+description = "An instant area spell hits a unit behind a wall, a creature with the CREATURE_IMMUNITY_AOE flag and a Game Master Character, and it reads no contested PvP or forced reaction. Its radius does not grow by a creature's combat reach, and a caster-centred area adds no leeway for a moving caster. A cone (targets 24 and 54) and an enemy area around the caster (targets 2 and 36) import as scripted effects, a source chain such as Chain Lightning or Multi-Shot (target 6) imports as a single target, and a script area (targets 7 and 8) ignores spell_script_target: a harmful one hits by the attack-target rule and a helpful one every unit not hostile to the caster, where vmangos hits only the spell's script targets, or every unit when it has none. Target 30 (FRIEND_AOE_AT_SRC_LOC) helps every unit not hostile to the caster where vmangos helps only friendly ones, because the caster of its world buffs cannot be told from the data (Spirit of Zandalar 24425 comes from a gameobject). A friendly area (targets 29 and 31) reads no forced reaction, contested PvP or Game Master state and treats a Character's cross-faction Group member by faction. A Package chain (T_CHAIN_ENEMY) gathers around its selected unit, where vmangos gathers around the caster for a spell with SPELL_ATTR_EX2_CHAIN_FROM_CASTER, and reads no stealth or invisibility visibility check on a jump candidate. A friendly or party area does not check the unit flags that IsTargetableBy refuses help on."
 path = "module/src/spell/cast/targeting.rs"
 symbol = "select_targets"
-evidence = "Source reading, not measured. At d9173eca, Spell.cpp SpellNotifierCreatureAndPlayer skips a unit out of line of sight unless SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT and adds GetCombatReach to the radius for a unit no Character controls; SetTargetMap adds GetLeewayBonusRadius for targets 15, 20 and 24, fills targets 2 and 6 by chain jumps of at most 10 yd, searched within the radius plus 10 yd per jump for a spell that is not melee and checked for line of sight between jumps, and targets 7 and 8 from spell_script_target. importer/src/spell.rs resolve_target maps none of 2, 24, 36 and 54, and maps 6 to T_TARGET_ENEMY."
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp SpellNotifierCreatureAndPlayer skips a unit out of line of sight unless SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT and adds GetCombatReach to the radius for a unit no Character controls; SetTargetMap adds GetLeewayBonusRadius for targets 15, 20 and 24, fills targets 2 and 6 by chain jumps of at most 10 yd, searched within the radius plus 10 yd per jump for a spell that is not melee, checked for line of sight between jumps unless SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT and for SPELL_ATTR_EX3_ONLY_ON_PLAYER, and targets 7 and 8 from spell_script_target. importer/src/spell.rs resolve_target maps none of 2, 24, 36 and 54, and maps 6 to T_TARGET_ENEMY."
 
 [[known_gaps]]
 description = "A single-target spell lands on a unit whose flags make it spawning, not attackable, not selectable, or immune to the caster's side (UNIT_FLAG_SPAWNING, NOT_ATTACKABLE_1, NON_ATTACKABLE_2, NOT_SELECTABLE, IMMUNE_TO_PLAYER, IMMUNE_TO_NPC), and the caster's own IMMUNE_TO_PLAYER or IMMUNE_TO_NPC flag does not stop it, where an area spell passes over such a unit. A Character's Fireball lands on a creature immune to players that its Arcane Explosion spares."
