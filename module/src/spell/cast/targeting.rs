@@ -9,6 +9,7 @@ use crate::game_item_instance;
 use crate::{game_character, game_creature_template, game_world_entity, WorldEntity};
 
 use crate::geometry::{distance_3d, projectile_travel_ms};
+use crate::spell::tables::SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT;
 use crate::spell::*;
 
 use crate::skilldata::game_skill_ability;
@@ -137,7 +138,7 @@ fn aoe_keep(
 
 /// vmangos `SetTargetMap`: a chain's jump count, else the spell's `MaxAffectedTargets` (0: none).
 pub(super) fn affected_target_cap(max_affected_targets: u32, e: &SpellEffect) -> Option<usize> {
-    if e.target == T_CHAIN_ENEMY {
+    if matches!(e.target, T_CHAIN_ENEMY | T_CHAIN_ALLY) {
         Some(chain_length(e.chain_targets))
     } else if max_affected_targets > 0 {
         Some(max_affected_targets as usize)
@@ -200,6 +201,20 @@ fn affected_target_rank(guid: u64, seed: u32) -> u64 {
     z ^ (z >> 31)
 }
 
+pub(crate) fn helps_units(target: u8) -> bool {
+    matches!(
+        target,
+        T_TARGET_ALLY
+            | T_AREA_ALLY
+            | T_AREA_NOT_HOSTILE
+            | T_PARTY_AREA
+            | T_RAID_AREA
+            | T_TARGET_SUBGROUP
+            | T_CHAIN_ALLY
+            | T_TARGET_GROUP_CLASS
+    )
+}
+
 pub(crate) fn faction_target_violation(
     hits_enemy: bool,
     hits_ally: bool,
@@ -221,7 +236,7 @@ pub(crate) fn select_targets(
     explicit: u64,
     e: &SpellEffect,
     dest: Option<(f32, f32, f32)>,
-    spell_level: u8,
+    hdr: &Spell,
 ) -> Vec<u64> {
     // vmangos puts a ground area on the ground, not on a unit: see `place_ground_area`.
     if e.kind == E_PERSISTENT_AREA {
@@ -231,25 +246,17 @@ pub(crate) fn select_targets(
     match e.target {
         T_SELF => vec![caster_guid],
         T_TARGET_ENEMY | T_TARGET_ALLY | T_TARGET_ANY => {
-            if one != caster_guid
-                && ctx
-                    .db
-                    .game_world_entity()
-                    .guid()
-                    .find(one)
-                    .is_some_and(|target| target.is_flying())
-            {
-                Vec::new()
-            } else {
-                vec![one]
-            }
+            selected_unit(ctx, caster_guid, one).into_iter().collect()
         }
         T_PARTY_AREA | T_RAID_AREA => {
             let Some(caster) = ctx.db.game_world_entity().guid().find(caster_guid) else {
                 return Vec::new();
             };
             let raid = e.target == T_RAID_AREA;
-            party_area_targets(ctx, &caster, raid, area_radius(e), spell_level)
+            party_area_targets(ctx, &caster, &caster, raid, area_radius(e), hdr.spell_level)
+        }
+        T_TARGET_SUBGROUP | T_CHAIN_ALLY | T_TARGET_GROUP_CLASS => {
+            selected_unit_targets(ctx, caster_guid, one, e, hdr)
         }
         T_AREA_ENEMY | T_AREA_ALLY | T_AREA_NOT_HOSTILE | T_CHAIN_ENEMY => {
             let entities = ctx.db.game_world_entity();
@@ -310,9 +317,18 @@ pub(crate) fn select_targets(
                 else {
                     return Vec::new();
                 };
-                let first = (first.guid, (first.x, first.y, first.z));
-                let units = units.iter().map(|c| (c.guid, (c.x, c.y, c.z))).collect();
-                return chain_jumps(first, units, chain_length(e.chain_targets));
+                let first = ChainUnit::at(first.guid, (first.x, first.y, first.z));
+                let units = units
+                    .iter()
+                    .map(|c| ChainUnit::at(c.guid, (c.x, c.y, c.z)))
+                    .collect();
+                return chain_jumps(
+                    first,
+                    units,
+                    chain_length(e.chain_targets),
+                    |_, _| true,
+                    chain_distance_sq,
+                );
             }
             let mut hits: Vec<u64> = units.iter().map(|c| c.guid).collect();
             // Missing faction data can make the caster appear unfriendly to itself.
@@ -326,6 +342,82 @@ pub(crate) fn select_targets(
     }
 }
 
+/// The cast's selected unit, unless it rides a taxi.
+fn selected_unit(ctx: &ReducerContext, caster_guid: u64, selected: u64) -> Option<u64> {
+    let flying = selected != caster_guid
+        && ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(selected)
+            .is_some_and(|target| target.is_flying());
+    (!flying).then_some(selected)
+}
+
+/// vmangos `SetTargetMap` targets 37, 45 and 61: units gathered around the selected unit.
+fn selected_unit_targets(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    one: u64,
+    e: &SpellEffect,
+    hdr: &Spell,
+) -> Vec<u64> {
+    let entities = ctx.db.game_world_entity();
+    let (Some(caster), Some(selected)) = (
+        entities.guid().find(caster_guid),
+        selected_unit(ctx, caster_guid, one).and_then(|guid| entities.guid().find(guid)),
+    ) else {
+        return Vec::new();
+    };
+    match e.target {
+        T_TARGET_SUBGROUP => {
+            let Some(center) = subgroup_center(ctx, &caster, &selected) else {
+                return Vec::new();
+            };
+            party_area_targets(
+                ctx,
+                &caster,
+                &center,
+                false,
+                selected_unit_radius(e, hdr),
+                hdr.spell_level,
+            )
+        }
+        T_CHAIN_ALLY => friendly_chain_targets(ctx, &caster, &selected, e, hdr),
+        _ => group_class_targets(ctx, &caster, &selected, selected_unit_radius(e, hdr)),
+    }
+}
+
+/// vmangos `SetTargetMap`: the effect's radius, else the spell's maximum range.
+fn selected_unit_radius(e: &SpellEffect, hdr: &Spell) -> f32 {
+    if e.radius_yd > 0.0 {
+        e.radius_yd
+    } else {
+        hdr.range_yd as f32
+    }
+}
+
+/// vmangos target 37: a pet caster's owner, or a Character caster's selected Character or pet owner.
+fn subgroup_center(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    selected: &WorldEntity,
+) -> Option<WorldEntity> {
+    let entities = ctx.db.game_world_entity();
+    if caster.owner_guid != 0 {
+        return entities.guid().find(caster.owner_guid);
+    }
+    if !caster.is_player() {
+        return None;
+    }
+    let center = if selected.is_player() {
+        selected.guid
+    } else {
+        selected.owner_guid
+    };
+    entities.guid().find(center).filter(WorldEntity::is_player)
+}
+
 fn area_radius(e: &SpellEffect) -> f32 {
     if e.radius_yd > 0.0 {
         e.radius_yd
@@ -334,20 +426,21 @@ fn area_radius(e: &SpellEffect) -> f32 {
     }
 }
 
-/// vmangos `FillRaidOrPartyTargets`: the caster's subgroup or raid and their pets near the caster.
+/// vmangos `FillRaidOrPartyTargets`: `center`'s Subgroup or raid and their pets near `center`.
 fn party_area_targets(
     ctx: &ReducerContext,
     caster: &WorldEntity,
+    center: &WorldEntity,
     raid: bool,
     radius: f32,
     spell_level: u8,
 ) -> Vec<u64> {
     // vmangos `GetCharmerOrOwnerPlayerOrPlayerItself`, else `GetCharmerOrOwnerOrSelf`.
-    let master = crate::pvp::affecting_character(ctx, caster).map_or(
-        if caster.owner_guid != 0 {
-            caster.owner_guid
+    let master = crate::pvp::affecting_character(ctx, center).map_or(
+        if center.owner_guid != 0 {
+            center.owner_guid
         } else {
-            caster.guid
+            center.guid
         },
         |character| character.guid,
     );
@@ -381,8 +474,8 @@ fn party_area_targets(
                 !raid
             } else {
                 !unit.dead
-                    && crate::helpers::in_same_partition(&unit, caster.map_id, caster.instance_id)
-                    && crate::helpers::dist_sq(caster, &unit) <= radius * radius
+                    && crate::helpers::in_same_partition(&unit, center.map_id, center.instance_id)
+                    && crate::helpers::dist_sq(center, &unit) <= radius * radius
             };
             if reached {
                 hits.push(unit.guid);
@@ -390,6 +483,115 @@ fn party_area_targets(
         }
     }
     hits
+}
+
+/// vmangos target 61: the selected Character's Group members of its class, or that unit alone.
+fn group_class_targets(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    selected: &WorldEntity,
+    radius: f32,
+) -> Vec<u64> {
+    let Some(group_id) = character_group(ctx, selected) else {
+        return vec![selected.guid];
+    };
+    let entities = ctx.db.game_world_entity();
+    crate::group::members_of(ctx, group_id)
+        .into_iter()
+        .filter_map(|member| entities.guid().find(member.character_guid))
+        .filter(|member| {
+            !member.dead
+                && member.class() == selected.class()
+                && crate::helpers::in_same_partition(member, selected.map_id, selected.instance_id)
+                && crate::helpers::dist_sq(selected, member) <= radius * radius
+                && crate::combat::relation(ctx, caster, member) != crate::combat::Relation::Hostile
+        })
+        .map(|member| member.guid)
+        .collect()
+}
+
+fn character_group(ctx: &ReducerContext, unit: &WorldEntity) -> Option<u64> {
+    if !unit.is_player() {
+        return None;
+    }
+    crate::group::group_of(ctx, unit.guid).map(|member| member.group_id)
+}
+
+/// vmangos target 45: the selected unit, then the injured friendly units by `ChainHealingOrder`.
+fn friendly_chain_targets(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    selected: &WorldEntity,
+    e: &SpellEffect,
+    hdr: &Spell,
+) -> Vec<u64> {
+    let count = chain_length(e.chain_targets);
+    if count == 1 {
+        return vec![selected.guid];
+    }
+    // vmangos gathers jumps within this reach of the caster, not of the target.
+    let reach = selected_unit_radius(e, hdr) + count as f32 * CHAIN_JUMP_YD;
+    let link = |unit: &WorldEntity| ChainUnit {
+        guid: unit.guid,
+        at: (unit.x, unit.y, unit.z),
+        group: character_group(ctx, unit),
+        missing_health: i64::from(unit.max_health.saturating_sub(unit.health)),
+    };
+    let injured: Vec<ChainUnit> = crate::helpers::area_candidates(
+        ctx,
+        caster.map_id,
+        caster.instance_id,
+        caster.x,
+        caster.y,
+        reach,
+    )
+    .into_iter()
+    .filter(|c| {
+        !c.dead
+            && c.health < c.max_health
+            && crate::helpers::dist_sq(caster, c) <= reach * reach
+            && (c.guid == caster.guid
+                || (crate::combat::may_help(ctx, caster, c)
+                    && crate::combat::area_may_help(ctx, caster, c)))
+    })
+    .map(|c| link(&c))
+    .collect();
+    let checks_los = hdr.attributes_ex_2 & SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT == 0;
+    let sees = |from: &ChainUnit, to: &ChainUnit| {
+        !checks_los || crate::nav::has_los(ctx, caster.map_id, caster.instance_id, from.at, to.at)
+    };
+    chain_jumps(link(selected), injured, count, sees, chain_healing_rank)
+}
+
+/// One unit a chain may jump to; `group` is a Character's Group.
+#[derive(Clone, Copy)]
+struct ChainUnit {
+    guid: u64,
+    at: (f32, f32, f32),
+    group: Option<u64>,
+    missing_health: i64,
+}
+
+impl ChainUnit {
+    fn at(guid: u64, at: (f32, f32, f32)) -> Self {
+        Self {
+            guid,
+            at,
+            group: None,
+            missing_health: 0,
+        }
+    }
+}
+
+/// vmangos `ChainHealingHash`: the last unit's Group first, then the most injured first.
+fn chain_healing_rank(last: &ChainUnit, next: &ChainUnit) -> i64 {
+    let same_group = last.group.is_some() && last.group == next.group;
+    let tier = if same_group { 20_000 } else { 40_000 };
+    tier - next.missing_health
+}
+
+fn chain_distance_sq(from: &ChainUnit, to: &ChainUnit) -> f32 {
+    (to.at.0 - from.at.0).powi(2) + (to.at.1 - from.at.1).powi(2) + (to.at.2 - from.at.2).powi(2)
 }
 
 // vmangos CHAIN_SPELL_JUMP_RADIUS: a chain jumps at most this far from the last unit it hit.
@@ -400,30 +602,30 @@ fn chain_length(chain_targets: u8) -> usize {
     usize::from(chain_targets.max(1))
 }
 
-/// vmangos `SetTargetMap` for a chain: the cast's target, then each time the unit nearest the last.
-fn chain_jumps(
-    (first, mut at): (u64, (f32, f32, f32)),
-    mut units: Vec<(u64, (f32, f32, f32))>,
+/// vmangos `SetTargetMap` for a chain: the cast's target, then each time the first unit by `order`.
+fn chain_jumps<K: PartialOrd>(
+    first: ChainUnit,
+    mut units: Vec<ChainUnit>,
     count: usize,
+    may_jump: impl Fn(&ChainUnit, &ChainUnit) -> bool,
+    order: impl Fn(&ChainUnit, &ChainUnit) -> K,
 ) -> Vec<u64> {
-    units.retain(|&(guid, _)| guid != first);
-    let mut chain = vec![first];
+    units.retain(|unit| unit.guid != first.guid);
+    let mut chain = vec![first.guid];
+    let mut last = first;
     while chain.len() < count {
-        let jump = |(x, y, z): (f32, f32, f32)| {
-            (x - at.0).powi(2) + (y - at.1).powi(2) + (z - at.2).powi(2)
-        };
-        let nearest = units
+        let next = units
             .iter()
             .enumerate()
-            .map(|(i, &(_, position))| (i, jump(position)))
-            .filter(|&(_, d2)| d2 <= CHAIN_JUMP_YD * CHAIN_JUMP_YD)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        let Some((next, _)) = nearest else {
+            .filter(|&(_, unit)| chain_distance_sq(&last, unit) <= CHAIN_JUMP_YD * CHAIN_JUMP_YD)
+            .filter(|&(_, unit)| may_jump(&last, unit))
+            .map(|(i, unit)| (i, order(&last, unit)))
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let Some((next, _)) = next else {
             break;
         };
-        let (guid, position) = units.swap_remove(next);
-        chain.push(guid);
-        at = position;
+        last = units.remove(next);
+        chain.push(last.guid);
     }
     chain
 }
@@ -2216,24 +2418,48 @@ mod effect_handler_tests {
         assert_eq!(picks.pick(0, vec![1, 2, 3], 3, 0, || 0), vec![1, 2]);
     }
 
+    fn nearest_chain(first: (u64, f32), units: &[(u64, f32)], count: usize) -> Vec<u64> {
+        let unit = |&(guid, x): &(u64, f32)| super::ChainUnit::at(guid, (x, 0.0, 0.0));
+        let units = units.iter().map(unit).collect();
+        super::chain_jumps(
+            unit(&first),
+            units,
+            count,
+            |_, _| true,
+            super::chain_distance_sq,
+        )
+    }
+
+    fn injured(guid: u64, x: f32, group: Option<u64>, missing_health: i64) -> super::ChainUnit {
+        super::ChainUnit {
+            guid,
+            at: (x, 0.0, 0.0),
+            group,
+            missing_health,
+        }
+    }
+
+    fn healing_chain(
+        first: super::ChainUnit,
+        units: Vec<super::ChainUnit>,
+        count: usize,
+    ) -> Vec<u64> {
+        super::chain_jumps(first, units, count, |_, _| true, super::chain_healing_rank)
+    }
+
     #[test]
     fn a_chain_jumps_from_its_target_to_the_nearest_unit_within_ten_yards() {
-        let units = vec![
-            (1, (0.0, 0.0, 0.0)),
-            (2, (9.0, 0.0, 0.0)),
-            (3, (4.0, 0.0, 0.0)),
-            (4, (30.0, 0.0, 0.0)),
-        ];
-        let target = (1, (0.0, 0.0, 0.0));
-        assert_eq!(super::chain_jumps(target, units.clone(), 2), vec![1, 3]);
-        assert_eq!(super::chain_jumps(target, units, 10), vec![1, 3, 2]);
+        let units = [(1, 0.0), (2, 9.0), (3, 4.0), (4, 30.0)];
+        assert_eq!(nearest_chain((1, 0.0), &units, 2), vec![1, 3]);
+        assert_eq!(nearest_chain((1, 0.0), &units, 10), vec![1, 3, 2]);
     }
 
     #[test]
     fn a_chain_starts_at_its_target_even_when_the_area_rule_skips_it() {
-        let units = vec![(2, (9.0, 0.0, 0.0)), (3, (4.0, 0.0, 0.0))];
-        let totem = (7, (0.0, 0.0, 0.0));
-        assert_eq!(super::chain_jumps(totem, units, 3), vec![7, 3, 2]);
+        assert_eq!(
+            nearest_chain((7, 0.0), &[(2, 9.0), (3, 4.0)], 3),
+            vec![7, 3, 2]
+        );
     }
 
     #[test]
@@ -2241,12 +2467,58 @@ mod effect_handler_tests {
         assert_eq!(super::chain_length(0), 1);
         assert_eq!(super::chain_length(1), 1);
         assert_eq!(super::chain_length(3), 3);
-        let units = vec![(2, (1.0, 0.0, 0.0))];
-        let target = (1, (0.0, 0.0, 0.0));
         assert_eq!(
-            super::chain_jumps(target, units, super::chain_length(0)),
+            nearest_chain((1, 0.0), &[(2, 1.0)], super::chain_length(0)),
             vec![1]
         );
+    }
+
+    #[test]
+    fn a_healing_chain_jumps_to_the_last_units_group_before_a_more_injured_outsider() {
+        let target = injured(1, 0.0, Some(9), 100);
+        let mate = injured(2, 8.0, Some(9), 10);
+        let outsider = injured(3, 2.0, None, 5_000);
+        assert_eq!(healing_chain(target, vec![outsider, mate], 2), vec![1, 2]);
+    }
+
+    #[test]
+    fn a_healing_chain_jumps_to_the_most_injured_unit_not_the_nearest() {
+        let target = injured(1, 0.0, None, 100);
+        let scratched = injured(2, 1.0, None, 10);
+        let wounded = injured(3, 9.0, None, 900);
+        assert_eq!(
+            healing_chain(target, vec![scratched, wounded], 3),
+            vec![1, 3, 2]
+        );
+    }
+
+    #[test]
+    fn a_healing_chain_ranks_each_jump_from_the_unit_it_last_healed() {
+        let target = injured(1, 0.0, None, 100);
+        let first_mate = injured(2, 5.0, Some(4), 950);
+        let outsider = injured(3, 9.0, None, 900);
+        let second_mate = injured(5, 12.0, Some(4), 10);
+        assert_eq!(
+            healing_chain(target, vec![first_mate, outsider, second_mate], 3),
+            vec![1, 2, 5],
+            "the second jump prefers the first mate's Group over the more injured outsider"
+        );
+    }
+
+    #[test]
+    fn a_healing_chain_skips_a_unit_it_may_not_jump_to() {
+        let target = injured(1, 0.0, None, 100);
+        let hidden = injured(2, 3.0, None, 900);
+        let beyond_every_link = injured(3, 17.0, None, 900);
+        let seen = injured(4, 6.0, None, 10);
+        let chain = super::chain_jumps(
+            target,
+            vec![hidden, beyond_every_link, seen],
+            3,
+            |_, next| next.guid != hidden.guid,
+            super::chain_healing_rank,
+        );
+        assert_eq!(chain, vec![1, 4]);
     }
 
     #[test]
