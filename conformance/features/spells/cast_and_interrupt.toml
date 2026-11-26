@@ -329,7 +329,7 @@ rung = "unit"
 
 [[tests]]
 path = "module/src/spell/cast/targeting.rs"
-function = "a_melee_enemy_chain_gathers_within_its_radius_and_a_spell_chain_ten_yards_a_jump"
+function = "a_melee_enemy_chain_gathers_within_its_reach_and_any_other_chain_ten_yards_more_a_jump"
 rung = "unit"
 
 [[tests]]

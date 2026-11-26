@@ -559,7 +559,7 @@ fn friendly_chain_targets(
 
 /// vmangos target 6 gathers within `radius` for a melee spell, else `radius` plus 10 yd a jump.
 fn enemy_chain_reach(e: &SpellEffect, hdr: &Spell) -> f32 {
-    let radius = area_radius(e);
+    let radius = selected_unit_radius(e, hdr);
     if hdr.damage_class == crate::spell::proc::DAMAGE_CLASS_MELEE {
         radius
     } else {
@@ -654,13 +654,16 @@ fn chain_jumps<K: PartialOrd>(
     let mut chain = vec![first.guid];
     let mut last = first;
     while chain.len() < count {
-        let next = units
+        let mut in_reach: Vec<(usize, K)> = units
             .iter()
             .enumerate()
             .filter(|&(_, unit)| chain_distance_sq(&last, unit) <= CHAIN_JUMP_YD * CHAIN_JUMP_YD)
-            .filter(|&(_, unit)| may_jump(&last, unit))
             .map(|(i, unit)| (i, order(&last, unit)))
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            .collect();
+        in_reach.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let next = in_reach
+            .into_iter()
+            .find(|&(i, _)| may_jump(&last, &units[i]));
         let Some((next, _)) = next else {
             break;
         };
@@ -2591,13 +2594,13 @@ mod effect_handler_tests {
 
     #[test]
     fn an_enemy_chain_that_only_hits_players_skips_a_creature() {
-        let units = [(1, 0.0, true), (2, 3.0, false), (3, 6.0, true)];
+        let units = [(1, 0.0, false), (2, 3.0, false), (3, 6.0, true)];
         assert_eq!(enemy_chain(&units, true, (9, 9)), vec![1, 3]);
         assert_eq!(enemy_chain(&units, false, (9, 9)), vec![1, 2, 3]);
     }
 
     #[test]
-    fn a_melee_enemy_chain_gathers_within_its_radius_and_a_spell_chain_ten_yards_a_jump() {
+    fn a_melee_enemy_chain_gathers_within_its_reach_and_any_other_chain_ten_yards_more_a_jump() {
         let chain = super::SpellEffect {
             target: super::T_CHAIN_ENEMY,
             radius_yd: 5.0,
@@ -2609,6 +2612,15 @@ mod effect_handler_tests {
             ..super::Spell::blank(1, "Cleave")
         };
         assert_eq!(super::enemy_chain_reach(&chain, &melee), 5.0);
+        let ranged_melee = super::Spell {
+            range_yd: 5,
+            ..melee
+        };
+        let no_radius = super::SpellEffect {
+            radius_yd: 0.0,
+            ..chain
+        };
+        assert_eq!(super::enemy_chain_reach(&no_radius, &ranged_melee), 5.0);
         assert_eq!(
             super::enemy_chain_reach(&chain, &super::Spell::blank(2, "Chain")),
             35.0
