@@ -1,7 +1,7 @@
 schema_version = 1
 id = "quest_log"
 system = "quests"
-scope = "A Character can reorder and abandon quests in its quest log."
+scope = "A Character can reorder and abandon quests in its quest log. Abandoning destroys the quest's source item and every copy, in bags and bank, of each required item with quest bonding; a required item without it stays."
 requests = ["0x0193", "0x0194"]
 replies = []
 dependencies = []
@@ -12,6 +12,7 @@ prerequisites = []
 tests = [
     { path = "module/tests/native_conformance.rs", function = "quest_slots_survive_reconnect_and_reuse_only_the_abandoned_slot", rung = "durable_module" },
     { path = "module/tests/conformance/quest_turn_in.rs", function = "abandoning_a_quest_whose_source_item_is_worn_removes_the_item_and_its_stats", rung = "durable_module" },
+    { path = "module/tests/conformance/quest_turn_in.rs", function = "abandoning_a_quest_destroys_its_quest_bonded_required_items_in_bags_and_bank", rung = "durable_module" },
 ]
 
 [vmangos]

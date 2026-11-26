@@ -417,6 +417,26 @@ pub(crate) fn remove_items(
     Ok(())
 }
 
+/// Deletes every copy of `item_entry` the Character carries, wears or banks. Each deletion goes
+/// through the write path, so the client sees the item destroyed and a Trade Session offering it
+/// is reset. Items inside bank bags have no address in this model.
+pub(crate) fn destroy_all_copies(ctx: &ReducerContext, owner_guid: u64, item_entry: u32) {
+    let copies: Vec<u64> = ctx
+        .db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(&owner_guid)
+        .filter(|i| {
+            i.entry == item_entry
+                && (is_carried_slot(i.slot) || super::inventory::is_bank_slot(i.slot))
+        })
+        .map(|i| i.guid)
+        .collect();
+    for guid in copies {
+        crate::ItemInstance::delete(ctx, guid);
+    }
+}
+
 fn use_spell_for(tmpl: &ItemTemplate) -> Option<u32> {
     super::equip::spells(tmpl)
         .into_iter()

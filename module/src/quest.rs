@@ -1885,7 +1885,38 @@ pub(crate) fn apply_abandon_quest(
     if cq.rewarded {
         return Err("cannot abandon a completed quest".into());
     }
-    remove_from_log(ctx, cq)
+    remove_from_log(ctx, cq)?;
+    destroy_quest_bonded_required_items(ctx, player_guid, quest_entry);
+    Ok(())
+}
+
+// vmangos Player::RemoveQuestAtSlot, d9173eca: abandoning destroys every copy, in bags and bank,
+// of each required item whose template has quest bonding. A failed quest keeps them.
+fn destroy_quest_bonded_required_items(ctx: &ReducerContext, player_guid: u64, quest_entry: u32) {
+    let quest_bonded: Vec<u32> = ctx
+        .db
+        .game_quest_objective()
+        .by_quest()
+        .filter(&quest_entry)
+        .filter(|o| o.kind == objective_kind::COLLECT_ITEM)
+        .map(|o| o.target_entry)
+        .filter(|&entry| {
+            ctx.db
+                .game_item_template()
+                .entry()
+                .find(entry)
+                .is_some_and(|tmpl| {
+                    matches!(
+                        tmpl.bonding,
+                        crate::items::bonding::BIND_QUEST_ITEM
+                            | crate::items::bonding::BIND_QUEST_ITEM1
+                    )
+                })
+        })
+        .collect();
+    for entry in quest_bonded {
+        crate::items::destroy_all_copies(ctx, player_guid, entry);
+    }
 }
 
 fn remove_from_log(ctx: &ReducerContext, mut cq: CharacterQuest) -> Result<(), crate::Refusal> {

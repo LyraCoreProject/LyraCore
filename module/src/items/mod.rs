@@ -47,10 +47,11 @@ pub(crate) use inventory::{
 };
 pub(crate) use ops::{
     apply_death_durability_loss, apply_item_use, apply_item_use_on,
-    apply_spirit_healer_durability_loss, equipped_school_stat_bonus, equipped_stat_bonus,
-    grant_item, grant_item_property, grant_letter_item, grant_starter_item, has_free_slot,
-    item_count, item_stat_bonus, remove_items, request_grant_item, request_profile_item,
-    resistance_items, store_instance_state, use_up_one, ItemSnapshot, ItemUseTarget, StoreRefusal,
+    apply_spirit_healer_durability_loss, destroy_all_copies, equipped_school_stat_bonus,
+    equipped_stat_bonus, grant_item, grant_item_property, grant_letter_item, grant_starter_item,
+    has_free_slot, item_count, item_stat_bonus, remove_items, request_grant_item,
+    request_profile_item, resistance_items, store_instance_state, use_up_one, ItemSnapshot,
+    ItemUseTarget, StoreRefusal,
 };
 pub(crate) use properties::{
     enchant_stat, enchant_stat_for_school, is_known_enchant, property_stat,
