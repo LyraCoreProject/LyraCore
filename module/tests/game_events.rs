@@ -2,6 +2,10 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::{packed_creature_spawn_guid, packed_gameobject_spawn_guid};
+use lyracore_shared::game_event::{
+    DARKMOON_FAIRE_ELWYNN, DARKMOON_FAIRE_ELWYNN_BUILDING, DARKMOON_FAIRE_EVENTS,
+    DARKMOON_FAIRE_MULGORE,
+};
 use support::{number, refused, Standalone};
 
 const CHARACTER: u64 = 1;
@@ -20,6 +24,12 @@ const LANTERN_WHILE_RUNNING: u32 = 5_300_401;
 const LANTERN_WHILE_STOPPED: u32 = 5_300_402;
 const PARTIAL_LANTERNS: u32 = 5_300_501;
 
+// 2026-12-06 23:59:30 UTC, thirty seconds before the Darkmoon Faire opens in Elwynn.
+const FAIRE_BUILDING_SECS: i64 = 1_796_601_570;
+const FAIRE_BUILDER_WOLF: u32 = 3_000_003;
+const ELWYNN_FAIRE_LANTERN: u32 = 5_300_403;
+const MULGORE_FAIRE_LANTERN: u32 = 5_300_404;
+
 struct Place {
     map_id: u32,
     x: f32,
@@ -28,6 +38,10 @@ struct Place {
 }
 
 fn realm(name: &str) -> (Standalone, Place) {
+    realm_at(name, VIRTUAL_START_SECS)
+}
+
+fn realm_at(name: &str, start_secs: i64) -> (Standalone, Place) {
     let mut shard = Standalone::start(name);
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
@@ -36,7 +50,7 @@ fn realm(name: &str) -> (Standalone, Place) {
     shard.assert_call("debug_spawn_player_entity", &[&CHARACTER.to_string()]);
     shard.assert_call(
         "debug_start_virtual_clock",
-        &[&(VIRTUAL_START_SECS * 1_000_000).to_string()],
+        &[&(start_secs * 1_000_000).to_string()],
     );
     let at = shard.query_rows(&format!(
         "SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {CHARACTER}"
@@ -85,12 +99,16 @@ fn festival(shard: &Standalone, start_secs: i64, length_mins: u32, kind: Kind) {
 }
 
 fn link(shard: &Standalone, spawn_guid: u64, while_inactive: bool) {
+    link_to(shard, spawn_guid, FESTIVAL, while_inactive);
+}
+
+fn link_to(shard: &Standalone, spawn_guid: u64, event_entry: u32, while_inactive: bool) {
     shard.insert_row(
         "game_event_link",
         &[
             ("link_id", &spawn_guid),
             ("spawn_guid", &spawn_guid),
-            ("event_entry", &FESTIVAL),
+            ("event_entry", &event_entry),
             ("while_inactive", &while_inactive),
         ],
     );
@@ -110,7 +128,16 @@ fn festival_spawns(shard: &Standalone, at: &Place) {
     link(shard, wolf_guid(WOLF_WHILE_STOPPED), true);
     link(shard, lantern_guid(LANTERN_WHILE_RUNNING), false);
     link(shard, lantern_guid(LANTERN_WHILE_STOPPED), true);
-    let wolves = [WOLF_WHILE_RUNNING, WOLF_WHILE_STOPPED]
+    import_spawns(
+        shard,
+        at,
+        &[WOLF_WHILE_RUNNING, WOLF_WHILE_STOPPED],
+        &[LANTERN_WHILE_RUNNING, LANTERN_WHILE_STOPPED],
+    );
+}
+
+fn import_spawns(shard: &Standalone, at: &Place, wolves: &[u32], lanterns: &[u32]) {
+    let wolves = wolves
         .iter()
         .map(|&low| {
             format!(
@@ -125,7 +152,7 @@ fn festival_spawns(shard: &Standalone, at: &Place) {
         .collect::<Vec<_>>()
         .join(";");
     shard.assert_call("import_creature_spawns_append", &[&wolves]);
-    let lanterns = [LANTERN_WHILE_RUNNING, LANTERN_WHILE_STOPPED]
+    let lanterns = lanterns
         .iter()
         .map(|&low| {
             format!(
@@ -415,4 +442,64 @@ fn a_pool_tied_to_an_event_rolls_only_while_the_event_runs() {
 
     shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
     assert!(pooled().is_empty(), "the event's end takes its pool down");
+}
+
+/// A Darkmoon Faire event as the pinned World Source has it: scripted, with no calendar dates.
+fn faire_event(shard: &Standalone, event_entry: u32) {
+    shard.insert_row(
+        "game_event",
+        &[
+            ("event_entry", &event_entry),
+            ("start_secs", &0i64),
+            ("end_secs", &0i64),
+            ("occurrence_mins", &YEAR_MINS),
+            ("length_mins", &2_592_000u32),
+            ("scripted", &true),
+            ("disabled", &false),
+            ("description", &"Fixture Darkmoon Faire"),
+        ],
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_darkmoon_faire_builds_then_opens_at_its_months_site_without_an_operator() {
+    let (shard, at) = realm_at("game-event-darkmoon-faire", FAIRE_BUILDING_SECS);
+    for event_entry in DARKMOON_FAIRE_EVENTS {
+        faire_event(&shard, event_entry);
+    }
+    let builder = wolf_guid(FAIRE_BUILDER_WOLF);
+    let elwynn = lantern_guid(ELWYNN_FAIRE_LANTERN);
+    let mulgore = lantern_guid(MULGORE_FAIRE_LANTERN);
+    link_to(&shard, builder, DARKMOON_FAIRE_ELWYNN_BUILDING, false);
+    link_to(&shard, elwynn, DARKMOON_FAIRE_ELWYNN, false);
+    link_to(&shard, mulgore, DARKMOON_FAIRE_MULGORE, false);
+    import_spawns(
+        &shard,
+        &at,
+        &[FAIRE_BUILDER_WOLF],
+        &[ELWYNN_FAIRE_LANTERN, MULGORE_FAIRE_LANTERN],
+    );
+    settle(&shard);
+    assert_eq!(
+        [
+            in_world(&shard, builder),
+            shown(&shard, elwynn),
+            shown(&shard, mulgore)
+        ],
+        [true, false, false],
+        "the Faire builds in Elwynn on the Sunday before its first Monday"
+    );
+
+    shard.assert_call("debug_advance_roll_batch", &["1200"]);
+
+    assert_eq!(
+        [
+            in_world(&shard, builder),
+            shown(&shard, elwynn),
+            shown(&shard, mulgore)
+        ],
+        [false, true, false],
+        "the Faire opens in Elwynn on December's first Monday"
+    );
 }

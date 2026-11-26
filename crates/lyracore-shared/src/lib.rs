@@ -6,6 +6,7 @@ pub mod constants;
 pub mod eventai;
 pub mod faction;
 pub mod form;
+pub mod game_event;
 pub mod gossip;
 pub mod group;
 pub mod guid;

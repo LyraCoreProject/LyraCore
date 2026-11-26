@@ -37,6 +37,12 @@ tests = [
     { path = "module/tests/conformance/quest_availability.rs", function = "an_event_quest_is_offered_only_while_its_event_runs", rung = "durable_module" },
     { path = "module/tests/conformance/quest_availability.rs", function = "an_accepted_event_quest_stays_in_the_log_and_rewards_when_its_event_ends", rung = "durable_module" },
     { path = "module/tests/conformance/buy_in_slot.rs", function = "an_event_vendor_item_is_listed_and_sold_only_while_its_event_runs", rung = "durable_module" },
+    { path = "module/src/game_events/darkmoon_faire.rs", function = "the_faire_builds_for_three_days_then_opens_for_a_week_from_the_first_monday", rung = "unit" },
+    { path = "module/src/game_events/darkmoon_faire.rs", function = "the_faire_alternates_between_elwynn_and_mulgore_by_month", rung = "unit" },
+    { path = "module/src/game_events/darkmoon_faire.rs", function = "a_faire_opening_on_the_first_builds_on_no_day_of_the_month_before", rung = "unit" },
+    { path = "module/src/game_events.rs", function = "the_darkmoon_faire_runs_on_its_schedule_without_an_operator", rung = "unit" },
+    { path = "importer/src/world_import_game_events.rs", function = "the_darkmoon_faire_events_leave_the_scripted_finding", rung = "unit" },
+    { path = "module/tests/game_events.rs", function = "the_darkmoon_faire_builds_then_opens_at_its_months_site_without_an_operator", rung = "durable_module" },
 ]
 
 [vmangos]
@@ -78,7 +84,7 @@ symbol = "plan"
 evidence = "vmangos GameEventMgr::SendEventMails at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
 [[known_gaps]]
-description = "Scripted events (vmangos hardcoded: Darkmoon Faire, Elemental Invasions, Scourge Invasion, AQ War Effort, Fireworks, Post Firework Toasting Goblets, Lunar Festival Minions of Omen, Dragons of Nightmare) have no script, so they stay stopped: their spawns stay hidden, their quests are not offered and their absence spawns show until an Operator starts them."
+description = "Scripted events (vmangos hardcoded: Elemental Invasions, Scourge Invasion, AQ War Effort, Fireworks, Post Firework Toasting Goblets, Lunar Festival Minions of Omen, Dragons of Nightmare) have no script, so they stay stopped: their spawns stay hidden, their quests are not offered and their absence spawns show until an Operator starts them."
 path = "module/src/game_events.rs"
 symbol = "event_state"
 evidence = "Compatibility Manifest events.scripted; vmangos HardcodedEvents.cpp at d9173eca3ea08dd985c52dabbcc826898d1d0b77."

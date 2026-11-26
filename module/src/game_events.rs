@@ -6,6 +6,8 @@ use spacetimedb::{
     log, reducer, table, ReducerContext, ScheduleAt, SpacetimeType, Table, TimeDuration,
 };
 
+mod darkmoon_faire;
+
 /// One vmangos `game_event` row: its calendar on the Realm Clock.
 #[table(accessor = game_event)]
 pub struct GameEvent {
@@ -15,7 +17,7 @@ pub struct GameEvent {
     pub end_secs: i64,
     pub occurrence_mins: u32,
     pub length_mins: u32,
-    // vmangos `hardcoded`: a script, absent here, runs it, so the calendar keeps it stopped.
+    // vmangos `hardcoded`: its script runs it; only the Darkmoon Faire has one here.
     pub scripted: bool,
     // vmangos `disabled`, or left out of patch 1.12: nothing runs or stops it.
     pub disabled: bool,
@@ -188,7 +190,7 @@ pub(crate) fn in_window(occurrence: Occurrence, now_secs: i64) -> bool {
 }
 
 /// vmangos `GameEventMgr::Update`: a disabled or zero-length event is not checked, a scripted
-/// one stays stopped until its script runs it, and an Operator's start or stop wins.
+/// one follows its script or stays stopped without one, and an Operator's start or stop wins.
 pub(crate) fn event_state(
     event: Option<&GameEvent>,
     running: Option<bool>,
@@ -201,7 +203,9 @@ pub(crate) fn event_state(
         Some(true) => GameEventState::Active,
         Some(false) => GameEventState::Inactive,
         None if event.disabled || event.length_mins == 0 => GameEventState::Unscheduled,
-        None if event.scripted => GameEventState::Inactive,
+        None if event.scripted => {
+            darkmoon_faire::state(event.event_entry, now_secs).unwrap_or(GameEventState::Inactive)
+        }
         None if in_window(event.occurrence(), now_secs) => GameEventState::Active,
         None => GameEventState::Inactive,
     }
@@ -647,6 +651,31 @@ mod tests {
         assert_eq!(event_state(Some(&scheduled), None, outside), Inactive);
         let scripted = event(true, false, night());
         assert_eq!(event_state(Some(&scripted), None, inside), Inactive);
+    }
+
+    #[test]
+    fn the_darkmoon_faire_runs_on_its_schedule_without_an_operator() {
+        use lyracore_shared::game_event::{DARKMOON_FAIRE_ELWYNN, DARKMOON_FAIRE_MULGORE};
+        // 2026-12-07 12:00 UTC, the Faire's first day in Elwynn.
+        let faire_day = 1_796_644_800;
+        let faire = |event_entry| GameEvent {
+            event_entry,
+            ..event(true, false, night())
+        };
+        let elwynn = faire(DARKMOON_FAIRE_ELWYNN);
+        let mulgore = faire(DARKMOON_FAIRE_MULGORE);
+        assert_eq!(
+            event_state(Some(&elwynn), None, faire_day),
+            GameEventState::Active
+        );
+        assert_eq!(
+            event_state(Some(&mulgore), None, faire_day),
+            GameEventState::Inactive
+        );
+        assert_eq!(
+            event_state(Some(&elwynn), Some(false), faire_day),
+            GameEventState::Inactive
+        );
     }
 
     #[test]
