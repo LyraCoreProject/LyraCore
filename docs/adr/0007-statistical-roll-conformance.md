@@ -651,8 +651,9 @@ Strike context is melee Mortal Strike.
 A ranged hit is a Spell in vmangos, so `CreateProcExtendMask`
 ([Unit.cpp:8776–8830](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp))
 raises `PROC_EX_BLOCK` beside the hit's quality (`PROC_EX_NORMAL_HIT` or `PROC_EX_CRITICAL_HIT`),
-and `PROC_EX_ABSORB` beside the quality for an absorb. Only a white melee full block raises
-`PROC_EX_BLOCK` alone. `ranged_impact` runs the unlanded proc pass when a shot lands with no
+and `PROC_EX_ABSORB` beside the quality for an absorb. A cast or queued melee strike a block takes
+whole keeps its quality beside the block too; only a white melee full block raises `PROC_EX_BLOCK`
+alone. `ranged_impact` runs the unlanded proc pass when a shot lands with no
 damage, so a fully blocked, absorbed or resisted ranged hit raises its quality and the block or
 absorb bit; the launch folds the
 absorbed amount into the impact schedule. A shot that misses or meets an immune target has no
