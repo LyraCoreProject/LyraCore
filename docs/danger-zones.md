@@ -304,6 +304,17 @@ whose event an import removed. An importer from before this change re-importing 
 `event_ids` but no links; if no `events` import ever ran, the Realm keeps the behavior before Game
 Events, otherwise the existing links still name the same spawns.
 
+### Game event quest and vendor migration
+
+The private `game_event_quest` and `game_event_vendor_item` tables are new and start empty. No
+existing column or reducer argument changes, so no Package builds a changed row. A publish alone
+changes nothing a player sees: with no rows every quest is offered and every vendor item sold, as
+before.
+
+With the updated importer, run `--family events` again. A `creatures` or `gameobjects` import also
+writes the `events` family. The import writes both tables, so event quests and event vendor items
+follow their event at once. A rerun writes the same rows.
+
 ### Chest money and item loot migration
 
 `game_item_template` gains `lock_id`, `money_min` and `money_max`, and `game_gameobject_template`

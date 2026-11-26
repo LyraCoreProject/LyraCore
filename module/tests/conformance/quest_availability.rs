@@ -1,5 +1,5 @@
 // Quest availability and giver marks against vmangos d9173eca: Player::CanTakeQuest,
-// Player::CanSeeStartQuest and WorldSession::GetDialogStatus.
+// Player::CanSeeStartQuest, WorldSession::GetDialogStatus and GameEventMgr::UpdateEventQuests.
 use lyracore_package_delta::fixture_ids::SCENARIO_QUESTGIVER_ENTRY;
 use lyracore_shared::constants::npc_flags;
 use lyracore_test_support::{ReducerConnection, Standalone};
@@ -13,6 +13,7 @@ const EXCLUSIVE_GROUP: i32 = 5_113;
 const CMSG_QUESTGIVER_STATUS_QUERY: u32 = 0x182;
 const CMSG_QUESTGIVER_ACCEPT_QUEST: u32 = 0x189;
 const CMSG_QUESTLOG_REMOVE_QUEST: u32 = 0x194;
+const CMSG_QUESTGIVER_CHOOSE_REWARD: u32 = 0x18e;
 const SMSG_QUESTGIVER_STATUS: u16 = 0x183;
 const SMSG_QUESTGIVER_QUEST_INVALID: u16 = 0x18F;
 const SMSG_GOSSIP_COMPLETE: u16 = 0x17E;
@@ -557,4 +558,80 @@ fn set_cooking(stage: &Stage, value: u32) {
         "UPDATE game_player_skill SET current = {value} WHERE character_guid = {} AND skill_line = {COOKING}",
         stage.guid
     ));
+}
+
+const FESTIVAL: u32 = 5_113_100;
+
+/// Ties `quest` to a scripted Game Event, which stays stopped until an Operator starts it.
+fn festival_quest(stage: &Stage, quest: u32) {
+    stage.shard.insert_row(
+        "game_event",
+        &[
+            ("event_entry", &FESTIVAL),
+            ("start_secs", &0i64),
+            ("end_secs", &i64::from(i32::MAX)),
+            ("occurrence_mins", &525_600u32),
+            ("length_mins", &1_440u32),
+            ("scripted", &true),
+            ("disabled", &false),
+            ("description", &"Fixture festival"),
+        ],
+    );
+    stage.shard.insert_row(
+        "game_event_quest",
+        &[("quest_entry", &quest), ("event_entry", &FESTIVAL)],
+    );
+}
+
+fn festival(stage: &Stage, reducer: &str) {
+    stage.shard.assert_call(reducer, &[&FESTIVAL.to_string()]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_event_quest_is_offered_only_while_its_event_runs() {
+    let mut stage = stage("quest-availability-event");
+    offer(&stage, FIRST, 1, 1);
+    festival_quest(&stage, FIRST);
+
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
+    refused(&mut stage, FIRST, vec![(SMSG_GOSSIP_COMPLETE, Vec::new())]);
+
+    festival(&stage, "debug_event_start");
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
+    accepted(&mut stage, FIRST);
+}
+
+// vmangos GetDialogStatus hides an inactive quest from its ender; CanRewardQuest does not check it.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_accepted_event_quest_stays_in_the_log_and_rewards_when_its_event_ends() {
+    let mut stage = stage("quest-availability-event-end");
+    offer(&stage, FIRST, 1, 1);
+    stage.shard.insert_row(
+        "game_creature_quest",
+        &[
+            ("id", &(u64::from(FIRST) + 1_000_000_000)),
+            ("creature_entry", &SCENARIO_QUESTGIVER_ENTRY),
+            ("quest_entry", &FIRST),
+            ("role", &1),
+        ],
+    );
+    festival_quest(&stage, FIRST);
+    festival(&stage, "debug_event_start");
+    accepted(&mut stage, FIRST);
+
+    festival(&stage, "debug_event_stop");
+
+    assert!(has_quest(&stage, FIRST));
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
+    let mut body = stage.giver.to_le_bytes().to_vec();
+    body.extend(FIRST.to_le_bytes());
+    body.extend(0u32.to_le_bytes());
+    request(&mut stage.connection, CMSG_QUESTGIVER_CHOOSE_REWARD, body);
+    let rows = stage.shard.query_rows(&format!(
+        "SELECT rewarded FROM game_character_quest WHERE quest_entry = {FIRST}"
+    ));
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["rewarded"], "true");
 }
