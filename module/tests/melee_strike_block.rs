@@ -19,6 +19,8 @@ const DAMAGE_CLASS_MELEE: u8 = 2;
 // Spell.dbc Attributes of an instant melee ability: ability, not while shapeshifted, no sheath.
 const STRIKE_ATTRIBUTES: u32 = 0x0041_0010;
 const SPELL_ATTR_NO_ACTIVE_DEFENSE: u32 = 0x0020_0000;
+// A charge spends only after the watch Aura has aged past the tick that applied it.
+const ONE_TICK: &str = "1";
 const WATCH_CHARGES: u8 = 3;
 const DURATION_MS: u32 = 600_000;
 // vmangos SpellDefines.h ProcFlags and ProcFlagsEx.
@@ -118,6 +120,7 @@ fn assert_full_block_spends_a_watch_charge(name: &str, proc_ex: Option<u32>) {
     seed_caster(&standalone, wolf, BLOCKING_CASTER_STATE);
     let events = subscribe_with_fence(&standalone, &[GO_EVENTS]);
     assert_eq!(watch_charges(&standalone, wolf), Some(WATCH_CHARGES));
+    standalone.assert_call("debug_advance_roll_batch", &[ONE_TICK]);
 
     strike(&standalone, wolf);
     fence_subscription(&standalone, &events);
