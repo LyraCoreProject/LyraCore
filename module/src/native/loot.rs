@@ -200,8 +200,8 @@ fn release(ctx: &ReducerContext, connection: ConnectionId, guid: u64, current: u
     );
 }
 
-/// Closes `guid`'s open Loot Window and tells its client, as vmangos `Player::SetDeathState` calls
-/// `DoLootRelease` when a Character dies.
+/// Closes `guid`'s open Loot Window and tells its client, as vmangos calls `DoLootRelease` when a
+/// Character dies or a stun or fear starts on it.
 pub(crate) fn close_window(ctx: &ReducerContext, guid: u64) {
     let Some(player) = super::world_session(ctx, guid) else {
         return;

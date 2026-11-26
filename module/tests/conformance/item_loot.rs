@@ -1,4 +1,6 @@
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY};
+use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::spell::taxonomy::{A_CONTROL, M_FEAR, M_ROOT, M_STUN, P_MECHANIC, T_SELF};
 use lyracore_test_support::{Field, ReducerConnection, Standalone};
 
 use super::buy_in_slot::{delivered_until, request};
@@ -34,6 +36,7 @@ const PARTLY_LOOTED_CHEST_MICROS: u64 = 300_000_000;
 const VIRTUAL_START_MICROS: &str = "1800000000000000";
 const CLAM_COPPER: u32 = 37;
 const CHEST_COPPER: u32 = 25;
+const CONTROL_SELF: u32 = 5_093_091;
 
 struct Stage {
     shard: Standalone,
@@ -348,6 +351,63 @@ impl Stage {
             self.character
         ))[0]["open_loot"]
             .clone()
+    }
+
+    fn control_self(&self, mechanic: i32) {
+        self.shard.insert_row(
+            "game_spell",
+            &[
+                ("spell_id", &CONTROL_SELF),
+                ("name", &"Loot fixture control"),
+                ("school_mask", &1u8),
+                ("range_yd", &30),
+                ("is_negative", &true),
+                ("duration_ms", &600_000u32),
+                ("spell_level", &1),
+            ],
+        );
+        self.shard.insert_row(
+            "game_spell_effect",
+            &[
+                ("id", &packed_spell_effect_id(CONTROL_SELF, 0)),
+                ("spell_id", &CONTROL_SELF),
+                ("effect_index", &0u8),
+                ("kind", &A_CONTROL),
+                ("target", &T_SELF),
+                ("p_0", &mechanic),
+                ("p_0_kind", &P_MECHANIC),
+            ],
+        );
+        self.shard.assert_call(
+            "debug_force_cast",
+            &[&self.character.to_string(), &CONTROL_SELF.to_string()],
+        );
+    }
+
+    /// Applies a self-cast control Aura and returns the packets up to the release of `source`.
+    fn control_with_window_on(&mut self, mechanic: i32, source: u64) -> Vec<(u16, Vec<u8>)> {
+        self.control_self(mechanic);
+        delivered_until(&mut self.connection, &release_response(source))
+    }
+
+    fn clam_opened_and_emptied(&mut self) -> u64 {
+        self.lootable_template(CLAM, 0, CLAM_COPPER);
+        self.shard.insert_row(
+            "game_item_loot",
+            &[
+                ("id", &900_501),
+                ("lootable_entry", &CLAM),
+                ("item_entry", &FIXTURE_JERKY),
+                ("chance_bp", &10_000),
+                ("count", &1),
+                ("min_count", &1),
+            ],
+        );
+        let (clam, slot) = self.grant(CLAM);
+        window(&self.open(slot), clam);
+        request(&mut self.connection, CMSG_LOOT_MONEY, Vec::new());
+        request(&mut self.connection, CMSG_AUTOSTORE_LOOT_ITEM, vec![0]);
+        clam
     }
 
     /// Kills the Character and returns what its client receives until the release of `source`.
@@ -754,28 +814,67 @@ fn a_character_that_dies_with_an_emptied_chest_open_releases_it() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_character_that_dies_with_an_emptied_opened_item_open_releases_it() {
     let mut stage = stage("item-loot-clam-death");
-    stage.lootable_template(CLAM, 0, CLAM_COPPER);
-    stage.shard.insert_row(
-        "game_item_loot",
-        &[
-            ("id", &900_501),
-            ("lootable_entry", &CLAM),
-            ("item_entry", &FIXTURE_JERKY),
-            ("chance_bp", &10_000),
-            ("count", &1),
-            ("min_count", &1),
-        ],
-    );
-    let (clam, slot) = stage.grant(CLAM);
-    window(&stage.open(slot), clam);
-    request(&mut stage.connection, CMSG_LOOT_MONEY, Vec::new());
-    request(&mut stage.connection, CMSG_AUTOSTORE_LOOT_ITEM, vec![0]);
+    let clam = stage.clam_opened_and_emptied();
 
     let packets = stage.die_with_window_on(clam);
 
     assert!(packets.contains(&release_response(clam)));
     assert_eq!(stage.open_loot(), "0");
     assert_eq!(stage.held(CLAM), 0, "the emptied clam is destroyed");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_stun_on_a_character_with_an_emptied_chest_open_releases_it() {
+    let mut stage = stage("item-loot-chest-stun");
+    stage
+        .shard
+        .assert_call("debug_start_virtual_clock", &[VIRTUAL_START_MICROS]);
+    let chest = stage.spawn_chest_with_jerky(RESPAWNING_CHEST);
+    window(&stage.use_chest(chest), chest);
+    request(&mut stage.connection, CMSG_AUTOSTORE_LOOT_ITEM, vec![0]);
+
+    let packets = stage.control_with_window_on(M_STUN, chest);
+
+    assert!(packets.contains(&release_response(chest)));
+    assert_eq!(stage.open_loot(), "0");
+    assert!(stage.despawned(chest));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_fear_on_a_character_with_an_emptied_opened_item_open_releases_it() {
+    let mut stage = stage("item-loot-clam-fear");
+    let clam = stage.clam_opened_and_emptied();
+
+    let packets = stage.control_with_window_on(M_FEAR, clam);
+
+    assert!(packets.contains(&release_response(clam)));
+    assert_eq!(stage.open_loot(), "0");
+    assert_eq!(stage.held(CLAM), 0, "the emptied clam is destroyed");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_root_on_a_character_with_a_loot_window_open_leaves_it_open() {
+    let mut stage = stage("item-loot-clam-root");
+    stage.lootable_template(CLAM, 0, CLAM_COPPER);
+    let (clam, slot) = stage.grant(CLAM);
+    window(&stage.open(slot), clam);
+
+    stage.control_self(M_ROOT);
+
+    assert_eq!(
+        stage
+            .shard
+            .query_rows(&format!(
+                "SELECT id FROM game_aura WHERE target_guid = {} AND spell_id = {CONTROL_SELF}",
+                stage.character
+            ))
+            .len(),
+        1
+    );
+    assert_eq!(stage.open_loot(), clam.to_string());
 }
 
 #[test]

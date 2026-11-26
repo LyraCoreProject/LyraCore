@@ -194,3 +194,9 @@ rung = "durable_module"
 path = "importer/src/spell_power_tests.rs"
 function = "actual_spell_power_world_plan_wand_keeps_arcane_school_without_spell_power"
 rung = "durable_module"
+
+[[known_gaps]]
+description = "A bag that holds items cannot be moved (ItemRefusal::BagNotEmpty), so no swap moves the bag of an open item. When a swap may move a populated bag it must close the Loot Window as vmangos Player::SwapItem does for a bag holding an item with generated loot."
+path = "module/src/items/inventory.rs"
+symbol = "apply_item_move"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"
