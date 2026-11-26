@@ -151,12 +151,6 @@ symbol = "retaliate_on_hit"
 evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::HandleDummyAuraProc case 20230 returns SPELL_AURA_PROC_FAILED unless HasInArc(pVictim) and the warrior can react; retaliate_on_hit checks neither."
 
 [[known_gaps]]
-description = "An instant weapon ability, such as Mortal Strike, is never blocked, so it never raises PROC_EX_BLOCK and never spends a Shield Block or Redoubt charge. A queued strike, such as Heroic Strike, can be blocked."
-path = "module/src/spell/cast/resolve.rs"
-symbol = "hit_roll"
-evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::ProcDamageAndSpell raises PROC_EX_BLOCK for SPELL_MISS_BLOCK and for a spell hit whose damageInfo->blocked is set; run_spell_effects deals a weapon ability's damage with no block amount, and hit_roll raises no block."
-
-[[known_gaps]]
 description = "An Auto Shot that misses or is dodged runs no proc pass, so a ranged Aura with PROC_EX_TRIGGER_ALWAYS or a named avoidance result does not count it."
 path = "module/src/combat/swing.rs"
 symbol = "fire_ranged_shot"

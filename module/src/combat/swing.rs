@@ -896,7 +896,14 @@ pub(crate) fn launch_ranged_strike(
     spell: &crate::Spell,
     is_crit: bool,
 ) {
-    let (rolled, blocked) = super::folds::block_ranged_strike(ctx, attacker, target, spell, rolled);
+    let (rolled, blocked) = super::block_cast_strike(
+        ctx,
+        attacker,
+        target,
+        spell,
+        super::AttackType::Ranged,
+        rolled,
+    );
     let damage = FrozenDamage::launch(ctx, attacker.guid, target.guid, rolled);
     let (dx, dy, dz) = (
         target.x - attacker.x,
@@ -1020,6 +1027,9 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     // vmangos breaks a Weapon Strike's stealth on hit, not at launch.
     if strike {
         crate::spell::break_stealth(ctx, shot.attacker_guid);
+    }
+    if strike && shot.blocked > 0 {
+        arm_react(ctx, shot.target_guid, ReactKind::Revenge);
     }
 
     let damage = FrozenDamage::stored(shot.damage, shot.absorbed).resolve(ctx, &target);

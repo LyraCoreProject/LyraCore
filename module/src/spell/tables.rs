@@ -971,7 +971,7 @@ pub struct SpellCastEvent {
     pub energized: u32,
     #[default(0u8)]
     pub power_type: u8,
-    // Damage a queued strike's partial block took; only a queued strike writes it.
+    // Damage a partial block took.
     #[default(0u32)]
     pub blocked_amount: u32,
     // A `StrikeSwingReport` code; a queued strike's GO row also reports its swing.

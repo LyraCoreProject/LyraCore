@@ -893,6 +893,7 @@ fn run_spell_effects(
     let mut total_healed: u32 = 0;
     let mut total_resisted: u32 = 0;
     let mut total_absorbed: u32 = 0;
+    let mut total_blocked: u32 = 0;
     let mut total_energized: u32 = 0;
     let mut energized_power_type: u8 = 0;
     let mut any_crit = false;
@@ -985,6 +986,7 @@ fn run_spell_effects(
                 total_damage = total_damage.saturating_add(hit.dealt);
                 total_resisted = total_resisted.saturating_add(hit.resisted);
                 total_absorbed = total_absorbed.saturating_add(hit.absorbed);
+                total_blocked = total_blocked.saturating_add(hit.blocked);
                 total_healed = total_healed.saturating_add(hit.healed);
                 if hit.energized > 0 {
                     total_energized = total_energized.saturating_add(hit.energized);
@@ -1037,6 +1039,7 @@ fn run_spell_effects(
             is_crit: any_crit,
             resisted: total_resisted,
             absorbed: total_absorbed,
+            blocked_amount: total_blocked,
             energized: total_energized,
             power_type: energized_power_type,
             ..launch

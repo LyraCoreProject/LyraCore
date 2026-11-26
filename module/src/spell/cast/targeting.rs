@@ -33,6 +33,7 @@ pub(crate) struct EffectHit {
     pub dealt: u32,
     pub resisted: u32,
     pub absorbed: u32,
+    pub blocked: u32,
     pub crit: bool,
     pub healed: u32,
     pub energized: u32,
@@ -1296,19 +1297,42 @@ fn apply_damage_effect(
                 crate::combat::launch_ranged_strike(ctx, &caster, &target, dmg, hdr, strike_crit);
                 return EffectHit::none();
             }
-            let (dealt, absorbed) = crate::combat::deal_damage(
-                ctx,
-                caster_guid,
-                target_guid,
-                dmg as i32,
-                hit_of(
+            let (dmg, blocked) = if target_guid == caster_guid {
+                (dmg, 0)
+            } else {
+                crate::combat::block_cast_strike(
+                    ctx,
+                    &caster,
+                    &target,
                     hdr,
-                    triggered,
-                    crate::combat::HitSource::MeleeSpell,
-                    strike_crit,
-                ),
-            );
+                    crate::combat::AttackType::Melee,
+                    dmg,
+                )
+            };
+            let hit = hit_of(
+                hdr,
+                triggered,
+                crate::combat::HitSource::MeleeSpell,
+                strike_crit,
+            )
+            .with_block(blocked);
+            let (dealt, absorbed) =
+                crate::combat::deal_damage(ctx, caster_guid, target_guid, dmg as i32, hit);
+            if blocked > 0 {
+                crate::combat::arm_react(ctx, target_guid, crate::combat::ReactKind::Revenge);
+            }
+            if blocked > 0 && dmg == 0 && !triggered {
+                crate::spell::proc::run_unlanded_proc_pass(
+                    ctx,
+                    caster_guid,
+                    target_guid,
+                    &hit,
+                    crate::combat::AttackOutcome::Normal,
+                    (0, 0),
+                );
+            }
             EffectHit {
+                blocked,
                 crit: strike_crit,
                 ..EffectHit::dmg(dealt, absorbed)
             }
