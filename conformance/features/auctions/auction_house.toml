@@ -9,7 +9,9 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "module/tests/conformance/auction_offered_item.rs", function = "a_soulbound_quest_bonded_item_cannot_be_listed", rung = "durable_module" },
+]
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"

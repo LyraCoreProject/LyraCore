@@ -1,7 +1,7 @@
 use lyracore_test_support::actor;
 
 use super::buy_in_slot::request;
-use super::{enter, fixture};
+use super::{enter, fixture, Standalone};
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, SCENARIO_VENDOR_ENTRY};
 
 const CMSG_AUCTION_SELL_ITEM: u32 = 0x256;
@@ -10,10 +10,9 @@ const AUCTIONEER_AND_VENDOR: u32 = 4100;
 // Auction 0, action Started, result ErrInventory, then InventoryResult ItemNotFound as one byte.
 const NOT_TRADEABLE_REPLY: [u8; 13] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0x17];
 
-#[test]
-#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn an_item_offered_in_a_trade_cannot_be_listed_until_the_trade_ends() {
-    let (shard, guid, account) = fixture("auction-offered-item");
+/// A Character at an Auctioneer with an Auction House, 50,000 copper and an empty pack.
+fn auction_fixture(name: &str) -> (Standalone, u64, String, u64) {
+    let (shard, guid, account) = fixture(name);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
     shard.assert_call(
@@ -66,6 +65,22 @@ fn an_item_offered_in_a_trade_cannot_be_listed_until_the_trade_ends() {
         );
     }
 
+    (shard, guid, account, auctioneer)
+}
+
+fn sell_item_body(auctioneer: u64, item: u64) -> Vec<u8> {
+    let mut sell = auctioneer.to_le_bytes().to_vec();
+    sell.extend(item.to_le_bytes());
+    sell.extend(1u32.to_le_bytes());
+    sell.extend(2u32.to_le_bytes());
+    sell.extend(120u32.to_le_bytes());
+    sell
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_item_offered_in_a_trade_cannot_be_listed_until_the_trade_ends() {
+    let (shard, guid, account, auctioneer) = auction_fixture("auction-offered-item");
     shard.assert_call(
         "create_character",
         &[
@@ -133,11 +148,7 @@ fn an_item_offered_in_a_trade_cannot_be_listed_until_the_trade_ends() {
     };
     assert_eq!(offered().len(), 1, "the blade is offered");
 
-    let mut sell = auctioneer.to_le_bytes().to_vec();
-    sell.extend(item.to_le_bytes());
-    sell.extend(1u32.to_le_bytes());
-    sell.extend(2u32.to_le_bytes());
-    sell.extend(120u32.to_le_bytes());
+    let sell = sell_item_body(auctioneer, item);
     let refused = request(&mut connection, CMSG_AUCTION_SELL_ITEM, sell.clone());
     assert!(
         refused.contains(&(SMSG_AUCTION_COMMAND_RESULT, NOT_TRADEABLE_REPLY.to_vec())),
@@ -163,4 +174,52 @@ fn an_item_offered_in_a_trade_cannot_be_listed_until_the_trade_ends() {
     let listed = shard.query_rows("SELECT item_guid FROM game_auction");
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0]["item_guid"], item.to_string());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_soulbound_quest_bonded_item_cannot_be_listed() {
+    let (shard, guid, _account, auctioneer) = auction_fixture("auction-quest-bonded-item");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET bonding = 4 WHERE entry = {FIXTURE_BLADE}"
+    ));
+    let mut connection = enter(&shard, guid);
+    shard.assert_sql(&format!(
+        "DELETE FROM game_item_instance WHERE owner_guid = {guid}"
+    ));
+    connection.drain_packets();
+    shard.assert_call(
+        "debug_grant_item",
+        &[&guid.to_string(), &FIXTURE_BLADE.to_string(), "1"],
+    );
+    let carried = shard.query_rows(&format!(
+        "SELECT guid, soulbound FROM game_item_instance WHERE owner_guid = {guid}"
+    ));
+    assert_eq!(carried[0]["soulbound"], "true", "the grant bound it");
+    let item: u64 = carried[0]["guid"].parse().unwrap();
+
+    let refused = request(
+        &mut connection,
+        CMSG_AUCTION_SELL_ITEM,
+        sell_item_body(auctioneer, item),
+    );
+
+    // The reply code is not pinned: a soulbound item answers ErrItemNotFound where vmangos
+    // answers AUCTION_ERR_INVENTORY (a separate defect).
+    assert!(
+        refused
+            .iter()
+            .any(|(opcode, _)| *opcode == SMSG_AUCTION_COMMAND_RESULT),
+        "{refused:?}"
+    );
+    assert!(shard.query_rows("SELECT * FROM game_auction").is_empty());
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT guid FROM game_item_instance WHERE guid = {item} AND owner_guid = {guid}"
+            ))
+            .len(),
+        1,
+        "the item stays with the seller"
+    );
 }
