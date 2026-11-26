@@ -576,8 +576,8 @@ pub fn retry_package_relocation(ctx: &ReducerContext, retry: RelocationRetry) {
     }
 }
 
-/// Counts the unsent, unanswered and retried Package relocation messages that address `shard` or
-/// name it as the destination World Shard.
+/// Counts the Package relocation outbox and retry rows that address `shard` or name it as the
+/// destination World Shard.
 pub(crate) fn pending_toward(ctx: &ReducerContext, shard: Identity) -> usize {
     let toward = |call: &RelocationDelivery| {
         let message: Message =
@@ -598,6 +598,15 @@ pub(crate) fn pending_toward(ctx: &ReducerContext, shard: Identity) -> usize {
             .iter()
             .filter(|retry| toward(&retry.call))
             .count()
+}
+
+/// Counts the Package relocation arrivals from `shard` whose release has not arrived.
+pub(crate) fn arriving_from(ctx: &ReducerContext, shard: Identity) -> usize {
+    ctx.db
+        .game_package_arrival()
+        .iter()
+        .filter(|arrival| arrival.source == shard)
+        .count()
 }
 
 pub(crate) fn require_settled(ctx: &ReducerContext, package: &str) -> Result<(), String> {
@@ -623,28 +632,52 @@ pub(crate) fn clear_results(ctx: &ReducerContext, package: &str) {
     }
 }
 
-/// Queues a Package relocation release to `target`, which a test makes refuse it.
+/// Queues a Package relocation release addressed to `database` for a crossing toward `target`,
+/// which a test makes refuse it.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_queue_package_relocation_release(
     ctx: &ReducerContext,
+    database: Identity,
     target: Identity,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     send(
         ctx,
-        target,
-        Message::Release(Crossing {
-            id: 0,
-            guid: 0,
-            account_id: 0,
-            package: "fixture.relocation".into(),
-            realm: ctx.database_identity(),
-            target,
-            revision: 0,
-        }),
+        database,
+        Message::Release(fixture_crossing(ctx, 0, target)),
     );
     Ok(())
+}
+
+/// Records a Package relocation from `source` whose release has not arrived.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_insert_package_arrival(
+    ctx: &ReducerContext,
+    source: Identity,
+    id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    ctx.db.game_package_arrival().insert(PackageArrival {
+        id,
+        crossing: fixture_crossing(ctx, id, ctx.database_identity()),
+        source,
+    });
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+fn fixture_crossing(ctx: &ReducerContext, id: u64, target: Identity) -> Crossing {
+    Crossing {
+        id,
+        guid: 0,
+        account_id: 0,
+        package: "fixture.relocation".into(),
+        realm: ctx.database_identity(),
+        target,
+        revision: 0,
+    }
 }
 
 #[cfg(feature = "debug_reducers")]

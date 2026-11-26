@@ -79,38 +79,53 @@ pub fn operator_add_peer_shard(
 
 /// Peer Shard work that removal would strand. Only rows on this Shard count; see
 /// `docs/character-transfer.md#removing-a-peer-shard`.
-#[derive(Debug, PartialEq, Eq)]
 struct PendingToward {
     transfer_messages: usize,
+    transfer_arrivals: usize,
     package_relocation_messages: usize,
+    package_relocation_arrivals: usize,
 }
 
 impl PendingToward {
     fn of(ctx: &ReducerContext, shard: Identity) -> Self {
+        use crate::native::{package_relocation, transfer_arriving_from, transfer_pending_toward};
         Self {
-            transfer_messages: crate::native::transfer_pending_toward(ctx, shard),
-            package_relocation_messages: crate::native::package_relocation::pending_toward(
-                ctx, shard,
-            ),
+            transfer_messages: transfer_pending_toward(ctx, shard),
+            transfer_arrivals: transfer_arriving_from(ctx, shard),
+            package_relocation_messages: package_relocation::pending_toward(ctx, shard),
+            package_relocation_arrivals: package_relocation::arriving_from(ctx, shard),
         }
     }
 
+    fn counts(&self) -> [(usize, &'static str); 4] {
+        [
+            (self.transfer_messages, "Transfer message(s)"),
+            (self.transfer_arrivals, "Transfer arrival(s)"),
+            (
+                self.package_relocation_messages,
+                "Package relocation message(s)",
+            ),
+            (
+                self.package_relocation_arrivals,
+                "Package relocation arrival(s)",
+            ),
+        ]
+    }
+
     fn is_empty(&self) -> bool {
-        self.transfer_messages + self.package_relocation_messages == 0
+        self.counts().iter().all(|(count, _)| *count == 0)
     }
 }
 
 impl std::fmt::Display for PendingToward {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let pending = [
-            (self.transfer_messages, "Transfer"),
-            (self.package_relocation_messages, "Package relocation"),
-        ]
-        .into_iter()
-        .filter(|(count, _)| *count > 0)
-        .map(|(count, stream)| format!("{count} {stream} message(s)"))
-        .collect::<Vec<_>>()
-        .join(", ");
+        let pending = self
+            .counts()
+            .into_iter()
+            .filter(|(count, _)| *count > 0)
+            .map(|(count, stream)| format!("{count} {stream}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         write!(f, "Peer Shard still has unfinished work: {pending}")
     }
 }

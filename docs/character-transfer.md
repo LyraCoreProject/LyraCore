@@ -128,25 +128,39 @@ when the Character has already left its source. Terminal results survive restart
 
 ## Removing a Peer Shard
 
-`operator_remove_peer_shard` refuses while this Shard holds an unfinished Transfer or Package
-relocation message that addresses the Shard or names it as the destination World Shard. Retries
-keep their behaviour: a retry toward a Shard that is being removed is not dropped, so removal could
-strand a Character in Escrow or a directory change. The Refusal counts the pending messages per
-stream. The Operator waits for the retries to settle, or repairs the target so they succeed, and
-removes the Shard afterwards.
+`operator_remove_peer_shard` refuses while this Shard holds unfinished Transfer or Package
+relocation work involving the Shard. Retries keep their behaviour: a retry toward a Shard that is
+being removed is not dropped, so removal could strand a Character in Escrow or a directory change.
+The Refusal counts the pending items per stream.
 
-The refusal counts these rows on the Shard where the reducer runs:
+The reducer counts these rows on the Shard where it runs:
 
-- Transfer: `game_native_transfer`, `game_native_transfer_moved`, `game_native_transfer_release` and
-  the retry rows `game_native_transfer_moved_retry` and `game_native_transfer_release_retry`.
-- Package relocation: `game_package_relocation_delivery` and `game_package_relocation_retry`. A
-  message counts when it addresses the Shard or its crossing names the Shard as destination, so the
-  Realm directory message of a crossing toward the Shard counts too.
+- Transfer messages: `game_native_transfer`, `game_native_transfer_moved`,
+  `game_native_transfer_release` and the retry rows `game_native_transfer_moved_retry` and
+  `game_native_transfer_release_retry`. A row counts when it addresses the Shard or names it as the
+  destination World Shard.
+- Package relocation messages: `game_package_relocation_delivery` and
+  `game_package_relocation_retry`, counted the same way; the Realm directory message of a crossing
+  toward the Shard counts too.
+- Transfer arrivals: Handoffs in `game_native_handoff` whose `transfer_source` is the Shard and
+  whose Transfer still fences them (a `game_transfer_in` row). The Shard still owes this Shard a
+  release, and this Shard would refuse it once the Shard is removed.
+- Package relocation arrivals: `game_package_arrival` rows whose `source` is the Shard.
 
-The reducer cannot see work held on another Shard, such as an arrival fence or a Package
-relocation whose dungeon admission still waits on the Realm Instance allocator. Run the removal on
-every Shard that lists the target, and check that the target holds no unreleased arrival
-(`game_package_arrival`, `game_transfer_in`) before removing it from its last listing.
+Messages start only on World Shards, so the Realm Shard has no message rows to count. Yet the Realm
+Shard checks `is_peer` for the World Shard when a directory move arrives (`idc_native_transfer_moved`,
+which the relocation `Moved` message also calls), and it refuses the move of a Transfer whose
+target it no longer lists. Remove a World Shard from every other World Shard first and from the
+Realm Shard last. The removal on the Realm Shard checks nothing. If the Realm Shard lists the
+target no more while a source World Shard still retries a move toward it, the source retries every
+30 seconds with its Character in Escrow and fenced on the target. Recover by adding the target
+back on the Realm Shard with `operator_add_peer_shard`; the next retry then lands.
+
+The reducer cannot see work held on another Shard, such as a Package relocation whose dungeon
+admission still waits on the Realm Instance allocator. Escrow rows (`game_transfer_out`) name no
+target Shard, so they are not counted; each unfinished Transfer step has a message row that is.
+Check that the target holds no unreleased arrival (`game_package_arrival`, `game_transfer_in`)
+before removing it from its last listing.
 
 ## Manifest discipline
 

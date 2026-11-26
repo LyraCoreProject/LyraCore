@@ -1555,8 +1555,8 @@ pub fn debug_disarm_instance_tick(ctx: &ReducerContext, instance_id: u64) -> Res
 // SpacetimeDB 2.14 refuses SQL writes to scheduled tables, so durable tests stop schedules here.
 #[reducer]
 pub fn debug_clear_schedule(ctx: &ReducerContext, table: String) -> Result<(), String> {
-    use crate::native::game_native_transfer_release_retry;
     use crate::native::package_relocation::game_package_relocation_retry;
+    use crate::native::{game_native_transfer_moved_retry, game_native_transfer_release_retry};
     use crate::summoning_ritual::game_summoning_ritual_schedule;
     use crate::{
         game_aura_schedule, game_duel_schedule, game_event_reaper_schedule,
@@ -1576,6 +1576,7 @@ pub fn debug_clear_schedule(ctx: &ReducerContext, table: String) -> Result<(), S
         "game_gateway_lease_reaper_schedule" => clear(ctx.db.game_gateway_lease_reaper_schedule()),
         "game_melee_schedule" => clear(ctx.db.game_melee_schedule()),
         "game_motion_publish_schedule" => clear(ctx.db.game_motion_publish_schedule()),
+        "game_native_transfer_moved_retry" => clear(ctx.db.game_native_transfer_moved_retry()),
         "game_native_transfer_release_retry" => clear(ctx.db.game_native_transfer_release_retry()),
         "game_package_relocation_retry" => clear(ctx.db.game_package_relocation_retry()),
         "game_summoning_ritual_schedule" => clear(ctx.db.game_summoning_ritual_schedule()),

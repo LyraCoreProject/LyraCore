@@ -244,16 +244,18 @@ fn assert_removal_refused(shard: &Standalone, first: &str, second: &str, pending
     );
 }
 
-// A send in flight when the retry table is cleared queues a new retry, so this retries until a
+// A send in flight when a retry table is cleared queues a new retry, so this retries until a
 // removal lands while nothing is pending.
-fn remove_once_settled(shard: &Standalone, first: &str, second: &str, retry_table: &str) {
+fn remove_once_settled(shard: &Standalone, first: &str, second: &str, retry_tables: &[&str]) {
     assert!(
         poll_until(Duration::from_secs(20), || {
-            shard.assert_call_database(
-                first,
-                "debug_clear_schedule",
-                &[&format!(r#""{retry_table}""#)],
-            );
+            for table in retry_tables {
+                shard.assert_call_database(
+                    first,
+                    "debug_clear_schedule",
+                    &[&format!(r#""{table}""#)],
+                );
+            }
             shard
                 .call_database(
                     first,
@@ -295,7 +297,7 @@ fn a_pending_transfer_release_blocks_removing_its_peer_shard() {
         &shard,
         &first,
         &second,
-        "game_native_transfer_release_retry",
+        &["game_native_transfer_release_retry"],
     );
 }
 
@@ -306,7 +308,7 @@ fn a_pending_package_relocation_blocks_removing_its_peer_shard() {
     shard.assert_call_database(
         &first,
         "debug_queue_package_relocation_release",
-        &[&identity(&shard, &second)],
+        &[&identity(&shard, &second), &identity(&shard, &second)],
     );
     assert!(
         poll_until(Duration::from_secs(20), || count(
@@ -319,5 +321,89 @@ fn a_pending_package_relocation_blocks_removing_its_peer_shard() {
 
     assert_removal_refused(&shard, &first, &second, "1 Package relocation message(s)");
 
-    remove_once_settled(&shard, &first, &second, "game_package_relocation_retry");
+    remove_once_settled(&shard, &first, &second, &["game_package_relocation_retry"]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn work_toward_a_destination_blocks_removing_it_though_another_shard_receives_it() {
+    let (mut shard, first, second) = shard_listing_a_refusing_peer("destination-removal-peer");
+    let third = format!("{first}-third");
+    shard.publish_named_module_bytes(&third, module_bytes());
+    shard.assert_call_database(&third, "claim_operator", &[]);
+    shard.assert_call_database(
+        &first,
+        "operator_add_peer_shard",
+        &[&identity(&shard, &third), r#""third""#],
+    );
+    shard.assert_call_database(
+        &first,
+        "debug_queue_native_transfer_moved",
+        &[&identity(&shard, &second), &identity(&shard, &third)],
+    );
+    shard.assert_call_database(
+        &first,
+        "debug_queue_package_relocation_release",
+        &[&identity(&shard, &second), &identity(&shard, &third)],
+    );
+    assert!(
+        poll_until(Duration::from_secs(20), || {
+            count(&shard, &first, "game_native_transfer_moved_retry") == 1
+                && count(&shard, &first, "game_package_relocation_retry") == 1
+        }),
+        "the refused messages were not scheduled for retry"
+    );
+
+    assert_removal_refused(
+        &shard,
+        &first,
+        &third,
+        "1 Transfer message(s), 1 Package relocation message(s)",
+    );
+
+    remove_once_settled(
+        &shard,
+        &first,
+        &third,
+        &[
+            "game_native_transfer_moved_retry",
+            "game_package_relocation_retry",
+        ],
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_transfer_arriving_from_a_peer_shard_blocks_removing_it() {
+    let (shard, first, second) = shard_listing_a_refusing_peer("transfer-arrival-removal-peer");
+    shard.assert_call_database(
+        &first,
+        "debug_insert_native_transfer_arrival",
+        &[&identity(&shard, &second), "7"],
+    );
+
+    assert_removal_refused(&shard, &first, &second, "1 Transfer arrival(s)");
+
+    shard.assert_sql_database(
+        &first,
+        "DELETE FROM game_native_handoff WHERE transfer_id = 7",
+    );
+    shard.assert_sql_database(&first, "DELETE FROM game_transfer_in WHERE transfer_id = 7");
+    remove_once_settled(&shard, &first, &second, &[]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_package_relocation_arriving_from_a_peer_shard_blocks_removing_it() {
+    let (shard, first, second) = shard_listing_a_refusing_peer("relocation-arrival-removal-peer");
+    shard.assert_call_database(
+        &first,
+        "debug_insert_package_arrival",
+        &[&identity(&shard, &second), "7"],
+    );
+
+    assert_removal_refused(&shard, &first, &second, "1 Package relocation arrival(s)");
+
+    shard.assert_sql_database(&first, "DELETE FROM game_package_arrival WHERE id = 7");
+    remove_once_settled(&shard, &first, &second, &[]);
 }
