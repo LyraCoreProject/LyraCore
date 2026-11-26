@@ -174,8 +174,16 @@ pub(crate) fn is_proc_kind(kind: u8) -> bool {
     kind == A_PROC_TRIGGER || kind == A_PROC_DAMAGE
 }
 
+// vmangos Spell::PrepareDataForTriggerSystem gives a melee-class Spell the melee-ability flags and
+// a next-melee-swing Spell the swing flags beside them, so a queued strike raises both pairs.
+// PROC_FLAG_MAIN_HAND_WEAPON_SWING (0x0040_0000) is not modelled for a white swing or a strike:
+// vmangos notes that no spell carries it.
 pub(crate) fn hit_bits(hit: &Hit) -> (u32, u32) {
     match hit.source {
+        HitSource::MainHand if hit.spell_id != 0 => (
+            PROC_FLAG_SUCCESSFUL_MELEE_HIT | PROC_FLAG_SUCCESSFUL_MELEE_SPELL_HIT,
+            PROC_FLAG_TAKEN_MELEE_HIT | PROC_FLAG_TAKEN_MELEE_SPELL_HIT,
+        ),
         HitSource::MainHand => (PROC_FLAG_SUCCESSFUL_MELEE_HIT, PROC_FLAG_TAKEN_MELEE_HIT),
         HitSource::OffHand => (
             PROC_FLAG_SUCCESSFUL_MELEE_HIT | PROC_FLAG_SUCCESSFUL_OFFHAND_HIT,
@@ -934,6 +942,14 @@ mod tests {
     #[test]
     fn a_main_hand_swing_raises_the_melee_hit_event_on_both_sides() {
         assert_eq!(hit_bits(&swing(HitSource::MainHand)), (0x4, 0x8));
+    }
+
+    #[test]
+    fn a_queued_strike_raises_the_swing_and_the_melee_ability_events_on_both_sides() {
+        assert_eq!(
+            hit_bits(&Hit::spell(HitSource::MainHand, 78, false)),
+            (0x4 | 0x10, 0x8 | 0x20)
+        );
     }
 
     #[test]
