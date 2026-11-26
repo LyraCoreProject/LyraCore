@@ -1003,13 +1003,15 @@ its chain can no longer take that quest, and its giver no longer marks it.
 ### Quest item bonding migration
 
 An item whose template has quest bonding (`bonding` 4, `BIND_QUEST_ITEM`) is now soulbound from the
-moment a grant stores it, as `Player::StoreItem` does. Bonding 5 binds nothing. No schema changes
+moment a grant stores it, as `Player::StoreItem` does. Bonding 5 binds nothing. No schema change
 and no reimport is needed. An item stored before this publish keeps `soulbound = false`, so its
 owner can still trade, mail and auction it, and its recipient's copy then binds. A later grant that
 merges into its stack binds it. To bind the rest, list the entries with
 `SELECT entry FROM game_item_template WHERE bonding = 4` and run
 `UPDATE game_item_instance SET soulbound = true WHERE entry = <entry>` for each. Run it only when
-the Operator wants those items bound at once; the Module needs no repair to work.
+the Operator wants those items bound at once; the Module needs no repair to work. The SQL bypasses
+the World Session observer, so an online client can show a stale soulbound tooltip until an
+inventory change or a relog.
 
 ### Quest requirement migration
 
