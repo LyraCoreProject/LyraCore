@@ -199,6 +199,24 @@ symbol = "tick_auras"
 evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp:1509 Aura::TriggerSpell sets triggerCaster to the Aura's target and changes it only for a channeled spell; tick_auras queues every A_PERIODIC_TRIGGER tick with the Aura's caster_guid."
 
 [[known_gaps]]
+description = "An Aura's periodic damage tick raises no procs. vmangos raises PROC_FLAG_DEAL_HARMFUL_PERIODIC for the caster and PROC_FLAG_TAKE_HARMFUL_PERIODIC for the target with PROC_EX_NORMAL_HIT, never PROC_EX_ABSORB, and adds PROC_FLAG_TAKEN_ANY_DAMAGE when damage remains after the absorb."
+path = "module/src/spell/scheduler.rs"
+symbol = "tick_auras"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp:5903-5917 Aura::PeriodicTick builds the periodic proc flags and calls ProcDamageAndSpell before DealDamage; module/src/spell/proc.rs defines no periodic proc flag and tick_auras runs no proc pass."
+
+[[known_gaps]]
+description = "An absorb Aura takes damage of every school. vmangos skips a SPELL_AURA_SCHOOL_ABSORB whose school mask misses the damage's school, so a Fire Ward takes no Shadow damage."
+path = "module/src/spell/effects.rs"
+symbol = "absorb_incoming"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp:1967 Unit::CalculateDamageAbsorbAndResist tests mod->m_miscvalue & schoolMask for each absorb; absorb_incoming drains every A_ABSORB Aura of the target in id order."
+
+[[known_gaps]]
+description = "A health leech tick, such as Drain Life, heals its caster nothing and reports in SMSG_PERIODICAURALOG. vmangos heals the caster for the damage dealt times the effect's multiple value and reports the tick in SMSG_SPELLNONMELEEDAMAGELOG."
+path = "importer/src/spell_kind.rs"
+symbol = "aura_mod_to_kind"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp:5977 and 6012 Aura::PeriodicTick sends SendSpellNonMeleeDamageLog and calls DealHeal for SPELL_AURA_PERIODIC_LEECH; aura_mod_to_kind imports PeriodicLeech as A_PERIODIC_DAMAGE."
+
+[[known_gaps]]
 description = "A Triggered Cast refused for missing reagents sends its caster no cast-failed message. vmangos sends SPELL_FAILED_ITEM_NOT_READY."
 path = "module/src/spell/cast/resolve.rs"
 symbol = "take_triggered_reagents"
@@ -513,6 +531,21 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/school_immunity.rs"
 function = "a_periodic_damage_tick_on_a_creature_that_became_immune_deals_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_shield_takes_a_periodic_tick_it_covers_whole_and_the_tick_kills_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_periodic_tick_larger_than_a_shield_spends_it_and_deals_the_rest"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_periodic_tick_a_shield_takes_whole_breaks_auras_as_an_absorbed_hit_does"
 rung = "durable_module"
 
 [[tests]]

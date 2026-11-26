@@ -272,6 +272,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     let mut pending_reserve_power: std::collections::HashMap<u64, u32> =
         std::collections::HashMap::new();
     let mut dot_damaged: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut dot_absorbed: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut dying: std::collections::HashMap<u64, PeriodicDeath> = std::collections::HashMap::new();
     let mut finishing_duels: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut duel_losers: std::collections::HashSet<u64> = std::collections::HashSet::new();
@@ -351,13 +352,18 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     a.spell_id,
                     true,
                 );
-                let amount = if target.godmode { 0 } else { after_resist };
+                // vmangos CalculateDamageAbsorbAndResist drains shields after the resist.
+                let incoming = after_resist.max(0) as u32;
+                let left = crate::spell::absorb_incoming(ctx, a.target_guid, incoming);
+                let absorbed = incoming - left;
+                let amount = if target.godmode { 0 } else { left };
                 crate::SpellCastEvent::insert(
                     ctx,
                     SpellCastEvent {
-                        damage: amount.max(0) as u32,
+                        damage: amount,
                         school: crate::spell::school_index(school),
                         resisted: points.saturating_sub(after_resist).max(0) as u32,
+                        absorbed,
                         ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
                     },
                 );
@@ -368,14 +374,15 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                             ctx,
                             a.target_guid,
                             a.caster_guid,
-                            crate::threat::threat_from_damage(ctx, a.spell_id, amount as u32),
+                            crate::threat::threat_from_damage(ctx, a.spell_id, amount),
                         );
                     }
+                } else if absorbed > 0 && !target.godmode {
+                    dot_absorbed.insert(a.target_guid);
                 }
-                let result =
-                    crate::combat::damage_result(cur, amount.max(0) as u32, duel_finish, || {
-                        crate::combat::lethal_floor_protects(ctx, a.target_guid)
-                    });
+                let result = crate::combat::damage_result(cur, amount, duel_finish, || {
+                    crate::combat::lethal_floor_protects(ctx, a.target_guid)
+                });
                 match result {
                     crate::combat::DamageResult::EndsDuel(finish) => {
                         pending.insert(a.target_guid, 1);
@@ -402,7 +409,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                         pending.remove(&a.target_guid);
                     }
                     crate::combat::DamageResult::Survives => {
-                        pending.insert(a.target_guid, damaged_value(cur, amount));
+                        pending.insert(a.target_guid, damaged_value(cur, amount as i32));
                     }
                 }
                 let lost = pending
@@ -596,6 +603,9 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     shed_auras(ctx, expired);
 
     // Break auras after cadence advancement to avoid advancing or deleting them twice.
+    for &target_guid in dot_absorbed.difference(&dot_damaged) {
+        break_auras_on_absorbed_hit(ctx, target_guid, 0, true);
+    }
     for target_guid in dot_damaged {
         break_auras_on_damage(ctx, target_guid, 0, true);
     }
