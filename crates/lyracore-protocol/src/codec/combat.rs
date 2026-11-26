@@ -220,13 +220,24 @@ pub fn build_spell_go_outcome(
     ammo: Option<(u32, u32)>,
     miss: Option<SpellMissInfo>,
 ) -> SMSG_SPELL_GO {
-    // Self-casts use TARGET_FLAG_SELF even when the target guid equals the caster.
-    let is_self_cast = hit_target == 0 || hit_target == caster_guid;
-    let hit = if is_self_cast {
+    let hit = if hit_target == 0 {
         caster_guid
     } else {
         hit_target
     };
+    build_spell_go_units(caster_guid, spell_id, hit_target, ammo, &[(hit, miss)])
+}
+
+/// A GO at `selected` that lists each of `units` as hit, or as missed with its miss.
+pub fn build_spell_go_units(
+    caster_guid: u64,
+    spell_id: u32,
+    selected: u64,
+    ammo: Option<(u32, u32)>,
+    units: &[(u64, Option<SpellMissInfo>)],
+) -> SMSG_SPELL_GO {
+    // Self-casts use TARGET_FLAG_SELF even when the target guid equals the caster.
+    let is_self_cast = selected == 0 || selected == caster_guid;
     // CAST_FLAG_UNKNOWN9 is the base GO flag; ranged casts also carry AMMO.
     let flags = match ammo {
         Some((ammo_display_id, ammo_inventory_type)) => SMSG_SPELL_GO_CastFlags::new(
@@ -244,21 +255,25 @@ pub fn build_spell_go_outcome(
         SpellCastTargets {
             target_flags: SpellCastTargets_SpellCastTargetFlags::new_unit(
                 SpellCastTargets_SpellCastTargetFlags_Unit {
-                    unit_target: Guid::new(hit_target),
+                    unit_target: Guid::new(selected),
                 },
             ),
         }
     };
-    let (hits, misses) = match miss {
-        Some(miss_info) => (
-            vec![],
-            vec![SpellMiss {
-                target: Guid::new(hit),
+    let hits = units
+        .iter()
+        .filter(|(_, miss)| miss.is_none())
+        .map(|&(unit, _)| Guid::new(unit))
+        .collect();
+    let misses = units
+        .iter()
+        .filter_map(|&(unit, miss)| {
+            miss.map(|miss_info| SpellMiss {
+                target: Guid::new(unit),
                 miss_info,
-            }],
-        ),
-        None => (vec![Guid::new(hit)], vec![]),
-    };
+            })
+        })
+        .collect();
     SMSG_SPELL_GO {
         cast_item: Guid::new(caster_guid),
         caster: Guid::new(caster_guid),
@@ -618,6 +633,32 @@ mod tests {
             build_spell_go(caster, 133, 0, None).hits,
             vec![Guid::new(caster)]
         );
+    }
+
+    #[test]
+    fn a_spell_go_lists_every_unit_it_hit_and_each_unit_it_missed() {
+        let (caster, target, second, third) = (0xF1, 0xAA, 0xBB, 0xCC);
+        let go = build_spell_go_units(
+            caster,
+            421,
+            target,
+            None,
+            &[
+                (target, None),
+                (second, Some(SpellMissInfo::Resist)),
+                (third, None),
+            ],
+        );
+        assert_eq!(go.hits, vec![Guid::new(target), Guid::new(third)]);
+        assert_eq!(
+            go.misses
+                .iter()
+                .map(|miss| (miss.target, miss.miss_info))
+                .collect::<Vec<_>>(),
+            vec![(Guid::new(second), SpellMissInfo::Resist)]
+        );
+        let unit = go.targets.target_flags.get_unit().expect("UNIT flag set");
+        assert_eq!(unit.unit_target, Guid::new(target));
     }
 
     #[test]

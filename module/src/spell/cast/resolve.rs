@@ -3,7 +3,7 @@ use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
 use super::depth::TriggerLink;
-use super::targeting::{affected_target_cap, helps_units, CappedPicks};
+use super::targeting::{affected_target_cap, helps_units, CappedPicks, EffectHit};
 use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::spell::tables::SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT;
@@ -669,6 +669,8 @@ struct CastTargets<'a> {
     immunity: ImmuneRefusals,
     // Keyed by effect index and target; `None` when the target is immune to the whole spell.
     admitted: std::collections::HashMap<(u8, u64), Option<(AttackOutcome, bool)>>,
+    // Admitted units in first-admission order, as vmangos `m_UniqueTargetInfo` lists them.
+    units: Vec<u64>,
     weapon_targets: Vec<u64>,
     seen_weapon_targets: std::collections::HashSet<u64>,
     capped: CappedPicks,
@@ -710,6 +712,7 @@ impl<'a> CastTargets<'a> {
             answered: std::collections::HashSet::new(),
             immunity: ImmuneRefusals::default(),
             admitted: std::collections::HashMap::new(),
+            units: Vec::new(),
             weapon_targets: Vec::new(),
             seen_weapon_targets: std::collections::HashSet::new(),
             capped: CappedPicks::default(),
@@ -795,7 +798,15 @@ impl<'a> CastTargets<'a> {
                 Some((roll, immune))
             };
         self.admitted.insert((e.effect_index, t), admission);
+        if !self.units.contains(&t) {
+            self.units.push(t);
+        }
         admission
+    }
+
+    /// Each admitted unit with the `CAST_MISS_*` code the GO reports for it.
+    fn go_units(&self) -> Vec<(u64, u8)> {
+        self.units.iter().map(|&t| (t, self.miss_info(t))).collect()
     }
 
     /// Runs the target's weapon-roll reacts and procs once, after the GO and the cost.
@@ -868,7 +879,7 @@ fn launch_cast<'a>(
     };
     // A queued strike sends its GO when its swing fires.
     if !queues_next_swing(&spell.effects) {
-        crate::native::spell::cast_launch(ctx, &row, request.dest);
+        crate::native::spell::cast_launch(ctx, &row, request.dest, &targets.go_units());
     }
     Launched { targets, row }
 }
@@ -890,14 +901,7 @@ fn run_spell_effects(
     let (hdr, effects) = (&spell.header, spell.effects.as_slice());
     let mut landed = Vec::new();
     let triggered = origin.is_triggered();
-    let mut total_damage: u32 = 0;
-    let mut total_healed: u32 = 0;
-    let mut total_resisted: u32 = 0;
-    let mut total_absorbed: u32 = 0;
-    let mut total_blocked: u32 = 0;
-    let mut total_energized: u32 = 0;
-    let mut energized_power_type: u8 = 0;
-    let mut any_crit = false;
+    let mut unit_logs = UnitLogs::default();
     let mut created_items = Vec::new();
     let mut item_grants = 0;
     let mut item_refused = false;
@@ -983,18 +987,7 @@ fn run_spell_effects(
                 shield_targets.insert(t);
             }
             remember_landed_effect(&mut landed, t, e.effect_index);
-            if t == target_guid {
-                total_damage = total_damage.saturating_add(hit.dealt);
-                total_resisted = total_resisted.saturating_add(hit.resisted);
-                total_absorbed = total_absorbed.saturating_add(hit.absorbed);
-                total_blocked = total_blocked.saturating_add(hit.blocked);
-                total_healed = total_healed.saturating_add(hit.healed);
-                if hit.energized > 0 {
-                    total_energized = total_energized.saturating_add(hit.energized);
-                    energized_power_type = hit.power_type;
-                }
-                any_crit |= hit.crit;
-            }
+            unit_logs.add(t, &hit);
         }
     }
     targets.answer_rest();
@@ -1031,25 +1024,106 @@ fn run_spell_effects(
             u32::from(hdr.school_mask),
         );
     }
+    let selected = unit_logs.take(target_guid);
     crate::SpellCastEvent::insert_at(
         ctx,
         SpellCastEvent {
-            damage: total_damage,
-            healed: total_healed,
+            damage: selected.damage,
+            healed: selected.healed,
             school: crate::spell::school_index(hdr.school_mask),
-            is_crit: any_crit,
-            resisted: total_resisted,
-            absorbed: total_absorbed,
-            blocked_amount: total_blocked,
-            energized: total_energized,
-            power_type: energized_power_type,
+            is_crit: selected.crit,
+            resisted: selected.resisted,
+            absorbed: selected.absorbed,
+            blocked_amount: selected.blocked,
+            energized: selected.energized,
+            power_type: selected.power_type,
             ..launch
         },
         crate::native::spell::GoDelivery::Sent,
     );
+    unit_logs.log_each(ctx, caster_guid, hdr);
     finish_items(craft);
     finish_weapon_hits(ctx, caster_guid, targets.weapon_targets, shield_targets);
     cast_follow_up(ctx, hdr.spell_id, caster_guid, level, &landed);
+}
+
+/// What a cast's effects did to one unit.
+#[derive(Clone, Copy, Default)]
+struct UnitLog {
+    damage: u32,
+    healed: u32,
+    resisted: u32,
+    absorbed: u32,
+    blocked: u32,
+    energized: u32,
+    power_type: u8,
+    crit: bool,
+}
+
+/// Each unit a cast's effects reached, in first-landing order.
+#[derive(Default)]
+struct UnitLogs(Vec<(u64, UnitLog)>);
+
+impl UnitLogs {
+    fn add(&mut self, unit: u64, hit: &EffectHit) {
+        let at = match self.0.iter().position(|&(logged, _)| logged == unit) {
+            Some(at) => at,
+            None => {
+                self.0.push((unit, UnitLog::default()));
+                self.0.len() - 1
+            }
+        };
+        let log = &mut self.0[at].1;
+        log.damage = log.damage.saturating_add(hit.dealt);
+        log.healed = log.healed.saturating_add(hit.healed);
+        log.resisted = log.resisted.saturating_add(hit.resisted);
+        log.absorbed = log.absorbed.saturating_add(hit.absorbed);
+        log.blocked = log.blocked.saturating_add(hit.blocked);
+        if hit.energized > 0 {
+            log.energized = log.energized.saturating_add(hit.energized);
+            log.power_type = hit.power_type;
+        }
+        log.crit |= hit.crit;
+    }
+
+    /// Removes the unit's log; the GO row reports the selected unit's.
+    fn take(&mut self, unit: u64) -> UnitLog {
+        self.0
+            .iter()
+            .position(|&(logged, _)| logged == unit)
+            .map_or_else(UnitLog::default, |at| self.0.remove(at).1)
+    }
+
+    /// vmangos logs the damage and healing of every unit a spell hits, not only its target's.
+    fn log_each(self, ctx: &ReducerContext, caster_guid: u64, hdr: &Spell) {
+        for (unit, log) in self.0 {
+            let logs_damage =
+                log.damage > 0 || log.absorbed > 0 || log.resisted > 0 || log.blocked > 0;
+            if !logs_damage && log.healed == 0 {
+                continue;
+            }
+            crate::SpellCastEvent::insert(
+                ctx,
+                SpellCastEvent {
+                    target_guid: unit,
+                    damage: log.damage,
+                    healed: log.healed,
+                    school: crate::spell::school_index(hdr.school_mask),
+                    is_crit: log.crit,
+                    resisted: log.resisted,
+                    absorbed: log.absorbed,
+                    blocked_amount: log.blocked,
+                    is_proc_log: true,
+                    ..SpellCastEvent::signal(
+                        ctx,
+                        caster_guid,
+                        hdr.spell_id,
+                        SpellCastEventKind::ProcLog,
+                    )
+                },
+            );
+        }
+    }
 }
 
 thread_local! {
