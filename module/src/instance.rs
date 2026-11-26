@@ -1548,6 +1548,35 @@ mod tests {
         assert!(!instance_removal_due(36, 7, false, 1), "a GM");
     }
 
+    fn run(party_id: u64, holder_guid: u64) -> GameInstance {
+        GameInstance {
+            instance_id: 7,
+            map_id: 36,
+            party_id,
+            created_at: Timestamp::from_micros_since_unix_epoch(0),
+            last_empty_at_micros: 0,
+            reset_requested: false,
+            holder_guid,
+        }
+    }
+
+    #[test]
+    fn a_binding_routes_into_or_resets_a_solo_run_only_for_its_holder() {
+        assert!(!held_by_another(&run(0, 1), 1), "the holder");
+        assert!(
+            held_by_another(&run(0, 2), 1),
+            "a binding the leaver carried to the survivor's run"
+        );
+        assert!(
+            !held_by_another(&run(0, 0), 1),
+            "a solo run without a holder routes whoever is bound to it"
+        );
+        assert!(
+            !held_by_another(&run(42, 2), 1),
+            "a Group's run has no holder"
+        );
+    }
+
     #[test]
     fn a_groups_run_is_its_members_and_a_solo_run_is_its_holders_and_their_groups() {
         assert!(!run_is_theirs(42, None, 1, None), "left the Group");
