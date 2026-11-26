@@ -859,10 +859,12 @@ pub(crate) fn accept_gates(
     player: &crate::WorldEntity,
     tmpl: &QuestTemplate,
 ) -> Result<Option<CharacterQuest>, String> {
+    let existing =
+        acceptance_gate(ctx, player, tmpl).map_err(|refusal| refusal.text(tmpl.min_level))?;
     if !crate::game_events::quest_offered(ctx, tmpl.entry) {
         return Err(QUEST_NOT_OFFERED.to_string());
     }
-    acceptance_gate(ctx, player, tmpl).map_err(|refusal| refusal.text(tmpl.min_level))
+    Ok(existing)
 }
 
 struct CharacterQuestHistory<'a> {
@@ -1107,9 +1109,7 @@ pub(crate) fn accept_offered_quest(
         .into());
     }
     let giver = validate_giver(ctx, &player, giver_guid)?;
-    if !giver_has_quest_role(ctx, &giver, quest_entry, quest_role::START)
-        || !crate::game_events::quest_offered(ctx, quest_entry)
-    {
+    if !giver_has_quest_role(ctx, &giver, quest_entry, quest_role::START) {
         return Err(QUEST_NOT_OFFERED.to_string().into());
     }
     if let GiverKind::Party(sharer_guid) = giver {
@@ -1126,6 +1126,10 @@ pub(crate) fn accept_offered_quest(
             refusal,
             min_level: tmpl.min_level,
         })?;
+    // vmangos `Player::CanTakeQuest` checks `Quest::IsActive` after every requirement.
+    if !crate::game_events::quest_offered(ctx, quest_entry) {
+        return Err(QUEST_NOT_OFFERED.to_string().into());
+    }
     if existing.as_ref().is_none_or(|row| row.rewarded)
         && quest_slots_used(ctx, player_guid) >= MAX_QUEST_LOG_SIZE
     {

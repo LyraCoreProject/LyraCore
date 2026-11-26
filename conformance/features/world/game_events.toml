@@ -35,7 +35,7 @@ tests = [
     { path = "importer/src/world_import_game_events.rs", function = "a_quest_keeps_its_first_event_and_the_reserved_event_is_skipped", rung = "unit" },
     { path = "importer/src/world_import_game_events.rs", function = "a_vendor_item_takes_the_event_of_its_first_offer_only", rung = "unit" },
     { path = "module/tests/conformance/quest_availability.rs", function = "an_event_quest_is_offered_only_while_its_event_runs", rung = "durable_module" },
-    { path = "module/tests/conformance/quest_availability.rs", function = "an_accepted_event_quest_stays_in_the_log_when_its_event_ends", rung = "durable_module" },
+    { path = "module/tests/conformance/quest_availability.rs", function = "an_accepted_event_quest_stays_in_the_log_and_rewards_when_its_event_ends", rung = "durable_module" },
     { path = "module/tests/conformance/buy_in_slot.rs", function = "an_event_vendor_item_is_listed_and_sold_only_while_its_event_runs", rung = "durable_module" },
 ]
 
@@ -82,6 +82,12 @@ description = "Scripted events (vmangos hardcoded: Darkmoon Faire, Elemental Inv
 path = "module/src/game_events.rs"
 symbol = "event_state"
 evidence = "Compatibility Manifest events.scripted; vmangos HardcodedEvents.cpp at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
+
+[[known_gaps]]
+description = "A link or event quest whose event vmangos does not load (absent from game_event, or zero length) is ignored there, so the spawn shows and the quest is offered all year; here the event is unscheduled, so they stay hidden. Patch selection leaves out-of-patch events absent too, which vmangos loads disabled, so the import cannot tell the two apart. The pinned World Source has no such link or quest."
+path = "importer/src/world_import_game_events.rs"
+symbol = "plan"
+evidence = "vmangos GameEventMgr::LoadFromDB and GameEventMgr::IsValidEvent at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
 [[known_gaps]]
 description = "A negative event on a pooled placement is not linked, so the placement stays in its pool's rolls while the event runs. The pinned World Source has none."

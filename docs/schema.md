@@ -1010,11 +1010,13 @@ creature copies follow their source, its GameObject copies keep what they had at
 despawned door or button has no collider.
 
 A quest tied to an event is offered only while the event runs, as vmangos `Quest::IsActive`: its
-givers show no mark and list no entry for it, start or end, and refuse its accept with only the
-gossip close. A Character who took it keeps it in the log when the event ends, and a turn-in
-request at its ender still rewards it, as in vmangos. A vendor item tied to an event is left out of
-the vendor's list and refused as an item the vendor does not sell while the event does not run.
-Both read the event's state at the moment of the request, not the minute pass.
+givers show no mark and list no entry for it, start or end. An accept that meets every other
+requirement is refused with only the gossip close; a failed requirement sends its own message
+first, as vmangos `Player::CanTakeQuest` checks the event last. A Character who took it keeps it
+in the log when the event ends, and a turn-in request at its ender still rewards it, as in
+vmangos. A vendor item tied to an event is left out of the vendor's list and refused as an item the
+vendor does not sell while the event does not run. Both read the event's state at the moment of
+the request, not the minute pass.
 
 Before the `events` family is imported no link exists, and a creature population member's
 `event_ids` keep a member with a positive event out of its population's selection, as they did

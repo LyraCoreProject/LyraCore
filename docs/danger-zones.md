@@ -311,9 +311,9 @@ existing column or reducer argument changes, so no Package builds a changed row.
 changes nothing a player sees: with no rows every quest is offered and every vendor item sold, as
 before.
 
-Rerun `--family events`, or a `creatures` or `gameobjects` import, which writes it, with the updated
-importer. The import writes both tables, so event quests and event vendor items follow their event
-at once; it changes no spawn. A rerun writes the same rows.
+With the updated importer, run `--family events` again. A `creatures` or `gameobjects` import also
+writes the `events` family. The import writes both tables, so event quests and event vendor items
+follow their event at once. A rerun writes the same rows.
 
 ### Chest money and item loot migration
 

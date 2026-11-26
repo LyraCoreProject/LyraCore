@@ -162,7 +162,7 @@ pub(super) fn active_event_conditions(
 }
 
 /// Each vendor item's event, from `(creature, item, condition)` offers in import order. The first
-/// offer of an item is the one the items family keeps, so it alone decides.
+/// offer of an item to a creature is the one the items family keeps, so it alone decides.
 fn event_vendor_items(
     offers: impl IntoIterator<Item = (u32, u32, u32)>,
     conditions: &BTreeMap<u32, u32>,
@@ -180,18 +180,22 @@ fn event_vendor_items(
 }
 
 /// `npc_vendor` offers, then `npc_vendor_template` offers for each creature using the template.
+/// An offer with a stock limit but no restock time, or the reverse, is left out, as the items
+/// family leaves it out before it keeps the first offer of an item.
 fn vendor_offers(dump: &(impl TableRows + ?Sized)) -> Result<Vec<(u32, u32, u32)>> {
-    let offer = |row: &crate::world_source::Row| -> Result<(u32, u32, u32)> {
-        Ok((
+    let offer = |row: &crate::world_source::Row| -> Result<Option<(u32, u32, u32)>> {
+        let limited = row.number::<u32>("maxcount")? != 0;
+        let restocks = row.number::<u32>("incrtime")? != 0;
+        Ok((limited == restocks).then_some((
             row.number("entry")?,
             row.number("item")?,
             row.number("condition_id")?,
-        ))
+        )))
     };
-    let mut offers = parse_table(dump, "npc_vendor")?
-        .iter()
-        .map(offer)
-        .collect::<Result<Vec<_>>>()?;
+    let mut offers = Vec::new();
+    for row in parse_table(dump, "npc_vendor")?.iter() {
+        offers.extend(offer(row)?);
+    }
     let mut template_users: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for row in dump
         .columns("creature_template", &["entry", "vendor_id"])?
@@ -206,7 +210,9 @@ fn vendor_offers(dump: &(impl TableRows + ?Sized)) -> Result<Vec<(u32, u32, u32)
         }
     }
     for row in parse_table(dump, "npc_vendor_template")?.iter() {
-        let (template, item, condition) = offer(row)?;
+        let Some((template, item, condition)) = offer(row)? else {
+            continue;
+        };
         for &creature in template_users.get(&template).into_iter().flatten() {
             offers.push((creature, item, condition));
         }

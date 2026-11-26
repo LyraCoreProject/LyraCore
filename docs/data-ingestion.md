@@ -193,7 +193,8 @@ leaves out gets a disabled row, as vmangos disables it, so its spawns stay hidde
 (vmangos `hardcoded`) appear in the Compatibility Manifest as `events.scripted`. It also reads
 `game_event_quest`, keeping a quest's first event and skipping event 0, and ties each `npc_vendor` or
 `npc_vendor_template` item whose condition is a plain `CONDITION_ACTIVE_GAME_EVENT` to that event;
-the first offer of an item to a creature decides, as the `items` family keeps it. Those vendor items
+the first offer of an item to a creature decides, as the `items` family keeps it, after both leave
+out an offer with a stock limit but no restock time, or the reverse. Those vendor items
 leave the `items.vendor-condition` finding. A `creatures` or `gameobjects` import writes the
 `events` family with it. The Module rules are in
 [Game events](schema.md#game-events).
