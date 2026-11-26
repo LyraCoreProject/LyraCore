@@ -314,10 +314,9 @@ pub(crate) fn select_targets(
                     .collect();
 
             if e.target == T_CHAIN_ENEMY {
-                let Some(first) = entities
-                    .guid()
-                    .find(explicit)
-                    .filter(|first| first.guid != caster_guid)
+                let Some(first) = selected_unit(ctx, caster_guid, explicit)
+                    .filter(|&first| first != caster_guid)
+                    .and_then(|first| entities.guid().find(first))
                 else {
                     return Vec::new();
                 };

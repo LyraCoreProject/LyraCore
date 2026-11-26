@@ -54,24 +54,37 @@ pub(crate) fn cast_event(ctx: &ReducerContext, event: &SpellCastEvent, delivery:
 }
 
 /// Sends a resolving cast's START, CAST_RESULT and GO, which name `ground_point` when it has one.
+/// A GO at a unit lists `units`, each with its `CAST_MISS_*` code.
 pub(crate) fn cast_launch(
     ctx: &ReducerContext,
     launch: &SpellCastEvent,
     ground_point: Option<(f32, f32, f32)>,
+    units: &[(u64, u8)],
 ) {
     if ctx.db.game_native_player().count() == 0 {
         return;
     }
-    let go_targets = go_targets(ctx, launch, ground_point);
+    let go_targets = match go_targets(ctx, launch, ground_point) {
+        GoTargets::Unit => GoTargets::Units(
+            units
+                .iter()
+                .map(|&(unit, miss)| (unit, cast_miss_info(miss)))
+                .collect(),
+        ),
+        other => other,
+    };
     for (audience, packet) in launch_messages(launch, projectile(ctx, launch), go_targets) {
         deliver(ctx, launch.caster_guid, audience, packet);
     }
 }
 
 /// The target block of a GO; vmangos `Spell::SendSpellGo` writes the cast's own targets.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum GoTargets {
+    /// The row's target alone.
     Unit,
+    /// The row's target, and every unit the cast reached as hit or missed.
+    Units(Vec<(u64, Option<wow_world_messages::vanilla::SpellMissInfo>)>),
     /// A persistent area hits the ground, so its GO lists no unit as hit.
     Area,
     GroundPoint((f32, f32, f32)),
@@ -197,6 +210,21 @@ fn damage_log(row: &SpellCastEvent) -> Option<Packet> {
     })
 }
 
+fn heal_log(row: &SpellCastEvent) -> Option<Packet> {
+    use wow_world_messages::vanilla::SMSG_SPELLHEALLOG;
+    (row.healed > 0).then(|| {
+        message(ServerOpcodeMessage::SMSG_SPELLHEALLOG(Box::new(
+            SMSG_SPELLHEALLOG {
+                victim: Guid::new(row.target_guid),
+                caster: Guid::new(row.caster_guid),
+                id: row.spell_id,
+                damage: row.healed,
+                critical: row.is_crit,
+            },
+        )))
+    })
+}
+
 fn strike_swing(row: &SpellCastEvent) -> Option<Packet> {
     let reports_damage = match StrikeSwingReport::from_code(row.strike_swing_report) {
         StrikeSwingReport::None => return None,
@@ -266,6 +294,7 @@ fn cast_event_messages(
     }
     if kind == SpellCastEventKind::ProcLog {
         out.extend(damage_log(row).map(|packet| (EventAudience::Everyone, packet)));
+        out.extend(heal_log(row).map(|packet| (EventAudience::Everyone, packet)));
         return out;
     }
     if kind == SpellCastEventKind::PeriodicLog {
@@ -287,22 +316,7 @@ fn cast_event_messages(
     // vmangos sends a queued strike's swing after its GO and before its damage log.
     out.extend(strike_swing(row).map(|packet| (EventAudience::Everyone, packet)));
     out.extend(damage_log(row).map(|packet| (EventAudience::Everyone, packet)));
-    if row.healed > 0 {
-        use wow_world_messages::vanilla::SMSG_SPELLHEALLOG;
-        use wow_world_messages::Guid;
-        out.push((
-            EventAudience::Everyone,
-            message(ServerOpcodeMessage::SMSG_SPELLHEALLOG(Box::new(
-                SMSG_SPELLHEALLOG {
-                    victim: Guid::new(row.target_guid),
-                    caster: Guid::new(row.caster_guid),
-                    id: row.spell_id,
-                    damage: row.healed,
-                    critical: row.is_crit,
-                },
-            ))),
-        ));
-    }
+    out.extend(heal_log(row).map(|packet| (EventAudience::Everyone, packet)));
 
     if row.energized > 0 {
         out.push((
@@ -380,6 +394,9 @@ fn spell_go(
                 .flatten();
             let miss = cast_miss_info(row.miss_info).or(swing_miss);
             codec::build_spell_go_outcome(caster, spell, row.target_guid, ammo, miss)
+        }
+        GoTargets::Units(units) => {
+            codec::build_spell_go_units(caster, spell, row.target_guid, ammo, &units)
         }
     }
 }
@@ -492,6 +509,19 @@ mod tests {
             assert_eq!(packets[0].1.opcode, 0x0250);
             assert!(matches!(packets[0].0, EventAudience::Everyone));
         }
+    }
+
+    #[test]
+    fn a_log_for_a_further_unit_a_cast_healed_sends_its_heal_log() {
+        let mut row = event();
+        row.kind = SpellCastEventKind::ProcLog as u8;
+        row.target_guid = 9;
+        row.healed = 120;
+        let opcodes: Vec<_> = cast_event_messages(&row, None, None)
+            .iter()
+            .map(|(_, packet)| packet.opcode)
+            .collect();
+        assert_eq!(opcodes, [0x0150], "SMSG_SPELLHEALLOG");
     }
 
     #[test]

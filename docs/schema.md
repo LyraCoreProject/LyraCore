@@ -1095,8 +1095,9 @@ The effect targets that select units in an area:
 - `T_AREA_ENEMY` (4): units the caster may attack, by vmangos `IsValidAttackTarget`.
 - `T_AREA_ALLY` (5, targets 29 and 31): units friendly to the caster, as vmangos
   `SPELL_TARGETS_FRIENDLY`, with the caster's owner and the owner's other units.
-- `T_CHAIN_ENEMY` (6): the cast's target, then each time the nearest unit the caster may attack
-  within 10 yd. A jump count of 0 or 1 hits the target alone.
+- `T_CHAIN_ENEMY` (6, target 6 with a jump count above 1): the cast's target, then each time the
+  nearest unit the caster may attack within 10 yd. A jump count of 0 or 1 hits the target alone. A
+  queued strike such as Cleave keeps `T_TARGET_ENEMY` and strikes its victim alone.
 - `T_PARTY_AREA` (9) and `T_RAID_AREA` (10): the caster's subgroup or whole raid and their pets,
   measured from the caster, as vmangos `FillRaidOrPartyTargets`. The members come from the
   Character that controls the caster; without one, from the caster's owner, or the caster itself

@@ -66,9 +66,9 @@ use lyracore_shared::spell::taxonomy::{
     P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
     SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
-    T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CASTER_PET, T_CHAIN_ALLY, T_PARTY_AREA, T_RAID_AREA,
-    T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY, T_TARGET_GROUP_CLASS,
-    T_TARGET_SUBGROUP,
+    T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CASTER_PET, T_CHAIN_ALLY, T_CHAIN_ENEMY, T_PARTY_AREA,
+    T_RAID_AREA, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    T_TARGET_GROUP_CLASS, T_TARGET_SUBGROUP,
 };
 
 // AttributesEx1 bits 0x04 and 0x40 both mark a channeled spell.
@@ -478,6 +478,16 @@ fn resolve_target(target: i32, is_negative: bool) -> u8 {
 }
 
 const TARGET_UNIT_CASTER_PET: i32 = 5;
+const TARGET_UNIT_ENEMY: i32 = 6;
+
+/// vmangos `SetTargetMap`: target 6 with an `EffectChainTarget` above 1 jumps to more enemies.
+fn unit_selection_target(selection: i32, chain_targets: u32, is_negative: bool) -> u8 {
+    if selection == TARGET_UNIT_ENEMY && chain_targets > 1 {
+        T_CHAIN_ENEMY
+    } else {
+        resolve_target(selection, is_negative)
+    }
+}
 
 fn teaches_caster_pet(effect_id: i32, target_a: i32) -> bool {
     effect_id == 36 && target_a == TARGET_UNIT_CASTER_PET
@@ -1467,7 +1477,7 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
             .unwrap_or_else(|| supported_effect_default(s.effect[i], kind, is_negative))
     } else {
         let selection = unit_selection_from_pair(target_a, target_b);
-        resolve_target(selection, is_negative)
+        unit_selection_target(selection, s.effect_chain_target[i], is_negative)
     };
     let target = match kind {
         E_CHARGE | E_JUDGEMENT | E_PICKPOCKET | E_INTERRUPT | E_NEXT_SWING | E_TAUNT
@@ -3157,9 +3167,9 @@ mod tests {
                 .map(|e| (e.target, e.radius_yd, e.chain_targets))
                 .collect::<Vec<_>>(),
             [
-                (T_TARGET_ENEMY, 7.0, 4),
+                (T_CHAIN_ENEMY, 7.0, 4),
                 (T_SELF, 9.0, 5),
-                (T_TARGET_ENEMY, 0.0, 6)
+                (T_CHAIN_ENEMY, 0.0, 6)
             ]
         );
         assert_eq!(
@@ -4864,6 +4874,16 @@ mod tests {
             resolve_instant_params(E_CREATE_ITEM, 99, 2070),
             (2070, P_ITEM_ENTRY)
         );
+    }
+
+    #[test]
+    fn an_enemy_target_with_more_than_one_chain_target_is_an_enemy_chain() {
+        assert_eq!(unit_selection_target(6, 0, true), T_TARGET_ENEMY);
+        assert_eq!(unit_selection_target(6, 1, true), T_TARGET_ENEMY);
+        assert_eq!(unit_selection_target(6, 2, true), T_CHAIN_ENEMY);
+        assert_eq!(unit_selection_target(6, 3, false), T_CHAIN_ENEMY);
+        assert_eq!(unit_selection_target(45, 3, false), T_CHAIN_ALLY);
+        assert_eq!(unit_selection_target(25, 3, true), T_TARGET_ENEMY);
     }
 
     #[test]

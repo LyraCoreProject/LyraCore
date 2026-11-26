@@ -388,6 +388,20 @@ repair, respawn or `debug_repair_after_publish` step is needed. `game_instance` 
 the Transfer blob. Code that inserts a `GameInstance`, such as a Package fixture, must set the
 field; Packages pin a Core revision that has it.
 
+### Enemy chain migration
+
+No schema changes. The importer now writes vmangos target 6 with an `EffectChainTarget` above 1 as
+`T_CHAIN_ENEMY` (6), so Chain Lightning, Multi-Shot, Swipe and the other source chains jump to more
+enemies. Until you reimport `spell`, they keep `T_TARGET_ENEMY` and hit the selected unit alone.
+Reimport `spell` from this revision before play resumes. A queued strike such as Cleave still
+imports as `T_TARGET_ENEMY`. A Package Delta emitted from an older Base Snapshot writes these effects
+with target 1; emit it again from a Base Snapshot of this revision.
+
+These changes apply at publish, without the reimport. A cast's SMSG_SPELL_GO lists every unit its
+effects reached, each as hit or with its miss, instead of the selected unit alone. Each unit other
+than the selected one gets its own damage and heal log, so an instant area spell now logs the damage
+it deals every unit.
+
 ### Hunter pet presence migration
 
 `game_hunter_pet` gains the END-appended columns `presence`, `display_id`, `saved_health` and

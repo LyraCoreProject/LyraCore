@@ -5,7 +5,7 @@ use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
     CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, E_HEAL, T_AREA_ALLY, T_AREA_ENEMY, T_PARTY_AREA,
 };
-use support::{number, Field, Standalone};
+use support::{event_rows, fence_subscription, number, subscribe_with_fence, Field, Standalone};
 
 const CHARACTER: u64 = 1;
 const WOLF_HEALTH: u32 = 100_000;
@@ -87,6 +87,35 @@ fn an_instant_area_spell_spares_an_evading_creature() {
         "vmangos AddUnitTarget: SPELL_MISS_EVADE"
     );
     assert!(health(&shard, fighting) < WOLF_HEALTH);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_instant_area_spell_logs_the_damage_it_deals_each_unit() {
+    let (shard, wolf) = stage("instant-area-damage-logs");
+    let second = spawn_wolf(&shard, 2.0);
+    let logs = subscribe_with_fence(
+        &shard,
+        &[&format!(
+            "SELECT * FROM game_spell_cast_event_live WHERE caster_guid = {CHARACTER} \
+             AND is_proc_log = true"
+        )],
+    );
+
+    cast(&shard, AREA_BURST);
+    fence_subscription(&shard, &logs);
+
+    let mut logged: Vec<(u64, u32)> = event_rows(&logs, "game_spell_cast_event_live")
+        .iter()
+        .map(|row| (number(row, "target_guid"), number(row, "damage")))
+        .collect();
+    logged.sort_unstable();
+    let mut dealt = [wolf, second].map(|guid| (guid, WOLF_HEALTH - health(&shard, guid)));
+    dealt.sort_unstable();
+    assert_eq!(
+        logged, dealt,
+        "vmangos DoSpellHitOnUnit sends SMSG_SPELLNONMELEEDAMAGELOG for each unit the spell hits"
+    );
 }
 
 #[test]
