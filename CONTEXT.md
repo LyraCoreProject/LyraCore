@@ -1142,8 +1142,9 @@ _Avoid_: server time, game time, local time
 A world occurrence from vmangos `game_event`, such as a holiday, the night or a fishing contest,
 with a calendar on the Realm Clock: a start, an end, and a length that repeats at a fixed interval.
 While it runs, the spawns tied to it show and the spawns tied to its absence hide, givers offer its
-quests and vendors sell its items. One that vmangos scripts stays stopped without its script, and
-one it disables neither runs nor stops; an Operator can still start or stop either.
+quests and vendors sell its items. One that vmangos scripts follows its script, as the Darkmoon
+Faire does, or stays stopped without one, and one it disables neither runs nor stops; an Operator
+can still start or stop either.
 _Avoid_: holiday (one kind of Game Event), world event, seasonal event
 
 **Game Event Link**:

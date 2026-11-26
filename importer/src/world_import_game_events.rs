@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context, Result};
+use lyracore_shared::game_event::DARKMOON_FAIRE_EVENTS;
 
 use super::{collect_gameobject_spawns, gameobject_pools, go_guid, DumpPlan, WorldImportArgs};
 use crate::creature_population;
@@ -220,6 +221,14 @@ fn vendor_offers(dump: &(impl TableRows + ?Sized)) -> Result<Vec<(u32, u32, u32)
     Ok(offers)
 }
 
+/// The scripted events whose script the Module lacks, for the `events.scripted` finding.
+fn unscripted_events(scripted: Vec<u32>) -> Vec<u32> {
+    scripted
+        .into_iter()
+        .filter(|entry| !DARKMOON_FAIRE_EVENTS.contains(entry))
+        .collect()
+}
+
 pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> Result<DumpPlan> {
     let mut definitions = definitions(dump)?;
     let creatures = creature_population::collect(dump, &args.scope)?;
@@ -338,11 +347,13 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         links.pooled_absences
     );
 
-    let scripted: Vec<u32> = parse_table(dump, "game_event")?
-        .iter()
-        .filter(|row| row.number::<u8>("hardcoded").is_ok_and(|flag| flag != 0))
-        .map(|row| row.number("entry"))
-        .collect::<Result<_>>()?;
+    let scripted = unscripted_events(
+        parse_table(dump, "game_event")?
+            .iter()
+            .filter(|row| row.number::<u8>("hardcoded").is_ok_and(|flag| flag != 0))
+            .map(|row| row.number("entry"))
+            .collect::<Result<Vec<u32>>>()?,
+    );
     let manifest = serde_json::json!({
         "format_version": 1,
         "source": "vmangos",
@@ -427,6 +438,14 @@ mod tests {
             &conditions,
         );
         assert_eq!(items, BTreeMap::from([((295, 21_813), 8)]));
+    }
+
+    #[test]
+    fn the_darkmoon_faire_events_leave_the_scripted_finding() {
+        assert_eq!(
+            unscripted_events(vec![4, 5, 6, 13, 23, 24, 66]),
+            [6, 13, 66]
+        );
     }
 
     #[test]

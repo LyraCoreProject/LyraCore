@@ -975,7 +975,8 @@ place like any chest.
 `GameEventMgr` does.
 `game_event` holds each event's calendar: `start_secs` and `end_secs` on the Realm Clock, and every
 `occurrence_mins` the event runs for `length_mins`. `scripted` marks a vmangos `hardcoded` event,
-whose script is absent, and `disabled` an event vmangos disables or leaves out of patch 1.12.
+which its script runs instead of the calendar, and `disabled` an event vmangos disables or leaves
+out of patch 1.12.
 `game_event_link` holds a Game Event Link: a creature spawn's source guid or a world GameObject's
 guid, its event, and `while_inactive` for a negative vmangos id. `game_event_pool` names a top-level
 GameObject pool that rolls only while its event runs. `game_event_quest` ties a quest to its event
@@ -985,9 +986,12 @@ claims or reads these tables, so they stay out of the table catalogue.
 An event is running while the Realm Clock is inside its start and end and within its length of the
 latest occurrence. A yearly event shorter than a year skips each 29 February since its start, so it
 comes back on its calendar date; see the deliberate deviations in
-`conformance/features/world/game_events.toml`. A scripted event stays stopped. A disabled or
-zero-length event, and one no row defines, is unscheduled: neither its spawns nor its absence
-spawns show. An Operator's `debug_event_start` or `debug_event_stop` holds on one Shard until
+`conformance/features/world/game_events.toml`. The Darkmoon Faire's events follow vmangos
+`DarkmoonFaire`: on the Realm Clock's UTC date the Faire opens on each month's first Monday for
+seven days, in Elwynn in even months and Mulgore in odd ones, and its building event runs on the up
+to three days of the same month before that Monday. Every other scripted event stays stopped. A
+disabled or zero-length event, and one no row defines, is unscheduled: neither its spawns nor its
+absence spawns show. An Operator's `debug_event_start` or `debug_event_stop` holds on one Shard until
 `debug_event_clear` hands the event back to its calendar.
 
 A spawn shows when, of its links, one plain link's event runs (if it has any) and every
