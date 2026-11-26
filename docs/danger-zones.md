@@ -396,13 +396,15 @@ enemies. The melee chains Druid Swipe, Holy Cleave 18819, Strong Cleave 8255 and
 25174 are cast Spells, not queued strikes, so they also jump. Until you reimport `spell`, they keep
 `T_TARGET_ENEMY` and hit the selected unit alone. Reimport `spell` from this revision before play
 resumes. A queued strike, such as Cleave 845 and most creature Cleaves, still imports as
-`T_TARGET_ENEMY` and strikes its victim alone. A Package Delta emitted from an older Base Snapshot
+`T_TARGET_ENEMY` with its chain count, which it has had since earlier imports, so its swing reaches
+its chain units at publish without the reimport. A Package Delta emitted from an older Base Snapshot
 writes these effects with target 1; emit it again from a Base Snapshot of this revision.
 
 These changes apply at publish, without the reimport. A cast's SMSG_SPELL_GO lists every unit its
 effects reached, each as hit or with its miss, instead of the selected unit alone. Each unit other
 than the selected one gets its own damage and heal log, so an instant area spell now logs the damage
-it deals every unit.
+it deals every unit. A queued strike's GO lists its victim and every chain unit, and each chain
+unit gets its own hit roll, damage log, threat and procs.
 
 ### Hunter pet presence migration
 

@@ -14,6 +14,6 @@ pub(crate) use targeting::blink_forward;
 pub(crate) use targeting::{
     apply_direct_heal, apply_effect, aura_apply, aura_has_visible_slot, end_ground_area,
     faction_target_violation, helps_units, holds_channelled_area, is_channelled_area,
-    place_ground_area, recipe_reagents, revive_amount, select_targets, spell_misses,
-    ItemGrantOutcome,
+    place_ground_area, queued_strike_chain, recipe_reagents, revive_amount, select_targets,
+    spell_misses, ItemGrantOutcome,
 };

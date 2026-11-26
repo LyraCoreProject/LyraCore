@@ -5,7 +5,7 @@ use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::item::weapon_subclass::THROWN;
 use lyracore_shared::spell::taxonomy::{
     CAST_FLAG_ALWAYS_HIT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE,
-    E_WEAPON_STRIKE, T_CHAIN_ENEMY,
+    E_NEXT_SWING, E_WEAPON_STRIKE, T_CHAIN_ENEMY, T_TARGET_ENEMY,
 };
 use serde_json::json;
 use support::{number, Field, NativePacket, Standalone, WorldSessionObserver};
@@ -24,6 +24,7 @@ const NATURE: u32 = 0x08;
 const PHYSICAL: u32 = 0x01;
 // vmangos SpellDamageClass.
 const DAMAGE_CLASS_MAGIC: u8 = 1;
+const DAMAGE_CLASS_MELEE: u8 = 2;
 const DAMAGE_CLASS_RANGED: u8 = 3;
 const RANGED_SLOT: u8 = 17;
 const INVTYPE_THROWN: u8 = 25;
@@ -35,6 +36,15 @@ const WOLF_OFFSETS: [f32; 4] = [4.0, 8.0, 12.0, 16.0];
 const SMSG_SPELL_GO: u16 = 0x0132;
 // vmangos SpellMissInfo SPELL_MISS_EVADE.
 const MISS_EVADE: u8 = 6;
+const CLEAVE: u32 = 845;
+// Spell.dbc Cleave 845: EffectChainTarget 2, no effect radius, the 5 yd melee range.
+const CLEAVE_CHAIN_TARGETS: u8 = 2;
+// The victim in melee reach, a wolf 3 yd past it and one 6.5 yd past it, beyond Cleave's 5 yd.
+const CLEAVE_WOLF_OFFSETS: [f32; 3] = [1.5, 4.5, 8.0];
+// Two 50 ms batches pass a 100 ms melee tick, which swings the 50 ms fist.
+const SWING_TICKS: &str = "2";
+// A dodge or miss can spare a wolf; 20 Cleaves leave it a negligible chance.
+const CLEAVE_ATTEMPTS: usize = 20;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -104,7 +114,72 @@ fn a_chain_lightning_go_lists_its_hits_in_jump_order_and_the_unit_that_evaded() 
     );
 }
 
-fn stage(name: &str) -> (Standalone, [u64; 4]) {
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_queued_cleave_strikes_its_victim_and_the_enemy_in_reach_but_not_one_beyond() {
+    let shard = open_shard("queued-cleave-chain");
+    let [victim, near, far] = CLEAVE_WOLF_OFFSETS.map(|offset| spawn_wolf(&shard, offset));
+    insert_queued_cleave(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET godmode = true, base_attack_time_ms = 50 \
+         WHERE guid = {CHARACTER}"
+    ));
+    let mut wire = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    wire.call("native_world_open", json!([42])).unwrap();
+    wire.call("debug_native_enter_world", json!([CHARACTER]))
+        .unwrap();
+    let mut session = WorldSessionObserver::new(wire.connection_id());
+    shard.assert_call(
+        "debug_engage",
+        &[&CHARACTER.to_string(), &victim.to_string()],
+    );
+
+    let mut gos = Vec::new();
+    for _ in 0..CLEAVE_ATTEMPTS {
+        if hit(&shard, [victim, near]) == [true, true] {
+            break;
+        }
+        shard.assert_call(
+            "debug_force_cast_at",
+            &[
+                &CHARACTER.to_string(),
+                &CLEAVE.to_string(),
+                &victim.to_string(),
+            ],
+        );
+        shard.assert_call("debug_advance_roll_batch", &[SWING_TICKS]);
+        gos.extend(
+            session
+                .received(&wire.drain_packets())
+                .into_iter()
+                .filter(|packet| {
+                    packet.opcode == Some(SMSG_SPELL_GO) && go_spell(packet) == CLEAVE
+                }),
+        );
+    }
+
+    assert_eq!(
+        hit(&shard, [victim, near, far]),
+        [true, true, false],
+        "vmangos casts the queued Cleave at the victim; its target 6 chain gathers melee units \
+         within 5 yd of it"
+    );
+    let go = gos.first().expect("the swing sends the Cleave's GO");
+    let (hits, misses) = go_units(go);
+    let mut units: Vec<u64> = hits
+        .into_iter()
+        .chain(misses.into_iter().map(|(unit, _)| unit))
+        .collect();
+    units.sort_unstable();
+    let mut expected = vec![victim, near];
+    expected.sort_unstable();
+    assert_eq!(
+        units, expected,
+        "vmangos WriteSpellGoTargets lists the victim and the chained wolf, hit or missed"
+    );
+}
+
+fn open_shard(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
@@ -113,12 +188,17 @@ fn stage(name: &str) -> (Standalone, [u64; 4]) {
     shard.assert_call("debug_spawn_player_entity", &[&CHARACTER.to_string()]);
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.clear_schedule("game_creature_move_schedule");
-    shard.clear_schedule("game_melee_schedule");
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60, orientation = 0 WHERE guid = {CHARACTER}"
     ));
     factions(&shard);
     set_faction(&shard, CHARACTER, CHARACTER_FACTION);
+    shard
+}
+
+fn stage(name: &str) -> (Standalone, [u64; 4]) {
+    let shard = open_shard(name);
+    shard.clear_schedule("game_melee_schedule");
     let wolves = WOLF_OFFSETS.map(|offset| spawn_wolf(&shard, offset));
     // Chain Lightning 421: nature damage at 30 yd with no effect radius.
     insert_chain(
@@ -243,6 +323,34 @@ fn insert_chain(
     shard.insert_row("game_spell_effect", &effect_row);
 }
 
+// Cleave 845 as the importer writes it: a queued strike that keeps its chain count.
+fn insert_queued_cleave(shard: &Standalone) {
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &CLEAVE),
+            ("name", &"Cleave"),
+            ("range_yd", &5),
+            ("is_negative", &true),
+            ("school_mask", &PHYSICAL),
+            ("damage_class", &DAMAGE_CLASS_MELEE),
+            ("gcd_ms", &0),
+            ("cooldown_ms", &0),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(CLEAVE, 0)),
+            ("spell_id", &CLEAVE),
+            ("kind", &E_NEXT_SWING),
+            ("base_points", &5),
+            ("target", &T_TARGET_ENEMY),
+            ("chain_targets", &CLEAVE_CHAIN_TARGETS),
+        ],
+    );
+}
+
 fn equip_thrown(shard: &Standalone) {
     shard.assert_call(
         "debug_equip_weapon",
@@ -281,6 +389,16 @@ fn cast_and_land(shard: &Standalone, spell_id: u32, target: u64) {
         ],
     );
     shard.assert_call("debug_advance_roll_batch", &[FLIGHT_TICKS]);
+}
+
+/// The spell id of an SMSG_SPELL_GO body.
+fn go_spell(go: &NativePacket) -> u32 {
+    let body = &go.body;
+    let mut at = 0;
+    for _ in 0..2 {
+        at += 1 + body[at].count_ones() as usize;
+    }
+    u32::from_le_bytes(body[at..at + 4].try_into().unwrap())
 }
 
 /// The hit guids and the (guid, miss) pairs of an SMSG_SPELL_GO body.
