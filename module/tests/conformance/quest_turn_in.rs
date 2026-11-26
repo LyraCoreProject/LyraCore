@@ -984,3 +984,30 @@ fn abandoning_a_quest_destroys_its_quest_bonded_required_items_in_bags_and_bank(
         ))
         .is_empty());
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn failing_a_repeatable_untimed_quest_destroys_its_quest_bonded_required_items() {
+    let (shard, _connection, guid, _giver) = stage("quest-fail-bonded-items");
+    seed_quest(&shard, ABANDON_QUEST, FIXTURE_REINS, true);
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET repeatable = true, limit_time = 0 WHERE entry = {ABANDON_QUEST}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET bonding = 4, max_stack = 1 WHERE entry = {FIXTURE_REINS}"
+    ));
+    grant(&shard, guid, FIXTURE_REINS, 1, 23);
+    grant_quest(&shard, guid, ABANDON_QUEST);
+
+    shard.assert_call(
+        "debug_expire_quest",
+        &[&guid.to_string(), &ABANDON_QUEST.to_string()],
+    );
+
+    assert!(item_slots(&shard, guid, FIXTURE_REINS).is_empty());
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT * FROM game_character_quest WHERE quest_entry = {ABANDON_QUEST}"
+        ))
+        .is_empty());
+}

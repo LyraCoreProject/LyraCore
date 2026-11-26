@@ -12,7 +12,9 @@ use crate::game_spell_effect;
 use crate::game_start_item;
 use crate::game_world_entity;
 
-use super::inventory::{first_free_backpack_slot, first_free_bag_slot, is_carried_slot};
+use super::inventory::{
+    first_free_backpack_slot, first_free_bag_slot, is_bank_slot, is_carried_slot,
+};
 use super::rules::{
     binds_on_grant, equip_slot, meets_required_level, meets_required_reputation,
     resolve_equip_slot, template_stat, EquipStat,
@@ -417,19 +419,14 @@ pub(crate) fn remove_items(
     Ok(())
 }
 
-/// Deletes every copy of `item_entry` the Character carries, wears or banks. Each deletion goes
-/// through the write path, so the client sees the item destroyed and a Trade Session offering it
-/// is reset. Items inside bank bags have no address in this model.
+/// Includes worn and banked copies; a Trade Session offering one is reset.
 pub(crate) fn destroy_all_copies(ctx: &ReducerContext, owner_guid: u64, item_entry: u32) {
     let copies: Vec<u64> = ctx
         .db
         .game_item_instance()
         .by_owner_guid()
         .filter(&owner_guid)
-        .filter(|i| {
-            i.entry == item_entry
-                && (is_carried_slot(i.slot) || super::inventory::is_bank_slot(i.slot))
-        })
+        .filter(|i| i.entry == item_entry && (is_carried_slot(i.slot) || is_bank_slot(i.slot)))
         .map(|i| i.guid)
         .collect();
     for guid in copies {

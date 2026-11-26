@@ -75,6 +75,13 @@ pub mod bonding {
     pub const BIND_QUEST_ITEM1: u8 = 5;
 }
 
+pub(crate) fn is_quest_bonded(item_bonding: u8) -> bool {
+    matches!(
+        item_bonding,
+        bonding::BIND_QUEST_ITEM | bonding::BIND_QUEST_ITEM1
+    )
+}
+
 // vmangos Player::StoreItem binds BIND_WHEN_PICKED_UP and BIND_QUEST_ITEM when it stores them.
 pub(crate) fn binds_on_grant(item_bonding: u8) -> bool {
     matches!(

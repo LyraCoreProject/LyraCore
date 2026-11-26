@@ -67,7 +67,7 @@ pub(crate) use tables::ItemPush;
 
 #[cfg(feature = "debug_reducers")]
 pub(crate) use rules::binds_on_equip;
-pub(crate) use rules::{binds_on_grant, merge_amount, EquipStat};
+pub(crate) use rules::{binds_on_grant, is_quest_bonded, merge_amount, EquipStat};
 
 pub use rules::weapon_subclass;
 
