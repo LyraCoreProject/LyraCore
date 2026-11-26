@@ -520,6 +520,13 @@ A landed cast then rolls partial block separately, exactly as the queued strike 
 block chance is 5% at both levels, and the overlapping block probabilities are
 `8500*214748365/(10000*2^32)` and `7150*214748365/(10000*2^32)`.
 
+LyraCore rolls it in `apply_damage_effect` for a landed melee-slot Weapon Strike from the Caster
+stream, after the cast's hit roll and the effect's points draw, unless its spell has
+`SPELL_ATTR_NO_ACTIVE_DEFENSE` or `SPELL_ATTR_EX3_COMPLETELY_BLOCKED`. The blocked amount comes off
+the strike before absorb, goes to the damage log, and raises `PROC_EX_BLOCK` beside the hit's
+quality. The extra Caster draw moves the later draws of each Character's stream, so the public
+seeds' counts differ from those before it.
+
 vmangos reports every outcome through the Spell path. [Spell.cpp:4529–4561, 4625–4653](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)
 sends one `SMSG_SPELL_GO` to the caster and its observers: a landed target is in the hit list, an
 avoided target is in the miss list with reason 1 (miss), 3 (dodge) or 4 (parry). A landed cast then
@@ -638,8 +645,8 @@ the same Spell.cpp:1415 branch, unless its spell has `SPELL_ATTR_NO_ACTIVE_DEFEN
 `launch_ranged_strike` from the Caster stream, after the cast's hit roll and the effect's points
 draw. The strike's own damage roll is `ctx.random`, not a Caster draw. The blocked amount goes to
 the impact. vmangos rolls the block at impact, LyraCore at launch, so a block that follows a launch
-state change differs. No Roll Conformance context measures a ranged cast strike: the cast Weapon
-Strike context is melee Mortal Strike, so Tier 1 signatures do not move.
+state change differs. No Roll Conformance context measures a ranged cast strike; the cast Weapon
+Strike context is melee Mortal Strike.
 
 A ranged hit is a Spell in vmangos, so `CreateProcExtendMask`
 ([Unit.cpp:8776–8830](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp))

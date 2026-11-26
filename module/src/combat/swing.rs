@@ -896,7 +896,14 @@ pub(crate) fn launch_ranged_strike(
     spell: &crate::Spell,
     is_crit: bool,
 ) {
-    let (rolled, blocked) = super::folds::block_ranged_strike(ctx, attacker, target, spell, rolled);
+    let (rolled, blocked) = super::block_cast_strike(
+        ctx,
+        attacker,
+        target,
+        spell,
+        super::AttackType::Ranged,
+        rolled,
+    );
     let damage = FrozenDamage::launch(ctx, attacker.guid, target.guid, rolled);
     let (dx, dy, dz) = (
         target.x - attacker.x,
