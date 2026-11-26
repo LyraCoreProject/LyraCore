@@ -34,8 +34,8 @@ const MANA: u32 = 0;
 const PROC_WATCH: u32 = 5_131_703;
 const WATCH_CHARGES: u8 = 3;
 const WATCH_DURATION_MS: u32 = 600_000;
-// vmangos PROC_FLAG_TAKE_MELEE_ABILITY: a queued strike raises it, a white swing does not.
-const TAKEN_MELEE_ABILITY: u32 = 0x20;
+// vmangos PROC_FLAG_TAKE_MELEE_ABILITY.
+const TAKEN_MELEE_SPELL_HIT: u32 = 0x20;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -247,12 +247,7 @@ fn a_queued_strike_raises_the_victims_melee_ability_proc_and_a_white_swing_does_
     stage_proc_watch(&standalone, wolf);
     assert_eq!(watch_charges(&standalone, wolf), Some(WATCH_CHARGES));
 
-    for _ in 0..20 {
-        stage_power(&standalone, 0);
-        if swing(&standalone).1["damage"] != "0" {
-            break;
-        }
-    }
+    landed_swing(&standalone, || stage_power(&standalone, 0));
     assert_eq!(
         watch_charges(&standalone, wolf),
         Some(WATCH_CHARGES),
@@ -761,7 +756,7 @@ fn stage_proc_watch(standalone: &Standalone, wolf: u64) {
             ("range_yd", &30),
             ("duration_ms", &WATCH_DURATION_MS),
             ("spell_level", &1),
-            ("proc_flags", &TAKEN_MELEE_ABILITY),
+            ("proc_flags", &TAKEN_MELEE_SPELL_HIT),
             ("proc_chance", &100),
             ("proc_charges", &WATCH_CHARGES),
         ],

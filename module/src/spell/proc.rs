@@ -135,7 +135,7 @@ fn landed_result(hit: &Hit, absorbed: u32) -> u32 {
 }
 
 fn is_melee_spell_strike(hit: &Hit) -> bool {
-    hit.source == HitSource::MeleeSpell || (hit.source == HitSource::MainHand && hit.spell_id != 0)
+    hit.source == HitSource::MeleeSpell || hit.is_queued_strike()
 }
 
 // vmangos Unit::CalculateMeleeDamage raises PROC_EX_BLOCK alone for a full block; a ranged hit is
@@ -174,13 +174,10 @@ pub(crate) fn is_proc_kind(kind: u8) -> bool {
     kind == A_PROC_TRIGGER || kind == A_PROC_DAMAGE
 }
 
-// vmangos Spell::PrepareDataForTriggerSystem gives a melee-class Spell the melee-ability flags and
-// a next-melee-swing Spell the swing flags beside them, so a queued strike raises both pairs.
-// PROC_FLAG_MAIN_HAND_WEAPON_SWING (0x0040_0000) is not modelled for a white swing or a strike:
-// vmangos notes that no spell carries it.
+// PROC_FLAG_MAIN_HAND_WEAPON_SWING (0x0040_0000) is not modelled: vmangos notes no spell carries it.
 pub(crate) fn hit_bits(hit: &Hit) -> (u32, u32) {
     match hit.source {
-        HitSource::MainHand if hit.spell_id != 0 => (
+        HitSource::MainHand if hit.is_queued_strike() => (
             PROC_FLAG_SUCCESSFUL_MELEE_HIT | PROC_FLAG_SUCCESSFUL_MELEE_SPELL_HIT,
             PROC_FLAG_TAKEN_MELEE_HIT | PROC_FLAG_TAKEN_MELEE_SPELL_HIT,
         ),
