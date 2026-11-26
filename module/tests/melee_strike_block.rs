@@ -27,9 +27,9 @@ const PROC_EX_BLOCK: u32 = 0x40;
 const GO_EVENTS: &str =
     "SELECT * FROM game_spell_cast_event_live WHERE caster_guid = 1 AND kind = 2";
 // A cast melee strike draws the Caster stream: its hit roll, the effect points, then the block.
-// Splitmix states whose first draw clears the wolf's dodge and parry bands and whose draws 2 to 5
-// each fall under 200 basis points, below the wolf's 500 block chance, or each fall over 1000,
-// above it.
+// Splitmix states whose first draw, 8467 and 8682, falls above the wolf's 3650 basis point dodge
+// band, since the fixture wolf cannot parry. The third draw, 3 and 9487, is the block draw against
+// the wolf's 500 basis point block chance; draws 2 to 5 of the blocking state each fall under 200.
 const BLOCKING_CASTER_STATE: u64 = 12_934_727;
 const CLEAR_CASTER_STATE: u64 = 4;
 
@@ -43,7 +43,12 @@ fn a_cast_melee_strike_is_partly_blocked_by_a_facing_creature_and_reports_it() {
     seed_caster(&standalone, wolf, BLOCKING_CASTER_STATE);
     let events = subscribe_with_fence(&standalone, &[GO_EVENTS]);
 
+    assert_eq!(revenge_until_ms(&standalone, wolf), 0);
     strike(&standalone, wolf);
+    assert!(
+        revenge_until_ms(&standalone, wolf) > 0,
+        "vmangos arms Revenge on the target of a blocked melee ability"
+    );
     reseed_caster(&standalone, CLEAR_CASTER_STATE);
     strike(&standalone, wolf);
     fence_subscription(&standalone, &events);
@@ -162,6 +167,14 @@ fn stage(standalone: &mut Standalone) -> u64 {
     standalone.insert_row(
         "game_conformance_swing_random",
         &[("character_guid", &PLAYER), ("state", &1)],
+    );
+    standalone.insert_row(
+        "game_creature_defense",
+        &[
+            ("entry", &TEST_WOLF_ENTRY),
+            ("no_parry", &true),
+            ("no_block", &false),
+        ],
     );
     standalone.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
     wolf
@@ -297,6 +310,14 @@ fn strike(standalone: &Standalone, wolf: u64) {
         "debug_cast_at",
         &[&PLAYER.to_string(), &STRIKE.to_string(), &wolf.to_string()],
     );
+}
+
+fn revenge_until_ms(standalone: &Standalone, guid: u64) -> u64 {
+    standalone.query_rows(&format!(
+        "SELECT revenge_until_ms FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["revenge_until_ms"]
+        .parse()
+        .unwrap()
 }
 
 fn health(standalone: &Standalone, guid: u64) -> u32 {

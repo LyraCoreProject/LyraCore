@@ -896,7 +896,7 @@ const SPELL_ATTR_EX3_COMPLETELY_BLOCKED: u32 = 0x0000_0008;
 fn rolls_spell_block(
     ctx: &ReducerContext,
     stream: crate::conformance_rolls::RollStream,
-    ranged_spell_id: u32,
+    spell_id: u32,
     partial_block_bp: u32,
 ) -> bool {
     partial_block_bp > 0
@@ -904,7 +904,7 @@ fn rolls_spell_block(
             .db
             .game_spell()
             .spell_id()
-            .find(ranged_spell_id)
+            .find(spell_id)
             .is_some_and(|spell| {
                 matches!(
                     spell.damage_class,

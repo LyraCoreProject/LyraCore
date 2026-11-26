@@ -523,8 +523,8 @@ block chance is 5% at both levels, and the overlapping block probabilities are
 LyraCore rolls it in `apply_damage_effect` for a landed melee-slot Weapon Strike from the Caster
 stream, after the cast's hit roll and the effect's points draw, unless its spell has
 `SPELL_ATTR_NO_ACTIVE_DEFENSE` or `SPELL_ATTR_EX3_COMPLETELY_BLOCKED`. The blocked amount comes off
-the strike before absorb, goes to the damage log, and raises `PROC_EX_BLOCK` beside the hit's
-quality. The extra Caster draw moves the later draws of each Character's stream, so the public
+the strike before absorb, goes to the damage log, arms Revenge on the target and raises
+`PROC_EX_BLOCK` beside the hit's quality. The extra Caster draw moves the later draws of each Character's stream, so the public
 seeds' counts differ from those before it.
 
 vmangos reports every outcome through the Spell path. [Spell.cpp:4529–4561, 4625–4653](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)

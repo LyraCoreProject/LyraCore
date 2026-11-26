@@ -1318,7 +1318,10 @@ fn apply_damage_effect(
             .with_block(blocked);
             let (dealt, absorbed) =
                 crate::combat::deal_damage(ctx, caster_guid, target_guid, dmg as i32, hit);
-            if blocked > 0 && dealt == 0 && absorbed == 0 && !triggered {
+            if blocked > 0 {
+                crate::combat::arm_react(ctx, target_guid, crate::combat::ReactKind::Revenge);
+            }
+            if blocked > 0 && dmg == 0 && !triggered {
                 crate::spell::proc::run_unlanded_proc_pass(
                     ctx,
                     caster_guid,

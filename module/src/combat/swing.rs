@@ -1028,6 +1028,9 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     if strike {
         crate::spell::break_stealth(ctx, shot.attacker_guid);
     }
+    if strike && shot.blocked > 0 {
+        arm_react(ctx, shot.target_guid, ReactKind::Revenge);
+    }
 
     let damage = FrozenDamage::stored(shot.damage, shot.absorbed).resolve(ctx, &target);
     let hit = if strike {
