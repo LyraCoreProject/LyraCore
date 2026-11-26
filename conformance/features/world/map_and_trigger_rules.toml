@@ -74,9 +74,21 @@ symbol = "world_plan"
 evidence = "conformance/vmangos-port-census/dbc.md: Map reset delays and lockout limits."
 
 [[known_gaps]]
-description = "On a split Realm a Shard hands over only the runs and bindings it holds, so the formation and leader-change handovers of vmangos Group::Create and Group::_setLeader need the run and the leader's binding on one Shard. A leader outside the dungeon holds its binding on a continent World Shard while its solo run is on the Instance Shard: the Group takes that run only when the leader enters it first, a new leader outside the dungeon does not take the Group to its own run, and an old leader on another Shard does not keep the Group's former run."
+description = "On a split Realm a Shard hands over only the runs and bindings it holds, so the formation and leader-change handovers of vmangos Group::Create and Group::_setLeader need the run and the leader's binding on one Shard. A leader outside the dungeon holds its binding on a continent World Shard while its solo run is on the Instance Shard: the Group takes that run only when the leader enters it first, a new leader outside the dungeon does not take the Group to its own run, and an old leader on another Shard does not keep the Group's former run. With several Instance hosts for one map, a run the Group adopts on one host is not the Group's Instance Placement, so the Realm Shard can send a member to a fresh run on another host."
 path = "module/src/instance.rs"
 symbol = "hand_runs_to_leader"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
+
+[[known_gaps]]
+description = "When the leader leaves the Group and the new leader holds its own run of a map, vmangos Group::_setLeader gives the Group's run to the leaver. The members still standing in that run stay in vmangos, because its countdown starts only for the leaver in Group::_homebindIfInstance. LyraCore checks its countdown from the run's owner, so those members stand in the leaver's run outside its Group and count down."
+path = "module/src/instance.rs"
+symbol = "hand_runs_to_leader"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
+
+[[known_gaps]]
+description = "When the leader leaves the Group while it stands in the Group's run and the new leader holds its own run of that map, the leaver keeps the run as in vmangos Group::_setLeader. vmangos Group::_homebindIfInstance then counts the leaver down, because its bind is not permanent. LyraCore lets the holder stay, so the leaver gets no countdown."
+path = "module/src/instance.rs"
+symbol = "instance_removal_standing"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
 
 [[known_gaps]]

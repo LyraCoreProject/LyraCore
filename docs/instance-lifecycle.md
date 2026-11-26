@@ -13,25 +13,28 @@ Adoption refuses a run when the Group already has a live run of that map on the 
 cannot see the Group's runs on other Instance Shards, so on a split Realm a member standing in a
 disbanded Group's run can still give that run to a Group whose run is on another Instance Shard.
 
-A solo run has `party_id` 0 and is held by the Characters bound to it on its Shard. A binding to a
-solo run that another Character holds does not route. A Character may stand in its Group's run, or
-in a solo run that it or a member of its Group holds; a solo run that nobody holds, such as one an
-operator staged, sends nobody home. A run changes owner at three moments, as in vmangos
-`Group.cpp`:
+A solo run has `party_id` 0. Its `holder_guid` names the Character that holds it, or 0 when no
+handover gave it a holder; such a run routes whoever is bound to it. A binding to a solo run that
+another Character holds does not route, also when that binding came with the Character on a
+Transfer. A Character may stand in its Group's run, or in a solo run that it or a member of its
+Group holds; a solo run without a holder sends nobody home. A run changes owner at three moments,
+as in vmangos `Group.cpp`:
 
 - When a Group forms, the leader's solo runs become the Group's (`Player::ConvertInstancesToGroup`).
 - When the leader changes, each Group run of a map where the new leader holds a solo run passes to
-  the old leader as its solo run, unless the old leader holds one of that map; then the new
-  leader's solo runs become the Group's (`Group::_setLeader`).
+  the old leader as its solo run, unless the old leader holds one of that map; then that run is
+  reset. The new leader's solo runs then become the Group's (`Group::_setLeader`). The remaining
+  members are checked for Instance Removal again.
 - When a Group disbands, the Group's run the last member stands in becomes that member's solo run
-  and its other bindings are dropped (`Group::Disband`). That member gets no Instance Removal.
+  and its other bindings on that Shard are dropped (`Group::Disband`). That member gets no
+  Instance Removal.
 
-`hand_runs_to_leader` and `hand_run_to_survivor` do this on the Shard that runs the Group change: the
-Group plane on one Shard, and each World Shard when it applies the Group projection on a split
-Realm. A Shard changes only the runs and bindings it holds, so on a split Realm a handover needs
-the run and the Character's binding on one Shard. The disband handover always has both on the
-Instance Shard where the last member stands. The Package fixture mirror `sync_group_mirror` names
-no last member and hands over nothing.
+`hand_runs_to_leader` and `hand_run_to_survivor` do this on the Shard that runs the Group change:
+the Group plane on one Shard, and each World Shard when it applies the Group projection on a split
+Realm. A Shard changes only the runs and bindings it holds, so on a split Realm a formation or
+leader-change handover needs the run and the leader's binding on one Shard. The disband handover
+runs on the Instance Shard where the last member stands, and records it as the holder there. The
+Package fixture mirror `sync_group_mirror` names no last member and hands over nothing.
 
 A Character who joins a Group without leading it loses its bindings, except for the map it stands
 on, as vmangos `Group::AddMember` resets a joining member's runs. The Group plane does this on one
@@ -98,8 +101,9 @@ the Package Creature Range carry bit 23 too. GameObject copies use `0xF110 | bit
 pool band and above static and debug identifiers.
 
 A Character standing in a Group's dungeon Instance without membership, or in a solo run that
-neither it nor a member of its Group holds, gets a 60-second removal timer. `reconcile_instance_removal` runs when membership or location changes, including login and
-Group projection. `expire_instance_removal` checks the rule again before moving the Character home.
+neither it nor a member of its Group holds, gets a 60-second removal timer.
+`reconcile_instance_removal` runs when membership or location changes, including login and Group
+projection. `expire_instance_removal` checks the rule again before moving the Character home.
 
 All tables are private.
 

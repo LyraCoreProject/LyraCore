@@ -117,6 +117,14 @@ fn owner_of(shard: &Standalone, run: &str) -> String {
         .clone()
 }
 
+fn holder_of(shard: &Standalone, run: &str) -> u64 {
+    shard.query_rows(&format!(
+        "SELECT holder_guid FROM game_instance WHERE instance_id = {run}"
+    ))[0]["holder_guid"]
+        .parse()
+        .unwrap()
+}
+
 fn holders_of(shard: &Standalone, run: &str) -> Vec<u64> {
     let mut holders: Vec<u64> = shard
         .query_rows(&format!(
@@ -170,6 +178,7 @@ fn a_new_leader_takes_the_group_to_its_own_run_and_the_old_leader_keeps_the_grou
 
     assert_eq!(owner_of(&shard, &heirs_run), group);
     assert_eq!(owner_of(&shard, &groups_run), "0");
+    assert_eq!(holder_of(&shard, &groups_run), LEADER);
     assert_eq!(holders_of(&shard, &groups_run), [LEADER]);
     assert_eq!(
         enter(&shard, other),
@@ -197,6 +206,7 @@ fn the_last_member_in_the_groups_run_keeps_it_when_the_group_disbands() {
     group_op(&shard, LEAVE, LEADER, 0, 0);
 
     assert_eq!(owner_of(&shard, &run), "0", "the run is the survivor's own");
+    assert_eq!(holder_of(&shard, &run), survivor);
     assert_eq!(holders_of(&shard, &run), [survivor]);
     walk_out(&shard, survivor);
     assert_eq!(enter(&shard, survivor), run);
