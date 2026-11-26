@@ -197,7 +197,8 @@ fn a_periodic_tick_of_a_spell_that_is_not_channelled_puts_neither_unit_in_combat
     assert!(!in_combat(&standalone, WOLF));
 }
 
-/// Gives the DOT a Spell row with `cast_flags`, and puts caster and target on one map.
+/// Gives the DOT a Spell row with `cast_flags` and `CHAN_NO_DIST_LIMIT`, and puts both units on map 0
+/// with the caster outside simulation indexing.
 fn stage_dot_spell(standalone: &Standalone, cast_flags: u32) {
     standalone.insert_rows(
         "game_spell",

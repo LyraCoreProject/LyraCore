@@ -1,3 +1,4 @@
+use lyracore_shared::spell::taxonomy::A_DAMAGE_SHIELD;
 use spacetimedb::{log, reducer, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::world::power_pool::request_resurrected_power;
@@ -252,7 +253,14 @@ fn channelled_tick_enters_combat(ctx: &ReducerContext, aura: &Aura, spell: &crat
             .game_spell_effect()
             .by_spell()
             .filter(&spell.spell_id)
-            .any(|effect| effect.kind == lyracore_shared::spell::taxonomy::A_DAMAGE_SHIELD)
+            .any(|effect| effect.kind == A_DAMAGE_SHIELD)
+}
+
+fn engage_for_channelled_tick(ctx: &ReducerContext, caster: &WorldEntity, target: &WorldEntity) {
+    crate::pvp::harmed(ctx, caster, target);
+    crate::combat::engage_passive_creature(ctx, target.guid, caster.guid);
+    crate::combat::enter_combat(ctx, caster.guid);
+    crate::combat::enter_combat(ctx, target.guid);
 }
 
 pub(crate) fn is_due_for_expiry(eff_kind: u8, expires_at: Timestamp, now: Timestamp) -> bool {
@@ -373,8 +381,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 let absorbed = incoming - left;
                 let amount = if target.godmode { 0 } else { left };
                 if enters_combat {
-                    crate::combat::enter_combat(ctx, a.caster_guid);
-                    crate::combat::enter_combat(ctx, a.target_guid);
+                    engage_for_channelled_tick(ctx, &caster, &target);
                 }
                 crate::SpellCastEvent::insert(
                     ctx,
