@@ -465,6 +465,137 @@ pub struct NativeTransferRelease {
     pub connected: bool,
 }
 
+/// Counts the Transfer outbox and retry rows that address `shard` or name it as the destination
+/// World Shard.
+pub(crate) fn pending_toward(ctx: &ReducerContext, shard: Identity) -> usize {
+    let moved = |call: &NativeTransferMoved| call.database.0 == shard || call.world.0 == shard;
+    ctx.db
+        .game_native_transfer()
+        .iter()
+        .filter(|call| call.database.0 == shard)
+        .count()
+        + ctx
+            .db
+            .game_native_transfer_moved()
+            .iter()
+            .filter(moved)
+            .count()
+        + ctx
+            .db
+            .game_native_transfer_moved_retry()
+            .iter()
+            .filter(|retry| moved(&retry.call))
+            .count()
+        + ctx
+            .db
+            .game_native_transfer_release()
+            .iter()
+            .filter(|call| call.database.0 == shard)
+            .count()
+        + ctx
+            .db
+            .game_native_transfer_release_retry()
+            .iter()
+            .filter(|retry| retry.call.database.0 == shard)
+            .count()
+}
+
+/// Counts the Handoffs that a Transfer from `shard` still fences, until its release.
+pub(crate) fn arriving_from(ctx: &ReducerContext, shard: Identity) -> usize {
+    ctx.db
+        .game_native_handoff()
+        .iter()
+        .filter(|handoff| {
+            handoff.transfer_source == Some(shard) && super::handoff::fenced(ctx, handoff)
+        })
+        .count()
+}
+
+/// Queues a Transfer release to `target`, which a test makes refuse it.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_queue_native_transfer_release(
+    ctx: &ReducerContext,
+    target: Identity,
+    character_guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    ctx.db
+        .game_native_transfer_release()
+        .insert(NativeTransferRelease {
+            id: 0,
+            database: remote::Identity(target),
+            realm: remote::Identity(ctx.database_identity()),
+            transfer_id: 0,
+            character_guid,
+            connection: 0,
+            connected: false,
+        });
+    Ok(())
+}
+
+/// Queues a directory update addressed to `database` for a Transfer toward `world`, which a test
+/// makes refuse it.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_queue_native_transfer_moved(
+    ctx: &ReducerContext,
+    database: Identity,
+    world: Identity,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    ctx.db
+        .game_native_transfer_moved()
+        .insert(NativeTransferMoved {
+            id: 0,
+            database: remote::Identity(database),
+            world: remote::Identity(world),
+            transfer_id: 0,
+            character_guid: 9,
+            account_id: 0,
+            connection: 0,
+            revision: 0,
+        });
+    Ok(())
+}
+
+/// Records a Transfer from `source` whose release has not arrived.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_insert_native_transfer_arrival(
+    ctx: &ReducerContext,
+    source: Identity,
+    transfer_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    ctx.db.game_transfer_in().insert(transfer::TransferIn {
+        transfer_id,
+        character_guid: 9,
+        blob: Vec::new(),
+        created_micros: 0,
+        bot_intent_id: 0,
+        bot_controller_generation: 0,
+        bot_intent_created_micros: 0,
+        bot_intent_source: Identity::ZERO,
+        source_map_id: 0,
+        source_instance_id: 0,
+        source_locator_revision: 0,
+    });
+    ctx.db.game_native_handoff().insert(NativeHandoff {
+        connection_id: ConnectionId::from_u128(u128::from(transfer_id)),
+        server_seed: 0,
+        account_id: 0,
+        client_seed: 0,
+        client_proof: Vec::new(),
+        character_guid: Some(9),
+        world_port: true,
+        teleport_counter: 0,
+        transfer_id,
+        transfer_source: Some(source),
+    });
+    Ok(())
+}
+
 crate::outside_table_catalog!(
     game_native_transfer_pending,
     game_native_transfer,

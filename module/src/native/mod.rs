@@ -83,6 +83,11 @@ pub(crate) use motion_permit::{
     sweep_delete_game_native_motion_permit, sweep_transfer_game_native_motion_permit,
 };
 pub(crate) use teleport::expire_near_teleports_pass;
+pub(crate) use transfer::{
+    arriving_from as transfer_arriving_from, pending_toward as transfer_pending_toward,
+};
+#[cfg(feature = "debug_reducers")]
+pub(crate) use transfer::{game_native_transfer_moved_retry, game_native_transfer_release_retry};
 
 pub(crate) fn is_world_porting(ctx: &ReducerContext, guid: u64) -> bool {
     world_session(ctx, guid)

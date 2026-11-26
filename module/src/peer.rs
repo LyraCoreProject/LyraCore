@@ -77,12 +77,71 @@ pub fn operator_add_peer_shard(
     Ok(())
 }
 
+/// Peer Shard work that removal would strand. Only rows on this Shard count; see
+/// `docs/character-transfer.md#removing-a-peer-shard`.
+struct PendingToward {
+    transfer_messages: usize,
+    transfer_arrivals: usize,
+    package_relocation_messages: usize,
+    package_relocation_arrivals: usize,
+}
+
+impl PendingToward {
+    fn of(ctx: &ReducerContext, shard: Identity) -> Self {
+        use crate::native::{package_relocation, transfer_arriving_from, transfer_pending_toward};
+        Self {
+            transfer_messages: transfer_pending_toward(ctx, shard),
+            transfer_arrivals: transfer_arriving_from(ctx, shard),
+            package_relocation_messages: package_relocation::pending_toward(ctx, shard),
+            package_relocation_arrivals: package_relocation::arriving_from(ctx, shard),
+        }
+    }
+
+    fn counts(&self) -> [(usize, &'static str); 4] {
+        [
+            (self.transfer_messages, "Transfer message(s)"),
+            (self.transfer_arrivals, "Transfer arrival(s)"),
+            (
+                self.package_relocation_messages,
+                "Package relocation message(s)",
+            ),
+            (
+                self.package_relocation_arrivals,
+                "Package relocation arrival(s)",
+            ),
+        ]
+    }
+
+    fn is_empty(&self) -> bool {
+        self.counts().iter().all(|(count, _)| *count == 0)
+    }
+}
+
+impl std::fmt::Display for PendingToward {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let pending = self
+            .counts()
+            .into_iter()
+            .filter(|(count, _)| *count > 0)
+            .map(|(count, stream)| format!("{count} {stream}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(f, "Peer Shard still has unfinished work: {pending}")
+    }
+}
+
 #[reducer]
 pub fn operator_remove_peer_shard(ctx: &ReducerContext, database: Identity) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    if !ctx.db.game_peer_shard().database().delete(database) {
+    let peers = ctx.db.game_peer_shard();
+    if peers.database().find(database).is_none() {
         return Err("not a Peer Shard".into());
     }
+    let pending = PendingToward::of(ctx, database);
+    if !pending.is_empty() {
+        return Err(pending.to_string());
+    }
+    peers.database().delete(database);
     Ok(())
 }
 
