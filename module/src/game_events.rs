@@ -1,6 +1,6 @@
-// vmangos `GameEventMgr` spawn rules; read docs/schema.md#game-events first.
+// vmangos `GameEventMgr` spawn, quest and vendor rules; read docs/schema.md#game-events first.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use spacetimedb::{
     log, reducer, table, ReducerContext, ScheduleAt, SpacetimeType, Table, TimeDuration,
@@ -46,6 +46,27 @@ pub struct GameEventPool {
     pub event_entry: u32,
 }
 
+/// A quest from vmangos `game_event_quest`: its givers offer it only while its event runs.
+#[table(accessor = game_event_quest)]
+pub struct GameEventQuest {
+    #[primary_key]
+    pub quest_entry: u32,
+    pub event_entry: u32,
+}
+
+/// A vendor item whose vmangos `npc_vendor` condition is `CONDITION_ACTIVE_GAME_EVENT`.
+#[table(
+    accessor = game_event_vendor_item,
+    index(accessor = by_vendor, btree(columns = [creature_entry]))
+)]
+pub struct GameEventVendorItem {
+    #[primary_key]
+    pub id: u64,
+    pub creature_entry: u32,
+    pub item_entry: u32,
+    pub event_entry: u32,
+}
+
 /// The state an event's spawns are being brought to, and how far that has come.
 #[table(accessor = game_event_status)]
 #[derive(Clone, Debug, PartialEq)]
@@ -79,6 +100,8 @@ crate::outside_table_catalog!(
     game_event,
     game_event_link,
     game_event_pool,
+    game_event_quest,
+    game_event_vendor_item,
     game_event_status,
     game_event_override,
     game_event_schedule
@@ -236,6 +259,30 @@ fn state_of(ctx: &ReducerContext, event_entry: u32, now_secs: i64) -> GameEventS
             .map(|forced| forced.running),
         now_secs,
     )
+}
+
+fn running(ctx: &ReducerContext, event_entry: u32) -> bool {
+    state_of(ctx, event_entry, crate::time::now_secs(ctx) as i64) == GameEventState::Active
+}
+
+/// vmangos `Quest::IsActive`: whether givers offer `quest_entry` now.
+pub(crate) fn quest_offered(ctx: &ReducerContext, quest_entry: u32) -> bool {
+    ctx.db
+        .game_event_quest()
+        .quest_entry()
+        .find(quest_entry)
+        .is_none_or(|quest| running(ctx, quest.event_entry))
+}
+
+/// The items vendor `creature_entry` neither lists nor sells now, because their event does not run.
+pub(crate) fn withheld_vendor_items(ctx: &ReducerContext, creature_entry: u32) -> BTreeSet<u32> {
+    ctx.db
+        .game_event_vendor_item()
+        .by_vendor()
+        .filter(creature_entry)
+        .filter(|item| !running(ctx, item.event_entry))
+        .map(|item| item.item_entry)
+        .collect()
 }
 
 /// Whether any Game Event Link exists; until the `events` family is imported, none does.

@@ -1193,3 +1193,71 @@ fn vendor_stock_commit_failure_rolls_back_payment_stock_and_acknowledgement() {
         assert_eq!(shard.query_rows("SELECT * FROM game_vendor_stock"), stock);
     }
 }
+
+const FESTIVAL: u32 = 5_113_101;
+const CMSG_LIST_INVENTORY: u32 = 0x19e;
+const SMSG_LIST_INVENTORY: u16 = 0x19f;
+const SMSG_BUY_FAILED: u16 = 0x1a5;
+
+/// The item entries of the vendor's list, read from its 28-byte item records.
+fn listed(connection: &mut ReducerConnection, vendor: u64) -> Vec<u32> {
+    let packets = request(
+        connection,
+        CMSG_LIST_INVENTORY,
+        vendor.to_le_bytes().to_vec(),
+    );
+    let (_, body) = packets
+        .iter()
+        .find(|(opcode, _)| *opcode == SMSG_LIST_INVENTORY)
+        .expect("the vendor lists its items");
+    (0..usize::from(body[8]))
+        .map(|index| {
+            let at = 9 + index * 28 + 4;
+            u32::from_le_bytes(body[at..at + 4].try_into().unwrap())
+        })
+        .collect()
+}
+
+// vmangos Player::IsVendorItemVisible checks an item's condition, here CONDITION_ACTIVE_GAME_EVENT.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_event_vendor_item_is_listed_and_sold_only_while_its_event_runs() {
+    let (shard, mut connection, guid, vendor) = stage("purchase-event-item");
+    shard.insert_row(
+        "game_event",
+        &[
+            ("event_entry", &FESTIVAL),
+            ("start_secs", &0i64),
+            ("end_secs", &i64::from(i32::MAX)),
+            ("occurrence_mins", &525_600u32),
+            ("length_mins", &1_440u32),
+            ("scripted", &true),
+            ("disabled", &false),
+            ("description", &"Fixture festival"),
+        ],
+    );
+    shard.insert_row(
+        "game_event_vendor_item",
+        &[
+            ("id", &1u64),
+            ("creature_entry", &SCENARIO_VENDOR_ENTRY),
+            ("item_entry", &THREAD),
+            ("event_entry", &FESTIVAL),
+        ],
+    );
+
+    assert_eq!(listed(&mut connection, vendor), [ARMOR]);
+    let packets = buy(&mut connection, vendor, THREAD, guid, 255, 1);
+    let mut cant_find_item = vendor.to_le_bytes().to_vec();
+    cant_find_item.extend(THREAD.to_le_bytes());
+    cant_find_item.push(0);
+    assert_eq!(packets, [(SMSG_BUY_FAILED, cant_find_item)]);
+    assert!(inventory(&shard, guid).is_empty());
+    assert_eq!(money(&shard, guid), "50000");
+
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    assert_eq!(listed(&mut connection, vendor), [ARMOR, THREAD]);
+    buy(&mut connection, vendor, THREAD, guid, 255, 1);
+    assert_eq!(inventory(&shard, guid)[0]["entry"], THREAD.to_string());
+    assert_eq!(money(&shard, guid), "49990");
+}

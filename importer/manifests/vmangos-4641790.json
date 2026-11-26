@@ -1185,6 +1185,16 @@
       },
       "locked_rows": 12137
     },
+    "game_event_quest": {
+      "columns": {
+        "integer": [
+          "event",
+          "patch_min",
+          "quest"
+        ]
+      },
+      "locked_rows": 69
+    },
     "game_graveyard_zone": {
       "columns": {
         "integer": [

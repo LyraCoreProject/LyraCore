@@ -1,7 +1,7 @@
 schema_version = 1
 id = "game_events"
 system = "world"
-scope = "Game Events run on the Realm Clock calendar and decide which creature and GameObject spawns exist."
+scope = "Game Events run on the Realm Clock calendar and decide which creature and GameObject spawns exist, which event quests givers offer and which event items vendors sell."
 requests = []
 replies = []
 dependencies = []
@@ -32,6 +32,11 @@ tests = [
     { path = "module/tests/game_events.rs", function = "a_stop_part_way_through_a_start_takes_every_shown_spawn_down", rung = "durable_module" },
     { path = "module/tests/game_events.rs", function = "a_respawn_due_while_its_event_does_not_run_brings_nothing_back", rung = "durable_module" },
     { path = "module/tests/game_events.rs", function = "a_pool_tied_to_an_event_rolls_only_while_the_event_runs", rung = "durable_module" },
+    { path = "importer/src/world_import_game_events.rs", function = "a_quest_keeps_its_first_event_and_the_reserved_event_is_skipped", rung = "unit" },
+    { path = "importer/src/world_import_game_events.rs", function = "a_vendor_item_takes_the_event_of_its_first_offer_only", rung = "unit" },
+    { path = "module/tests/conformance/quest_availability.rs", function = "an_event_quest_is_offered_only_while_its_event_runs", rung = "durable_module" },
+    { path = "module/tests/conformance/quest_availability.rs", function = "an_accepted_event_quest_stays_in_the_log_when_its_event_ends", rung = "durable_module" },
+    { path = "module/tests/conformance/buy_in_slot.rs", function = "an_event_vendor_item_is_listed_and_sold_only_while_its_event_runs", rung = "durable_module" },
 ]
 
 [vmangos]
@@ -61,22 +66,10 @@ reason = "The Reference Server result depends on the order its events start and 
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/GameEventMgr.cpp"
 
 [[known_gaps]]
-description = "Event quests (game_event_quest) are not imported: an event's quests stay offered whether the event runs or not."
-path = "importer/src/world_import_game_events.rs"
-symbol = "plan"
-evidence = "vmangos GameEventMgr::UpdateEventQuests at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
-
-[[known_gaps]]
 description = "Creature model, equipment, entry and spell changes for a running event (game_event_creature_data) are not imported."
 path = "importer/src/world_import_game_events.rs"
 symbol = "plan"
 evidence = "vmangos GameEventMgr::UpdateCreatureData at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
-
-[[known_gaps]]
-description = "Event vendor item lists do not change with the event; vendor offers carry no event condition."
-path = "importer/src/world_import_game_events.rs"
-symbol = "plan"
-evidence = "vmangos npc_vendor conditions and GameEventMgr at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
 [[known_gaps]]
 description = "Event start and end mail (game_event_mail) is not sent."
@@ -85,7 +78,7 @@ symbol = "plan"
 evidence = "vmangos GameEventMgr::SendEventMails at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
 [[known_gaps]]
-description = "Scripted events (vmangos hardcoded: Darkmoon Faire, Elemental Invasions, Scourge Invasion, AQ War Effort, Fireworks, Post Firework Toasting Goblets, Lunar Festival Minions of Omen, Dragons of Nightmare) have no script, so they stay stopped: their spawns stay hidden and their absence spawns show until an Operator starts them."
+description = "Scripted events (vmangos hardcoded: Darkmoon Faire, Elemental Invasions, Scourge Invasion, AQ War Effort, Fireworks, Post Firework Toasting Goblets, Lunar Festival Minions of Omen, Dragons of Nightmare) have no script, so they stay stopped: their spawns stay hidden, their quests are not offered and their absence spawns show until an Operator starts them."
 path = "module/src/game_events.rs"
 symbol = "event_state"
 evidence = "Compatibility Manifest events.scripted; vmangos HardcodedEvents.cpp at d9173eca3ea08dd985c52dabbcc826898d1d0b77."

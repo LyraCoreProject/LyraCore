@@ -2244,11 +2244,13 @@ fn items_findings(
         }
     }
     let mut findings: BTreeMap<&str, BTreeSet<(u64, u64)>> = BTreeMap::new();
+    let mut event_conditions = None;
     for table in ["npc_vendor", "npc_vendor_template"] {
         for row in dump.rows(table)?.iter() {
             let entry: u64 = row.number("entry")?;
             let item: u64 = row.number("item")?;
-            if forbidden.contains(&item) || item == 0 {
+            let condition: u32 = row.number("condition_id")?;
+            if forbidden.contains(&item) || item == 0 || condition == 0 {
                 continue;
             }
             let users = if table == "npc_vendor" {
@@ -2260,7 +2262,11 @@ fn items_findings(
             } else {
                 template_users.get(&entry).cloned().unwrap_or_default()
             };
-            if row.number::<u64>("condition_id")? != 0 {
+            let event_conditions = match &mut event_conditions {
+                Some(events) => events,
+                unread @ None => unread.insert(game_events::active_event_conditions(dump)?),
+            };
+            if !event_conditions.contains_key(&condition) {
                 findings
                     .entry("items.vendor-condition")
                     .or_default()

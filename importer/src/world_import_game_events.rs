@@ -1,4 +1,5 @@
-// vmangos `GameEventMgr::LoadFromDB` for spawns; read docs/schema.md#game-events first.
+// vmangos `GameEventMgr::LoadFromDB` for spawns, quests and vendor items; read
+// docs/schema.md#game-events first.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,6 +12,9 @@ use crate::dump::{insert_row_count, parse_table, push_insert, sql_str, TableRows
 pub(crate) const FAMILY: &str = "events";
 
 const DAY_SECS: i64 = 86_400;
+
+// vmangos `CONDITION_ACTIVE_GAME_EVENT`, whose `value1` is the event.
+const CONDITION_ACTIVE_GAME_EVENT: i32 = 12;
 
 /// Where a world GameObject placement went in the gameobjects family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +133,87 @@ fn signed_links(dump: &(impl TableRows + ?Sized), table: &str) -> Result<Vec<(u3
     Ok(links)
 }
 
+/// `game_event_quest` as quest to event. Event 0 is reserved in vmangos and skipped; of a quest's
+/// several events the first is kept.
+fn event_quests(rows: impl IntoIterator<Item = (u32, u32)>) -> BTreeMap<u32, u32> {
+    let mut quests = BTreeMap::new();
+    for (quest, event) in rows.into_iter().filter(|&(_, event)| event != 0) {
+        quests.entry(quest).or_insert(event);
+    }
+    quests
+}
+
+/// The events of conditions that only ask for a running event, by condition entry.
+pub(super) fn active_event_conditions(
+    dump: &(impl TableRows + ?Sized),
+) -> Result<BTreeMap<u32, u32>> {
+    let mut events = BTreeMap::new();
+    for row in parse_table(dump, "conditions")?.iter() {
+        let event: i64 = row.number("value1")?;
+        if row.number::<i32>("type")? == CONDITION_ACTIVE_GAME_EVENT
+            && row.number::<u8>("flags")? == 0
+        {
+            if let Ok(event @ 1..) = u32::try_from(event) {
+                events.insert(row.number("condition_entry")?, event);
+            }
+        }
+    }
+    Ok(events)
+}
+
+/// Each vendor item's event, from `(creature, item, condition)` offers in import order. The first
+/// offer of an item is the one the items family keeps, so it alone decides.
+fn event_vendor_items(
+    offers: impl IntoIterator<Item = (u32, u32, u32)>,
+    conditions: &BTreeMap<u32, u32>,
+) -> BTreeMap<(u32, u32), u32> {
+    let mut first: BTreeMap<(u32, u32), Option<u32>> = BTreeMap::new();
+    for (creature, item, condition) in offers {
+        first
+            .entry((creature, item))
+            .or_insert_with(|| conditions.get(&condition).copied());
+    }
+    first
+        .into_iter()
+        .filter_map(|(offer, event)| Some((offer, event?)))
+        .collect()
+}
+
+/// `npc_vendor` offers, then `npc_vendor_template` offers for each creature using the template.
+fn vendor_offers(dump: &(impl TableRows + ?Sized)) -> Result<Vec<(u32, u32, u32)>> {
+    let offer = |row: &crate::world_source::Row| -> Result<(u32, u32, u32)> {
+        Ok((
+            row.number("entry")?,
+            row.number("item")?,
+            row.number("condition_id")?,
+        ))
+    };
+    let mut offers = parse_table(dump, "npc_vendor")?
+        .iter()
+        .map(offer)
+        .collect::<Result<Vec<_>>>()?;
+    let mut template_users: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for row in dump
+        .columns("creature_template", &["entry", "vendor_id"])?
+        .iter()
+    {
+        let vendor: u32 = row.number("vendor_id")?;
+        if vendor != 0 {
+            template_users
+                .entry(vendor)
+                .or_default()
+                .push(row.number("entry")?);
+        }
+    }
+    for row in parse_table(dump, "npc_vendor_template")?.iter() {
+        let (template, item, condition) = offer(row)?;
+        for &creature in template_users.get(&template).into_iter().flatten() {
+            offers.push((creature, item, condition));
+        }
+    }
+    Ok(offers)
+}
+
 pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> Result<DumpPlan> {
     let mut definitions = definitions(dump)?;
     let creatures = creature_population::collect(dump, &args.scope)?;
@@ -150,13 +235,23 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         },
     );
 
+    let quests = event_quests(
+        parse_table(dump, "game_event_quest")?
+            .iter()
+            .map(|row| Ok((row.number("quest")?, row.number("event")?)))
+            .collect::<Result<Vec<_>>>()?,
+    );
+    let vendor_items = event_vendor_items(vendor_offers(dump)?, &active_event_conditions(dump)?);
+
     // An event the World Source leaves out for patch 1.12 is disabled, as vmangos disables it, so
-    // its spawns stay hidden.
+    // its spawns stay hidden and its quests and vendor items are not offered.
     let linked = links
         .spawns
         .iter()
         .map(|&(_, event, _)| event)
-        .chain(links.pools.values().copied());
+        .chain(links.pools.values().copied())
+        .chain(quests.values().copied())
+        .chain(vendor_items.values().copied());
     for event in linked {
         definitions
             .entry(event)
@@ -167,6 +262,8 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         "DELETE FROM game_event_status WHERE event_entry >= 0".to_string(),
         "DELETE FROM game_event_link WHERE link_id >= 0".to_string(),
         "DELETE FROM game_event_pool WHERE pool_id >= 0".to_string(),
+        "DELETE FROM game_event_quest WHERE quest_entry >= 0".to_string(),
+        "DELETE FROM game_event_vendor_item WHERE id >= 0".to_string(),
         "DELETE FROM game_event WHERE event_entry >= 0".to_string(),
     ];
     push_insert(
@@ -200,14 +297,37 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         "pool_id,event_entry",
         &pool_rows,
     );
+    let quest_rows: Vec<String> = quests
+        .iter()
+        .map(|(quest, event)| format!("({quest},{event})"))
+        .collect();
+    push_insert(
+        &mut stmts,
+        "game_event_quest",
+        "quest_entry,event_entry",
+        &quest_rows,
+    );
+    let vendor_rows: Vec<String> = vendor_items
+        .iter()
+        .zip(1u64..)
+        .map(|(((creature, item), event), id)| format!("({id},{creature},{item},{event})"))
+        .collect();
+    push_insert(
+        &mut stmts,
+        "game_event_vendor_item",
+        "id,creature_entry,item_entry,event_entry",
+        &vendor_rows,
+    );
     // Each statement commits alone, so a pass that ran part way through the import settled on a
     // partial link set. Dropping the statuses last makes the next pass walk every link again.
     stmts.push("DELETE FROM game_event_status WHERE event_entry >= 0".to_string());
     eprintln!(
-        "game events: {} links and {} event pools; {} links name a spawn the import leaves out, \
-         {} negative links on pooled placements are unsupported",
+        "game events: {} links, {} event pools, {} event quests and {} event vendor items; {} links \
+         name a spawn the import leaves out, {} negative links on pooled placements are unsupported",
         link_rows.len(),
         pool_rows.len(),
+        quest_rows.len(),
+        vendor_rows.len(),
         links.absent,
         links.pooled_absences
     );
@@ -277,6 +397,30 @@ mod tests {
         let links = resolved(&[(5, -7)], |_| Placement::Pooled { root: 40 });
         assert!(links.pools.is_empty());
         assert_eq!(links.pooled_absences, 1);
+    }
+
+    #[test]
+    fn a_quest_keeps_its_first_event_and_the_reserved_event_is_skipped() {
+        assert_eq!(
+            event_quests([(8, 10), (9, 0), (8, 12), (11, 12)]),
+            BTreeMap::from([(8, 10), (11, 12)])
+        );
+    }
+
+    #[test]
+    fn a_vendor_item_takes_the_event_of_its_first_offer_only() {
+        let conditions = BTreeMap::from([(440, 8)]);
+        let items = event_vendor_items(
+            [
+                (295, 21_813, 440),
+                (295, 117, 0),
+                (6_736, 117, 0),
+                (6_736, 117, 440),
+                (7_733, 21_815, 73),
+            ],
+            &conditions,
+        );
+        assert_eq!(items, BTreeMap::from([((295, 21_813), 8)]));
     }
 
     #[test]

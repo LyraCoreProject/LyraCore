@@ -852,11 +852,16 @@ fn giver_has_quest_role(
     }
 }
 
+const QUEST_NOT_OFFERED: &str = "that quest giver does not offer this quest";
+
 pub(crate) fn accept_gates(
     ctx: &ReducerContext,
     player: &crate::WorldEntity,
     tmpl: &QuestTemplate,
 ) -> Result<Option<CharacterQuest>, String> {
+    if !crate::game_events::quest_offered(ctx, tmpl.entry) {
+        return Err(QUEST_NOT_OFFERED.to_string());
+    }
     acceptance_gate(ctx, player, tmpl).map_err(|refusal| refusal.text(tmpl.min_level))
 }
 
@@ -1102,10 +1107,10 @@ pub(crate) fn accept_offered_quest(
         .into());
     }
     let giver = validate_giver(ctx, &player, giver_guid)?;
-    if !giver_has_quest_role(ctx, &giver, quest_entry, quest_role::START) {
-        return Err("that quest giver does not offer this quest"
-            .to_string()
-            .into());
+    if !giver_has_quest_role(ctx, &giver, quest_entry, quest_role::START)
+        || !crate::game_events::quest_offered(ctx, quest_entry)
+    {
+        return Err(QUEST_NOT_OFFERED.to_string().into());
     }
     if let GiverKind::Party(sharer_guid) = giver {
         share::require_quest_share(ctx, player_guid, sharer_guid, quest_entry)?;

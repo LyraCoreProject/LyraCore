@@ -968,14 +968,16 @@ place like any chest.
 
 ### Game events
 
-`module/src/game_events.rs` runs vmangos Game Events for spawns, as `GameEventMgr` does.
+`module/src/game_events.rs` runs vmangos Game Events for spawns, quests and vendor items, as
+`GameEventMgr` does.
 `game_event` holds each event's calendar: `start_secs` and `end_secs` on the Realm Clock, and every
 `occurrence_mins` the event runs for `length_mins`. `scripted` marks a vmangos `hardcoded` event,
 whose script is absent, and `disabled` an event vmangos disables or leaves out of patch 1.12.
 `game_event_link` holds a Game Event Link: a creature spawn's source guid or a world GameObject's
 guid, its event, and `while_inactive` for a negative vmangos id. `game_event_pool` names a top-level
-GameObject pool that rolls only while its event runs. No Package claims or reads these tables, so
-they stay out of the table catalogue.
+GameObject pool that rolls only while its event runs. `game_event_quest` ties a quest to its event
+and `game_event_vendor_item` a vendor's item to the event its vmangos condition asks for. No Package
+claims or reads these tables, so they stay out of the table catalogue.
 
 An event is running while the Realm Clock is inside its start and end and within its length of the
 latest occurrence. A yearly event shorter than a year skips each 29 February since its start, so it
@@ -1006,6 +1008,13 @@ Instance's rolls), Instance creation and the post-publish chest stamp. A new Ins
 creature hidden with its respawn off and leaves out a hidden GameObject; a running Instance's
 creature copies follow their source, its GameObject copies keep what they had at creation. A
 despawned door or button has no collider.
+
+A quest tied to an event is offered only while the event runs, as vmangos `Quest::IsActive`: its
+givers show no mark and list no entry for it, start or end, and refuse its accept with only the
+gossip close. A Character who took it keeps it in the log when the event ends, and a turn-in
+request at its ender still rewards it, as in vmangos. A vendor item tied to an event is left out of
+the vendor's list and refused as an item the vendor does not sell while the event does not run.
+Both read the event's state at the moment of the request, not the minute pass.
 
 Before the `events` family is imported no link exists, and a creature population member's
 `event_ids` keep a member with a positive event out of its population's selection, as they did

@@ -78,11 +78,13 @@ pub(crate) fn vendor_offers(
     ctx: &ReducerContext,
     vendor_entry: u32,
 ) -> Vec<(NpcVendor, ItemTemplate)> {
+    let withheld = crate::game_events::withheld_vendor_items(ctx, vendor_entry);
     let mut offers: Vec<_> = ctx
         .db
         .game_npc_vendor()
         .by_vendor()
         .filter(vendor_entry)
+        .filter(|offer| !withheld.contains(&offer.item_entry))
         .filter_map(|offer| {
             ctx.db
                 .game_item_template()

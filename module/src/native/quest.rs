@@ -280,6 +280,7 @@ pub(super) fn evaluations(
     };
     giver_relations(ctx, giver)
         .into_iter()
+        .filter(|relation| crate::game_events::quest_offered(ctx, relation.quest_entry))
         .filter_map(
             |QuestRelation {
                  quest_entry: entry,
