@@ -10,6 +10,7 @@ scenarios = []
 prerequisites = []
 tests = [
     { path = "module/tests/trade_offered_items.rs", function = "a_ranged_strike_spends_carried_ammo_and_leaves_offered_ammo_in_the_trade", rung = "durable_module" },
+    { path = "module/tests/trade_offered_items.rs", function = "a_quest_item_with_quest_bonding_is_soulbound_and_cannot_be_traded_or_mailed", rung = "durable_module" },
 ]
 
 [vmangos]

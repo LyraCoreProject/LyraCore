@@ -70,10 +70,16 @@ pub mod bonding {
     pub const NONE: u8 = 0;
     pub const BIND_ON_PICKUP: u8 = 1;
     pub const BIND_ON_EQUIP: u8 = 2;
+    pub const BIND_QUEST_ITEM: u8 = 4;
+    // Bonding 5 (BIND_QUEST_ITEM1) is "not used in game" in vmangos and binds nothing.
 }
 
+// vmangos Player::StoreItem binds BIND_WHEN_PICKED_UP and BIND_QUEST_ITEM when it stores them.
 pub(crate) fn binds_on_grant(item_bonding: u8) -> bool {
-    item_bonding == bonding::BIND_ON_PICKUP
+    matches!(
+        item_bonding,
+        bonding::BIND_ON_PICKUP | bonding::BIND_QUEST_ITEM
+    )
 }
 
 pub(crate) fn binds_on_equip(item_bonding: u8) -> bool {
@@ -287,6 +293,15 @@ pub(crate) fn resolve_equip_slot(
 pub(crate) mod tests {
     use super::*;
     use crate::items::tables::ItemTemplate;
+
+    #[test]
+    fn pickup_and_quest_bonding_bind_on_grant_and_quest_item1_binds_nothing() {
+        assert!(binds_on_grant(bonding::BIND_ON_PICKUP));
+        assert!(binds_on_grant(bonding::BIND_QUEST_ITEM));
+        for other in [bonding::NONE, bonding::BIND_ON_EQUIP, 3, 5] {
+            assert!(!binds_on_grant(other), "bonding {other}");
+        }
+    }
 
     fn can_equip_proficiency(player_class: u8, item_class: u8, item_subclass: u8) -> bool {
         Proficiency::derive(player_class, true, true).can_equip(item_class, item_subclass)

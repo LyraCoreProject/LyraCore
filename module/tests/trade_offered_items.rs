@@ -3,7 +3,7 @@ mod support;
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, TEST_WOLF_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::item::ItemRefusal;
-use lyracore_shared::mail::SENDER_IS_TRADING;
+use lyracore_shared::mail::{ITEM_IS_SOULBOUND, SENDER_IS_TRADING};
 use lyracore_shared::spell::taxonomy::{
     CAST_FLAG_ALWAYS_HIT, CAST_FLAG_CANNOT_CRIT, E_WEAPON_STRIKE, T_TARGET_ENEMY,
 };
@@ -21,6 +21,9 @@ const ARROW_STACK: u32 = 20;
 const RANGED_SLOT: u8 = 17;
 const STRIKE: u32 = 5_091_233;
 const SOURCE_ITEM_QUEST: u32 = 5_091_234;
+const BIND_QUEST_ITEM: u8 = 4;
+// BIND_QUEST_ITEM1: vmangos marks it "not used in game" and StoreItem ignores it.
+const BIND_QUEST_ITEM1: u8 = 5;
 // Spell.dbc Attributes of Throw; 0x02 marks the ranged slot.
 const STRIKE_ATTRIBUTES: u32 = 0x0041_0012;
 const DAMAGE_CLASS_RANGED: u8 = 3;
@@ -488,4 +491,71 @@ fn a_ranged_strike_spends_carried_ammo_and_leaves_offered_ammo_in_the_trade() {
 
     assert_eq!(f.stack_count(OFFERED_ARROWS), ARROW_STACK.to_string());
     assert_eq!(f.stack_count(SPARE_ARROWS), (ARROW_STACK - 1).to_string());
+}
+
+impl Fixture {
+    fn soulbound(&self, entry: u32) -> String {
+        self.shard.query_rows(&format!(
+            "SELECT soulbound FROM game_item_instance WHERE entry = {entry}"
+        ))[0]["soulbound"]
+            .clone()
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_quest_item_with_quest_bonding_is_soulbound_and_cannot_be_traded_or_mailed() {
+    let f = fixture("trade-quest-bonded-item");
+    f.shard.assert_sql(&format!(
+        "UPDATE game_item_template SET bonding = {BIND_QUEST_ITEM} WHERE entry = {FIXTURE_JERKY}"
+    ));
+    f.shard.assert_sql(&format!(
+        "UPDATE game_item_template SET bonding = {BIND_QUEST_ITEM1} WHERE entry = {FIXTURE_BLADE}"
+    ));
+    f.shard.insert_row(
+        "game_quest_template",
+        &[
+            ("entry", &SOURCE_ITEM_QUEST),
+            ("quest_level", &2),
+            ("title", &"Quest bonded source item"),
+            ("zone_or_sort", &12),
+            ("src_item", &FIXTURE_JERKY),
+            ("src_item_count", &1u32),
+        ],
+    );
+    f.shard
+        .assert_call("debug_grant_quest", &["1", &SOURCE_ITEM_QUEST.to_string()]);
+    f.shard
+        .assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
+    assert_eq!(f.soulbound(FIXTURE_JERKY), "true", "the quest gave it");
+    assert_eq!(
+        f.soulbound(FIXTURE_BLADE),
+        "false",
+        "bonding 5 binds nothing"
+    );
+    let jerky = f.item(FIXTURE_JERKY)[0]["guid"].clone();
+    let slot = f.shard.query_rows(&format!(
+        "SELECT slot FROM game_item_instance WHERE guid = {jerky}"
+    ))[0]["slot"]
+        .clone();
+
+    f.shard.assert_call("gw_initiate_trade", &[ACTOR, &f.other]);
+    f.shard.assert_call("gw_begin_trade", &[&f.partner]);
+    f.shard
+        .assert_call("gw_set_trade_item", &[ACTOR, "0", &slot]);
+    assert_eq!(f.events("1", event_kind::TRADE_CANCELED), 1);
+    assert!(f
+        .shard
+        .query_rows("SELECT id FROM game_trade_slot")
+        .is_empty());
+    f.shard.assert_call("gw_cancel_trade", &[ACTOR]);
+
+    refused(
+        &f.shard,
+        "realm_mail_send",
+        &f.mail_args("0", &jerky),
+        ITEM_IS_SOULBOUND,
+    );
+    assert!(f.shard.query_rows("SELECT id FROM game_mail").is_empty());
+    assert_eq!(f.item(FIXTURE_JERKY)[0]["owner_guid"], "1");
 }

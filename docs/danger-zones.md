@@ -1010,6 +1010,19 @@ The next-quest-in-chain check needs no reimport: it reads `next_quest_id`, which
 already hold. From the publish on, a Character who has taken or finished a quest's next quest in
 its chain can no longer take that quest, and its giver no longer marks it.
 
+### Quest item bonding migration
+
+An item whose template has quest bonding (`bonding` 4, `BIND_QUEST_ITEM`) is now soulbound from the
+moment a grant stores it, as `Player::StoreItem` does. Bonding 5 binds nothing. No schema change
+and no reimport is needed. An item stored before this publish keeps `soulbound = false`, so its
+owner can still trade, mail and auction it, and its recipient's copy then binds. A later grant that
+merges into its stack binds it. To bind the rest, list the entries with
+`SELECT entry FROM game_item_template WHERE bonding = 4` and run
+`UPDATE game_item_instance SET soulbound = true WHERE entry = <entry>` for each. Run it only when
+the Operator wants those items bound at once; the Module needs no repair to work. The SQL bypasses
+the World Session observer, so an online client can show a stale soulbound tooltip until an
+inventory change or a relog.
+
 ### Quest requirement migration
 
 `game_quest_template` gains `required_skill`, `required_skill_value`, `required_min_rep_faction`,
