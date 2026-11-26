@@ -61,9 +61,15 @@ source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52da
 
 [[deliberate_deviations]]
 id = "boundary_within_a_minute"
-result = "An event starts or stops on the first minute pass at or after its boundary, up to a minute late. The Reference Server schedules its next check one second after the nearest boundary."
+result = "An event starts or stops on the first minute pass at or after its boundary, up to a minute late. The Reference Server schedules its next check one second after the nearest boundary of an event its calendar runs; the Darkmoon Faire's boundaries are in darkmoon_faire_on_the_utc_date."
 reason = "One pass a minute keyed to the Realm Clock corrects a missed firing on its own and needs no per-event timer."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/GameEventMgr.cpp"
+
+[[deliberate_deviations]]
+id = "darkmoon_faire_on_the_utc_date"
+result = "The Darkmoon Faire's building and open events switch on the first minute pass after midnight of the Realm Clock's UTC date. Each of the four events is unscheduled while its own row is disabled, and an Operator start or stop holds over the Faire's schedule until cleared. The Reference Server reads the date in the server's local time and runs the Faire script only on its next GameEventMgr::Update, which can come up to 86,400 seconds (max_ge_check_delay) later, so it can switch hours late; it runs the script only while event 4 is not disabled and does not check the other three events' flags, and its script stops a manually started Faire event on its next update. The pinned World Source disables none of the four events."
+reason = "The Realm Clock is UTC, as for every imported event time; one minute pass keeps every boundary within a minute; and an Operator hold that the schedule cannot undo is the decided Operator contract for every Game Event in #1320."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/HardcodedEvents.cpp"
 
 [[deliberate_deviations]]
 id = "spawn_of_several_events"

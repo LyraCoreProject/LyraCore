@@ -191,13 +191,12 @@ positive events, and a GameObject pool rolls only while it runs. A negative even
 GameObject placement is counted as `events.pooled-absence` and not linked. An event the selection
 leaves out gets a disabled row, as vmangos disables it, so its spawns stay hidden. Scripted events
 (vmangos `hardcoded`) other than the Darkmoon Faire's, whose schedule the Module runs, appear in the
-Compatibility Manifest as `events.scripted`. It also reads
-`game_event_quest`, keeping a quest's first event and skipping event 0, and ties each `npc_vendor` or
-`npc_vendor_template` item whose condition is a plain `CONDITION_ACTIVE_GAME_EVENT` to that event;
-the first offer of an item to a creature decides, as the `items` family keeps it, after both leave
-out an offer with a stock limit but no restock time, or the reverse. Those vendor items
-leave the `items.vendor-condition` finding. A `creatures` or `gameobjects` import writes the
-`events` family with it. The Module rules are in
+Compatibility Manifest as `events.scripted`. It also reads `game_event_quest`, keeping a quest's
+first event and skipping event 0, and ties each `npc_vendor` or `npc_vendor_template` item whose
+condition is a plain `CONDITION_ACTIVE_GAME_EVENT` to that event; the first offer of an item to a
+creature decides, as the `items` family keeps it, after both leave out an offer with a stock limit
+but no restock time, or the reverse. Those vendor items leave the `items.vendor-condition` finding.
+A `creatures` or `gameobjects` import writes the `events` family with it. The Module rules are in
 [Game events](schema.md#game-events).
 
 Transports use selected build rows and template versions with the client's TaxiPath and
