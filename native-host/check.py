@@ -2154,27 +2154,29 @@ def check_areatriggers(host):
         world.collect()
     second.send(0x7b)
     assert countdowns(second.collect()) == [60000]
-    assert countdowns(first.collect()) == [60000]
-    assert not countdowns(solo.collect())
-    assert host.rows(f'SELECT character_guid FROM game_instance_removal WHERE character_guid = {first_guid}') == [[first_guid]]
-    first.close()
-    first = host.connect('AREAONE')
-    worlds[0] = (first, first_guid)
-    assert first.read()[0] == 0x1ee
-    first.send(0x3d, struct.pack('<Q', first_guid))
-    resumed = countdowns(first.collect())
+    assert not countdowns(first.collect() + solo.collect())
+    assert host.rows('SELECT character_guid FROM game_instance_removal') == [[second_guid]]
+    assert host.rows(f'SELECT party_id, holder_guid FROM game_instance WHERE instance_id = {party_instance}') == [[0, first_guid]]
+    second.close()
+    second = host.connect('AREATWO')
+    worlds[1] = (second, second_guid)
+    assert second.read()[0] == 0x1ee
+    second.send(0x3d, struct.pack('<Q', second_guid))
+    resumed = countdowns(second.collect())
     assert len(resumed) == 1 and 0 < resumed[0] < 60000, resumed
-    assert location(first_guid)[1] == party_instance
+    assert location(second_guid)[1] == party_instance
     first.send(0x6e, b'Areatwo\0')
     invited_first = first.collect()
     invited_second = second.collect()
     second.send(0x72)
     assert countdowns(invited_second + second.collect()) == [0]
-    assert countdowns(invited_first + first.collect()) == [0]
+    assert not countdowns(invited_first + first.collect())
     assert not host.rows(f'SELECT character_guid FROM game_instance_removal WHERE character_guid = {first_guid} OR character_guid = {second_guid}')
+    group = host.rows(f'SELECT group_id FROM game_group_member WHERE character_guid = {first_guid}')[0][0]
+    assert host.rows(f'SELECT party_id FROM game_instance WHERE instance_id = {party_instance}') == [[group]]
     second.send(0x7b)
     assert countdowns(second.collect()) == [60000]
-    assert countdowns(first.collect()) == [60000]
+    assert not countdowns(first.collect())
     host.call('debug_expire_instance_removal', [second_guid])
     expired = second.collect()
     assert countdowns(expired)[0] == 0 and any(opcode == 0x3e for opcode, _ in expired)

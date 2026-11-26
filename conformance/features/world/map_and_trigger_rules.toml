@@ -74,21 +74,27 @@ symbol = "world_plan"
 evidence = "conformance/vmangos-port-census/dbc.md: Map reset delays and lockout limits."
 
 [[known_gaps]]
-description = "When a Group disbands, vmangos Group::Disband hands the last member standing in the Group's dungeon run that run as its own bind. LyraCore counts that member down and removes it like the member who left, unless the two form a Group again inside the run."
-path = "module/src/group.rs"
-symbol = "remove_member"
-evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
-
-[[known_gaps]]
-description = "vmangos Group::Create calls Player::ConvertInstancesToGroup, so the leader's solo runs become the Group's runs when the Group forms. LyraCore gives a leader's solo run to the Group only when the leader enters it first; a member who enters first gets the Group a fresh run, and the leader's solo run is left to be reaped."
+description = "On a split Realm a Shard hands over only the runs and bindings it holds, so the formation and leader-change handovers of vmangos Group::Create and Group::_setLeader need the run and the leader's binding on one Shard. A leader outside the dungeon holds its binding on a continent World Shard while its solo run is on the Instance Shard: the Group takes that run only when the leader enters it first, a new leader outside the dungeon does not take the Group to its own run, and an old leader on another Shard does not keep the Group's former run. With several Instance hosts for one map, a run the Group adopts on one host is not the Group's Instance Placement, so the Realm Shard can send a member to a fresh run on another host."
 path = "module/src/instance.rs"
-symbol = "resolve_or_create_instance"
+symbol = "hand_runs_to_leader"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
 
 [[known_gaps]]
-description = "vmangos Group::_setLeader replaces the Group's run of a map with the new leader's personal run when the new leader has one, and gives the old run to the old leader. LyraCore keeps the Group's run through a leader change."
-path = "module/src/group.rs"
-symbol = "set_leader_on"
+description = "When the leader leaves the Group and the new leader holds its own run of a map, vmangos Group::_setLeader gives the Group's run to the leaver. The members still standing in that run stay in vmangos, because its countdown starts only for the leaver in Group::_homebindIfInstance. LyraCore checks its countdown from the run's owner, so those members stand in the leaver's run outside its Group and count down."
+path = "module/src/instance.rs"
+symbol = "hand_runs_to_leader"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
+
+[[known_gaps]]
+description = "vmangos Group::_setLeader gives the Group's run to the old leader only when the old leader is online. LyraCore gives it to an offline old leader whose Character is on the Shard that runs the leader change."
+path = "module/src/instance.rs"
+symbol = "hand_runs_to_leader"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
+
+[[known_gaps]]
+description = "When the leader leaves the Group while it stands in the Group's run and the new leader holds its own run of that map, the leaver keeps the run as in vmangos Group::_setLeader. vmangos Group::_homebindIfInstance then counts the leaver down, because its bind is not permanent. LyraCore lets the holder stay, so the leaver gets no countdown."
+path = "module/src/instance.rs"
+symbol = "instance_removal_standing"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp"
 
 [[known_gaps]]

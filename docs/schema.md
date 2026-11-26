@@ -161,6 +161,9 @@ for replacement and import rules. Existing spell table layouts stay unchanged.
 Instance resets. They start empty; no existing columns or IDC signatures change. Reset state uses
 the existing `game_instance.reset_requested` field. See [Instance lifecycle](instance-lifecycle.md#manual-resets).
 
+`game_instance.holder_guid` is end-appended with 0, which means a run without a holder. See the
+[holder migration](danger-zones.md#dungeon-run-holder-migration).
+
 `game_instance_binding.world` is end-appended with `None::<Identity>`. A legacy `None` uses the
 unchanged default map owner; new bindings record their hosting Shard explicitly. Transfer carries
 this column with the binding. `game_instance_host` and `game_instance_placement` are new private

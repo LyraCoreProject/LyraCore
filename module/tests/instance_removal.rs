@@ -269,23 +269,26 @@ fn the_membership_cores_arm_and_cancel_the_countdown_on_one_database() {
     );
 
     group_op(&node, LEAVE, CHARLIE, 0, 0);
+    let after_disband = [
+        (BRAVO, INSTANCE.to_string(), group.clone()),
+        (CHARLIE, INSTANCE.to_string(), "0".to_string()),
+    ];
     assert_eq!(
         countdowns(&node),
-        counting(&[ALPHA, BRAVO, CHARLIE], &group),
-        "a disband counts down for both members"
+        after_disband,
+        "a disband counts down for the member who left; the last member keeps the run"
     );
+    assert_eq!(instance_owner(&node), "0");
+    assert_in_instance(&node, ALPHA);
 
     node.assert_call("debug_logout_character", &[&CHARLIE.to_string()]);
     assert_eq!(
         countdowns(&node),
-        counting(&[ALPHA, BRAVO, CHARLIE], &group),
+        after_disband,
         "logging out keeps the countdown"
     );
     node.assert_call("debug_expire_instance_removal", &[&CHARLIE.to_string()]);
     assert_at_home(&node, CHARLIE);
-
-    node.assert_call("debug_expire_instance_removal", &[&ALPHA.to_string()]);
-    assert_at_home(&node, ALPHA);
     assert_eq!(countdowns(&node), counting(&[BRAVO], &group));
 }
 
@@ -308,16 +311,16 @@ fn assert_in_instance(node: &Standalone, guid: u64) {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_party_of_two_that_forms_again_inside_the_instance_cancels_both_countdowns() {
+fn the_last_member_who_leads_a_group_again_inside_its_run_gives_the_run_to_that_group() {
     let node = start("instance-removal-regroup-cores");
     join(&node, ALPHA, CHARLIE);
     let first = node.query_rows("SELECT group_id FROM game_group")[0]["group_id"].clone();
     node.assert_call("debug_stage_instance_removal_fixture", &[&first]);
 
     group_op(&node, LEAVE, CHARLIE, 0, 0);
-    assert_eq!(countdowns(&node), counting(&[ALPHA, CHARLIE], &first));
+    assert_eq!(countdowns(&node), counting(&[CHARLIE], "0"));
 
-    join(&node, CHARLIE, ALPHA);
+    join(&node, ALPHA, CHARLIE);
     let second = node.query_rows("SELECT group_id FROM game_group")[0]["group_id"].clone();
     assert_ne!(second, first, "the Group formed again is a new Group");
     assert_eq!(countdowns(&node), [], "nobody is sent home");

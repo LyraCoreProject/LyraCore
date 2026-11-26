@@ -8,11 +8,36 @@ Instance first, then the Character's live binding to a solo run, then creates an
 belongs to the Group that entered it, as in vmangos `DungeonMap::BindPlayerOrGroupOnEnter`. A
 binding to a Group's run never routes a Character outside that Group: after leaving the Group,
 or after the Group disbands, the Character enters a fresh run alone or its new Group's run. A
-member who enters its solo run while its Group has no run of that map gives the run to the Group,
-which is how a leader's earlier solo run becomes the Group's run. Adoption refuses a run when the
-Group already has a live run of that map on the same Shard. It cannot see the Group's runs on
-other Instance Shards, so on a split Realm a member standing in a disbanded Group's run can still
-give that run to a Group whose run is on another Instance Shard.
+member who enters its solo run while its Group has no run of that map gives the run to the Group.
+Adoption refuses a run when the Group already has a live run of that map on the same Shard. It
+cannot see the Group's runs on other Instance Shards, so on a split Realm a member standing in a
+disbanded Group's run can still give that run to a Group whose run is on another Instance Shard.
+
+A solo run has `party_id` 0. Its `holder_guid` names the Character that holds it, or 0 when no
+handover gave it a holder; such a run routes whoever is bound to it. A binding to a solo run that
+another Character holds does not route, also when that binding came with the Character on a
+Transfer. A Character may stand in its Group's run, or in a solo run that it or a member of its
+Group holds; a solo run without a holder sends nobody home. `holder_guid` is not swept with its
+Character, because the Transfer cascade runs the deletion sweeps whenever the holder leaves the
+Instance Shard. A deleted holder's run routes nobody, no other Character can reset it, and it is
+reaped when empty. A run changes owner at three moments,
+as in vmangos `Group.cpp`:
+
+- When a Group forms, the leader's solo runs become the Group's (`Player::ConvertInstancesToGroup`).
+- When the leader changes, each Group run of a map where the new leader holds a solo run passes to
+  the old leader as its solo run. When the old leader holds one of that map, or its Character is
+  not on this Shard, that run is reset instead. The new leader's solo runs then become the Group's (`Group::_setLeader`). The remaining
+  members are checked for Instance Removal again.
+- When a Group disbands, the Group's run the last member stands in becomes that member's solo run
+  and its other bindings on that Shard are dropped (`Group::Disband`). That member gets no
+  Instance Removal.
+
+`hand_runs_to_leader` and `hand_run_to_survivor` do this on the Shard that runs the Group change:
+the Group plane on one Shard, and each World Shard when it applies the Group projection on a split
+Realm. A Shard changes only the runs and bindings it holds, so on a split Realm a formation or
+leader-change handover needs the run and the leader's binding on one Shard. The disband handover
+runs on the Instance Shard where the last member stands, and records it as the holder there. The
+Package fixture mirror `sync_group_mirror` names no last member and hands over nothing.
 
 A Character who joins a Group without leading it loses its bindings, except for the map it stands
 on, as vmangos `Group::AddMember` resets a joining member's runs. The Group plane does this on one
@@ -21,11 +46,8 @@ first names it a member. Teardown deletes the bindings on the Shard that hosts t
 split Realm the Character's copy on its World Shard stays until its next entry to that map deletes
 it.
 
-vmangos `Group::Disband` hands the last member standing in the Group's run that run as its own.
-Here that member counts down and is removed like the one who left, unless the two form a Group
-again inside, which adopts the run. The known gaps in
-`conformance/features/world/map_and_trigger_rules.toml` record this and the other places where
-dungeon run ownership differs from vmangos.
+The known gaps in `conformance/features/world/map_and_trigger_rules.toml` record where dungeon run
+ownership differs from vmangos.
 
 `create_instance` builds creature entities from the map's authored spawn rows and makes copies of
 doors, buttons, chests and goobers. Templates and authored spawn rows are shared. With
@@ -81,9 +103,10 @@ row or entity already holds, because dormant instance-zero spawns in the Operato
 the Package Creature Range carry bit 23 too. GameObject copies use `0xF110 | bit46 | seq`, below the
 pool band and above static and debug identifiers.
 
-A Character standing in a Group's dungeon Instance without membership gets a 60-second removal
-timer. `reconcile_instance_removal` runs when membership or location changes, including login and
-Group projection. `expire_instance_removal` checks the rule again before moving the Character home.
+A Character standing in a Group's dungeon Instance without membership, or in a solo run that
+neither it nor a member of its Group holds, gets a 60-second removal timer.
+`reconcile_instance_removal` runs when membership or location changes, including login and Group
+projection. `expire_instance_removal` checks the rule again before moving the Character home.
 
 All tables are private.
 

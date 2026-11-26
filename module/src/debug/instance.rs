@@ -880,6 +880,7 @@ pub fn debug_stage_instance_removal_fixture(
         created_at: crate::time::now(ctx),
         last_empty_at_micros: 0,
         reset_requested: false,
+        holder_guid: 0,
     });
     let (home_map, home_x, home_y, home_z, home_zone) = REMOVAL_FIXTURE_HOME;
     for (guid, name, gm_level, inside, online) in REMOVAL_FIXTURE_CHARACTERS {

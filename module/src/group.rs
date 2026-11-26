@@ -1269,6 +1269,9 @@ impl JoinPlan {
                 .map(|member| member.character_guid),
         );
         crate::instance::unbind_joining_member(ctx, joiner_guid);
+        if joined.formed {
+            crate::instance::hand_runs_to_leader(ctx, joined.group_id, None);
+        }
         crate::instance::reconcile_instance_removal(ctx, joiner_guid);
         if let JoinTarget::NewParty { leader_guid } = target {
             crate::instance::reconcile_instance_removal(ctx, leader_guid);
@@ -1424,6 +1427,7 @@ fn set_leader_on(
     }
     group.leader_guid = target_guid;
     ctx.db.game_group().group_id().update(group);
+    crate::instance::hand_runs_to_leader(ctx, member.group_id, Some(actor_guid));
     announce_leader(ctx, member.group_id, target_guid);
     push_list_to_all(ctx, member.group_id);
     Ok(RosterChange::Changed)
@@ -1605,6 +1609,9 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64, departure
             crate::meeting_stone::party_disbanded(ctx, group_id, &all_guids);
             clear_target_icons(ctx, group_id);
             ctx.db.game_group().group_id().delete(group_id);
+            if let Some(survivor) = survivor {
+                crate::instance::hand_run_to_survivor(ctx, group_id, survivor);
+            }
             crate::native::health::group_changed(ctx, all_guids.iter().copied());
             for guid in all_guids {
                 crate::instance::reconcile_instance_removal(ctx, guid);
@@ -1615,8 +1622,10 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64, departure
             let mut leader_changed = false;
             if let Some(mut group) = group {
                 if group.leader_guid != new_leader {
+                    let previous_leader = group.leader_guid;
                     group.leader_guid = new_leader;
                     ctx.db.game_group().group_id().update(group);
+                    crate::instance::hand_runs_to_leader(ctx, group_id, Some(previous_leader));
                     announce_leader(ctx, group_id, new_leader);
                     leader_changed = true;
                 }

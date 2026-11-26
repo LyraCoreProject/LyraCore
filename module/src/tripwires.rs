@@ -18,6 +18,10 @@ pub(crate) mod character_owned_tripwire {
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
         (
+            &["game_instance"],
+            "A run's holder_guid outlives its holder: the Transfer cascade runs the delete sweeps when the holder leaves the Instance Shard, and a deleted holder's run routes nobody and is reaped when empty",
+        ),
+        (
             &["game_character_migration"],
             "Operator record of a Character Migration outlives the Character, so a rerun does not migrate a deleted Character again",
         ),

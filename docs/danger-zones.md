@@ -378,6 +378,16 @@ before moving active World Sessions. `game_drunk_sobering` is a Character-owned 
 transported. A blob from an older source lacks it and imports with no rows; login on the
 destination starts a new timer.
 
+### Dungeon run holder migration
+
+`game_instance` gains the END-appended column `holder_guid` with default 0. 0 means that no
+handover gave the run a holder, so every existing lease keeps its routing: a Group's run belongs
+to its Group, and a solo run routes the Characters bound to it. A run gets a holder only when a
+Group disbands around its last member or a leader change gives the old leader the Group's run. No
+repair, respawn or `debug_repair_after_publish` step is needed. `game_instance` does not cross in
+the Transfer blob. Code that inserts a `GameInstance`, such as a Package fixture, must set the
+field; Packages pin a Core revision that has it.
+
 ### Hunter pet presence migration
 
 `game_hunter_pet` gains the END-appended columns `presence`, `display_id`, `saved_health` and

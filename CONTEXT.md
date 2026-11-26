@@ -402,13 +402,15 @@ _Avoid_: raid mark, marker, raid target (for the icon)
 
 **Instance Removal**:
 The countdown that sends a Character to its hearthstone home when it stands in a Group's dungeon
-Instance without being a member of that Group. Rejoining the Group or leaving the Instance cancels
-it. A GM and a session-less Character with a live entity are exempt. See `module/src/instance.rs`.
+Instance without being a member of that Group, or in a solo run that neither it nor a member of its
+Group holds. Rejoining the Group or leaving the Instance cancels it. A GM and a session-less
+Character with a live entity are exempt. See `module/src/instance.rs`.
 _Avoid_: homebind timer, instance kick, raid timer
 
 **Instance Lease**:
-The `game_instance` row that gives one dungeon Instance its id. Removing an Instance's population
-keeps it, and reaping removes it last. See `docs/instance-lifecycle.md`.
+The `game_instance` row that gives one dungeon Instance its id, and the Group or holder Character
+that owns the run. Removing an Instance's population keeps it, and reaping removes it last. See
+`docs/instance-lifecycle.md`.
 
 **Ready Check**:
 A leader or Assistant poll. Every member is asked; answers reach the leader only. The Group keeps
