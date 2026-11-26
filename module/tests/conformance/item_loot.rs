@@ -384,7 +384,7 @@ impl Stage {
         );
     }
 
-    /// Applies a self-cast control Aura and returns what the client receives until the release of `source`.
+    /// Applies a self-cast control Aura and returns the packets up to the release of `source`.
     fn control_with_window_on(&mut self, mechanic: i32, source: u64) -> Vec<(u16, Vec<u8>)> {
         self.control_self(mechanic);
         delivered_until(&mut self.connection, &release_response(source))
@@ -864,6 +864,16 @@ fn a_root_on_a_character_with_a_loot_window_open_leaves_it_open() {
 
     stage.control_self(M_ROOT);
 
+    assert_eq!(
+        stage
+            .shard
+            .query_rows(&format!(
+                "SELECT id FROM game_aura WHERE target_guid = {} AND spell_id = {CONTROL_SELF}",
+                stage.character
+            ))
+            .len(),
+        1
+    );
     assert_eq!(stage.open_loot(), clam.to_string());
 }
 

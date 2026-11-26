@@ -678,7 +678,7 @@ impl Aura {
         aura
     }
 
-    /// vmangos `HandleAuraModStun` and `ModConfuseSpell` call `DoLootRelease` on a Character they hit.
+    /// vmangos `HandleAuraModStun` and `ModConfuseSpell` release a hit Character's loot.
     fn stuns_or_fears(&self) -> bool {
         use lyracore_shared::spell::taxonomy::{A_CONTROL, M_FEAR, M_STUN};
         self.eff_kind == A_CONTROL && (self.eff_p0 == M_STUN || self.eff_p0 == M_FEAR)
