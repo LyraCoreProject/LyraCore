@@ -368,6 +368,11 @@ function = "multi_shot_strikes_its_target_and_two_more_enemies_for_one_thrown_we
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/enemy_chain_spells.rs"
+function = "a_chain_lightning_go_lists_its_hits_in_jump_order_and_the_unit_that_evaded"
+rung = "durable_module"
+
+[[tests]]
 path = "crates/lyracore-protocol/src/codec/combat.rs"
 function = "a_spell_go_lists_every_unit_it_hit_and_each_unit_it_missed"
 rung = "codec"
@@ -631,6 +636,12 @@ description = "An instant area spell hits a unit behind a wall, a creature with 
 path = "module/src/spell/cast/targeting.rs"
 symbol = "select_targets"
 evidence = "Source reading, not measured. At d9173eca, Spell.cpp SpellNotifierCreatureAndPlayer skips a unit out of line of sight unless SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT and adds GetCombatReach to the radius for a unit no Character controls; SetTargetMap adds GetLeewayBonusRadius for targets 15, 20 and 24, fills targets 2 and 6 by chain jumps of at most 10 yd, searched within the radius plus 10 yd per jump for a spell that is not melee, checked for line of sight between jumps unless SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT and for SPELL_ATTR_EX3_ONLY_ON_PLAYER, and targets 7 and 8 from spell_script_target. importer/src/spell.rs resolve_target maps none of 2, 24, 36 and 54, and resolve_effect_target keeps a queued strike (E_NEXT_SWING) at T_TARGET_ENEMY, which module/src/combat/swing.rs fire_melee_swing strikes alone. Unit.cpp Unit::AttackerStateUpdate casts the queued Spell, so its target map reaches every chain unit."
+
+[[known_gaps]]
+description = "A melee Spell that hits more than one unit, such as Swipe, Holy Cleave, Strong Cleave or Sundering Cleave, raises the caster's melee ability proc flag on every unit. vmangos raises it on the first unit only and raises a harmful spell proc flag on each later unit, so a caster's melee-only proc such as Sweeping Strikes fires once a cast there and can fire once a unit here."
+path = "module/src/spell/proc.rs"
+symbol = "hit_bits"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::DoAllEffectOnTarget (L1172-L1185) replaces PROC_FLAG_DEAL_MELEE_ABILITY with PROC_FLAG_DEAL_HARMFUL_SPELL in procAttacker when m_targetNum is above 1; it leaves procVictim as it is. LyraCore hit_bits gives the caster PROC_FLAG_SUCCESSFUL_MELEE_SPELL_HIT from each hit alone and does not count the units of a cast."
 
 [[known_gaps]]
 description = "A single-target spell lands on a unit whose flags make it spawning, not attackable, not selectable, or immune to the caster's side (UNIT_FLAG_SPAWNING, NOT_ATTACKABLE_1, NON_ATTACKABLE_2, NOT_SELECTABLE, IMMUNE_TO_PLAYER, IMMUNE_TO_NPC), and the caster's own IMMUNE_TO_PLAYER or IMMUNE_TO_NPC flag does not stop it, where an area spell passes over such a unit. A Character's Fireball lands on a creature immune to players that its Arcane Explosion spares."

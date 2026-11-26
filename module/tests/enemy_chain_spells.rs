@@ -7,7 +7,8 @@ use lyracore_shared::spell::taxonomy::{
     CAST_FLAG_ALWAYS_HIT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE,
     E_WEAPON_STRIKE, T_CHAIN_ENEMY,
 };
-use support::{number, Field, Standalone};
+use serde_json::json;
+use support::{number, Field, NativePacket, Standalone, WorldSessionObserver};
 
 const CHARACTER: u64 = 1;
 const WOLF_HEALTH: u32 = 100_000;
@@ -31,6 +32,9 @@ const THROWN_STACK: u32 = 20;
 const FLIGHT_TICKS: &str = "20";
 // Four wolves 4 yd apart in a line ahead of the Character; the cast aims at the nearest.
 const WOLF_OFFSETS: [f32; 4] = [4.0, 8.0, 12.0, 16.0];
+const SMSG_SPELL_GO: u16 = 0x0132;
+// vmangos SpellMissInfo SPELL_MISS_EVADE.
+const MISS_EVADE: u8 = 6;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -64,6 +68,39 @@ fn multi_shot_strikes_its_target_and_two_more_enemies_for_one_thrown_weapon() {
         thrown_stack(&shard),
         THROWN_STACK - 1,
         "vmangos Spell::TakeAmmo spends one per cast, not one per target"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_chain_lightning_go_lists_its_hits_in_jump_order_and_the_unit_that_evaded() {
+    let (shard, wolves) = stage("enemy-chain-go");
+    shard.insert_row(
+        "game_creature_ai_returning_home",
+        &[("creature_guid", &wolves[1])],
+    );
+    let mut wire = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    wire.call("native_world_open", json!([42])).unwrap();
+    wire.call("debug_native_enter_world", json!([CHARACTER]))
+        .unwrap();
+
+    wire.call(
+        "debug_force_cast_at",
+        json!([CHARACTER, CHAIN_LIGHTNING, wolves[0]]),
+    )
+    .unwrap();
+
+    let mut session = WorldSessionObserver::new(wire.connection_id());
+    let go = session
+        .received(&wire.drain_packets())
+        .into_iter()
+        .find(|packet| packet.opcode == Some(SMSG_SPELL_GO))
+        .expect("the caster's World Session receives the GO");
+    assert_eq!(
+        go_units(&go),
+        (vec![wolves[0], wolves[2]], vec![(wolves[1], MISS_EVADE)]),
+        "vmangos WriteSpellGoTargets: every unit of the target map in jump order, the evading \
+         link as a miss; the fourth wolf is past the 3 targets"
     );
 }
 
@@ -244,6 +281,34 @@ fn cast_and_land(shard: &Standalone, spell_id: u32, target: u64) {
         ],
     );
     shard.assert_call("debug_advance_roll_batch", &[FLIGHT_TICKS]);
+}
+
+/// The hit guids and the (guid, miss) pairs of an SMSG_SPELL_GO body.
+fn go_units(go: &NativePacket) -> (Vec<u64>, Vec<(u64, u8)>) {
+    let body = &go.body;
+    let mut at = 0;
+    // Two packed guids, then spell u32 and flags u16.
+    for _ in 0..2 {
+        at += 1 + body[at].count_ones() as usize;
+    }
+    at += 6;
+    let guid = |at: &mut usize| {
+        let value = u64::from_le_bytes(body[*at..*at + 8].try_into().unwrap());
+        *at += 8;
+        value
+    };
+    let hit_count = usize::from(body[at]);
+    at += 1;
+    let hits = (0..hit_count).map(|_| guid(&mut at)).collect();
+    let miss_count = usize::from(body[at]);
+    at += 1;
+    let mut misses = Vec::new();
+    for _ in 0..miss_count {
+        let unit = guid(&mut at);
+        misses.push((unit, body[at]));
+        at += 1;
+    }
+    (hits, misses)
 }
 
 fn hit<const N: usize>(shard: &Standalone, wolves: [u64; N]) -> [bool; N] {

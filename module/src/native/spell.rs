@@ -78,10 +78,10 @@ pub(crate) fn cast_launch(
     }
 }
 
-/// The target block of a GO; vmangos `Spell::SendSpellGo` writes the cast's own targets.
+/// A GO's target block and its hit and miss lists, as vmangos `Spell::SendSpellGo` writes them.
 #[derive(Clone)]
 enum GoTargets {
-    /// The row's target alone.
+    /// The row's target, hit or missed by the row's own result.
     Unit,
     /// The row's target, and every unit the cast reached as hit or missed.
     Units(Vec<(u64, Option<wow_world_messages::vanilla::SpellMissInfo>)>),

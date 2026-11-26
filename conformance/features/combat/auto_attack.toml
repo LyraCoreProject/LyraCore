@@ -45,10 +45,10 @@ symbol = "build_queued_strike_swing"
 evidence = "Source reading at d9173eca: Spell.cpp Spell::SendMeleeAttackingStateUpdate, SpellCaster.cpp RollMeleeOutcomeAgainst sets the ROLLED_* flags, Unit.cpp SetDamageIndependentHitInfoFlags and SetDamageDependentHitInfoFlags. LyraCore: module/src/combat/swing.rs fire_melee_swing writes no absorbed amount on the queued strike's GO row when a seal portion is folded in."
 
 [[known_gaps]]
-description = "An SMSG_SPELL_GO names only the cast's primary target: it lists that unit as hit or missed and leaves every other unit target out. vmangos Spell::WriteSpellGoTargets lists every unit target with its own hit or miss result, so an area or chain spell's GO differs."
+description = "A queued strike's SMSG_SPELL_GO lists its victim alone, and a GO at a ground point lists no unit. vmangos Spell::WriteSpellGoTargets lists every unit target with its own hit or miss result, so the GO of a ground-point spell that hits units at once, such as Flamestrike, differs."
 path = "module/src/native/spell.rs"
 symbol = "spell_go"
-evidence = "Source reading at d9173eca: Spell.cpp:4625-4653 Spell::WriteSpellGoTargets writes m_UniqueTargetInfo. LyraCore: SpellCastEvent keeps one target_guid and one miss_info, and spell_go builds one hit or one miss from them."
+evidence = "Source reading at d9173eca: Spell.cpp:4625-4653 Spell::WriteSpellGoTargets writes m_UniqueTargetInfo. LyraCore: module/src/combat/swing.rs fire_melee_swing inserts a queued strike's GO row with the victim as its one target_guid, and spell_go builds GoTargets::GroundPoint through codec::build_spell_go_dest, which writes no hit or miss."
 
 [[known_gaps]]
 description = "Other white melee contexts retain the legacy Character dodge formula, Character parry and block eligibility, creature crushing chance, weapon-skill bonuses and offhand weapon-skill selection. Controlled units, ranged Weapon Strikes, thrown weapons, bows, crossbows and target-side hit/crit auras need separate conformance."

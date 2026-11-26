@@ -391,11 +391,13 @@ field; Packages pin a Core revision that has it.
 ### Enemy chain migration
 
 No schema changes. The importer now writes vmangos target 6 with an `EffectChainTarget` above 1 as
-`T_CHAIN_ENEMY` (6), so Chain Lightning, Multi-Shot, Swipe and the other source chains jump to more
-enemies. Until you reimport `spell`, they keep `T_TARGET_ENEMY` and hit the selected unit alone.
-Reimport `spell` from this revision before play resumes. A queued strike such as Cleave still
-imports as `T_TARGET_ENEMY`. A Package Delta emitted from an older Base Snapshot writes these effects
-with target 1; emit it again from a Base Snapshot of this revision.
+`T_CHAIN_ENEMY` (6), so Chain Lightning, Multi-Shot and the other source chains jump to more
+enemies. The melee chains Druid Swipe, Holy Cleave 18819, Strong Cleave 8255 and Sundering Cleave
+25174 are cast Spells, not queued strikes, so they also jump. Until you reimport `spell`, they keep
+`T_TARGET_ENEMY` and hit the selected unit alone. Reimport `spell` from this revision before play
+resumes. A queued strike, such as Cleave 845 and most creature Cleaves, still imports as
+`T_TARGET_ENEMY` and strikes its victim alone. A Package Delta emitted from an older Base Snapshot
+writes these effects with target 1; emit it again from a Base Snapshot of this revision.
 
 These changes apply at publish, without the reimport. A cast's SMSG_SPELL_GO lists every unit its
 effects reached, each as hit or with its miss, instead of the selected unit alone. Each unit other
