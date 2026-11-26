@@ -227,7 +227,16 @@ fn shard_listing_a_refusing_peer(name: &str) -> (Standalone, String, String) {
     (shard, first, second)
 }
 
-fn assert_removal_refused(shard: &Standalone, first: &str, second: &str, pending: &str) {
+// `name` is what `operator_add_peer_shard` listed the Shard as.
+fn is_listed(shard: &Standalone, database: &str, name: &str) -> bool {
+    shard
+        .query_database_rows(database, "SELECT name FROM game_peer_shard")
+        .iter()
+        .any(|row| row["name"].contains(name))
+}
+
+fn assert_removal_refused(shard: &Standalone, first: &str, removed: (&str, &str), pending: &str) {
+    let (second, name) = removed;
     let output = shard.call_database(
         first,
         "operator_remove_peer_shard",
@@ -239,14 +248,20 @@ fn assert_removal_refused(shard: &Standalone, first: &str, second: &str, pending
         "removal should refuse with {pending}: {output_text}"
     );
     assert!(
-        confirmed(shard, first).is_some(),
+        is_listed(shard, first, name),
         "the refused removal still removed the Peer Shard"
     );
 }
 
 // A send in flight when a retry table is cleared queues a new retry, so this retries until a
 // removal lands while nothing is pending.
-fn remove_once_settled(shard: &Standalone, first: &str, second: &str, retry_tables: &[&str]) {
+fn remove_once_settled(
+    shard: &Standalone,
+    first: &str,
+    removed: (&str, &str),
+    retry_tables: &[&str],
+) {
+    let (second, name) = removed;
     assert!(
         poll_until(Duration::from_secs(20), || {
             for table in retry_tables {
@@ -268,7 +283,7 @@ fn remove_once_settled(shard: &Standalone, first: &str, second: &str, retry_tabl
         "the Peer Shard stayed listed after its work finished"
     );
     assert!(
-        confirmed(shard, first).is_none(),
+        !is_listed(shard, first, name),
         "the Peer Shard is still listed"
     );
 }
@@ -291,12 +306,12 @@ fn a_pending_transfer_release_blocks_removing_its_peer_shard() {
         "the refused release was not scheduled for retry"
     );
 
-    assert_removal_refused(&shard, &first, &second, "1 Transfer message(s)");
+    assert_removal_refused(&shard, &first, (&second, "second"), "1 Transfer message(s)");
 
     remove_once_settled(
         &shard,
         &first,
-        &second,
+        (&second, "second"),
         &["game_native_transfer_release_retry"],
     );
 }
@@ -319,9 +334,19 @@ fn a_pending_package_relocation_blocks_removing_its_peer_shard() {
         "the refused relocation release was not scheduled for retry"
     );
 
-    assert_removal_refused(&shard, &first, &second, "1 Package relocation message(s)");
+    assert_removal_refused(
+        &shard,
+        &first,
+        (&second, "second"),
+        "1 Package relocation message(s)",
+    );
 
-    remove_once_settled(&shard, &first, &second, &["game_package_relocation_retry"]);
+    remove_once_settled(
+        &shard,
+        &first,
+        (&second, "second"),
+        &["game_package_relocation_retry"],
+    );
 }
 
 #[test]
@@ -357,14 +382,14 @@ fn work_toward_a_destination_blocks_removing_it_though_another_shard_receives_it
     assert_removal_refused(
         &shard,
         &first,
-        &third,
+        (&third, "third"),
         "1 Transfer message(s), 1 Package relocation message(s)",
     );
 
     remove_once_settled(
         &shard,
         &first,
-        &third,
+        (&third, "third"),
         &[
             "game_native_transfer_moved_retry",
             "game_package_relocation_retry",
@@ -382,14 +407,14 @@ fn a_transfer_arriving_from_a_peer_shard_blocks_removing_it() {
         &[&identity(&shard, &second), "7"],
     );
 
-    assert_removal_refused(&shard, &first, &second, "1 Transfer arrival(s)");
+    assert_removal_refused(&shard, &first, (&second, "second"), "1 Transfer arrival(s)");
 
     shard.assert_sql_database(
         &first,
         "DELETE FROM game_native_handoff WHERE transfer_id = 7",
     );
     shard.assert_sql_database(&first, "DELETE FROM game_transfer_in WHERE transfer_id = 7");
-    remove_once_settled(&shard, &first, &second, &[]);
+    remove_once_settled(&shard, &first, (&second, "second"), &[]);
 }
 
 #[test]
@@ -402,8 +427,13 @@ fn a_package_relocation_arriving_from_a_peer_shard_blocks_removing_it() {
         &[&identity(&shard, &second), "7"],
     );
 
-    assert_removal_refused(&shard, &first, &second, "1 Package relocation arrival(s)");
+    assert_removal_refused(
+        &shard,
+        &first,
+        (&second, "second"),
+        "1 Package relocation arrival(s)",
+    );
 
     shard.assert_sql_database(&first, "DELETE FROM game_package_arrival WHERE id = 7");
-    remove_once_settled(&shard, &first, &second, &[]);
+    remove_once_settled(&shard, &first, (&second, "second"), &[]);
 }
