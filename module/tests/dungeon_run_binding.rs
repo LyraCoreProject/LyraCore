@@ -9,6 +9,7 @@ const TO_DEADMINES: u32 = 5_272_001;
 const INVITE: &str = "0";
 const ACCEPT: &str = "1";
 const LEAVE: &str = "3";
+const SET_LEADER: &str = "7";
 
 fn realm(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
@@ -114,6 +115,92 @@ fn owner_of(shard: &Standalone, run: &str) -> String {
         "SELECT party_id FROM game_instance WHERE instance_id = {run}"
     ))[0]["party_id"]
         .clone()
+}
+
+fn holders_of(shard: &Standalone, run: &str) -> Vec<u64> {
+    let mut holders: Vec<u64> = shard
+        .query_rows(&format!(
+            "SELECT character_guid FROM game_instance_binding WHERE instance_id = {run}"
+        ))
+        .into_iter()
+        .map(|row| row["character_guid"].parse().unwrap())
+        .collect();
+    holders.sort_unstable();
+    holders
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_leaders_solo_run_becomes_the_groups_run_when_the_group_forms() {
+    let shard = realm("dungeon-run-formation");
+    let member = create_character(&shard, "Member");
+    let solo = enter(&shard, LEADER);
+    walk_out(&shard, LEADER);
+
+    join(&shard, LEADER, member);
+    let group = group_of(&shard, LEADER);
+
+    assert_eq!(
+        owner_of(&shard, &solo),
+        group,
+        "the Group takes the leader's run"
+    );
+    assert_eq!(
+        enter(&shard, member),
+        solo,
+        "a member who enters first resumes it"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_new_leader_takes_the_group_to_its_own_run_and_the_old_leader_keeps_the_groups_run() {
+    let shard = realm("dungeon-run-leader-change");
+    let heir = create_character(&shard, "Heir");
+    let other = create_character(&shard, "Other");
+    let heirs_run = enter(&shard, heir);
+    join(&shard, LEADER, heir);
+    join(&shard, LEADER, other);
+    let group = group_of(&shard, LEADER);
+    let groups_run = enter(&shard, LEADER);
+    assert_ne!(groups_run, heirs_run, "the heir joined inside its own run");
+    walk_out(&shard, LEADER);
+
+    group_op(&shard, SET_LEADER, LEADER, heir, 0);
+
+    assert_eq!(owner_of(&shard, &heirs_run), group);
+    assert_eq!(owner_of(&shard, &groups_run), "0");
+    assert_eq!(holders_of(&shard, &groups_run), [LEADER]);
+    assert_eq!(
+        enter(&shard, other),
+        heirs_run,
+        "the Group enters the new leader's run"
+    );
+    group_op(&shard, LEAVE, LEADER, 0, 0);
+    assert_eq!(
+        enter(&shard, LEADER),
+        groups_run,
+        "the old leader keeps the Group's former run"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_last_member_in_the_groups_run_keeps_it_when_the_group_disbands() {
+    let shard = realm("dungeon-run-disband");
+    let survivor = create_character(&shard, "Survivor");
+    join(&shard, LEADER, survivor);
+    let run = enter(&shard, LEADER);
+    assert_eq!(enter(&shard, survivor), run);
+    walk_out(&shard, LEADER);
+
+    group_op(&shard, LEAVE, LEADER, 0, 0);
+
+    assert_eq!(owner_of(&shard, &run), "0", "the run is the survivor's own");
+    assert_eq!(holders_of(&shard, &run), [survivor]);
+    walk_out(&shard, survivor);
+    assert_eq!(enter(&shard, survivor), run);
+    assert_ne!(enter(&shard, LEADER), run, "the leaver starts a fresh run");
 }
 
 #[test]

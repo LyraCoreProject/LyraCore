@@ -842,10 +842,8 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
     affected.extend(roster.members.iter().map(|member| member.guid));
     if roster.leader != 0 {
         let groups = ctx.db.game_group();
-        let rr_cursor = groups
-            .group_id()
-            .find(roster.group_id)
-            .map_or(0, |group| group.rr_cursor);
+        let previous = groups.group_id().find(roster.group_id);
+        let rr_cursor = previous.as_ref().map_or(0, |group| group.rr_cursor);
         groups.group_id().delete(roster.group_id);
         groups.insert(Group {
             group_id: roster.group_id,
@@ -856,7 +854,13 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
             rr_cursor,
             group_type: roster.kind,
         });
+        crate::instance::hand_runs_to_leader(
+            ctx,
+            roster.group_id,
+            previous.map(|group| group.leader_guid),
+        );
     } else {
+        let survivor = roster.disband.as_ref().and_then(|disband| disband.survivor);
         if let Some(disband) = roster.disband {
             crate::loot::force_resolve_rolls_for_disband(
                 ctx,
@@ -866,6 +870,9 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
             );
         }
         ctx.db.game_group().group_id().delete(roster.group_id);
+        if let Some(survivor) = survivor {
+            crate::instance::hand_run_to_survivor(ctx, roster.group_id, survivor);
+        }
     }
     let icons = ctx.db.game_group_target_icon();
     for icon in icons.by_group().filter(roster.group_id).collect::<Vec<_>>() {

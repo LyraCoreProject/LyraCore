@@ -350,15 +350,26 @@ pub(crate) fn resettable_map(map: u32) -> bool {
 pub(crate) fn instance_removal_due(
     map_id: u32,
     instance_id: u64,
-    instance_party: u64,
-    own_group: Option<u64>,
+    theirs: bool,
     gm_level: u8,
 ) -> bool {
-    instance_id != 0
-        && is_dungeon_map(map_id)
-        && instance_party != 0
-        && own_group != Some(instance_party)
-        && gm_level == 0
+    instance_id != 0 && is_dungeon_map(map_id) && !theirs && gm_level == 0
+}
+
+/// `holders` pairs each Character bound to a solo run with its Group; see docs/instance-lifecycle.md.
+pub(crate) fn run_is_theirs(
+    run_party: u64,
+    holders: &[(u64, Option<u64>)],
+    character_guid: u64,
+    own_group: Option<u64>,
+) -> bool {
+    if run_party != 0 {
+        return own_group == Some(run_party);
+    }
+    holders.is_empty()
+        || holders.iter().any(|&(holder, holder_group)| {
+            holder == character_guid || (own_group.is_some() && holder_group == own_group)
+        })
 }
 
 const MAP_TYPE_CONTINENT: u32 = 0;
@@ -417,6 +428,117 @@ fn live_instance_for(ctx: &ReducerContext, instance_id: u64, map_id: u32) -> Opt
         .instance_id()
         .find(instance_id)
         .filter(|i| i.map_id == map_id && !i.reset_requested)
+}
+
+fn run_holders(ctx: &ReducerContext, run: &GameInstance) -> Vec<u64> {
+    ctx.db
+        .game_instance_binding()
+        .by_instance()
+        .filter(&run.instance_id)
+        .filter(|b| b.map_id == run.map_id && binding_is_local(ctx, b.map_id, b.world))
+        .map(|b| b.character_guid)
+        .collect()
+}
+
+fn held_by_another(ctx: &ReducerContext, run: &GameInstance, character_guid: u64) -> bool {
+    run.party_id == 0
+        && run_holders(ctx, run)
+            .into_iter()
+            .any(|holder| holder != character_guid)
+}
+
+fn solo_runs_of(ctx: &ReducerContext, character_guid: u64) -> Vec<GameInstance> {
+    ctx.db
+        .game_instance_binding()
+        .by_character()
+        .filter(&character_guid)
+        .filter(|b| binding_is_local(ctx, b.map_id, b.world))
+        .filter_map(|b| live_instance_for(ctx, b.instance_id, b.map_id))
+        .filter(|run| run.party_id == 0)
+        .collect()
+}
+
+fn solo_run_of(ctx: &ReducerContext, character_guid: u64, map_id: u32) -> Option<GameInstance> {
+    solo_runs_of(ctx, character_guid)
+        .into_iter()
+        .find(|run| run.map_id == map_id)
+}
+
+/// Makes `run` a solo run held by `holder` alone; with no holder it waits to be reaped.
+fn release_run(ctx: &ReducerContext, mut run: GameInstance, holder: Option<u64>) {
+    let bindings = ctx.db.game_instance_binding();
+    for binding in bindings
+        .by_instance()
+        .filter(&run.instance_id)
+        .filter(|b| Some(b.character_guid) != holder && binding_is_local(ctx, b.map_id, b.world))
+        .collect::<Vec<_>>()
+    {
+        bindings.id().delete(binding.id);
+    }
+    if let Some(holder) = holder {
+        bind_character(
+            ctx,
+            holder,
+            run.instance_id,
+            run.map_id,
+            ctx.database_identity(),
+        );
+    }
+    log::info!(
+        "instance {} released by party {} to {holder:?}",
+        run.instance_id,
+        run.party_id
+    );
+    run.party_id = 0;
+    ctx.db.game_instance().instance_id().update(run);
+}
+
+/// `previous_leader` is `None` when the Group forms; see docs/instance-lifecycle.md.
+pub(crate) fn hand_runs_to_leader(
+    ctx: &ReducerContext,
+    group_id: u64,
+    previous_leader: Option<u64>,
+) {
+    let Some(leader) = ctx
+        .db
+        .game_group()
+        .group_id()
+        .find(group_id)
+        .map(|group| group.leader_guid)
+    else {
+        return;
+    };
+    if let Some(previous) = previous_leader.filter(|previous| *previous != leader) {
+        let runs: Vec<_> = ctx
+            .db
+            .game_instance()
+            .by_party()
+            .filter(&group_id)
+            .filter(|run| !run.reset_requested && solo_run_of(ctx, leader, run.map_id).is_some())
+            .collect();
+        for run in runs {
+            let keeps_it = crate::helpers::character_by_guid(ctx, previous).is_some()
+                && solo_run_of(ctx, previous, run.map_id).is_none();
+            release_run(ctx, run, keeps_it.then_some(previous));
+        }
+    }
+    for run in solo_runs_of(ctx, leader) {
+        adopt_instance_for_party(ctx, run.instance_id, group_id);
+    }
+}
+
+pub(crate) fn hand_run_to_survivor(ctx: &ReducerContext, group_id: u64, survivor: u64) {
+    let Some(entity) = ctx.db.game_world_entity().guid().find(survivor) else {
+        return;
+    };
+    let Some(run) = live_instance_for(ctx, entity.instance_id, entity.map_id)
+        .filter(|run| run.party_id == group_id && group_id != 0)
+    else {
+        return;
+    };
+    if solo_run_of(ctx, survivor, run.map_id).is_none() {
+        release_run(ctx, run, Some(survivor));
+    }
 }
 
 fn party_run(ctx: &ReducerContext, party_id: u64, map_id: u32) -> Option<u64> {
@@ -479,6 +601,7 @@ pub(crate) fn resolve_or_create_instance(
     let bound = own_binding.and_then(|b| {
         let live = if binding_is_local(ctx, b.map_id, b.world) {
             live_instance_for(ctx, b.instance_id, target_map)
+                .filter(|run| !held_by_another(ctx, run, character_guid))
         } else {
             None
         };
@@ -1124,30 +1247,39 @@ fn instance_removal_standing(ctx: &ReducerContext, character_guid: u64) -> Optio
         Some(entity) => (entity.map_id, entity.instance_id),
         None => (character.map_id, character.pending_instance_id),
     };
-    let instance_party = ctx
+    let run = ctx
         .db
         .game_instance()
         .instance_id()
         .find(instance_id)
-        .filter(|instance| instance.map_id == map_id)
-        .map_or(0, |instance| instance.party_id);
+        .filter(|instance| instance.map_id == map_id);
     let own_group = crate::group::group_of(ctx, character_guid).map(|member| member.group_id);
+    let theirs = run.as_ref().is_none_or(|run| {
+        let holders: Vec<_> = run_holders(ctx, run)
+            .into_iter()
+            .map(|holder| {
+                let group = crate::group::group_of(ctx, holder).map(|member| member.group_id);
+                (holder, group)
+            })
+            .collect();
+        run_is_theirs(run.party_id, &holders, character_guid, own_group)
+    });
     instance_removal_due(
         map_id,
         instance_id,
-        instance_party,
-        own_group,
+        theirs,
         crate::auth::gm_level(ctx, character.account_id),
     )
     .then_some(RemovalStanding {
         instance_id,
-        group_id: instance_party,
+        group_id: run.map_or(0, |run| run.party_id),
         in_world: entity.is_some(),
     })
 }
 
 fn adopt_for_regrouped_member(ctx: &ReducerContext, character_guid: u64) -> Option<u64> {
-    let standing = instance_removal_standing(ctx, character_guid)?;
+    let standing =
+        instance_removal_standing(ctx, character_guid).filter(|standing| standing.group_id != 0)?;
     let own_group = crate::group::group_of(ctx, character_guid)?.group_id;
     adopt_instance_for_party(ctx, standing.instance_id, own_group).then_some(own_group)
 }
@@ -1403,23 +1535,42 @@ mod tests {
     }
 
     #[test]
-    fn instance_removal_is_due_only_for_a_non_member_in_a_group_instance() {
-        assert!(instance_removal_due(36, 7, 42, None, 0), "left the Group");
+    fn instance_removal_is_due_only_for_a_character_in_a_run_that_is_not_theirs() {
+        assert!(instance_removal_due(36, 7, false, 0), "another's run");
+        assert!(!instance_removal_due(36, 7, true, 0), "its own run");
+        assert!(!instance_removal_due(36, 0, false, 0), "the open world");
         assert!(
-            instance_removal_due(36, 7, 42, Some(43), 0),
-            "joining another Group does not cancel"
-        );
-        assert!(!instance_removal_due(36, 7, 42, Some(42), 0), "a member");
-        assert!(
-            !instance_removal_due(36, 7, 0, None, 0),
-            "a solo instance has no Group to leave"
-        );
-        assert!(!instance_removal_due(36, 0, 42, None, 0), "the open world");
-        assert!(
-            !instance_removal_due(0, 7, 42, None, 0),
+            !instance_removal_due(0, 7, false, 0),
             "an instance of an open-world map is not a dungeon"
         );
-        assert!(!instance_removal_due(36, 7, 42, None, 1), "a GM");
+        assert!(!instance_removal_due(36, 7, false, 1), "a GM");
+    }
+
+    #[test]
+    fn a_groups_run_is_its_members_and_a_solo_run_is_its_holders_and_their_groups() {
+        assert!(!run_is_theirs(42, &[], 1, None), "left the Group");
+        assert!(
+            !run_is_theirs(42, &[], 1, Some(43)),
+            "joining another Group does not cancel"
+        );
+        assert!(run_is_theirs(42, &[], 1, Some(42)), "a member");
+        assert!(run_is_theirs(0, &[(1, None)], 1, None), "the holder");
+        assert!(
+            !run_is_theirs(0, &[(2, None)], 1, None),
+            "the member who left a disbanded Group's run, now the survivor's"
+        );
+        assert!(
+            run_is_theirs(0, &[(2, Some(42))], 1, Some(42)),
+            "a member of the holder's Group"
+        );
+        assert!(
+            !run_is_theirs(0, &[(2, Some(42))], 1, Some(43)),
+            "a member of another Group"
+        );
+        assert!(
+            run_is_theirs(0, &[], 1, None),
+            "a solo run nobody holds turns nobody out"
+        );
     }
 
     #[test]
