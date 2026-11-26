@@ -465,6 +465,64 @@ pub struct NativeTransferRelease {
     pub connected: bool,
 }
 
+/// Counts the unsent, unanswered and retained Transfer messages that address `shard` or name it
+/// as the destination World Shard.
+pub(crate) fn pending_toward(ctx: &ReducerContext, shard: Identity) -> usize {
+    let moved = |call: &NativeTransferMoved| call.database.0 == shard || call.world.0 == shard;
+    ctx.db
+        .game_native_transfer()
+        .iter()
+        .filter(|call| call.database.0 == shard)
+        .count()
+        + ctx
+            .db
+            .game_native_transfer_moved()
+            .iter()
+            .filter(moved)
+            .count()
+        + ctx
+            .db
+            .game_native_transfer_moved_retry()
+            .iter()
+            .filter(|retry| moved(&retry.call))
+            .count()
+        + ctx
+            .db
+            .game_native_transfer_release()
+            .iter()
+            .filter(|call| call.database.0 == shard)
+            .count()
+        + ctx
+            .db
+            .game_native_transfer_release_retry()
+            .iter()
+            .filter(|retry| retry.call.database.0 == shard)
+            .count()
+}
+
+/// Queues a Transfer release to `target`, which a test makes refuse it.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_queue_native_transfer_release(
+    ctx: &ReducerContext,
+    target: Identity,
+    character_guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    ctx.db
+        .game_native_transfer_release()
+        .insert(NativeTransferRelease {
+            id: 0,
+            database: remote::Identity(target),
+            realm: remote::Identity(ctx.database_identity()),
+            transfer_id: 0,
+            character_guid,
+            connection: 0,
+            connected: false,
+        });
+    Ok(())
+}
+
 crate::outside_table_catalog!(
     game_native_transfer_pending,
     game_native_transfer,

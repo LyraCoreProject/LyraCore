@@ -126,6 +126,28 @@ Host restart do not release the target fence or recreate the source. No Session 
 Handoff or client acknowledgement participates. Package Teardown waits for pending relocation even
 when the Character has already left its source. Terminal results survive restart until consumed.
 
+## Removing a Peer Shard
+
+`operator_remove_peer_shard` refuses while this Shard holds an unfinished Transfer or Package
+relocation message that addresses the Shard or names it as the destination World Shard. Retries
+keep their behaviour: a retry toward a Shard that is being removed is not dropped, so removal could
+strand a Character in Escrow or a directory change. The Refusal counts the pending messages per
+stream. The Operator waits for the retries to settle, or repairs the target so they succeed, and
+removes the Shard afterwards.
+
+The refusal counts these rows on the Shard where the reducer runs:
+
+- Transfer: `game_native_transfer`, `game_native_transfer_moved`, `game_native_transfer_release` and
+  the retry rows `game_native_transfer_moved_retry` and `game_native_transfer_release_retry`.
+- Package relocation: `game_package_relocation_delivery` and `game_package_relocation_retry`. A
+  message counts when it addresses the Shard or its crossing names the Shard as destination, so the
+  Realm directory message of a crossing toward the Shard counts too.
+
+The reducer cannot see work held on another Shard, such as an arrival fence or a Package
+relocation whose dungeon admission still waits on the Realm Instance allocator. Run the removal on
+every Shard that lists the target, and check that the target holds no unreleased arrival
+(`game_package_arrival`, `game_transfer_in`) before removing it from its last listing.
+
 ## Manifest discipline
 
 - `transfer::is_in_transit` hides a Character with an Escrow row from by-guid lookups and refuses

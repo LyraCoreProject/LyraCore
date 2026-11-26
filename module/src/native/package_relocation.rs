@@ -576,6 +576,30 @@ pub fn retry_package_relocation(ctx: &ReducerContext, retry: RelocationRetry) {
     }
 }
 
+/// Counts the unsent, unanswered and retried Package relocation messages that address `shard` or
+/// name it as the destination World Shard.
+pub(crate) fn pending_toward(ctx: &ReducerContext, shard: Identity) -> usize {
+    let toward = |call: &RelocationDelivery| {
+        let message: Message =
+            bsatn::from_slice(&call.message).expect("stored Package relocation decodes");
+        let (Message::Import(Import { crossing, .. })
+        | Message::Moved(crossing)
+        | Message::Release(crossing)) = message;
+        call.database.0 == shard || crossing.target == shard
+    };
+    ctx.db
+        .game_package_relocation_delivery()
+        .iter()
+        .filter(toward)
+        .count()
+        + ctx
+            .db
+            .game_package_relocation_retry()
+            .iter()
+            .filter(|retry| toward(&retry.call))
+            .count()
+}
+
 pub(crate) fn require_settled(ctx: &ReducerContext, package: &str) -> Result<(), String> {
     let ident = crate::package_teardown::ident(package);
     if ctx.db.game_package_relocation().iter().any(|r| {
@@ -597,6 +621,30 @@ pub(crate) fn clear_results(ctx: &ReducerContext, package: &str) {
     for id in ids {
         rows.id().delete(id);
     }
+}
+
+/// Queues a Package relocation release to `target`, which a test makes refuse it.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_queue_package_relocation_release(
+    ctx: &ReducerContext,
+    target: Identity,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    send(
+        ctx,
+        target,
+        Message::Release(Crossing {
+            id: 0,
+            guid: 0,
+            account_id: 0,
+            package: "fixture.relocation".into(),
+            realm: ctx.database_identity(),
+            target,
+            revision: 0,
+        }),
+    );
+    Ok(())
 }
 
 #[cfg(feature = "debug_reducers")]

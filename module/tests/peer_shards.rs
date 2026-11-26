@@ -82,7 +82,7 @@ fn peer_shards_confirm_each_other_once_both_list_the_other() {
 
 fn count(shard: &Standalone, database: &str, table: &str) -> usize {
     shard
-        .query_database_rows(database, &format!("SELECT id FROM {table}"))
+        .query_database_rows(database, &format!("SELECT * FROM {table}"))
         .len()
 }
 
@@ -198,4 +198,126 @@ fn a_package_creation_retry_stops_and_settles_when_its_target_leaves_the_peer_sh
         std::thread::sleep(Duration::from_millis(250));
         assert!(idle(&shard), "the dropped retry was queued again");
     }
+}
+
+fn text(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+// Publishes two Shards where only the first lists the second, so the second refuses what the
+// first sends.
+fn shard_listing_a_refusing_peer(name: &str) -> (Standalone, String, String) {
+    let mut shard = Standalone::start_persistent(name);
+    shard.publish_module();
+    let first = shard.shard_name().to_owned();
+    let second = format!("{first}-second");
+    shard.publish_named_module_bytes(&second, module_bytes());
+    for database in [&first, &second] {
+        shard.assert_call_database(database, "claim_operator", &[]);
+    }
+    shard.assert_call_database(
+        &first,
+        "operator_add_peer_shard",
+        &[&identity(&shard, &second), r#""second""#],
+    );
+    (shard, first, second)
+}
+
+fn assert_removal_refused(shard: &Standalone, first: &str, second: &str, pending: &str) {
+    let output = shard.call_database(
+        first,
+        "operator_remove_peer_shard",
+        &[&identity(shard, second)],
+    );
+    let output_text = text(&output);
+    assert!(
+        !output.status.success() && output_text.contains(pending),
+        "removal should refuse with {pending}: {output_text}"
+    );
+    assert!(
+        confirmed(shard, first).is_some(),
+        "the refused removal still removed the Peer Shard"
+    );
+}
+
+// A send in flight when the retry table is cleared queues a new retry, so this retries until a
+// removal lands while nothing is pending.
+fn remove_once_settled(shard: &Standalone, first: &str, second: &str, retry_table: &str) {
+    assert!(
+        poll_until(Duration::from_secs(20), || {
+            shard.assert_call_database(
+                first,
+                "debug_clear_schedule",
+                &[&format!(r#""{retry_table}""#)],
+            );
+            shard
+                .call_database(
+                    first,
+                    "operator_remove_peer_shard",
+                    &[&identity(shard, second)],
+                )
+                .status
+                .success()
+        }),
+        "the Peer Shard stayed listed after its work finished"
+    );
+    assert!(
+        confirmed(shard, first).is_none(),
+        "the Peer Shard is still listed"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_pending_transfer_release_blocks_removing_its_peer_shard() {
+    let (shard, first, second) = shard_listing_a_refusing_peer("transfer-removal-peer");
+    shard.assert_call_database(
+        &first,
+        "debug_queue_native_transfer_release",
+        &[&identity(&shard, &second), "9"],
+    );
+    assert!(
+        poll_until(Duration::from_secs(20), || count(
+            &shard,
+            &first,
+            "game_native_transfer_release_retry"
+        ) == 1),
+        "the refused release was not scheduled for retry"
+    );
+
+    assert_removal_refused(&shard, &first, &second, "1 Transfer message(s)");
+
+    remove_once_settled(
+        &shard,
+        &first,
+        &second,
+        "game_native_transfer_release_retry",
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_pending_package_relocation_blocks_removing_its_peer_shard() {
+    let (shard, first, second) = shard_listing_a_refusing_peer("relocation-removal-peer");
+    shard.assert_call_database(
+        &first,
+        "debug_queue_package_relocation_release",
+        &[&identity(&shard, &second)],
+    );
+    assert!(
+        poll_until(Duration::from_secs(20), || count(
+            &shard,
+            &first,
+            "game_package_relocation_retry"
+        ) == 1),
+        "the refused relocation release was not scheduled for retry"
+    );
+
+    assert_removal_refused(&shard, &first, &second, "1 Package relocation message(s)");
+
+    remove_once_settled(&shard, &first, &second, "game_package_relocation_retry");
 }
