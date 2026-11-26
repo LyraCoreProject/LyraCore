@@ -863,6 +863,16 @@ A Package Delta written before this revision has no `max_affected_targets`, so i
 cap. Emit the Package again from a Base Snapshot of this revision, or set the field, before you
 apply it.
 
+### Area target from the selected unit migration
+
+No schema changes. The importer now writes vmangos target 37 as `T_TARGET_SUBGROUP` (12), target 45
+as `T_CHAIN_ALLY` (13) and target 61 as `T_TARGET_GROUP_CLASS` (14). Until you reimport `spell`,
+Prayer of Fortitude, Gift of the Wild, Arcane Brilliance, the Greater Blessings, Chain Heal and
+Healing Wave keep `T_TARGET_ALLY` and reach only the selected unit. Reimport `spell` from this
+revision before play resumes. An Operator Content edit now accepts effect targets up to 14. A
+Package Delta emitted from an older Base Snapshot writes these effects with target 2; emit it again
+from a Base Snapshot of this revision.
+
 ### Melee reach migration
 
 The new `game_display_combat_reach` table starts empty after a publish, so every unit keeps the

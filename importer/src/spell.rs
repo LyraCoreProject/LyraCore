@@ -66,8 +66,9 @@ use lyracore_shared::spell::taxonomy::{
     P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
     SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
-    T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CASTER_PET, T_PARTY_AREA, T_RAID_AREA, T_SCRIPTED, T_SELF,
-    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CASTER_PET, T_CHAIN_ALLY, T_PARTY_AREA, T_RAID_AREA,
+    T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY, T_TARGET_GROUP_CLASS,
+    T_TARGET_SUBGROUP,
 };
 
 // AttributesEx1 bits 0x04 and 0x40 both mark a channeled spell.
@@ -449,7 +450,10 @@ fn resolve_target(target: i32, is_negative: bool) -> u8 {
         0 => T_SCRIPTED,
         1 => T_SELF,
         6 => T_TARGET_ENEMY,
-        21 | 35 | 37 | 45 | 57 | 61 => T_TARGET_ALLY,
+        21 | 35 | 57 => T_TARGET_ALLY,
+        37 => T_TARGET_SUBGROUP,
+        45 => T_CHAIN_ALLY,
+        61 => T_TARGET_GROUP_CLASS,
         25 => {
             if is_negative {
                 T_TARGET_ENEMY
@@ -3253,7 +3257,7 @@ mod tests {
         }
         assert_eq!(unit_selection_from_pair(0, 6), 6);
         assert_eq!(unit_selection_from_pair(45, 6), 45);
-        assert_eq!(resolve_target(45, false), T_TARGET_ALLY);
+        assert_eq!(resolve_target(45, false), T_CHAIN_ALLY);
         assert_eq!(unit_selection_from_pair(26, 6), 26);
     }
 
@@ -4871,6 +4875,9 @@ mod tests {
         assert_eq!(resolve_target(20, false), T_PARTY_AREA);
         assert_eq!(resolve_target(34, false), T_PARTY_AREA);
         assert_eq!(resolve_target(56, false), T_RAID_AREA);
+        assert_eq!(resolve_target(37, false), T_TARGET_SUBGROUP);
+        assert_eq!(resolve_target(45, false), T_CHAIN_ALLY);
+        assert_eq!(resolve_target(61, false), T_TARGET_GROUP_CLASS);
         assert_eq!(resolve_target(31, false), T_AREA_ALLY);
         assert_eq!(resolve_target(30, false), T_AREA_NOT_HOSTILE);
         assert_eq!(resolve_target(8, true), T_AREA_ENEMY);

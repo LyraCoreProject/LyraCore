@@ -198,6 +198,10 @@ pub const T_PARTY_AREA: u8 = 9;
 pub const T_RAID_AREA: u8 = 10;
 // Every unit not hostile to the caster: helpful script areas (7, 8) and target 30.
 pub const T_AREA_NOT_HOSTILE: u8 = 11;
+// vmangos SetTargetMap targets 37, 45 and 61, each measured from the selected unit.
+pub const T_TARGET_SUBGROUP: u8 = 12;
+pub const T_CHAIN_ALLY: u8 = 13;
+pub const T_TARGET_GROUP_CLASS: u8 = 14;
 pub const COMBAT_ATTACK_POWER: u8 = 0;
 pub const COMBAT_CRIT: u8 = 1;
 pub const COMBAT_HIT: u8 = 2;

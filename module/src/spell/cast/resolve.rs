@@ -3,7 +3,7 @@ use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
 use super::depth::TriggerLink;
-use super::targeting::{affected_target_cap, CappedPicks};
+use super::targeting::{affected_target_cap, helps_units, CappedPicks};
 use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
@@ -23,7 +23,8 @@ use crate::spell::{
     E_PERSISTENT_AREA, E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE,
     E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME,
     SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_AREA_NOT_HOSTILE,
-    T_CHAIN_ENEMY, T_PARTY_AREA, T_RAID_AREA, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    T_CHAIN_ALLY, T_CHAIN_ENEMY, T_PARTY_AREA, T_RAID_AREA, T_TARGET_ALLY, T_TARGET_ANY,
+    T_TARGET_ENEMY, T_TARGET_GROUP_CLASS, T_TARGET_SUBGROUP,
 };
 use crate::{
     game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
@@ -722,8 +723,7 @@ impl<'a> CastTargets<'a> {
         dest: Option<(f32, f32, f32)>,
     ) -> Vec<u64> {
         let (ctx, caster_guid, spell) = (self.ctx, self.caster_guid, self.spell);
-        let level = spell.header.spell_level;
-        let hits = select_targets(ctx, caster_guid, target_guid, e, dest, level);
+        let hits = select_targets(ctx, caster_guid, target_guid, e, dest, &spell.header);
         let Some(cap) = affected_target_cap(spell.header.max_affected_targets, e) else {
             return hits;
         };
@@ -2071,14 +2071,9 @@ fn check_target_faction(
             && e.kind != E_DUEL
             && matches!(e.target, T_TARGET_ENEMY | T_AREA_ENEMY | T_CHAIN_ENEMY)
     });
-    let hits_ally = effects.iter().any(|e| {
-        e.kind != A_FLAG
-            && e.kind != E_DUEL
-            && matches!(
-                e.target,
-                T_TARGET_ALLY | T_AREA_ALLY | T_AREA_NOT_HOSTILE | T_PARTY_AREA | T_RAID_AREA
-            )
-    });
+    let hits_ally = effects
+        .iter()
+        .any(|e| e.kind != A_FLAG && e.kind != E_DUEL && helps_units(e.target));
     if !(hits_enemy || hits_ally) {
         return Ok(());
     }
@@ -2388,10 +2383,13 @@ fn targets_unit(target: u8) -> bool {
             | T_PARTY_AREA
             | T_RAID_AREA
             | T_AREA_NOT_HOSTILE
+            | T_TARGET_SUBGROUP
+            | T_CHAIN_ALLY
+            | T_TARGET_GROUP_CLASS
     )
 }
 
-const SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT: u32 = 0x4;
+pub(super) const SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT: u32 = 0x4;
 
 fn targeted_los_applies(
     caster_guid: u64,
@@ -3077,6 +3075,9 @@ mod companion_los_tests {
             T_PARTY_AREA,
             T_RAID_AREA,
             T_AREA_NOT_HOSTILE,
+            T_TARGET_SUBGROUP,
+            T_CHAIN_ALLY,
+            T_TARGET_GROUP_CLASS,
         ] {
             assert!(targets_unit(target));
         }

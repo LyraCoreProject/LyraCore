@@ -298,6 +298,41 @@ function = "an_instant_area_spell_with_max_affected_targets_hits_only_that_many_
 rung = "durable_module"
 
 [[tests]]
+path = "module/src/spell/cast/targeting.rs"
+function = "a_healing_chain_jumps_to_the_last_units_group_before_a_more_injured_outsider"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/cast/targeting.rs"
+function = "a_healing_chain_jumps_to_the_most_injured_unit_not_the_nearest"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/cast/targeting.rs"
+function = "a_healing_chain_ranks_each_jump_from_the_unit_it_last_healed"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/cast/targeting.rs"
+function = "a_healing_chain_skips_a_unit_it_may_not_jump_to"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/selected_unit_spell_targets.rs"
+function = "a_subgroup_spell_reaches_the_selected_characters_subgroup_and_pets_near_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/selected_unit_spell_targets.rs"
+function = "a_group_class_spell_reaches_the_selected_characters_class_in_every_subgroup"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/selected_unit_spell_targets.rs"
+function = "a_friendly_chain_jumps_to_the_targets_group_before_a_more_injured_unit"
+rung = "durable_module"
+
+[[tests]]
 path = "module/src/native/aura.rs"
 function = "a_channelled_ground_area_keeps_the_channel_bar_when_its_last_channel_aura_ends"
 rung = "unit"
@@ -570,3 +605,9 @@ description = "A spell hit that a shield absorbs whole puts neither the attacker
 path = "module/src/combat/damage.rs"
 symbol = "deal_damage"
 evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::DealDamage calls SetInCombatWithAggressor and SetInCombatWithVictim in the absorbed branch when ShouldEnterCombat holds. The Module's deal_damage calls enter_combat only for damage that lands."
+
+[[known_gaps]]
+description = "A Subgroup spell (target 37) always reaches its caster when the caster is in the selected Character's Subgroup, and measures the selected Character's pet from that Character when there is no Group. vmangos measures the caster from the selected Character and that pet from the caster."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "party_area_targets"
+evidence = "Source reading, not measured. vmangos Spell.cpp SetTargetMap TARGET_UNIT_FRIEND_AND_PARTY at d9173eca. A unit differs only when it stands farther from one of the two than the spell's radius."

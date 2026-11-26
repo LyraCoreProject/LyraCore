@@ -35,10 +35,10 @@ pub(crate) use cast::{
     apply_direct_heal, apply_effect, apply_item_auras, apply_spell_auras, aura_apply, begin_cast,
     begin_loaded_cast, cast_aura_triggered, cast_triggered, charge_spell_cost,
     check_cast_start_gates, clear_dead_callback_cast_admission, complete_cast,
-    faction_target_violation, place_ground_area, recipe_reagents, record_spell_cooldown,
-    resolve_cast, revive_amount, select_targets, start_creature_spell, start_spell_cooldown,
-    CastRequest, CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode,
-    CreatureSpellTarget, ItemGrantOutcome, LoadedSpell,
+    faction_target_violation, helps_units, place_ground_area, recipe_reagents,
+    record_spell_cooldown, resolve_cast, revive_amount, select_targets, start_creature_spell,
+    start_spell_cooldown, CastRequest, CreatureSpellCasterAdmission, CreatureSpellStart,
+    CreatureSpellStartMode, CreatureSpellTarget, ItemGrantOutcome, LoadedSpell,
 };
 pub(crate) use control::breaks_on_damage;
 #[cfg(test)]
@@ -120,8 +120,9 @@ pub(crate) use lyracore_shared::spell::taxonomy::{
     M_POLY, M_ROOT, M_STUN, P_DISPLAY_ID, P_ENTRY, P_GAMEOBJECT_ENTRY, P_MECHANIC, P_PCT_MAX_POWER,
     P_POWER_TYPE, P_SPEED_KIND, RESIST_ARMOR, SPEED_MOUNTED, SPEED_MOVE, SPEED_SWING,
     SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_DAMAGE, SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT,
-    STAT_AGI, STAT_STR, T_AREA_ALLY, T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CHAIN_ENEMY, T_PARTY_AREA,
-    T_RAID_AREA, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    STAT_AGI, STAT_STR, T_AREA_ALLY, T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CHAIN_ALLY, T_CHAIN_ENEMY,
+    T_PARTY_AREA, T_RAID_AREA, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    T_TARGET_GROUP_CLASS, T_TARGET_SUBGROUP,
 };
 #[cfg(test)]
 pub(crate) use lyracore_shared::spell::taxonomy::{A_MOD_STAT, T_SCRIPTED};
