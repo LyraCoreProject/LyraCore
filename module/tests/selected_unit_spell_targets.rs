@@ -14,6 +14,8 @@ const MAX_HEALTH: u32 = 1_000;
 const SUBGROUP_HEAL: u32 = 5_131_301;
 const GROUP_CLASS_HEAL: u32 = 5_131_302;
 const CHAIN_HEAL: u32 = 5_131_303;
+const RANGED_CHAIN_HEAL: u32 = 5_131_304;
+const CHAIN_HEAL_RANGE_YD: u32 = 40;
 const GROUP: u64 = 13_130;
 const RADIUS_YD: f32 = 5.0;
 const CHARACTER_FACTION: u32 = 13_131;
@@ -77,21 +79,45 @@ fn a_group_class_spell_reaches_the_selected_characters_class_in_every_subgroup()
 fn a_friendly_chain_jumps_to_the_targets_group_before_a_more_injured_unit() {
     let shard = stage("friendly-chain");
     let target = character(&shard, "Target", WARRIOR, 5.0);
-    let mate = character(&shard, "Mate", WARRIOR, 12.0);
+    let mate = character(&shard, "Mate", WARRIOR, 14.0);
     group(&shard, &[(target, 0), (mate, 0)]);
     wound(&shard, mate, 100);
-    let friend = spawn_wolf(&shard, 8.0);
-    wound(&shard, friend, 500);
-    let distant = spawn_wolf(&shard, 40.0);
-    wound(&shard, distant, 500);
+    let injured_most = spawn_wolf(&shard, 1.0);
+    wound(&shard, injured_most, 500);
+    let beyond_mate = spawn_wolf(&shard, 22.0);
+    wound(&shard, beyond_mate, 200);
 
-    let healed = cast_and_watch(&shard, CHAIN_HEAL, target, [target, mate, friend, distant]);
+    let healed = cast_and_watch(
+        &shard,
+        CHAIN_HEAL,
+        target,
+        [target, mate, beyond_mate, injured_most],
+    );
 
     assert_eq!(
         healed,
-        [true, true, false, false],
-        "vmangos ChainHealingOrder: a chain of two jumps to the target's Group before a closer, \
-         more injured unit"
+        [true, true, true, false],
+        "vmangos ChainHealingOrder: the first jump goes to the target's Group mate, not to the \
+         closer, more injured unit; the last jump goes from the mate to the unit 8 yd beyond it, \
+         which the injured unit 13 yd from the mate could not have reached"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_friendly_chain_without_a_radius_jumps_within_the_spells_range_of_the_caster() {
+    let shard = stage("friendly-chain-range");
+    let target = character(&shard, "Target", WARRIOR, 35.0);
+    let beyond_target = spawn_wolf(&shard, 38.0);
+    wound(&shard, beyond_target, 200);
+
+    let healed = cast_and_watch(&shard, RANGED_CHAIN_HEAL, target, [target, beyond_target]);
+
+    assert_eq!(
+        healed,
+        [true, true],
+        "vmangos SetTargetMap: without a radius the jumps come from the spell's 40 yd range plus \
+         10 yd per jump of the caster"
     );
 }
 
@@ -119,9 +145,25 @@ fn stage(name: &str) -> Standalone {
         ],
     );
     set_faction(&shard, CHARACTER, CHARACTER_FACTION);
-    insert_heal(&shard, SUBGROUP_HEAL, T_TARGET_SUBGROUP, 0);
-    insert_heal(&shard, GROUP_CLASS_HEAL, T_TARGET_GROUP_CLASS, 0);
-    insert_heal(&shard, CHAIN_HEAL, T_CHAIN_ALLY, 2);
+    insert_heal(&shard, SUBGROUP_HEAL, T_TARGET_SUBGROUP, 0, RADIUS_YD, 0);
+    insert_heal(
+        &shard,
+        GROUP_CLASS_HEAL,
+        T_TARGET_GROUP_CLASS,
+        0,
+        RADIUS_YD,
+        0,
+    );
+    insert_heal(&shard, CHAIN_HEAL, T_CHAIN_ALLY, 3, RADIUS_YD, 0);
+    // Chain Heal 1064: no radius, a 40 yd range.
+    insert_heal(
+        &shard,
+        RANGED_CHAIN_HEAL,
+        T_CHAIN_ALLY,
+        2,
+        0.0,
+        CHAIN_HEAL_RANGE_YD,
+    );
     shard
 }
 
@@ -259,7 +301,14 @@ fn wound(shard: &Standalone, guid: u64, missing: u32) {
 }
 
 // A zero range skips the range check and the flight.
-fn insert_heal(shard: &Standalone, spell_id: u32, target: u8, chain_targets: u8) {
+fn insert_heal(
+    shard: &Standalone,
+    spell_id: u32,
+    target: u8,
+    chain_targets: u8,
+    radius_yd: f32,
+    range_yd: u32,
+) {
     let name = format!("Selected unit heal fixture {spell_id}");
     shard.insert_row(
         "game_spell",
@@ -267,7 +316,7 @@ fn insert_heal(shard: &Standalone, spell_id: u32, target: u8, chain_targets: u8)
             ("spell_id", &spell_id),
             ("name", &name),
             ("school_mask", &0x02),
-            ("range_yd", &0),
+            ("range_yd", &range_yd),
             ("is_negative", &false),
             ("gcd_ms", &0),
             ("cooldown_ms", &0),
@@ -281,7 +330,7 @@ fn insert_heal(shard: &Standalone, spell_id: u32, target: u8, chain_targets: u8)
             ("kind", &E_HEAL),
             ("target", &target),
             ("base_points", &10),
-            ("radius_yd", &RADIUS_YD),
+            ("radius_yd", &radius_yd),
             ("chain_targets", &chain_targets),
         ],
     );

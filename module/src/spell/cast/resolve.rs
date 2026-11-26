@@ -6,6 +6,7 @@ use super::depth::TriggerLink;
 use super::targeting::{affected_target_cap, helps_units, CappedPicks};
 use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
+use crate::spell::tables::SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT;
 use crate::{game_creature_template, game_world_entity, WorldEntity};
 
 use crate::{game_item_instance, game_item_template, game_spell_reagent};
@@ -2388,8 +2389,6 @@ fn targets_unit(target: u8) -> bool {
             | T_TARGET_GROUP_CLASS
     )
 }
-
-pub(super) const SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT: u32 = 0x4;
 
 fn targeted_los_applies(
     caster_guid: u64,

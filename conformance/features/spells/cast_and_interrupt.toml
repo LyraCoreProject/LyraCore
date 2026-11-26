@@ -333,6 +333,11 @@ function = "a_friendly_chain_jumps_to_the_targets_group_before_a_more_injured_un
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/selected_unit_spell_targets.rs"
+function = "a_friendly_chain_without_a_radius_jumps_within_the_spells_range_of_the_caster"
+rung = "durable_module"
+
+[[tests]]
 path = "module/src/native/aura.rs"
 function = "a_channelled_ground_area_keeps_the_channel_bar_when_its_last_channel_aura_ends"
 rung = "unit"
@@ -607,7 +612,19 @@ symbol = "deal_damage"
 evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::DealDamage calls SetInCombatWithAggressor and SetInCombatWithVictim in the absorbed branch when ShouldEnterCombat holds. The Module's deal_damage calls enter_combat only for damage that lands."
 
 [[known_gaps]]
-description = "A Subgroup spell (target 37) always reaches its caster when the caster is in the selected Character's Subgroup, and measures the selected Character's pet from that Character when there is no Group. vmangos measures the caster from the selected Character and that pet from the caster."
+description = "A Subgroup spell (target 37) always reaches its caster when the caster is in the selected Character's Subgroup, and measures the selected Character's pet from that Character when there is no Group. vmangos measures the caster from the selected Character and that pet from the caster. Any owned selected unit, a totem or a guardian too, stands for its owner; vmangos does that only for a pet."
 path = "module/src/spell/cast/targeting.rs"
 symbol = "party_area_targets"
 evidence = "Source reading, not measured. vmangos Spell.cpp SetTargetMap TARGET_UNIT_FRIEND_AND_PARTY at d9173eca. A unit differs only when it stands farther from one of the two than the spell's radius."
+
+[[known_gaps]]
+description = "A party, raid, Subgroup or Group class spell (targets 9, 10, 12 and 14) reaches a member who duels another Character, and a member whose level gives a lower rank than the cast one. vmangos CheckTarget skips both for a helpful spell: a member in a Duel with someone other than the caster, and, for a Character's untriggered cast without an item, a member other than the selected unit for whom SelectAuraRankForLevel picks another rank."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "party_area_targets"
+evidence = "Source reading, not measured. vmangos Spell.cpp Spell::CheckTarget at d9173eca."
+
+[[known_gaps]]
+description = "A chain jumps to a unit whose center is within 10 yd of the last unit. vmangos IsWithinDist adds both units' bounding radii to the 10 yd, so a chain between large units jumps farther."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "chain_jumps"
+evidence = "Source reading, not measured. vmangos Object.cpp WorldObject::IsWithinDist and Spell.cpp SetTargetMap CHAIN_SPELL_JUMP_RADIUS at d9173eca."

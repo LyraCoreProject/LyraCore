@@ -8,8 +8,8 @@ use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
 use crate::game_item_instance;
 use crate::{game_character, game_creature_template, game_world_entity, WorldEntity};
 
-use super::resolve::SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT;
 use crate::geometry::{distance_3d, projectile_travel_ms};
+use crate::spell::tables::SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT;
 use crate::spell::*;
 
 use crate::skilldata::game_skill_ability;
@@ -378,16 +378,25 @@ fn selected_unit_targets(
                 &caster,
                 &center,
                 false,
-                area_radius(e),
+                selected_unit_radius(e, hdr),
                 hdr.spell_level,
             )
         }
         T_CHAIN_ALLY => friendly_chain_targets(ctx, &caster, &selected, e, hdr),
-        _ => group_class_targets(ctx, &caster, &selected, area_radius(e)),
+        _ => group_class_targets(ctx, &caster, &selected, selected_unit_radius(e, hdr)),
     }
 }
 
-/// vmangos target 37: a pet's owner, else the selected Character or the selected pet's owner.
+/// vmangos `SetTargetMap`: the effect's radius, else the spell's maximum range.
+fn selected_unit_radius(e: &SpellEffect, hdr: &Spell) -> f32 {
+    if e.radius_yd > 0.0 {
+        e.radius_yd
+    } else {
+        hdr.range_yd as f32
+    }
+}
+
+/// vmangos target 37: a pet caster's owner, or a Character caster's selected Character or pet owner.
 fn subgroup_center(
     ctx: &ReducerContext,
     caster: &WorldEntity,
@@ -396,6 +405,9 @@ fn subgroup_center(
     let entities = ctx.db.game_world_entity();
     if caster.owner_guid != 0 {
         return entities.guid().find(caster.owner_guid);
+    }
+    if !caster.is_player() {
+        return None;
     }
     let center = if selected.is_player() {
         selected.guid
@@ -516,15 +528,15 @@ fn friendly_chain_targets(
     if count == 1 {
         return vec![selected.guid];
     }
-    // vmangos gathers jumps within the radius plus 10 yd per jump of the caster, not the target.
-    let reach = e.radius_yd + count as f32 * CHAIN_JUMP_YD;
+    // vmangos gathers jumps within this reach of the caster, not of the target.
+    let reach = selected_unit_radius(e, hdr) + count as f32 * CHAIN_JUMP_YD;
     let link = |unit: &WorldEntity| ChainUnit {
         guid: unit.guid,
         at: (unit.x, unit.y, unit.z),
         group: character_group(ctx, unit),
         missing_health: i64::from(unit.max_health.saturating_sub(unit.health)),
     };
-    let mut injured: Vec<ChainUnit> = crate::helpers::area_candidates(
+    let injured: Vec<ChainUnit> = crate::helpers::area_candidates(
         ctx,
         caster.map_id,
         caster.instance_id,
@@ -543,10 +555,6 @@ fn friendly_chain_targets(
     })
     .map(|c| link(&c))
     .collect();
-    // Missing faction data can make the caster appear unfriendly to itself.
-    if caster.health < caster.max_health && injured.iter().all(|c| c.guid != caster.guid) {
-        injured.push(link(caster));
-    }
     let checks_los = hdr.attributes_ex_2 & SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT == 0;
     let sees = |from: &ChainUnit, to: &ChainUnit| {
         !checks_los || crate::nav::has_los(ctx, caster.map_id, caster.instance_id, from.at, to.at)
@@ -2477,11 +2485,11 @@ mod effect_handler_tests {
     fn a_healing_chain_skips_a_unit_it_may_not_jump_to() {
         let target = injured(1, 0.0, None, 100);
         let hidden = injured(2, 3.0, None, 900);
-        let far = injured(3, 11.0, None, 900);
+        let beyond_every_link = injured(3, 17.0, None, 900);
         let seen = injured(4, 6.0, None, 10);
         let chain = super::chain_jumps(
             target,
-            vec![hidden, far, seen],
+            vec![hidden, beyond_every_link, seen],
             3,
             |_, next| next.guid != hidden.guid,
             super::chain_healing_rank,

@@ -1096,11 +1096,16 @@ The effect targets that select units in an area:
 - `T_CHAIN_ALLY` (13, target 45): the selected unit, then each time the injured friendly unit
   within 10 yd of the last one and in its line of sight that vmangos `ChainHealingOrder` ranks
   first: a member of the last unit's Group before any other unit, the most injured first. The jumps
-  come from units within the radius plus 10 yd per jump of the caster. A jump count of 0 or 1 hits
-  the selected unit alone, as Healing Wave does.
+  come from units near the caster, within the radius plus 10 yd per jump. A jump count of 0 or 1
+  hits the selected unit alone, as Healing Wave does.
 - `T_TARGET_GROUP_CLASS` (14, target 61): the members of the selected Character's whole Group that
   share its class, measured from that Character, that the caster is not hostile to. Without a
   Group, the selected unit alone.
+
+For these three targets the radius is the effect's radius, or the spell's maximum range when the
+effect has none, as vmangos `SetTargetMap`. Chain Heal has no radius, so its jumps come from units
+within 40 + 10 yd per jump of the caster. A Subgroup spell cast by a creature that no unit owns
+reaches nobody.
 
 An area wider than 100 grid cells (a radius above about 225 yd, up to 50,000 yd in the source
 data) reads its map partition through the `by_map` index instead of one lookup per cell.
