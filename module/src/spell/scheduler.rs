@@ -243,6 +243,18 @@ pub(crate) fn do_cancel_aura(
     Ok(())
 }
 
+/// vmangos `ShouldEnterCombat` for a DOT tick: channelled, not on the caster, not a damage shield.
+fn channelled_tick_enters_combat(ctx: &ReducerContext, aura: &Aura, spell: &crate::Spell) -> bool {
+    spell.channelled()
+        && aura.caster_guid != aura.target_guid
+        && !ctx
+            .db
+            .game_spell_effect()
+            .by_spell()
+            .filter(&spell.spell_id)
+            .any(|effect| effect.kind == lyracore_shared::spell::taxonomy::A_DAMAGE_SHIELD)
+}
+
 pub(crate) fn is_due_for_expiry(eff_kind: u8, expires_at: Timestamp, now: Timestamp) -> bool {
     expires_at <= now && eff_kind != A_STEALTH
 }
@@ -329,6 +341,9 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     .copied()
                     .unwrap_or(target.health);
                 let school = spell.as_ref().map_or(0, |s| s.school_mask);
+                let enters_combat = spell
+                    .as_ref()
+                    .is_some_and(|spell| channelled_tick_enters_combat(ctx, a, spell));
                 let points = spell
                     .zip(ctx.db.game_spell_effect().id().find(a.effect_id))
                     .map_or(a.amount, |(hdr, effect)| {
@@ -357,6 +372,10 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 let left = crate::spell::absorb_incoming(ctx, a.target_guid, incoming);
                 let absorbed = incoming - left;
                 let amount = if target.godmode { 0 } else { left };
+                if enters_combat {
+                    crate::combat::enter_combat(ctx, a.caster_guid);
+                    crate::combat::enter_combat(ctx, a.target_guid);
+                }
                 crate::SpellCastEvent::insert(
                     ctx,
                     SpellCastEvent {

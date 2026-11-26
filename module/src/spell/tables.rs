@@ -176,7 +176,7 @@ impl Spell {
         lyracore_shared::spell_custom::is_negative(self.custom_flags, self.is_negative)
     }
 
-    fn channelled(&self) -> bool {
+    pub(crate) fn channelled(&self) -> bool {
         self.cast_flags & super::CAST_FLAG_CHANNELED != 0
     }
 

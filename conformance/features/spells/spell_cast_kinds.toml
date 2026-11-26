@@ -543,6 +543,21 @@ function = "a_periodic_tick_a_shield_takes_whole_breaks_auras_as_an_absorbed_hit
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_channelled_periodic_tick_a_shield_takes_whole_puts_both_units_in_combat"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_channelled_periodic_tick_that_lands_puts_both_units_in_combat"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_periodic_tick_of_a_spell_that_is_not_channelled_puts_neither_unit_in_combat"
+rung = "durable_module"
+
+[[tests]]
 path = "module/tests/school_immunity.rs"
 function = "a_harmful_spell_without_damage_is_refused_by_a_creature_immune_to_its_school"
 rung = "durable_module"

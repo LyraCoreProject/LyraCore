@@ -4,8 +4,11 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_shared::constants::unit_flags::IN_COMBAT;
 use lyracore_shared::guid;
+use lyracore_shared::spell::taxonomy::CAST_FLAG_CHANNELED;
 use lyracore_shared::spell::taxonomy::{A_ABSORB, A_PERIODIC_DAMAGE};
+use lyracore_shared::spell_custom::CHAN_NO_DIST_LIMIT;
 use support::{event_rows, number, poll_until, Row, Standalone, POLL_TIMEOUT};
 
 const CHARACTER: u64 = 1;
@@ -151,6 +154,76 @@ fn a_periodic_tick_a_shield_takes_whole_breaks_auras_as_an_absorbed_hit_does() {
         "vmangos checkProcFlags keeps an Aura whose spell has proc flags"
     );
     assert_eq!(health(&standalone, CHARACTER), 10_000);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_channelled_periodic_tick_a_shield_takes_whole_puts_both_units_in_combat() {
+    let standalone = stage_shielded_character("periodic-channel-absorbed", 10_000, 100, 30, 1);
+    stage_dot_spell(&standalone, CAST_FLAG_CHANNELED);
+    assert!(!in_combat(&standalone, CHARACTER) && !in_combat(&standalone, WOLF));
+
+    let tick = tick_once(&standalone);
+
+    assert_eq!(number::<u32>(&tick, "absorbed"), 30);
+    assert_eq!(number::<u32>(&tick, "damage"), 0);
+    assert!(in_combat(&standalone, CHARACTER));
+    assert!(in_combat(&standalone, WOLF));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_channelled_periodic_tick_that_lands_puts_both_units_in_combat() {
+    let standalone = stage_shielded_character("periodic-channel-landed", 10_000, 0, 30, 1);
+    stage_dot_spell(&standalone, CAST_FLAG_CHANNELED);
+
+    let tick = tick_once(&standalone);
+
+    assert_eq!(number::<u32>(&tick, "damage"), 30);
+    assert!(in_combat(&standalone, CHARACTER));
+    assert!(in_combat(&standalone, WOLF));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_periodic_tick_of_a_spell_that_is_not_channelled_puts_neither_unit_in_combat() {
+    let standalone = stage_shielded_character("periodic-plain-no-combat", 10_000, 0, 30, 1);
+    stage_dot_spell(&standalone, 0);
+
+    let tick = tick_once(&standalone);
+
+    assert_eq!(number::<u32>(&tick, "damage"), 30);
+    assert!(!in_combat(&standalone, CHARACTER));
+    assert!(!in_combat(&standalone, WOLF));
+}
+
+/// Gives the DOT a Spell row with `cast_flags`, and puts caster and target on one map.
+fn stage_dot_spell(standalone: &Standalone, cast_flags: u32) {
+    standalone.insert_rows(
+        "game_spell",
+        &[&[
+            ("spell_id", &DOT),
+            ("name", &"Periodic combat fixture"),
+            ("cast_flags", &cast_flags),
+            ("custom_flags", &CHAN_NO_DIST_LIMIT),
+        ]],
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET simulation_indexed = false, map_id = 0, instance_id = 0 \
+         WHERE guid = {WOLF}"
+    ));
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET map_id = 0, instance_id = 0 WHERE guid = {CHARACTER}"
+    ));
+}
+
+fn in_combat(standalone: &Standalone, guid: u64) -> bool {
+    let flags: u32 = standalone.query_rows(&format!(
+        "SELECT unit_flags FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["unit_flags"]
+        .parse()
+        .unwrap();
+    flags & IN_COMBAT != 0
 }
 
 /// A Character at `health` of 10,000 behind a `shield` point absorb, under `debuffs` wolf Auras;
