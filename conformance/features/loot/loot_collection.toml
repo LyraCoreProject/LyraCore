@@ -28,3 +28,9 @@ description = "Stock-client use of CMSG_STORE_LOOT_IN_SLOT is unverified; vmango
 path = "module/src/native/mod.rs"
 symbol = "receive"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[[known_gaps]]
+description = "A confuse, flee or charm does not close a Character's Loot Window. vmangos closes it from Unit::ModConfuseSpell and the possess and charm Aura handlers; the Module has no confuse, flee or charm mechanic to hook. A stun and a fear close it."
+path = "module/src/spell/tables.rs"
+symbol = "stuns_or_fears"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp"

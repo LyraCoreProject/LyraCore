@@ -18,6 +18,7 @@ tests = [
     { path = "module/tests/conformance/item_loot.rs", function = "a_teleport_releases_an_emptied_chest_left_open", rung = "durable_module" },
     { path = "module/tests/conformance/item_loot.rs", function = "a_disconnect_releases_an_emptied_chest_left_open", rung = "durable_module" },
     { path = "module/tests/conformance/item_loot.rs", function = "a_character_that_dies_with_an_emptied_chest_open_releases_it", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "a_stun_on_a_character_with_an_emptied_chest_open_releases_it", rung = "durable_module" },
     { path = "module/tests/conformance/item_loot.rs", function = "a_looted_chest_without_a_respawn_time_disappears_for_good", rung = "durable_module" },
     { path = "module/tests/conformance/item_loot.rs", function = "a_chest_emptied_for_its_releaser_stays_while_an_earlier_opener_needs_its_quest_item", rung = "durable_module" },
     { path = "module/tests/conformance/item_loot.rs", function = "a_character_with_nothing_to_take_does_not_despawn_a_chest_shown_open_with_a_quest_item", rung = "durable_module" },
