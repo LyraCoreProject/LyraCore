@@ -443,7 +443,14 @@ chk "L10-20 quests (Westfall quest_level band)" "$FLOOR_QUESTS_L10_20" "$(q_list
 chk "chained quests (next_quest_id>0) [V]" "$FLOOR_QUESTS_CHAINED" "$(q_list "SELECT next_quest_id FROM game_quest_template" | awk '$1>0' | wc -l)"
 echo "  ..  timed quests (limit_time>0) [V]: $(q_list "SELECT limit_time FROM game_quest_template" | awk '$1>0' | wc -l)"
 sql_check_abort   # No chk follows this query to check the abort flag.
-chk "live creature entities"           "$FLOOR_LIVE_CREATURES" "$(n "SELECT guid FROM game_world_entity WHERE entry>0 AND owner_guid=0" '[0-9]{6,}')"
+# Creatures tied to a Game Event come and go with the calendar, so the floor counts only the others.
+unlinked_live_creatures() {
+  local live linked
+  live="$(q_list "SELECT guid FROM game_world_entity WHERE entry>0 AND owner_guid=0" | sort -u)"
+  linked="$(q_list "SELECT spawn_guid FROM game_event_link" | sort -u)"
+  comm -23 <(printf '%s\n' "$live" | sed '/^$/d') <(printf '%s\n' "$linked" | sed '/^$/d') | wc -l
+}
+chk "live creature entities not tied to a Game Event" "$FLOOR_LIVE_CREATURES" "$(unlinked_live_creatures)"
 chk "vendors (npc_vendor)"              "$FLOOR_VENDORS" "$(n "SELECT item_entry FROM game_npc_vendor")"
 echo "[world] service coverage (flagged NPCs that actually provide their service):"
 if ! command -v python3 >/dev/null 2>&1; then

@@ -19,6 +19,9 @@ pub struct GoCollider {
 
 pub(crate) fn register(ctx: &ReducerContext, go: &GameObject) {
     remove(ctx, go.guid);
+    if go.despawned {
+        return;
+    }
     let Some(template) = ctx
         .db
         .game_gameobject_template()

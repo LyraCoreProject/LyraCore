@@ -14,6 +14,9 @@ pub(crate) struct PopulationPlan {
     pub(crate) conditional_spawns: usize,
     pub(crate) event_spawns: usize,
     pub(crate) unsupported_pools: Vec<u64>,
+    /// `(spawn guid, signed vmangos event)` of each retained spawn; every member of a top-level
+    /// pool carries the pool's event from `pool_event`.
+    pub(crate) event_links: Vec<(u64, i32)>,
 }
 
 impl PopulationPlan {
@@ -144,6 +147,15 @@ pub(crate) fn pool_parents(
     Ok(parents)
 }
 
+/// The event that gates a whole top-level pool: vmangos `GameEventMgr::LoadFromDB` takes the
+/// first positive event it reads among the pool's members, here the lowest guid's lowest event.
+/// A member's other positive events then do not apply.
+fn pool_event(members: &BTreeMap<u64, u32>, events: &BTreeMap<u64, BTreeSet<i32>>) -> Option<i32> {
+    members
+        .keys()
+        .find_map(|guid| events.get(guid)?.iter().copied().find(|&event| event > 0))
+}
+
 fn add_pools(
     dump: &(impl crate::dump::TableRows + ?Sized),
     groups: &mut BTreeMap<u64, Group>,
@@ -263,13 +275,7 @@ fn add_pools(
         {
             bail!("creature pool {root}: explicit chances must sum to 100 percent");
         }
-        let positive_events: BTreeSet<i32> = members
-            .keys()
-            .filter_map(|guid| events.get(guid))
-            .flatten()
-            .copied()
-            .filter(|event| *event > 0)
-            .collect();
+        let pool_event = pool_event(&members, events);
         let population_id = (2_u64 << 32) + root;
         if groups
             .insert(
@@ -291,7 +297,11 @@ fn add_pools(
             if memberships.insert(guid, (population_id, chance)).is_some() {
                 bail!("creature {guid} belongs to both a spawn group and a pool");
             }
-            events.entry(guid).or_default().extend(&positive_events);
+            if let Some(event) = pool_event {
+                let linked = events.entry(guid).or_default();
+                linked.retain(|&event| event < 0);
+                linked.insert(event);
+            }
         }
     }
     Ok(unsupported)
@@ -351,6 +361,7 @@ pub(crate) fn collect(
         conditional_spawns: 0,
         event_spawns: 0,
         unsupported_pools,
+        event_links: Vec::new(),
     };
     let mut used_groups = BTreeSet::new();
     let mut seen_guids = BTreeSet::new();
@@ -431,7 +442,13 @@ pub(crate) fn collect(
         plan.conditional_spawns += usize::from(conditional);
         let event_ids = events.get(&guid);
         plan.event_spawns += usize::from(event_ids.is_some_and(|ids| ids.iter().any(|id| *id > 0)));
-        if member.is_none() && direct_choices.is_none() && event_ids.is_none() {
+        plan.event_links.extend(
+            event_ids
+                .into_iter()
+                .flatten()
+                .map(|&event| (world_guid(entry, guid), event)),
+        );
+        if member.is_none() && direct_choices.is_none() {
             continue;
         }
         let (population_id, chance) = member.copied().unwrap_or(((1_u64 << 32) + guid, 0));
@@ -445,14 +462,10 @@ pub(crate) fn collect(
                     .join(",")
             })
             .unwrap_or_default();
-        let event_ids = event_ids
-            .map(|ids| ids.iter().map(i32::to_string).collect::<Vec<_>>().join(","))
-            .unwrap_or_default();
         plan.membership_rows.push(format!(
-            "({},{population_id},{raw_entry},{},{chance},{})",
+            "({},{population_id},{raw_entry},{},{chance},'')",
             world_guid(entry, guid),
             sql_str(&choices),
-            sql_str(&event_ids)
         ));
     }
     for id in used_groups {
@@ -520,10 +533,11 @@ mod tests {
         assert_eq!(
             plan.membership_rows,
             [format!(
-                "({},4294967297,10,'10,20',0,'-4')",
+                "({},4294967297,10,'10,20',0,'')",
                 world_guid(10, 1)
             )]
         );
+        assert_eq!(plan.event_links, [(world_guid(10, 1), -4)]);
     }
 
     #[test]
@@ -540,13 +554,26 @@ mod tests {
                 expected
             );
             assert_eq!(plan.referenced_entries, expected.into_iter().collect());
-            let members = if slots.starts_with("10") {
-                vec![format!("({},4294967297,10,'',0,'-4')", world_guid(10, 1))]
+            let links = if slots.starts_with("10") {
+                vec![(world_guid(10, 1), -4)]
             } else {
                 vec![]
             };
-            assert_eq!(plan.membership_rows, members);
+            assert!(plan.membership_rows.is_empty());
+            assert_eq!(plan.event_links, links);
         }
+    }
+
+    #[test]
+    fn a_pool_takes_the_first_positive_event_of_its_lowest_member() {
+        let members = BTreeMap::from([(3, 0), (5, 0), (8, 0)]);
+        let events = BTreeMap::from([
+            (3, BTreeSet::from([-2])),
+            (5, BTreeSet::from([12, 4])),
+            (8, BTreeSet::from([1])),
+        ]);
+        assert_eq!(pool_event(&members, &events), Some(4));
+        assert_eq!(pool_event(&BTreeMap::from([(3, 0)]), &events), None);
     }
 
     #[test]

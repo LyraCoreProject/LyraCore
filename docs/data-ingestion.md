@@ -110,9 +110,9 @@ client row refuses the whole Map catalogue before any rows are replaced. Player 
 yet control gameplay. Other tables never mix vmangos and client columns.
 
 The `creatures` and `casts` vmangos families use selected creature templates, spawn ranges,
-entry choices, paths and spell lists. The creature plan preserves signed event membership and
-pool limits. Nested pools that the current population model cannot express stay inactive and
-appear in the Compatibility Manifest. Game-event schedules and formations remain unsupported.
+entry choices, paths and spell lists. The creature plan preserves pool limits. Nested pools that
+the current population model cannot express stay inactive and appear in the Compatibility Manifest.
+Formations remain unsupported; the `events` family below ties spawns to Game Events.
 Spawn choices use the consecutive nonzero slots in `id` through `id5`, stopping at the first zero,
 as `ChooseCreatureId` does in [Creature.cpp at 4641790](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Objects/Creature.cpp#L63-L76).
 A zero `id` skips the spawn and records `creatures.spawn-entry-zero`.
@@ -178,9 +178,21 @@ The gameobjects import selects template patches and spawn ranges, skips disabled
 translates source READY/ACTIVE states to the Module's closed/open states. A source ACTIVE chest
 starts lootable because vmangos tracks its loot state separately from its animation state. Native packets convert
 these back to the client's numbering. The authored gather entries (`GATHER_NODES` in
-`importer/src/world_import.rs`) retain their skill and item rules; real type-25 fishing holes remain unsupported. Game-event schedules, pool selection,
-remaining spawn flags, animation, visibility, respawn ranges and script names appear in the
-Compatibility Manifest. The import retains those placements at current parity.
+`importer/src/world_import.rs`) retain their skill and item rules; real type-25 fishing holes remain unsupported. Remaining spawn flags, animation, visibility,
+respawn ranges and script names appear in the Compatibility Manifest. The import retains those
+placements at current parity.
+
+The `events` family reads `game_event`, `game_event_creature` and `game_event_gameobject` after
+patch selection, as `GameEventMgr::LoadFromDB` does. Source times are read on the Realm Clock, in
+UTC, and the zero date as 0. It links each spawn the creatures and gameobjects families keep, and
+drops a link whose spawn they leave out. A top-level pool takes the first positive event among its
+members, the lowest guid's lowest event: every creature pool member carries it instead of its own
+positive events, and a GameObject pool rolls only while it runs. A negative event on a pooled
+GameObject placement is counted as `events.pooled-absence` and not linked. An event the selection
+leaves out gets a disabled row, as vmangos disables it, so its spawns stay hidden. Scripted events
+(vmangos `hardcoded`) appear in the Compatibility Manifest as `events.scripted`. A `creatures` or
+`gameobjects` import writes the `events` family with it. The Module rules are in
+[Game events](schema.md#game-events).
 
 Transports use selected build rows and template versions with the client's TaxiPath and
 TaxiPathNode tables. `--go-models <client/Data> --dump <sqlite>` resolves door and
@@ -348,13 +360,14 @@ map fails the run. For
 in the profile's supported map list. Importing their rows does not make them ready for player entry.
 
 All authored creature positions are retained, including nonselectable creatures and population
-alternatives. Population metadata retains entry choices, count limits, chances and event links.
+alternatives. Population metadata retains entry choices, count limits and chances; Game Event Links
+come from the `events` family.
 Creature pools retain supported count limits and chances. Nested or mixed memberships the Module
 cannot express stay inactive with Compatibility Manifest findings.
 The Module selects an initial population from that metadata. Selections last until reimport or
-Instance teardown; source pool rotation after deaths is not yet implemented. Positive game-event
-members and groups with world-state conditions remain dormant until an event system can evaluate
-them. Negative event members use the inactive-event state. Conditional squad positions with no
+Instance teardown; source pool rotation after deaths is not yet implemented. Groups with
+world-state conditions remain dormant. A member's spawn shows or hides with its Game Events, see
+[Game events](schema.md#game-events). Conditional squad positions with no
 SQL entry choices remain inspectable source rows with entry zero and never become live entities.
 
 Dungeon, raid and battleground source rows stay dormant in Instance zero. Creating a dungeon or

@@ -16,6 +16,8 @@ const ROLL_BATCH_OBJECTS: u64 = 250;
 
 pub(super) struct GameobjectPools {
     owned: HashSet<u32>,
+    // The top-level pool of each owned placement whose pool spawns.
+    roots: BTreeMap<u32, u64>,
     pool_rows: Vec<String>,
     member_rows: Vec<String>,
     link_rows: Vec<String>,
@@ -27,6 +29,11 @@ impl GameobjectPools {
     /// Whether a pool owns the placement, so it is no static spawn.
     pub(super) fn owns(&self, db_guid: u32) -> bool {
         self.owned.contains(&db_guid)
+    }
+
+    /// The top-level pool that rolls an owned placement; `None` when its pool never spawns.
+    pub(super) fn root_of(&self, db_guid: u32) -> Option<u64> {
+        self.roots.get(&db_guid).copied()
     }
 
     pub(super) fn push_statements(&self, stmts: &mut Vec<String>) {
@@ -286,8 +293,13 @@ pub(super) fn collect(
         member_rows.len(),
         roll_batches.len()
     );
+    let roots = membership
+        .iter()
+        .filter_map(|(&guid, &(pool, _))| root_of.get(&pool).map(|&root| (guid, root)))
+        .collect();
     Ok(GameobjectPools {
         owned: membership.keys().copied().collect(),
+        roots,
         pool_rows,
         member_rows,
         link_rows,

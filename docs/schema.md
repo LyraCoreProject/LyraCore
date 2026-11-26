@@ -219,7 +219,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | Loot | `loot/*` |
 | Group, Meeting Stones and Guild | `group.rs`, `meeting_stone/mod.rs`, `guild/*` |
 | Instance and encounter | `instance.rs`, `encounter.rs` |
-| Taxi, Transport and weather | `taxi.rs`, `transport/mod.rs`, `weather.rs` |
+| Taxi, Transport, weather and Game Events | `taxi.rs`, `transport/mod.rs`, `weather.rs`, `game_events.rs` |
 | Packages | `package_account.rs`, `package_config.rs`, `package_import.rs`, `package_teardown.rs`, `script_binding.rs` |
 | Event GC | `gc.rs` |
 | Config, static data and diagnostics | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `import_meta.rs`, `debug/*` |
@@ -966,6 +966,53 @@ pool rolling again when no other is free. The replacement's object is despawned 
 own respawn delay passes. A pooled chest in an Instance, or one without a respawn time, despawns in
 place like any chest.
 
+### Game events
+
+`module/src/game_events.rs` runs vmangos Game Events for spawns, as `GameEventMgr` does.
+`game_event` holds each event's calendar: `start_secs` and `end_secs` on the Realm Clock, and every
+`occurrence_mins` the event runs for `length_mins`. `scripted` marks a vmangos `hardcoded` event,
+whose script is absent, and `disabled` an event vmangos disables or leaves out of patch 1.12.
+`game_event_link` holds a Game Event Link: a creature spawn's source guid or a world GameObject's
+guid, its event, and `while_inactive` for a negative vmangos id. `game_event_pool` names a top-level
+GameObject pool that rolls only while its event runs. No Package claims or reads these tables, so
+they stay out of the table catalogue.
+
+An event is running while the Realm Clock is inside its start and end and within its length of the
+latest occurrence. A yearly event shorter than a year skips each 29 February since its start, so it
+comes back on its calendar date; see the deliberate deviations in
+`conformance/features/world/game_events.toml`. A scripted event stays stopped. A disabled or
+zero-length event, and one no row defines, is unscheduled: neither its spawns nor its absence
+spawns show. An Operator's `debug_event_start` or `debug_event_stop` holds on one Shard until
+`debug_event_clear` hands the event back to its calendar.
+
+A spawn shows when, of its links, one plain link's event runs (if it has any) and every
+`while_inactive` link's event is stopped. A spawn without links always shows.
+
+`tick_game_events` runs once a minute. For each event whose state differs from its
+`game_event_status` row, it sets that row to the new state and starts again from the first link,
+so a state change part way through takes back what the old state already did. It then walks the
+event's links, then its pools, in id order from the row's cursors, and brings each spawn to the
+state through the normal paths. A hidden creature spawn leaves through `despawn_creature_entity`
+with both timers off, together with its population and Instance copies. A shown one whose respawn
+is off respawns on the next creature pass, unless its population leaves it out or a population copy
+stands in for it. A hidden GameObject is despawned with no respawn time and shows again in its own
+state, a chest or gather node unused. A pass makes at most 500 changes; each pending event gets an
+equal share first and the rest goes to them in entry order, so one large event holds no other
+back. The cursors keep the place for the next pass. The Operator verbs run the same pass at once.
+
+Every path that brings a spawn up asks the same question: the creature respawn pass, the GameObject
+respawn timer, import and Package insert claims, pool rolls (`arm_pools`, `arm_all_pools` and an
+Instance's rolls), Instance creation and the post-publish chest stamp. A new Instance copies a
+creature hidden with its respawn off and leaves out a hidden GameObject; a running Instance's
+creature copies follow their source, its GameObject copies keep what they had at creation. A
+despawned door or button has no collider.
+
+Before the `events` family is imported no link exists, and a creature population member's
+`event_ids` keep a member with a positive event out of its population's selection, as they did
+before Game Events. Once links exist, the first selection of a population whose member still holds
+a positive `event_ids` is dropped and those ids are cleared, so the population rolls again under the
+links.
+
 ### Global cooldowns (`module/src/spell/tables.rs`)
 
 `game_spell.gcd_ms` and `gcd_category` are the source `StartRecoveryTime` and
@@ -1178,6 +1225,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_gateway_lease_reaper_schedule` | `reap_gateway_leases` | 15 s; closes expired Account Claims | `gw.rs` |
 | `game_native_logon_reaper` | `native_reap_logon_addresses` | 60 s, armed by a logon connection | `native/logon.rs` |
 | `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs` |
+| `game_event_schedule` | `tick_game_events` | 60 s | `game_events.rs` |
 | `game_session_reaper_schedule` | `reap_sessions` | 5 min, armed by `establish_session` | `auth.rs` |
 | `game_weather_schedule` | `tick_weather` | 10 min | `weather.rs` |
 | `game_pending_cast` | `fire_pending_cast` | one-shot at cast completion | `spell/tables.rs` |

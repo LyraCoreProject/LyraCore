@@ -30,6 +30,12 @@ pub(crate) fn timer_never(ctx: &ReducerContext) -> Timestamp {
         .unwrap_or(now(ctx))
 }
 
+/// Whether `at` is a due time `timer_never` set, so its timer is off.
+pub(crate) fn is_never(ctx: &ReducerContext, at: Timestamp) -> bool {
+    at.to_micros_since_unix_epoch() - now(ctx).to_micros_since_unix_epoch()
+        > i64::from(u32::MAX / 2) * 1_000_000
+}
+
 /// Keeps a scheduled table declared in the same file off the conformance virtual clock.
 /// `module/build.rs` registers every other scheduled table with it. An exempt table schedules
 /// from the host clock (`ctx.timestamp`), not through `schedule_time` or `schedule_interval`.

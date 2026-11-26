@@ -76,12 +76,6 @@ symbol = "collect_gameobject_spawns"
 evidence = "Compatibility Manifest gameobjects.fishinghole; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
-description = "gameobjects.game-event full-world 12102, alliance-single 4844: Event schedules do not control these placements."
-path = "importer/src/world_import.rs"
-symbol = "collect_gameobject_spawns"
-evidence = "Compatibility Manifest gameobjects.game-event; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
 description = "gameobjects.gather-loot full-world 8, alliance-single 8: Authored gather nodes keep their fixed primary item."
 path = "importer/src/world_import.rs"
 symbol = "collect_gameobject_spawns"

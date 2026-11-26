@@ -22,9 +22,36 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
+/// Days since 1970-01-01 of a proleptic Gregorian date; Howard Hinnant days_from_civil.
+pub fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let march_year = if month <= 2 { year - 1 } else { year };
+    let era = march_year.div_euclid(400);
+    let year_of_era = march_year - era * 400;
+    let march_month = i64::from(if month > 2 { month - 3 } else { month + 9 });
+    let day_of_march_year = (153 * march_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_march_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn known_dates_convert_to_their_day_counts() {
+        for (date, expected) in [
+            ((1970, 1, 1), 0),
+            ((1970, 3, 1), 59),
+            ((2000, 2, 29), 11_016),
+            ((1900, 2, 28), -25_509),
+            ((1900, 3, 1), -25_508),
+            ((1969, 12, 31), -1),
+            ((2026, 1, 1), 20_454),
+        ] {
+            let (year, month, day) = date;
+            assert_eq!(days_from_civil(year, month, day), expected, "{date:?}");
+        }
+    }
 
     #[test]
     fn known_dates_convert_from_their_day_counts() {

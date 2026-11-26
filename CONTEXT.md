@@ -25,7 +25,7 @@ entry in both files.
 
 **F** [Fake](CORE_TERMS.md#fake) · [Feature Ledger](#conformance) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture Verb](#conformance) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Follow-up Cast](#procs) · [Forced Death](#creature-ai) · [Form](#forms) · [Form Projection](#forms) · [Form Set](#forms) · [Fuel Budget](#runtime-scripts)
 
-**G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Golden Trace](#conformance) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [Guardian](#creature-ai) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
+**G** [Game Event](#world-clock-and-weather) · [Game Event Link](#world-clock-and-weather) · [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Golden Trace](#conformance) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [Guardian](#creature-ai) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
 
 **H** [Handoff](#requests-and-delivery) · [Headless Client](CORE_TERMS.md#headless-client) · [Hold](#retired-terms) · [Host Operation](#runtime-scripts)
 
@@ -1135,6 +1135,20 @@ The wall clock the Realm runs on, always UTC. No part of the Realm reads host-lo
 sends it to the client at world entry, answers time queries from it, and picks the weather season
 from it.
 _Avoid_: server time, game time, local time
+
+**Game Event**:
+A world occurrence from vmangos `game_event`, such as a holiday, the night or a fishing contest,
+with a calendar on the Realm Clock: a start, an end, and a length that repeats at a fixed interval.
+While it runs, the spawns tied to it show and the spawns tied to its absence hide. One that vmangos
+scripts stays stopped without its script, and one it disables neither runs nor stops; an Operator
+can still start or stop either.
+_Avoid_: holiday (one kind of Game Event), world event, seasonal event
+
+**Game Event Link**:
+The tie between a creature spawn or world GameObject and a Game Event, from vmangos
+`game_event_creature` and `game_event_gameobject`. A negative vmangos event id is a link that shows
+the spawn while the event is stopped. A link on a pooled placement ties its whole top-level pool.
+_Avoid_: event spawn, event id sign
 
 **Zone Weather**:
 One durable row per zone holding the sky that zone shows now. World entry reads it and a live Relay

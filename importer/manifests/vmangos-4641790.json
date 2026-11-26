@@ -1146,6 +1146,27 @@
       },
       "locked_rows": 4084
     },
+    "game_event": {
+      "columns": {
+        "integer": [
+          "disabled",
+          "entry",
+          "hardcoded",
+          "length",
+          "occurence",
+          "patch_max",
+          "patch_min"
+        ],
+        "numeric": [
+          "end_time",
+          "start_time"
+        ],
+        "text": [
+          "description"
+        ]
+      },
+      "locked_rows": 94
+    },
     "game_event_creature": {
       "columns": {
         "integer": [

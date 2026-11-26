@@ -625,21 +625,12 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
                 finding(&mut findings, "creatures.spawn-distance", guid);
             }
         }
-        for (table, code) in [
-            ("creature_groups", "creatures.formation"),
-            ("game_event_creature", "creatures.game-event"),
-        ] {
-            for row in dump.rows(table)?.iter() {
-                finding(
-                    &mut findings,
-                    code,
-                    row.number::<u64>(if table == "creature_groups" {
-                        "member_guid"
-                    } else {
-                        "guid"
-                    })?,
-                );
-            }
+        for row in dump.rows("creature_groups")?.iter() {
+            finding(
+                &mut findings,
+                "creatures.formation",
+                row.number::<u64>("member_guid")?,
+            );
         }
         for table in [
             "pool_template",
