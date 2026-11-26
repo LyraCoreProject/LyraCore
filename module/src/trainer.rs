@@ -169,6 +169,18 @@ fn learn_kind(kind: u8, target: u8) -> u8 {
     }
 }
 
+fn teaches_the_pet(effect: &crate::SpellEffect) -> bool {
+    lyracore_shared::trainer::teaches_pet(effect.kind, effect.target) && effect.trigger_spell != 0
+}
+
+fn is_pet_learn_wrapper(ctx: &ReducerContext, spell_id: u32) -> bool {
+    ctx.db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .any(|effect| teaches_the_pet(&effect))
+}
+
 fn learn_target_trigger(effect: &crate::SpellEffect) -> Option<u32> {
     lyracore_shared::trainer::learn_target_trigger(
         learn_kind(effect.kind, effect.target),
@@ -347,7 +359,7 @@ fn admit_profile_spell(
     trigger_effects.truncate(PROFILE_WRAPPER_EFFECT_LIMIT);
     let mut wrappers: Vec<_> = trigger_effects
         .iter()
-        .filter(|effect| learn_target_trigger(effect) == Some(spell_id))
+        .filter(|effect| learn_target_trigger(effect) == Some(spell_id) && !teaches_the_pet(effect))
         .map(|effect| effect.spell_id)
         .filter(|wrapper| *wrapper != spell_id)
         .collect();
@@ -564,6 +576,14 @@ pub(crate) fn apply_trainer_buy(
             }
         };
         return Err(refused(refusal, &detail));
+    }
+    // vmangos casts a pet-learn wrapper from the trainer NPC, which has no pet, so the cast fails
+    // with SPELL_FAILED_NO_PET and the buy takes no money. Only an old-format row escapes this.
+    if is_pet_learn_wrapper(ctx, spell_id) {
+        return Err(refused(
+            TrainerRefusal::Unavailable,
+            "a trainer cannot teach a pet skill",
+        ));
     }
     caster.money = caster.money.saturating_sub(offered.cost);
     let owner = caster.owner_identity;

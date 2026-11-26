@@ -112,11 +112,16 @@ pub struct LearnEffect {
     pub trigger_spell: u32,
 }
 
+// Spell effect 36 aimed at the caster's pet imports as E_SCRIPTED with target T_CASTER_PET.
+pub fn teaches_pet(kind: u8, target: u8) -> bool {
+    use crate::spell::taxonomy::{E_SCRIPTED, T_CASTER_PET};
+    kind == E_SCRIPTED && target == T_CASTER_PET
+}
+
 // vmangos trainers resolve every wrapper, a pet-learn one included, to effect 0's trigger spell.
 pub fn learn_kind(kind: u8, target: u8) -> u8 {
-    use crate::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED, T_CASTER_PET};
-    if kind == E_SCRIPTED && target == T_CASTER_PET {
-        E_LEARN_SPELL
+    if teaches_pet(kind, target) {
+        crate::spell::taxonomy::E_LEARN_SPELL
     } else {
         kind
     }
