@@ -9,7 +9,7 @@ use crate::game_item_instance;
 use crate::{game_character, game_creature_template, game_world_entity, WorldEntity};
 
 use crate::geometry::{distance_3d, projectile_travel_ms};
-use crate::spell::tables::SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT;
+use crate::spell::tables::{SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT, SPELL_ATTR_EX3_ONLY_ON_PLAYER};
 use crate::spell::*;
 
 use crate::skilldata::game_skill_ability;
@@ -282,7 +282,11 @@ pub(crate) fn select_targets(
                     anchor.z,
                 )
             };
-            let radius = area_radius(e);
+            let radius = if e.target == T_CHAIN_ENEMY {
+                enemy_chain_reach(e, hdr)
+            } else {
+                area_radius(e)
+            };
             let r2 = radius * radius;
             let want_enemy = matches!(e.target, T_AREA_ENEMY | T_CHAIN_ENEMY);
 
@@ -317,18 +321,7 @@ pub(crate) fn select_targets(
                 else {
                     return Vec::new();
                 };
-                let first = ChainUnit::at(first.guid, (first.x, first.y, first.z));
-                let units = units
-                    .iter()
-                    .map(|c| ChainUnit::at(c.guid, (c.x, c.y, c.z)))
-                    .collect();
-                return chain_jumps(
-                    first,
-                    units,
-                    chain_length(e.chain_targets),
-                    |_, _| true,
-                    chain_distance_sq,
-                );
+                return enemy_chain_targets(ctx, &caster, &first, &units, e, hdr);
             }
             let mut hits: Vec<u64> = units.iter().map(|c| c.guid).collect();
             // Missing faction data can make the caster appear unfriendly to itself.
@@ -536,6 +529,7 @@ fn friendly_chain_targets(
         at: (unit.x, unit.y, unit.z),
         group: character_group(ctx, unit),
         missing_health: i64::from(unit.max_health.saturating_sub(unit.health)),
+        player: unit.is_player(),
     };
     let injured: Vec<ChainUnit> = crate::helpers::area_candidates(
         ctx,
@@ -563,6 +557,50 @@ fn friendly_chain_targets(
     chain_jumps(link(selected), injured, count, sees, chain_healing_rank)
 }
 
+/// vmangos target 6 gathers within `radius` for a melee spell, else `radius` plus 10 yd a jump.
+fn enemy_chain_reach(e: &SpellEffect, hdr: &Spell) -> f32 {
+    let radius = area_radius(e);
+    if hdr.damage_class == crate::spell::proc::DAMAGE_CLASS_MELEE {
+        radius
+    } else {
+        radius + chain_length(e.chain_targets) as f32 * CHAIN_JUMP_YD
+    }
+}
+
+/// vmangos target 6: the selected unit, then the nearest units it and each link can see.
+fn enemy_chain_targets(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    first: &WorldEntity,
+    units: &[WorldEntity],
+    e: &SpellEffect,
+    hdr: &Spell,
+) -> Vec<u64> {
+    let link = |unit: &WorldEntity| ChainUnit {
+        player: unit.is_player(),
+        ..ChainUnit::at(unit.guid, (unit.x, unit.y, unit.z))
+    };
+    let checks_los = hdr.attributes_ex_2 & SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT == 0;
+    let only_players = hdr.attributes_ex_3 & SPELL_ATTR_EX3_ONLY_ON_PLAYER != 0;
+    let may_jump = |from: &ChainUnit, to: &ChainUnit| {
+        chain_may_jump(to, only_players, || {
+            !checks_los
+                || crate::nav::has_los(ctx, caster.map_id, caster.instance_id, from.at, to.at)
+        })
+    };
+    chain_jumps(
+        link(first),
+        units.iter().map(link).collect(),
+        chain_length(e.chain_targets),
+        may_jump,
+        chain_distance_sq,
+    )
+}
+
+fn chain_may_jump(to: &ChainUnit, only_players: bool, sees: impl FnOnce() -> bool) -> bool {
+    (!only_players || to.player) && sees()
+}
+
 /// One unit a chain may jump to; `group` is a Character's Group.
 #[derive(Clone, Copy)]
 struct ChainUnit {
@@ -570,6 +608,7 @@ struct ChainUnit {
     at: (f32, f32, f32),
     group: Option<u64>,
     missing_health: i64,
+    player: bool,
 }
 
 impl ChainUnit {
@@ -579,6 +618,7 @@ impl ChainUnit {
             at,
             group: None,
             missing_health: 0,
+            player: false,
         }
     }
 }
@@ -2436,6 +2476,7 @@ mod effect_handler_tests {
             at: (x, 0.0, 0.0),
             group,
             missing_health,
+            player: false,
         }
     }
 
@@ -2519,6 +2560,59 @@ mod effect_handler_tests {
             super::chain_healing_rank,
         );
         assert_eq!(chain, vec![1, 4]);
+    }
+
+    fn enemy_chain(
+        units: &[(u64, f32, bool)],
+        only_players: bool,
+        wall_between: (u64, u64),
+    ) -> Vec<u64> {
+        let unit = |&(guid, x, player): &(u64, f32, bool)| super::ChainUnit {
+            player,
+            ..super::ChainUnit::at(guid, (x, 0.0, 0.0))
+        };
+        super::chain_jumps(
+            unit(&units[0]),
+            units[1..].iter().map(unit).collect(),
+            units.len(),
+            |from, to| {
+                super::chain_may_jump(to, only_players, || (from.guid, to.guid) != wall_between)
+            },
+            super::chain_distance_sq,
+        )
+    }
+
+    #[test]
+    fn an_enemy_chain_skips_a_unit_the_last_link_cannot_see() {
+        let units = [(1, 0.0, false), (2, 3.0, false), (3, 6.0, false)];
+        assert_eq!(enemy_chain(&units, false, (1, 2)), vec![1, 3, 2]);
+        assert_eq!(enemy_chain(&units, false, (9, 9)), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn an_enemy_chain_that_only_hits_players_skips_a_creature() {
+        let units = [(1, 0.0, true), (2, 3.0, false), (3, 6.0, true)];
+        assert_eq!(enemy_chain(&units, true, (9, 9)), vec![1, 3]);
+        assert_eq!(enemy_chain(&units, false, (9, 9)), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn a_melee_enemy_chain_gathers_within_its_radius_and_a_spell_chain_ten_yards_a_jump() {
+        let chain = super::SpellEffect {
+            target: super::T_CHAIN_ENEMY,
+            radius_yd: 5.0,
+            chain_targets: 3,
+            ..super::SpellEffect::blank(1, 0)
+        };
+        let melee = super::Spell {
+            damage_class: crate::spell::proc::DAMAGE_CLASS_MELEE,
+            ..super::Spell::blank(1, "Cleave")
+        };
+        assert_eq!(super::enemy_chain_reach(&chain, &melee), 5.0);
+        assert_eq!(
+            super::enemy_chain_reach(&chain, &super::Spell::blank(2, "Chain")),
+            35.0
+        );
     }
 
     #[test]
