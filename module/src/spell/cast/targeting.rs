@@ -1592,6 +1592,7 @@ fn apply_damage_effect(
                     target_guid,
                     roll.after_resist,
                     roll.blocked,
+                    crate::spell::damage_school_mask(hdr.school_mask),
                     hit_of(
                         hdr,
                         triggered,
@@ -1661,6 +1662,7 @@ fn apply_damage_effect(
                 target_guid,
                 dmg as i32,
                 blocked,
+                crate::spell::damage_school_mask(hdr.school_mask),
                 hit_of(
                     hdr,
                     triggered,
@@ -1686,6 +1688,7 @@ fn apply_damage_effect(
                     caster_guid,
                     target_guid,
                     bonuses::round_damage(ctx, target_guid, seal),
+                    crate::spell::damage_school_mask(hdr.school_mask),
                     hit_of(hdr, triggered, crate::combat::HitSource::Spell, false),
                 );
                 remove_seal_auras(ctx, caster_guid);
@@ -1774,6 +1777,7 @@ fn apply_restore_effect(
                 caster_guid,
                 target_guid,
                 bonuses::round_damage(ctx, target_guid, damage),
+                crate::spell::damage_school_mask(hdr.school_mask),
                 hit_of(hdr, triggered, crate::combat::HitSource::Spell, false),
             );
             EffectHit::dmg(dealt, absorbed)

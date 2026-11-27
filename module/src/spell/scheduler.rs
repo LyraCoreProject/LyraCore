@@ -330,7 +330,19 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 );
                 // vmangos CalculateDamageAbsorbAndResist drains shields after the resist.
                 let incoming = after_resist.max(0) as u32;
-                let left = crate::spell::absorb_incoming(ctx, a.target_guid, incoming);
+                flush_pending_power(
+                    ctx,
+                    a.target_guid,
+                    &mut pending_power,
+                    &mut pending_reserve_power,
+                );
+                let target = entities.guid().find(a.target_guid).unwrap_or(target);
+                let left = crate::spell::absorb_incoming(
+                    ctx,
+                    a.target_guid,
+                    incoming,
+                    crate::spell::damage_school_mask(school),
+                );
                 let absorbed = incoming - left;
                 let amount = if target.godmode { 0 } else { left };
                 if enters_combat {
@@ -649,6 +661,29 @@ enum PeriodicDeath {
     Creature { killer: Option<u64> },
 }
 
+type PendingPower = std::collections::HashMap<u64, u32>;
+
+// A Mana Shield spends mana in the row, so the unit's batched power must reach it first.
+fn flush_pending_power(
+    ctx: &ReducerContext,
+    guid: u64,
+    pending_power: &mut PendingPower,
+    pending_reserve_power: &mut PendingPower,
+) {
+    let (shown, reserve) = (
+        pending_power.remove(&guid),
+        pending_reserve_power.remove(&guid),
+    );
+    if shown.is_none() && reserve.is_none() {
+        return;
+    }
+    if let Some(mut target) = ctx.db.game_world_entity().guid().find(guid) {
+        target.power = shown.unwrap_or(target.power);
+        target.reserve_power = reserve.unwrap_or(target.reserve_power);
+        target.update(ctx);
+    }
+}
+
 // Re-read each entity so flushing power preserves the earlier health flush.
 fn flush_pool(
     ctx: &ReducerContext,
@@ -762,6 +797,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 a.caster_guid,
                 t,
                 resisted,
+                crate::spell::damage_school_mask(a.school_mask),
                 crate::combat::Hit::periodic(),
             );
             if dealt > 0 || absorbed > 0 || points > resisted {

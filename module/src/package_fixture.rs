@@ -11,7 +11,7 @@ pub(crate) use crate::threat::top_threat_target;
 
 pub(crate) use crate::account_ownership::SessionActor;
 pub(crate) use crate::combat::{
-    apply_hit, enter_combat, final_damage, fold_incoming_damage, kill_creature, Hit, HitSource,
+    apply_hit, enter_combat, final_damage, kill_creature, Hit, HitSource,
 };
 pub(crate) use crate::creatures::{
     build_creature_from_template as build_creature_entity, despawn_creature_entity,
@@ -27,6 +27,22 @@ pub(crate) use crate::spell::{
 };
 pub(crate) use crate::time::timer_never;
 pub(crate) use crate::xp::grant_xp;
+
+/// Weapon damage folded through the target's absorbs; Packages deal physical damage here.
+pub(crate) fn fold_incoming_damage(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    target_guid: u64,
+    rolled: u32,
+) -> (u32, u32) {
+    crate::combat::fold_incoming_damage(
+        ctx,
+        attacker_guid,
+        target_guid,
+        rolled,
+        crate::spell::SCHOOL_MASK_PHYSICAL,
+    )
+}
 
 pub(crate) fn base_spell(spell_id: u32, name: &str) -> crate::Spell {
     crate::Spell::blank(spell_id, name)
@@ -98,7 +114,14 @@ pub fn apply_damage(
         return Err("target is dead".to_string());
     }
     let capped = amount.min(target.health.saturating_sub(1));
-    crate::combat::resolve_damage(ctx, attacker_guid, target_guid, capped).land(
+    crate::combat::resolve_damage(
+        ctx,
+        attacker_guid,
+        target_guid,
+        capped,
+        crate::spell::SCHOOL_MASK_PHYSICAL,
+    )
+    .land(
         ctx,
         attacker_guid,
         target_guid,

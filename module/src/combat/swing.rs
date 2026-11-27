@@ -1,6 +1,6 @@
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration};
 
-use crate::spell::SpellCastEventKind;
+use crate::spell::{SpellCastEventKind, SCHOOL_MASK_PHYSICAL};
 use crate::{game_item_template, game_spell, game_world_entity, SpellCastEvent, WorldEntity};
 
 use super::reach::{in_melee_reach, MeleeBody};
@@ -9,6 +9,8 @@ use crate::{
     game_melee_attack, game_ranged_impact_schedule, CombatEvent, MeleeAttack, MeleeSchedule,
     RangedImpactSchedule,
 };
+
+const SHOOT_SPELL_ID: u32 = 5019;
 
 #[reducer]
 pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
@@ -175,7 +177,13 @@ fn resolve_offhand_swing(
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    let damage = resolve_damage(ctx, attacker_guid, target_guid, rolled);
+    let damage = resolve_damage(
+        ctx,
+        attacker_guid,
+        target_guid,
+        rolled,
+        SCHOOL_MASK_PHYSICAL,
+    );
     let killing_blow = is_killing_blow(ctx, attacker_guid, &target, damage.amount());
 
     CombatEvent::insert(
@@ -631,7 +639,13 @@ fn fire_melee_swing(
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    let damage = resolve_damage(ctx, attacker_guid, target_guid, rolled);
+    let damage = resolve_damage(
+        ctx,
+        attacker_guid,
+        target_guid,
+        rolled,
+        fired.map_or(SCHOOL_MASK_PHYSICAL, FiredStrike::school_mask),
+    );
     let (projected_swing, projected_seal) = split_damage_projection(damage.amount(), seal_portion);
 
     // vmangos reports a queued strike before the damage lands, so a killing blow follows it.
@@ -726,6 +740,12 @@ struct FiredStrike<'a> {
 }
 
 impl FiredStrike<'_> {
+    fn school_mask(self) -> u8 {
+        self.header.map_or(SCHOOL_MASK_PHYSICAL, |spell| {
+            crate::spell::damage_school_mask(spell.school_mask)
+        })
+    }
+
     fn weapon_procs(self) -> bool {
         self.header
             .is_some_and(|spell| spell.cast_flags & crate::spell::CAST_FLAG_WEAPON_PROCS != 0)
@@ -825,7 +845,13 @@ fn land_chained_strike(
     if unit.hit_info == AttackOutcome::Dodge {
         arm_react(ctx, attacker.guid, ReactKind::Overpower);
     }
-    let damage = resolve_damage(ctx, attacker.guid, target_guid, unit.rolled);
+    let damage = resolve_damage(
+        ctx,
+        attacker.guid,
+        target_guid,
+        unit.rolled,
+        strike.school_mask(),
+    );
     SpellCastEvent::insert(
         ctx,
         SpellCastEvent {
@@ -960,6 +986,15 @@ fn split_damage_projection(final_damage: u32, seal_portion: u32) -> (u32, u32) {
     (final_damage - seal, seal)
 }
 
+// vmangos Spell::Spell gives Shoot, the wand spell, the school of the equipped wand.
+fn ranged_damage_school_mask(ctx: &ReducerContext, attacker_guid: u64, ranged_spell_id: u32) -> u8 {
+    if ranged_spell_id == SHOOT_SPELL_ID {
+        1 << super::folds::ranged_school(ctx, attacker_guid)
+    } else {
+        crate::spell::spell_school_mask(ctx, ranged_spell_id)
+    }
+}
+
 fn fire_ranged_shot(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
@@ -1023,7 +1058,13 @@ fn fire_ranged_shot(
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    let damage = FrozenDamage::launch(ctx, attacker_guid, target_guid, roll.damage);
+    let damage = FrozenDamage::launch(
+        ctx,
+        attacker_guid,
+        target_guid,
+        roll.damage,
+        ranged_damage_school_mask(ctx, attacker_guid, ranged_spell_id),
+    );
 
     let speed_yps = ctx
         .db
@@ -1089,7 +1130,13 @@ pub(crate) fn launch_ranged_strike(
         super::AttackType::Ranged,
         rolled,
     );
-    let damage = FrozenDamage::launch(ctx, attacker.guid, target.guid, rolled);
+    let damage = FrozenDamage::launch(
+        ctx,
+        attacker.guid,
+        target.guid,
+        rolled,
+        crate::spell::damage_school_mask(spell.school_mask),
+    );
     let (dx, dy, dz) = (
         target.x - attacker.x,
         target.y - attacker.y,
@@ -1152,7 +1199,7 @@ fn schedule_ranged_impact(
             damage: damage.amount(),
             ranged_spell_id,
             is_crit,
-            school: if ranged_spell_id == 5019 {
+            school: if ranged_spell_id == SHOOT_SPELL_ID {
                 super::folds::ranged_school(ctx, attacker_guid)
             } else {
                 ctx.db

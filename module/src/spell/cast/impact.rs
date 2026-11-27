@@ -327,6 +327,7 @@ fn deal_impact_damage(ctx: &ReducerContext, impact: &PendingSpellImpact) {
             impact.target_guid,
             roll.after_resist,
             roll.blocked,
+            crate::spell::spell_school_mask(ctx, impact.spell_id),
             crate::combat::Hit::spell(
                 if impact.triggered {
                     crate::combat::HitSource::Triggered

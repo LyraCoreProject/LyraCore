@@ -9,6 +9,26 @@ use crate::{game_creature_template, game_spell, Aura, Spell, WorldEntity};
 
 pub(crate) const SCHOOL_MASK_PHYSICAL: u8 = 1;
 
+/// A Spell header's school mask as damage carries it: a header without a school is physical.
+pub(crate) fn damage_school_mask(school_mask: u8) -> u8 {
+    if school_mask == 0 {
+        SCHOOL_MASK_PHYSICAL
+    } else {
+        school_mask
+    }
+}
+
+/// The damage school mask of a Spell, physical for a weapon hit (spell id 0) or an unknown Spell.
+pub(crate) fn spell_school_mask(ctx: &ReducerContext, spell_id: u32) -> u8 {
+    ctx.db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .map_or(SCHOOL_MASK_PHYSICAL, |spell| {
+            damage_school_mask(spell.school_mask)
+        })
+}
+
 // Source aura ids in the low byte of an immunity Aura's p1: docs/schema.md#damage-shields.
 const SOURCE_SCHOOL_IMMUNITY: i32 = 39;
 const SOURCE_DAMAGE_IMMUNITY: i32 = 40;

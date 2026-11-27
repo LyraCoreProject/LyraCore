@@ -174,6 +174,17 @@ These rules come from `Creature::GetVendorItemCurrentCount`, `UpdateVendorItemCu
 List zero counts remain visible, as in
 [`SendListInventory`](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/ItemHandler.cpp).
 
+### Absorb school migration
+
+No schema changes. A school absorb Aura (aura 69) now takes damage only when its `eff_p0` school
+mask covers the damage's school, and a Mana Shield (aura 97) is an `A_ABSORB` row marked by
+`p0_kind` `P_MANA_SHIELD_MASK`, with its school mask in `p0` and its mana cost per absorbed point
+in `p1`; see [Absorb auras](schema.md#absorb-auras). School absorbs run first, then Mana Shields,
+which spend that mana and absorb no more than the unit's mana pays. Reimport the `spell` family
+straight after the publish, then call `debug_repair_after_publish`. Until the reimport a Mana
+Shield row has mask 0 and no marker, so it absorbs nothing, and a live Mana Shield Aura keeps that
+until the repair copies the new row onto it. Every other absorb row already carries its mask.
+
 ### Base reputation migration
 
 `game_faction` gains `base_standing_2` to `base_standing_4`, `base_race_mask_1` to

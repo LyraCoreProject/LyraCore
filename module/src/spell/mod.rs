@@ -84,8 +84,8 @@ pub(crate) use scheduler::{
 };
 pub use scheduler::{fire_spell_impact, tick_auras, tick_ground_areas};
 pub(crate) use school_immunity::{
-    aura_refuses_damage, immune_to_school, school_refuses_spell, template_immune_to_school,
-    SCHOOL_MASK_PHYSICAL,
+    aura_refuses_damage, damage_school_mask, immune_to_school, school_refuses_spell,
+    spell_school_mask, template_immune_to_school, SCHOOL_MASK_PHYSICAL,
 };
 pub(crate) use self_resurrect::{
     clear_resurrect_request_and_option, do_self_resurrect, record_self_resurrect_option,

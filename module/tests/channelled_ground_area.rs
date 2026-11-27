@@ -4,8 +4,8 @@ use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spatial::grid_cell;
 use lyracore_shared::spell::taxonomy::{
-    A_IMMUNITY, CAST_FLAG_CHANNELED, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, E_PERSISTENT_AREA,
-    P_SCHOOL_MASK, T_AREA_ENEMY, T_SELF, T_TARGET_ENEMY,
+    A_ABSORB, A_IMMUNITY, CAST_FLAG_CHANNELED, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE,
+    E_PERSISTENT_AREA, P_SCHOOL_MASK, T_AREA_ENEMY, T_SELF, T_TARGET_ENEMY,
 };
 use support::{actor, number, refused, Field, Row, Standalone};
 
@@ -13,6 +13,9 @@ const CHARACTER: u64 = 1;
 const CHARACTER_HEALTH: u32 = 100_000;
 const WOLF_HEALTH: u32 = 100_000;
 const FIRE: u32 = 0x04;
+const FROST: u32 = 0x10;
+const FROST_AREA: u32 = 5_123_409;
+const FROST_WARD_POOL: i32 = 1_000;
 const CHANNELLED_AREA: u32 = 5_123_401;
 const PLAIN_AREA: u32 = 5_123_402;
 const SHORT_CHANNELLED_AREA: u32 = 5_123_403;
@@ -178,6 +181,42 @@ fn a_unit_that_walks_into_a_ground_area_after_the_cast_takes_its_ticks() {
         health(&shard, wolf) < WOLF_HEALTH,
         "a unit that walks in takes the next tick"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_frost_ward_absorbs_a_frost_ground_area_tick() {
+    let (shard, wolf) = stage("ground-area-frost-ward");
+    insert_spell(
+        &shard,
+        FROST_AREA,
+        &[("duration_ms", &AREA_DURATION_MS), ("school_mask", &FROST)],
+        &[
+            ("kind", &E_PERSISTENT_AREA),
+            ("target", &T_SELF),
+            ("base_points", &TICK_DAMAGE),
+            ("period_ms", &PERIOD_MS),
+            ("radius_yd", &AREA_RADIUS_YD),
+        ],
+    );
+    shard.assert_call(
+        "debug_fill_aura_slots",
+        &[&wolf.to_string(), &CHARACTER.to_string(), "false", "1"],
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_aura SET eff_kind = {A_ABSORB}, eff_p0 = {FROST}, eff_p0_kind = {P_SCHOOL_MASK}, \
+         amount_remaining = {FROST_WARD_POOL} WHERE target_guid = {wolf}"
+    ));
+    cast_area(&shard, FROST_AREA);
+    assert_area_placed(&shard);
+
+    shard.assert_call("debug_advance_roll_batch", &[ONE_PERIOD_TICKS]);
+
+    assert_eq!(health(&shard, wolf), WOLF_HEALTH, "the ward takes the tick");
+    let ward = shard.query_rows(&format!(
+        "SELECT amount_remaining FROM game_aura WHERE target_guid = {wolf}"
+    ));
+    assert!(number::<i32>(&ward[0], "amount_remaining") < FROST_WARD_POOL);
 }
 
 #[test]

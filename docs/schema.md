@@ -1736,6 +1736,25 @@ An `A_FLAG` effect keeps its source aura id (`EffectApplyAuraName`) in `p1`, and
 to `eff_p1`. The Module reads aura 149, `SPELL_AURA_RESIST_PUSHBACK`, by this id; see
 [Interrupt flags](#interrupt-flags).
 
+### Absorb auras
+
+An `A_ABSORB` effect keeps its pool in the Aura's `amount_remaining` and its school mask in `p0`.
+Its `p0_kind` says which absorb it is, and the Aura copies all three to `eff_p0`, `eff_p0_kind` and
+`eff_p1`:
+
+| Source aura | `p0_kind` | `p0` | `p1` |
+| --- | --- | --- | --- |
+| 69, `SPELL_AURA_SCHOOL_ABSORB` | `P_SCHOOL_MASK` | school mask | 0 |
+| 97, `SPELL_AURA_MANA_SHIELD` | `P_MANA_SHIELD_MASK` | school mask | `EffectMultipleValue` in hundredths: 2.0 is 200 |
+
+An absorb takes only damage whose school its mask covers. School absorbs take damage first, oldest
+Aura first, then Mana Shields, as vmangos
+[`Unit::CalculateDamageAbsorbAndResist`](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)
+orders them. A Mana Shield costs its `p1` multiple, after the target's `SPELLMOD_OP_MULTIPLE_VALUE`
+modifiers, in mana per point absorbed. It absorbs no more than the unit's mana pays, a multiple of 0
+makes it free, and its Aura ends when its pool reaches 0. Weapon damage is physical. A Spell's
+damage, and a ground area's tick, carries the Spell's school.
+
 ### Mechanic numbering
 
 A Spell's `mechanic` and an effect's `effect_mechanic` (zero names none) carry the Spell.dbc

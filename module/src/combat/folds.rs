@@ -737,6 +737,7 @@ pub(crate) fn retaliate_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_
         victim_guid,
         attacker_guid,
         dmg as i32,
+        SCHOOL_MASK_PHYSICAL,
         Hit::triggered(),
     );
 }
@@ -955,10 +956,11 @@ pub(crate) fn deal_blocked_spell_damage(
     target_guid: u64,
     damage: i32,
     blocked: u32,
+    school_mask: u8,
     hit: Hit,
 ) -> (u32, u32) {
     let hit = hit.with_block(blocked);
-    let dealt = deal_damage(ctx, caster_guid, target_guid, damage, hit);
+    let dealt = deal_damage(ctx, caster_guid, target_guid, damage, school_mask, hit);
     if blocked == 0 {
         return dealt;
     }

@@ -63,8 +63,8 @@ use lyracore_shared::spell::taxonomy::{
     E_SUMMON_HOSTILE, E_SUMMON_OBJECT, E_SUMMON_PET, E_SUMMON_PLAYER, E_TAME_CREATURE, E_TAUNT,
     E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT,
     P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY,
-    P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SKILL_LINE,
-    P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    P_ITEM_ENTRY, P_MANA_SHIELD_MASK, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
+    P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
     SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
     T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CASTER_PET, T_CHAIN_ALLY, T_CHAIN_ENEMY, T_PARTY_AREA,
@@ -311,7 +311,10 @@ fn synthetic_seal_effect(spell_id: u32, name: &str, used_index: u8) -> Option<Sp
     })
 }
 
-// Store EffectMultipleValue in hundredths: 0.5 becomes 50.
+const MANA_SHIELD_AURA: u32 = 97;
+
+// Store EffectMultipleValue in hundredths: 0.5 becomes 50. A Mana Shield keeps its mana cost per
+// absorbed point this way in p1; docs/schema.md#absorb-auras.
 fn power_burn_ratio_bp(multiple: f32) -> i32 {
     (multiple * 100.0).round() as i32
 }
@@ -364,7 +367,7 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
         | A_MOD_HEALING => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         A_MOD_DAMAGE_TAKEN => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         A_ABSORB => match aura {
-            ManaShield => (0, P_NONE),
+            ManaShield => ((misc & 0x7F) as i32, P_MANA_SHIELD_MASK),
             _ => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         },
         A_MOD_COMBAT => {
@@ -1166,7 +1169,8 @@ fn push_spell_effect_rows(
             i32::from(s.effect_aura[i] == 98)
         } else if kind == E_SUMMON_HOSTILE {
             s.requires_spell_focus as i32
-        } else if kind == E_POWER_BURN {
+        } else if kind == E_POWER_BURN || (kind == A_ABSORB && s.effect_aura[i] == MANA_SHIELD_AURA)
+        {
             power_burn_ratio_bp(s.effect_multiple_values[i])
         } else if kind == A_PERIODIC_DAMAGE && s.effect_aura[i] == AuraMod::PeriodicLeech as u32 {
             leech_multiple_hundredths(s.effect_multiple_values[i])
@@ -3301,6 +3305,28 @@ mod tests {
     }
 
     #[test]
+    fn a_mana_shield_keeps_its_school_mask_and_mana_multiple_and_a_school_absorb_no_multiple() {
+        for (aura, multiple, p0_kind, expected) in [
+            (97u32, 2.0f32, P_MANA_SHIELD_MASK, (1, 200)),
+            (69, 2.0, P_SCHOOL_MASK, (1, 0)),
+        ] {
+            let mut bytes = source_spell_fixture();
+            for (column, value) in [(61, 6u32), (91, aura), (97, multiple.to_bits()), (106, 1)] {
+                bytes[20 + column * 4..24 + column * 4].copy_from_slice(&value.to_le_bytes());
+            }
+            let mut dbc = fixture_tables();
+            dbc.spells = read_spells(&bytes).unwrap();
+            let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+            let effect = &rows.effects[0];
+            assert_eq!(
+                (effect.kind, effect.p0_kind, (effect.p0, effect.p1)),
+                (A_ABSORB, p0_kind, expected),
+                "aura {aura}"
+            );
+        }
+    }
+
+    #[test]
     fn a_flag_aura_keeps_its_source_aura_in_p1() {
         let mut bytes = source_spell_fixture();
         // Effect 0 applies SPELL_AURA_RESIST_PUSHBACK, as Concentration Aura does.
@@ -4927,9 +4953,12 @@ mod tests {
     }
 
     #[test]
-    fn absorb_params_split_mana_shield_from_school_absorb() {
+    fn absorb_params_mark_a_mana_shield_and_keep_the_school_mask_of_both_absorb_auras() {
         use AuraMod::*;
-        assert_eq!(resolve_aura_params(A_ABSORB, ManaShield, 0x7F), (0, P_NONE));
+        assert_eq!(
+            resolve_aura_params(A_ABSORB, ManaShield, 0x01),
+            (0x01, P_MANA_SHIELD_MASK)
+        );
         assert_eq!(
             resolve_aura_params(A_ABSORB, SchoolAbsorb, 0x7F),
             (0x7F, P_SCHOOL_MASK)

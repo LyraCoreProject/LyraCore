@@ -354,12 +354,13 @@ pub(crate) fn fold_incoming_damage(
     attacker_guid: u64,
     target_guid: u64,
     rolled: u32,
+    school_mask: u8,
 ) -> (u32, u32) {
     let entities = ctx.db.game_world_entity();
     let outgoing_pct =
         crate::modifiers::combat_field_bonus(ctx, attacker_guid, crate::spell::COMBAT_DMG_DONE);
     let incoming = crate::spell::apply_damage_pct(rolled, outgoing_pct);
-    let dealt = crate::spell::absorb_incoming(ctx, target_guid, incoming);
+    let dealt = crate::spell::absorb_incoming(ctx, target_guid, incoming, school_mask);
     let dealt = landed_amount(entities.guid().find(target_guid).as_ref(), dealt);
     (dealt, incoming - dealt)
 }
@@ -604,8 +605,10 @@ pub(crate) fn resolve_damage(
     attacker_guid: u64,
     target_guid: u64,
     rolled: u32,
+    school_mask: u8,
 ) -> ResolvedDamage {
-    let (dealt, absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
+    let (dealt, absorbed) =
+        fold_incoming_damage(ctx, attacker_guid, target_guid, rolled, school_mask);
     ResolvedDamage {
         damage: FinalDamage {
             absorbed,
@@ -627,8 +630,10 @@ impl FrozenDamage {
         attacker_guid: u64,
         target_guid: u64,
         rolled: u32,
+        school_mask: u8,
     ) -> Self {
-        let (amount, absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
+        let (amount, absorbed) =
+            fold_incoming_damage(ctx, attacker_guid, target_guid, rolled, school_mask);
         Self { amount, absorbed }
     }
 
@@ -661,6 +666,7 @@ pub(crate) fn deal_damage(
     attacker_guid: u64,
     target_guid: u64,
     basis: i32,
+    school_mask: u8,
     hit: Hit,
 ) -> (u32, u32) {
     let entities = ctx.db.game_world_entity();
@@ -680,7 +686,13 @@ pub(crate) fn deal_damage(
     if !is_periodic(ctx, hit) {
         crate::spell::break_stealth(ctx, attacker_guid);
     }
-    let resolved = resolve_damage(ctx, attacker_guid, target_guid, basis.max(0) as u32);
+    let resolved = resolve_damage(
+        ctx,
+        attacker_guid,
+        target_guid,
+        basis.max(0) as u32,
+        school_mask,
+    );
     if resolved.amount() == 0 && !resolved.damage.lethal_prevented {
         if resolved.absorbed() > 0 {
             resolved.land(ctx, attacker_guid, target_guid, hit);

@@ -174,6 +174,7 @@ pub const P_ENCHANT_ID: u8 = 10;
 pub const SPELLMOD_OP_DAMAGE: i32 = 0;
 pub const SPELLMOD_OP_CASTING_TIME: i32 = 10;
 pub const SPELLMOD_OP_COST: i32 = 14;
+pub const SPELLMOD_OP_MULTIPLE_VALUE: i32 = 27;
 pub const P_SPELLMOD_OP: u8 = 11;
 pub const P_PCT_MAX_POWER: u8 = 12;
 pub const P_GAMEOBJECT_ENTRY: u8 = 13;
@@ -184,6 +185,7 @@ pub const P_FLAT_MANA: u8 = 16;
 pub const P_COMBAT_PERCENT: u8 = 17;
 pub const P_SKILL_LINE: u8 = 18;
 pub const P_FORM: u8 = 19;
+pub const P_MANA_SHIELD_MASK: u8 = 20;
 pub const P_RAW: u8 = 255;
 pub const T_SELF: u8 = 0;
 pub const T_TARGET_ENEMY: u8 = 1;
@@ -350,6 +352,7 @@ mod tests {
         assert_eq!(P_FLAT_MANA, 16);
         assert_eq!(P_COMBAT_PERCENT, 17);
         assert_eq!(P_SKILL_LINE, 18);
+        assert_eq!(P_MANA_SHIELD_MASK, 20);
         assert_eq!(A_MOD_SKILL, 0xBD);
         assert_eq!(P_RAW, 255);
         let all = [
@@ -371,6 +374,7 @@ mod tests {
             P_FLAT_MANA,
             P_COMBAT_PERCENT,
             P_SKILL_LINE,
+            P_MANA_SHIELD_MASK,
             P_RAW,
         ];
         for (i, a) in all.iter().enumerate() {

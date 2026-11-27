@@ -389,7 +389,7 @@ pub(crate) fn seed_pw_shield_fixture(ctx: &ReducerContext) {
             kind: 0xA2,
             base_points: 50,
             target: 2,
-            p0: 2,
+            p0: 127,
             p0_kind: 2,
             ..SpellEffect::blank(TEST_POWER_WORD_SHIELD_SPELL, 0)
         },
