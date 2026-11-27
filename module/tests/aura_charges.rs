@@ -7,10 +7,11 @@ use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
     A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE, A_PROC_TRIGGER, A_SPELLMOD_FLAT,
-    CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES, COMBAT_ATTACK_POWER, COMBAT_CRIT,
-    COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, E_TRIGGER, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD,
-    P_MECHANIC, P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST,
-    SPEED_MOVE, SPEED_SWING, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    A_SPELLMOD_PCT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES, COMBAT_ATTACK_POWER,
+    COMBAT_CRIT, COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, E_TRIGGER, M_FEAR, M_POLY, M_STUN,
+    P_COMBAT_FIELD, P_MECHANIC, P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR,
+    SPEED_CAST, SPEED_MOVE, SPEED_SWING, SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST, T_SELF,
+    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
@@ -117,6 +118,16 @@ const LOOP_SECOND: u32 = 5_091_139;
 const REAGENT_PROC_AURA: u32 = 5_091_140;
 const REAGENT_BOLT: u32 = 5_091_141;
 const PROC_REAGENT: u32 = 5_091_142;
+const CLEARCASTING: u32 = 5_091_143;
+const PRESENCE_OF_MIND: u32 = 5_091_144;
+const MAGE_BOLT: u32 = 5_091_145;
+const SLOW_MAGE_BOLT: u32 = 5_091_146;
+const UNMASKED_MAGE_BOLT: u32 = 5_091_147;
+const SPELL_FAMILY_MAGE: u8 = 3;
+const MAGE_BOLT_FAMILY_FLAG: i32 = 0x1;
+const UNMASKED_FAMILY_FLAG: i32 = 0x2;
+const MANA: u32 = 1000;
+const BOLT_COST: u32 = 10;
 const PROC_ICD_MS: u32 = 100;
 const FROST: u8 = 0x10;
 const SLOW_POINTS: i32 = -50;
@@ -864,7 +875,7 @@ fn kick_deals_its_damage_to_an_interrupt_immune_creature_and_leaves_its_cast() {
         "Kick's damage effect lands"
     );
     assert!(
-        wolf_is_casting(&standalone, wolf),
+        is_casting(&standalone, wolf),
         "vmangos Creature::IsImmuneToSpellEffect drops the interrupt effect of mechanic 26"
     );
     assert!(lockouts(&standalone, wolf).is_empty());
@@ -1036,7 +1047,7 @@ fn an_interrupt_stops_a_silence_immune_creature_without_locking_its_school() {
 
     wolf_begins_a_cast(&standalone, wolf);
     go_event(&standalone, PLAYER, KICK_FIXTURE, wolf);
-    assert!(!wolf_is_casting(&standalone, wolf));
+    assert!(!is_casting(&standalone, wolf));
     assert_eq!(
         lockouts(&standalone, wolf),
         [FIRE.to_string()],
@@ -1051,7 +1062,7 @@ fn an_interrupt_stops_a_silence_immune_creature_without_locking_its_school() {
     wolf_begins_a_cast(&standalone, wolf);
     go_event(&standalone, PLAYER, KICK_FIXTURE, wolf);
     assert!(
-        !wolf_is_casting(&standalone, wolf),
+        !is_casting(&standalone, wolf),
         "silence immunity does not stop an interrupt"
     );
     assert!(
@@ -1368,18 +1379,7 @@ fn insight_is_kept_by_a_free_spell_and_spent_by_one_that_costs_power() {
     bolt(&standalone, FIRE_BOLT, FIRE, 0);
     bolt(&standalone, COSTLY_BOLT, FIRE, 0);
     set_spell(&standalone, COSTLY_BOLT, "cost = 10");
-    let bytes: u32 = standalone
-        .query_rows(&format!(
-            "SELECT unit_bytes_0 FROM game_world_entity WHERE guid = {PLAYER}"
-        ))
-        .remove(0)["unit_bytes_0"]
-        .parse()
-        .expect("unit_bytes_0 is a number");
-    standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET unit_bytes_0 = {}, power = 1000, max_power = 1000 \
-         WHERE guid = {PLAYER}",
-        bytes & 0x00FF_FFFF
-    ));
+    use_mana(&standalone);
     standalone.assert_call("debug_force_cast", &["1", &INSIGHT.to_string()]);
     advance(&standalone);
 
@@ -1391,6 +1391,125 @@ fn insight_is_kept_by_a_free_spell_and_spent_by_one_that_costs_power() {
     );
     cast(&standalone, COSTLY_BOLT, wolf);
     assert_eq!(charges(&standalone, PLAYER, INSIGHT), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn clearcasting_makes_one_spell_free_and_that_spell_spends_it() {
+    let mut standalone = Standalone::start("aura-charges-clearcasting");
+    let wolf = stage(&mut standalone);
+    mage_modifier(&standalone, CLEARCASTING, -100, SPELLMOD_OP_COST);
+    mage_bolt(
+        &standalone,
+        MAGE_BOLT,
+        MAGE_BOLT_FAMILY_FLAG,
+        &format!("cost = {BOLT_COST}"),
+    );
+    use_mana(&standalone);
+    standalone.assert_call("debug_force_cast", &["1", &CLEARCASTING.to_string()]);
+    advance(&standalone);
+
+    cast(&standalone, MAGE_BOLT, wolf);
+    assert_eq!(
+        mana(&standalone),
+        MANA,
+        "Clearcasting's -100% cost makes the spell free"
+    );
+    assert_eq!(
+        charges(&standalone, PLAYER, CLEARCASTING),
+        None,
+        "vmangos RemoveSpellMods removes the Aura when the cast takes its last charge"
+    );
+    cast(&standalone, MAGE_BOLT, wolf);
+    assert_eq!(mana(&standalone), MANA - BOLT_COST);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn presence_of_mind_makes_one_cast_instant_and_ends_with_it() {
+    let mut standalone = Standalone::start("aura-charges-presence-of-mind");
+    let wolf = stage(&mut standalone);
+    mage_modifier(
+        &standalone,
+        PRESENCE_OF_MIND,
+        -100,
+        SPELLMOD_OP_CASTING_TIME,
+    );
+    mage_bolt(
+        &standalone,
+        SLOW_MAGE_BOLT,
+        MAGE_BOLT_FAMILY_FLAG,
+        "cast_time_ms = 1500",
+    );
+    standalone.assert_call("debug_force_cast", &["1", &PRESENCE_OF_MIND.to_string()]);
+    advance(&standalone);
+
+    begin_cast(&standalone, SLOW_MAGE_BOLT, wolf);
+    assert!(
+        !is_casting(&standalone, PLAYER),
+        "Presence of Mind makes the cast instant"
+    );
+    assert_eq!(charges(&standalone, PLAYER, PRESENCE_OF_MIND), None);
+    advance(&standalone);
+    begin_cast(&standalone, SLOW_MAGE_BOLT, wolf);
+    assert!(
+        is_casting(&standalone, PLAYER),
+        "the next cast takes its whole cast time"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_interrupted_cast_keeps_clearcasting_for_the_cast_that_completes() {
+    let mut standalone = Standalone::start("aura-charges-clearcasting-interrupt");
+    let wolf = stage(&mut standalone);
+    mage_modifier(&standalone, CLEARCASTING, -100, SPELLMOD_OP_COST);
+    mage_bolt(
+        &standalone,
+        SLOW_MAGE_BOLT,
+        MAGE_BOLT_FAMILY_FLAG,
+        &format!("cast_time_ms = 1500, cost = {BOLT_COST}"),
+    );
+    use_mana(&standalone);
+    standalone.assert_call("debug_force_cast", &["1", &CLEARCASTING.to_string()]);
+    advance(&standalone);
+
+    begin_cast(&standalone, SLOW_MAGE_BOLT, wolf);
+    assert!(is_casting(&standalone, PLAYER));
+    standalone.assert_call("debug_cancel_cast", &["1"]);
+    assert!(!is_casting(&standalone, PLAYER));
+    assert_eq!(
+        charges(&standalone, PLAYER, CLEARCASTING),
+        Some(1),
+        "vmangos RestoreSpellMods gives an interrupted cast's charge back"
+    );
+
+    begin_cast(&standalone, SLOW_MAGE_BOLT, wolf);
+    standalone.assert_call("debug_advance_roll_batch", &["40"]);
+    assert!(!is_casting(&standalone, PLAYER), "the cast completes");
+    assert_eq!(mana(&standalone), MANA);
+    assert_eq!(charges(&standalone, PLAYER, CLEARCASTING), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_spell_outside_the_family_mask_spends_no_clearcasting() {
+    let mut standalone = Standalone::start("aura-charges-clearcasting-unmasked");
+    let wolf = stage(&mut standalone);
+    mage_modifier(&standalone, CLEARCASTING, -100, SPELLMOD_OP_COST);
+    mage_bolt(
+        &standalone,
+        UNMASKED_MAGE_BOLT,
+        UNMASKED_FAMILY_FLAG,
+        &format!("cost = {BOLT_COST}"),
+    );
+    use_mana(&standalone);
+    standalone.assert_call("debug_force_cast", &["1", &CLEARCASTING.to_string()]);
+    advance(&standalone);
+
+    cast(&standalone, UNMASKED_MAGE_BOLT, wolf);
+    assert_eq!(mana(&standalone), MANA - BOLT_COST);
+    assert_eq!(charges(&standalone, PLAYER, CLEARCASTING), Some(1));
 }
 
 #[test]
@@ -1986,13 +2105,13 @@ fn wolf_begins_a_cast(standalone: &Standalone, wolf: u64) {
             &PLAYER.to_string(),
         ],
     );
-    assert!(wolf_is_casting(standalone, wolf));
+    assert!(is_casting(standalone, wolf));
 }
 
-fn wolf_is_casting(standalone: &Standalone, wolf: u64) -> bool {
+fn is_casting(standalone: &Standalone, caster: u64) -> bool {
     !standalone
         .query_rows(&format!(
-            "SELECT spell_id FROM game_pending_cast WHERE caster_guid = {wolf}"
+            "SELECT spell_id FROM game_pending_cast WHERE caster_guid = {caster}"
         ))
         .is_empty()
 }
@@ -2111,6 +2230,71 @@ fn bolt(standalone: &Standalone, spell_id: u32, school_mask: u8, cast_flags: u32
             ("kind", &E_DAMAGE),
             ("base_points", &5),
             ("target", &T_TARGET_ENEMY),
+        ],
+    );
+}
+
+fn mage_modifier(standalone: &Standalone, spell_id: u32, amount: i32, op: i32) {
+    aura_spell(
+        standalone,
+        Charged {
+            spell_id,
+            school_mask: FIRE,
+            target: T_SELF,
+            proc_flags: 0,
+            charges: 1,
+        },
+        &[(A_SPELLMOD_PCT, amount, op, P_SPELLMOD_OP)],
+    );
+    set_spell(
+        standalone,
+        spell_id,
+        &format!("family_name = {SPELL_FAMILY_MAGE}"),
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET p_1 = {MAGE_BOLT_FAMILY_FLAG} WHERE spell_id = {spell_id}"
+    ));
+}
+
+fn mage_bolt(standalone: &Standalone, spell_id: u32, family_flag: i32, assignments: &str) {
+    bolt(standalone, spell_id, FIRE, 0);
+    set_spell(
+        standalone,
+        spell_id,
+        &format!("family_name = {SPELL_FAMILY_MAGE}, family_flags = {family_flag}, {assignments}"),
+    );
+}
+
+fn use_mana(standalone: &Standalone) {
+    let bytes: u32 = standalone
+        .query_rows(&format!(
+            "SELECT unit_bytes_0 FROM game_world_entity WHERE guid = {PLAYER}"
+        ))
+        .remove(0)["unit_bytes_0"]
+        .parse()
+        .expect("unit_bytes_0 is a number");
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_bytes_0 = {}, power = {MANA}, max_power = {MANA} \
+         WHERE guid = {PLAYER}",
+        bytes & 0x00FF_FFFF
+    ));
+}
+
+fn mana(standalone: &Standalone) -> u32 {
+    standalone.query_rows(&format!(
+        "SELECT power FROM game_world_entity WHERE guid = {PLAYER}"
+    ))[0]["power"]
+        .parse()
+        .expect("power is a number")
+}
+
+fn begin_cast(standalone: &Standalone, spell_id: u32, target: u64) {
+    standalone.assert_call(
+        "debug_begin_cast",
+        &[
+            &PLAYER.to_string(),
+            &spell_id.to_string(),
+            &target.to_string(),
         ],
     );
 }

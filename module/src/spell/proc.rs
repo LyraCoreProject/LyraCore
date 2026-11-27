@@ -296,12 +296,19 @@ fn fear_ward_decide(profile: &ProcProfile, hit: &ProcHit, now_micros: i64) -> Op
         .then(|| fire_of(profile, now_micros))
 }
 
+// vmangos Aura::HandleAddModifier gives Shadow Trance and Netherwind Focus one charge.
+const ONE_CHARGE_MODIFIERS: [u32; 2] = [17941, 22008];
+
 /// Every Aura Holder carries its spell's profile and base charges (vmangos SpellAuraHolder).
 pub(crate) fn frozen_profile(hdr: &Spell, overlay: Option<&SpellProcEvent>) -> ProcProfile {
     let base = ProcProfile {
         flags: hdr.proc_flags,
         chance: hdr.proc_chance,
-        charges: hdr.proc_charges,
+        charges: if ONE_CHARGE_MODIFIERS.contains(&hdr.spell_id) {
+            1
+        } else {
+            hdr.proc_charges
+        },
         ..ProcProfile::default()
     };
     let Some(o) = overlay else {
@@ -1719,6 +1726,14 @@ mod tests {
             ..always()
         };
         assert!(decide(&any_mage, ProcSide::Victim, &spell(3, 0x40), 0, 0).is_some());
+    }
+
+    #[test]
+    fn shadow_trance_and_netherwind_focus_freeze_one_charge() {
+        for spell_id in ONE_CHARGE_MODIFIERS {
+            let hdr = crate::Spell::blank(spell_id, "Charged modifier");
+            assert_eq!(frozen_profile(&hdr, None).charges, 1);
+        }
     }
 
     fn proc_header() -> Spell {

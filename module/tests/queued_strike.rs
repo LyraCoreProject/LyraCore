@@ -1,7 +1,8 @@
 mod support;
 
 use lyracore_shared::spell::taxonomy::{
-    A_INERT, CAST_FLAG_DISCOUNT_POWER_ON_MISS, E_NEXT_SWING, P_NONE, T_SELF, T_TARGET_ENEMY,
+    A_INERT, A_SPELLMOD_PCT, CAST_FLAG_DISCOUNT_POWER_ON_MISS, E_NEXT_SWING, P_NONE, P_SPELLMOD_OP,
+    SPELLMOD_OP_COST, T_SELF, T_TARGET_ENEMY,
 };
 
 use std::collections::BTreeMap;
@@ -34,6 +35,9 @@ const INTERRUPTED: &str = "2";
 const RAGE: u32 = 1;
 const MANA: u32 = 0;
 const PROC_WATCH: u32 = 5_131_703;
+const FREE_STRIKE_MODIFIER: u32 = 5_131_704;
+const SPELL_FAMILY_HUNTER: u8 = 9;
+const RAPTOR_STRIKE_FAMILY_FLAG: i32 = 0x1;
 const WATCH_CHARGES: u8 = 3;
 const WATCH_DURATION_MS: u32 = 600_000;
 // vmangos PROC_FLAG_TAKE_MELEE_ABILITY.
@@ -557,6 +561,53 @@ fn death_drops_a_queued_raptor_strike() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_queued_strike_under_a_free_cost_modifier_is_free_and_spends_it_at_the_swing() {
+    let mut standalone = Standalone::start("queued-strike-cost-modifier");
+    standalone.publish_module();
+    stage_on_next_swing_spell(
+        &standalone,
+        QueuedStrike {
+            power_type: MANA,
+            ..QueuedStrike::rage(RAPTOR_STRIKE, "Raptor Strike", RAPTOR_STRIKE_COST)
+        },
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell SET family_name = {SPELL_FAMILY_HUNTER}, \
+         family_flags = {RAPTOR_STRIKE_FAMILY_FLAG} WHERE spell_id = {RAPTOR_STRIKE}"
+    ));
+    standalone.assert_call("debug_spawn_player_entity", &["1"]);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET godmode = true WHERE guid = {PLAYER}"
+    ));
+    let wolf = spawn_target(&standalone);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET godmode = true WHERE guid = {wolf}"
+    ));
+    engage(&standalone, wolf);
+    stage_free_strike_modifier(&standalone);
+    stage_mana(&standalone, 100);
+
+    cast(&standalone, RAPTOR_STRIKE, wolf);
+    assert_eq!(
+        modifier_charges(&standalone),
+        Some(1),
+        "queuing the strike spends no charge"
+    );
+    swing(&standalone);
+    assert_eq!(
+        power(&player(&standalone)),
+        100,
+        "the -100% cost modifier makes the strike free"
+    );
+    assert_eq!(
+        modifier_charges(&standalone),
+        None,
+        "vmangos casts the strike at the swing, which spends the modifier's one charge"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_queued_raptor_strike_ends_with_its_attack() {
     let mut standalone = Standalone::start("queued-strike-attack-end");
     standalone.publish_module();
@@ -946,6 +997,50 @@ fn stage_proc_watch(standalone: &Standalone, wolf: u64) {
             &wolf.to_string(),
         ],
     );
+}
+
+fn stage_free_strike_modifier(standalone: &Standalone) {
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &FREE_STRIKE_MODIFIER),
+            ("name", &"Free strike modifier fixture"),
+            ("school_mask", &1),
+            ("range_yd", &30),
+            ("duration_ms", &WATCH_DURATION_MS),
+            ("spell_level", &1),
+            ("family_name", &SPELL_FAMILY_HUNTER),
+            ("proc_charges", &1u8),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(FREE_STRIKE_MODIFIER, 0)),
+            ("spell_id", &FREE_STRIKE_MODIFIER),
+            ("effect_index", &0),
+            ("kind", &A_SPELLMOD_PCT),
+            ("base_points", &-100),
+            ("target", &T_SELF),
+            ("p_0", &SPELLMOD_OP_COST),
+            ("p_0_kind", &P_SPELLMOD_OP),
+            ("p_1", &RAPTOR_STRIKE_FAMILY_FLAG),
+        ],
+    );
+    standalone.assert_call(
+        "debug_force_cast",
+        &["1", &FREE_STRIKE_MODIFIER.to_string()],
+    );
+}
+
+fn modifier_charges(standalone: &Standalone) -> Option<u8> {
+    standalone
+        .query_rows(&format!(
+            "SELECT proc_charges FROM game_aura WHERE target_guid = {PLAYER} \
+             AND spell_id = {FREE_STRIKE_MODIFIER}"
+        ))
+        .first()
+        .map(|row| row["proc_charges"].parse().unwrap())
 }
 
 fn watch_charges(standalone: &Standalone, wolf: u64) -> Option<u8> {

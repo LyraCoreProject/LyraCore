@@ -21,7 +21,7 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
         .game_pending_cast()
         .scheduled_id()
         .delete(sched.scheduled_id);
-    let result = complete_cast(ctx, &sched.request());
+    let result = complete_cast(ctx, &sched.request(), sched.began_at());
     clear_dead_callback_cast_admission(ctx, sched.caster_guid, sched.spell_id);
     if let Err(e) = &result {
         log::info!(

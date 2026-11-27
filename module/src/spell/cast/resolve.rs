@@ -2,7 +2,7 @@ use lyracore_shared::spell::taxonomy::{
     CAST_FLAG_DISCOUNT_POWER_ON_MISS, CAST_FLAG_RANGED_AUTO_REPEAT, E_REVIVE_PET,
 };
 use lyracore_shared::spell_custom as custom;
-use spacetimedb::{log, ReducerContext, Table, TimeDuration};
+use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
 
 use super::depth::TriggerLink;
 use super::impact::SpellFlights;
@@ -113,7 +113,13 @@ pub(crate) fn resolve_cast(
     request: &CastRequest,
 ) -> Result<(), CastGateRefusal> {
     let spell = LoadedSpell::load(ctx, request.spell_id)?;
-    resolve_loaded_cast(ctx, request, &spell, CastPhase::Start)
+    resolve_loaded_cast(
+        ctx,
+        request,
+        &spell,
+        CastPhase::Start,
+        crate::time::now(ctx),
+    )
 }
 
 /// Resolves a Trigger Child Cast.
@@ -122,18 +128,25 @@ pub(crate) fn resolve_trigger_cast(
     request: &CastRequest,
 ) -> Result<(), CastGateRefusal> {
     let spell = LoadedSpell::load(ctx, request.spell_id)?;
-    resolve_loaded_cast(ctx, request, &spell, CastPhase::Trigger)
+    resolve_loaded_cast(
+        ctx,
+        request,
+        &spell,
+        CastPhase::Trigger,
+        crate::time::now(ctx),
+    )
 }
 
-/// Resolves a timed cast that came due.
+/// Resolves a timed cast that came due; `began_at` is when it began and fixed its cast time.
 pub(crate) fn complete_cast(
     ctx: &ReducerContext,
     request: &CastRequest,
+    began_at: Timestamp,
 ) -> Result<(), CastGateRefusal> {
     // A caster gone at completion refuses with the live-entity message, before the spell lookup.
     crate::helpers::live_entity(ctx, request.caster_guid)?;
     let spell = LoadedSpell::load(ctx, request.spell_id)?;
-    resolve_loaded_cast(ctx, request, &spell, CastPhase::Completion)
+    resolve_loaded_cast(ctx, request, &spell, CastPhase::Completion, began_at)
 }
 
 fn resolve_loaded_cast(
@@ -141,6 +154,7 @@ fn resolve_loaded_cast(
     request: &CastRequest,
     spell: &LoadedSpell,
     phase: CastPhase,
+    began_at: Timestamp,
 ) -> Result<(), CastGateRefusal> {
     let CastRequest {
         caster_guid,
@@ -155,6 +169,16 @@ fn resolve_loaded_cast(
         .map_err(|_| format!("caster {caster_guid} not in world"))?;
 
     check_cast_gates(ctx, &caster, spell, request, GateRun::Resolve(phase))?;
+    let pays_cost = caster.is_player() && !request.is_item_cast() && !queues_next_swing(effects);
+    let modifier_charges = crate::spell::ModifierCharges::used_by(
+        ctx,
+        caster_guid,
+        hdr,
+        crate::spell::ModifiedCast {
+            began_at,
+            pays_cost,
+        },
+    );
 
     let reagents = CastReagents::of(ctx, &caster, request, CastOrigin::Direct(phase));
     let cast_item = request
@@ -176,11 +200,9 @@ fn resolve_loaded_cast(
     }
 
     // Flush the cost before effects so self-heals read the charged caster row.
-    if caster.is_player() && hdr.cost > 0 && !request.is_item_cast() && !queues_next_swing(effects)
-    {
-        charge_spell_cost(ctx, &mut caster, hdr);
+    if pays_cost && hdr.cost > 0 {
+        launched.targets.paid_cost = charge_spell_cost(ctx, &mut caster, hdr);
         caster.update(ctx);
-        launched.targets.cost_paid = true;
     }
 
     let untriggered = phase != CastPhase::Trigger;
@@ -202,6 +224,7 @@ fn resolve_loaded_cast(
         craft,
         launched,
     );
+    modifier_charges.spend(ctx);
 
     // vmangos Spell::TakeCastItem runs after SMSG_SPELL_GO and the effects.
     if let Some((item_guid, item_use)) = cast_item.filter(|_| !plan_takes_cast_item) {
@@ -287,17 +310,24 @@ impl CastOrigin {
     }
 }
 
-pub(crate) fn charge_spell_cost(ctx: &ReducerContext, caster: &mut WorldEntity, hdr: &Spell) {
-    caster.spend_power(hdr.power_type, hdr.cost);
-    if hdr.cost > 0 && hdr.power_type == lyracore_shared::packing::power_type::MANA {
+/// Takes the spell's modified cost from the caster row and returns it.
+pub(crate) fn charge_spell_cost(
+    ctx: &ReducerContext,
+    caster: &mut WorldEntity,
+    hdr: &Spell,
+) -> u32 {
+    let cost = crate::spell::spell_cost(ctx, caster.guid, hdr);
+    caster.spend_power(hdr.power_type, cost);
+    if cost > 0 && hdr.power_type == lyracore_shared::packing::power_type::MANA {
         let now_ms = crate::time::now_ms(ctx);
         caster.mana_regen_paused_until_ms = now_ms + 5000;
     }
+    cost
 }
 
 /// vmangos `Spell::DoAllEffectOnTarget`: the paid cost a SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS
 /// Spell gives back for a target's `CAST_MISS_*` code, 82% rounded to nearest.
-fn avoided_cost_refund(hdr: &Spell, miss: u8) -> u32 {
+fn avoided_cost_refund(hdr: &Spell, cost: u32, miss: u8) -> u32 {
     use crate::spell::{
         CAST_MISS_DODGE, CAST_MISS_IMMUNE, CAST_MISS_IMMUNE2, CAST_MISS_MISS, CAST_MISS_PARRY,
     };
@@ -317,15 +347,21 @@ fn avoided_cost_refund(hdr: &Spell, miss: u8) -> u32 {
         };
     if refunds {
         // vmangos lroundf(m_powerCost * 0.82f): single precision, halves away from zero.
-        (hdr.cost as f32 * 0.82_f32).round() as u32
+        (cost as f32 * 0.82_f32).round() as u32
     } else {
         0
     }
 }
 
-/// Gives the caster back part of a cost it paid when the cast's target avoided it.
-pub(crate) fn refund_avoided_cost(ctx: &ReducerContext, caster_guid: u64, hdr: &Spell, miss: u8) {
-    let refund = avoided_cost_refund(hdr, miss);
+/// Gives the caster back part of the cost it paid when the cast's target avoided it.
+pub(crate) fn refund_avoided_cost(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    hdr: &Spell,
+    paid_cost: u32,
+    miss: u8,
+) {
+    let refund = avoided_cost_refund(hdr, paid_cost, miss);
     if refund == 0 {
         return;
     }
@@ -717,7 +753,7 @@ struct CastTargets<'a> {
     weapon_targets: Vec<u64>,
     seen_weapon_targets: std::collections::HashSet<u64>,
     capped: CappedPicks,
-    cost_paid: bool,
+    paid_cost: u32,
 }
 
 impl<'a> CastTargets<'a> {
@@ -746,7 +782,7 @@ impl<'a> CastTargets<'a> {
             weapon_targets: Vec::new(),
             seen_weapon_targets: std::collections::HashSet::new(),
             capped: CappedPicks::default(),
-            cost_paid: false,
+            paid_cost: 0,
         }
     }
 
@@ -865,7 +901,7 @@ impl<'a> CastTargets<'a> {
 
     /// Gives back part of the paid cost once for each target that avoided the cast.
     fn refund_avoided_cost(&self) {
-        if !self.cost_paid {
+        if self.paid_cost == 0 {
             return;
         }
         for &t in &self.units {
@@ -873,6 +909,7 @@ impl<'a> CastTargets<'a> {
                 self.ctx,
                 self.caster_guid,
                 &self.spell.header,
+                self.paid_cost,
                 self.miss_info(t),
             );
         }
@@ -2427,11 +2464,12 @@ fn check_power(
 
     // vmangos `Spell::CheckPower` passes a cast an item starts.
     let power = caster.spendable_power(hdr.power_type);
-    if !request.is_item_cast() && cost_gate_blocks(caster.is_player(), power, hdr.cost) {
+    let cost = crate::spell::spell_cost(ctx, caster_guid, hdr);
+    if !request.is_item_cast() && cost_gate_blocks(caster.is_player(), power, cost) {
         return Err(CastGateRefusal::new(
             CastRefusalKind::InsufficientPower,
             cost_refusal_reason(hdr.power_type),
-            format!("not enough power: have {power}, need {}", hdr.cost),
+            format!("not enough power: have {power}, need {cost}"),
         ));
     }
     Ok(())
@@ -2871,9 +2909,13 @@ pub(crate) fn begin_loaded_cast(
     }
 
     // Channels resolve immediately even when their imported cast time is nonzero.
-    let (ct_flat, ct_pct) =
-        crate::spell::spell_mod(ctx, caster_guid, SPELLMOD_OP_CASTING_TIME, hdr);
-    let cast_ms = crate::spell::apply_spell_mod(hdr.cast_time_ms, ct_flat, ct_pct);
+    let cast_ms = crate::spell::spell_modified_value(
+        ctx,
+        caster_guid,
+        SPELLMOD_OP_CASTING_TIME,
+        hdr,
+        hdr.cast_time_ms,
+    );
 
     let completed_channel = hdr.cast_flags & CAST_FLAG_CHANNELED != 0
         && spell
@@ -2881,7 +2923,8 @@ pub(crate) fn begin_loaded_cast(
             .iter()
             .any(|effect| effect.kind == E_TAME_CREATURE);
     if !completed_channel && (cast_ms == 0 || hdr.cast_flags & CAST_FLAG_CHANNELED != 0) {
-        let result = resolve_loaded_cast(ctx, request, spell, CastPhase::Start);
+        let result =
+            resolve_loaded_cast(ctx, request, spell, CastPhase::Start, crate::time::now(ctx));
         clear_dead_callback_cast_admission(ctx, caster_guid, spell_id);
         return result.map(|_| CastStart::Resolved);
     }
@@ -2907,6 +2950,7 @@ pub(crate) fn begin_loaded_cast(
         request,
         crate::time::schedule_time(ctx, fire_at),
         completion_ms,
+        crate::time::now(ctx),
     ));
     start_global_cooldown(ctx, caster_guid, hdr);
     crate::SpellCastEvent::insert(
@@ -3481,13 +3525,13 @@ mod cast_miss_tests {
             CAST_MISS_IMMUNE,
             CAST_MISS_IMMUNE2,
         ]
-        .map(|miss| avoided_cost_refund(&kick, miss));
+        .map(|miss| avoided_cost_refund(&kick, kick.cost, miss));
         assert_eq!(refunds, [21; 5], "lroundf(25 * 0.82) is 21");
         for miss in [CAST_MISS_NONE, CAST_MISS_BLOCK, CAST_MISS_EVADE] {
-            assert_eq!(avoided_cost_refund(&kick, miss), 0);
+            assert_eq!(avoided_cost_refund(&kick, kick.cost, miss), 0);
         }
         assert_eq!(
-            avoided_cost_refund(&refunding(ENERGY, 45), CAST_MISS_DODGE),
+            avoided_cost_refund(&refunding(ENERGY, 45), 45, CAST_MISS_DODGE),
             37
         );
     }
@@ -3497,10 +3541,22 @@ mod cast_miss_tests {
         use crate::spell::{CAST_MISS_BLOCK, CAST_MISS_DODGE, CAST_MISS_MISS, CAST_MISS_PARRY};
         use lyracore_shared::packing::power_type::RAGE;
         let heroic_strike = refunding(RAGE, 150);
-        assert_eq!(avoided_cost_refund(&heroic_strike, CAST_MISS_DODGE), 123);
-        assert_eq!(avoided_cost_refund(&heroic_strike, CAST_MISS_PARRY), 123);
-        assert_eq!(avoided_cost_refund(&heroic_strike, CAST_MISS_MISS), 0);
-        assert_eq!(avoided_cost_refund(&heroic_strike, CAST_MISS_BLOCK), 0);
+        assert_eq!(
+            avoided_cost_refund(&heroic_strike, heroic_strike.cost, CAST_MISS_DODGE),
+            123
+        );
+        assert_eq!(
+            avoided_cost_refund(&heroic_strike, heroic_strike.cost, CAST_MISS_PARRY),
+            123
+        );
+        assert_eq!(
+            avoided_cost_refund(&heroic_strike, heroic_strike.cost, CAST_MISS_MISS),
+            0
+        );
+        assert_eq!(
+            avoided_cost_refund(&heroic_strike, heroic_strike.cost, CAST_MISS_BLOCK),
+            0
+        );
     }
 
     #[test]
@@ -3511,9 +3567,9 @@ mod cast_miss_tests {
             cast_flags: 0,
             ..refunding(RAGE, 150)
         };
-        assert_eq!(avoided_cost_refund(&plain, CAST_MISS_DODGE), 0);
+        assert_eq!(avoided_cost_refund(&plain, plain.cost, CAST_MISS_DODGE), 0);
         assert_eq!(
-            avoided_cost_refund(&refunding(MANA, 150), CAST_MISS_DODGE),
+            avoided_cost_refund(&refunding(MANA, 150), 150, CAST_MISS_DODGE),
             0
         );
     }

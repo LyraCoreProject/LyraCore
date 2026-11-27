@@ -39,20 +39,32 @@ pub(crate) fn clear(ctx: &ReducerContext, guid: u64) {
     }
 }
 
-// A Character pays when the swing fires, even on a miss; short of the cost, it swings white.
+/// The cost a Character pays when the swing fires, even on a miss; `None` swings white.
 pub(crate) fn charge(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     queued_spell: u32,
     strike: Option<&Spell>,
-) -> bool {
+) -> Option<u32> {
     if !attacker.is_player() {
-        return true;
+        return Some(0);
     }
-    let Some(mut payer) = ctx.db.game_world_entity().guid().find(attacker.guid) else {
-        return false;
+    let mut payer = ctx.db.game_world_entity().guid().find(attacker.guid)?;
+    let Some(strike) = strike else {
+        return Some(0);
     };
-    if strike.is_some_and(|strike| payer.spendable_power(strike.power_type) < strike.cost) {
+    // vmangos casts a queued strike at the swing, so the swing spends its charged modifiers.
+    let modifier_charges = crate::spell::ModifierCharges::used_by(
+        ctx,
+        payer.guid,
+        strike,
+        crate::spell::ModifiedCast {
+            began_at: crate::time::now(ctx),
+            pays_cost: true,
+        },
+    );
+    if payer.spendable_power(strike.power_type) < crate::spell::spell_cost(ctx, payer.guid, strike)
+    {
         SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
@@ -66,13 +78,12 @@ pub(crate) fn charge(
                 )
             },
         );
-        return false;
+        return None;
     }
-    if let Some(strike) = strike {
-        crate::spell::charge_spell_cost(ctx, &mut payer, strike);
-    }
+    let paid_cost = crate::spell::charge_spell_cost(ctx, &mut payer, strike);
     payer.update(ctx);
-    true
+    modifier_charges.spend(ctx);
+    Some(paid_cost)
 }
 
 const SPELL_ATTR_ON_NEXT_SWING_NO_DAMAGE: u32 = 0x4;

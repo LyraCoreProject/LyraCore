@@ -626,6 +626,19 @@ From this revision every effect of a travelling spell other than a Weapon Strike
 finisher strike lands at impact ([spell travel](schema.md#spell-travel)), so Frostbolt's slow
 arrives with its damage.
 
+### Spell modifier charge migration
+
+`game_pending_cast` gains `began_at_micros`, END-appended with default 0. A cast in flight at the
+update completes with 0, so it spends no charged cast-time modifier, such as Nature's Grace, and
+keeps it for the next cast. The table is private and transient, so no repair or reimport is needed,
+and the Native Host's delivery layouts do not change. Publish through a planned update; development
+reload requires an unchanged schema.
+
+From this revision a cast pays its cost after its `SPELLMOD_COST` modifiers, so cost talents such as
+Improved Heroic Strike and Frost Channeling lower what the server charges, as the client already
+shows. A charged spell modifier, such as Clearcasting or Presence of Mind, is spent by the next
+spell it changes.
+
 ### Spell power refund migration
 
 No schema changes. The importer sets the new `CAST_FLAG_DISCOUNT_POWER_ON_MISS` (0x0080_0000) on a
