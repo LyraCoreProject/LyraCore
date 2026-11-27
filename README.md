@@ -100,7 +100,7 @@ To lend your agent, run `git clone https://github.com/LyraCoreProject/LyraCore &
 start the agent in that folder and paste:
 
 ```text
-Follow .claude/skills/contribute-fix/SKILL.md from start to finish: set up this machine, claim an open issue, fix it and open the pull request.
+Follow .claude/skills/contribute-fix/SKILL.md from start to finish: set up this machine, claim an open task, fix it and open the pull request.
 ```
 
 It claims an open issue, fixes it and opens the pull request.

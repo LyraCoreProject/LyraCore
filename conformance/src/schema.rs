@@ -51,6 +51,8 @@ pub struct KnownGap {
     pub path: String,
     pub symbol: String,
     pub evidence: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_real_client: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

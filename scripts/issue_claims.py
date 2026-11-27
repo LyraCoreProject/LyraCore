@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Claim and release issues by comment, and release stale claims (CONTRIBUTING.md, "Picking an issue")."""
+"""Claim Feature Ledger gaps and issues, release them, and release stale claims (CONTRIBUTING.md, "Picking a task")."""
 
+import hashlib
 import json
 import os
 import re
 import subprocess
+import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import quote
 
 
 READY = "ready-for-agent"
 IN_PROGRESS = "in progress"
+GAP = "gap"
 CLAIM_BOT = "github-actions[bot]"
 MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 MAX_CLAIMS = 2
@@ -20,18 +24,65 @@ LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
 CLOSING_REFERENCE = re.compile(
     r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?[ \t]+#(\d+)\b", re.IGNORECASE
 )
+GAP_ID = re.compile(r"[a-z0-9_]+-[0-9a-f]{8}")
+GAP_MARKER = re.compile(r"<!-- lyracore-gap: ([a-z0-9_]+-[0-9a-f]{8}) -->")
+TITLE_LIMIT = 100
+LEDGER = Path("conformance/features")
 
 ASSIGN = "assign"
 UNASSIGN = "unassign"
 ADD_LABEL = "add_label"
 REMOVE_LABEL = "remove_label"
 COMMENT = "comment"
+REWRITE = "rewrite"
+CLOSE = "close"
 
 
 @dataclass(frozen=True)
 class Action:
     kind: str
-    value: str
+    value: object
+
+
+@dataclass(frozen=True)
+class Rewrite:
+    title: str
+    body: str
+
+
+@dataclass(frozen=True)
+class KnownGap:
+    gap_id: str
+    behavior: str
+    behavior_file: str
+    description: str
+    path: str
+    symbol: str
+    evidence: str
+    needs_real_client: bool
+    vmangos: dict
+    scenarios: tuple
+
+    @property
+    def is_data_gap(self):
+        return self.path.startswith("importer/")
+
+    @property
+    def is_task(self):
+        return not self.is_data_gap and not self.needs_real_client
+
+
+@dataclass(frozen=True)
+class GapClaimFacts:
+    title: str
+    author: str
+    author_type: str
+    issue_number: int
+    gaps: dict
+    holders: dict
+    author_claims: tuple
+    repository: str
+    commit: str
 
 
 @dataclass(frozen=True)
@@ -143,11 +194,17 @@ def decide_release(facts):
     is_holder = facts.author in facts.assignees
     if not is_holder and facts.association not in MAINTAINER_ASSOCIATIONS:
         return reply(facts, "Only the holder or a maintainer can release this issue.")
-    return [
+    released = [
         *(Action(UNASSIGN, login) for login in facts.assignees),
         *([Action(REMOVE_LABEL, IN_PROGRESS)] if IN_PROGRESS in facts.labels else []),
-        *reply(facts, "Released. Anyone can claim this issue with `/claim`."),
     ]
+    if GAP in facts.labels:
+        return [
+            *released,
+            *reply(facts, "Released. The gap returns to the pool."),
+            Action(CLOSE, "not_planned"),
+        ]
+    return [*released, *reply(facts, "Released. Anyone can claim this issue with `/claim`.")]
 
 
 def decide_expiry(facts):
@@ -159,14 +216,148 @@ def decide_expiry(facts):
         or facts.now - facts.claimed_at <= CLAIM_LIFETIME
     ):
         return []
-    return [
+    released = [
         *(Action(UNASSIGN, login) for login in facts.assignees),
         Action(REMOVE_LABEL, IN_PROGRESS),
+    ]
+    reason = (
+        f"Released {mentions(facts.assignees)}: the claim is older than 24 hours "
+        f"and no open pull request says `Closes #{facts.issue_number}`."
+    )
+    if GAP in facts.labels:
+        return [
+            *released,
+            Action(COMMENT, f"{reason} The gap returns to the pool."),
+            Action(CLOSE, "not_planned"),
+        ]
+    return [*released, Action(COMMENT, f"{reason} Comment `/claim` to take this issue again.")]
+
+
+def gap_id(behavior, description):
+    return f"{behavior}-{hashlib.sha256(description.encode('utf-8')).hexdigest()[:8]}"
+
+
+def load_ledger(root):
+    gaps = {}
+    for file in sorted((root / LEDGER).glob("*/*.toml")):
+        with file.open("rb") as source:
+            behavior = tomllib.load(source)
+        for gap in behavior.get("known_gaps", []):
+            known = KnownGap(
+                gap_id=gap_id(behavior["id"], gap["description"]),
+                behavior=behavior["id"],
+                behavior_file=file.relative_to(root).as_posix(),
+                description=gap["description"],
+                path=gap["path"],
+                symbol=gap["symbol"],
+                evidence=gap["evidence"],
+                needs_real_client=gap.get("needs_real_client", False),
+                vmangos=behavior["vmangos"],
+                scenarios=tuple(behavior["scenarios"]),
+            )
+            gaps[known.gap_id] = known
+    return gaps
+
+
+def claim_title(title):
+    """The text after a leading `/claim`, or None when the title is no gap claim."""
+    words = title.split(None, 1)
+    if not words or words[0].lower() != "/claim":
+        return None
+    return words[1].strip() if len(words) > 1 else ""
+
+
+def held_gap(body):
+    match = GAP_MARKER.fullmatch((body or "").split("\n", 1)[0].strip())
+    return match.group(1) if match else None
+
+
+def issue_title(gap):
+    prefix = f"{gap.behavior}: "
+    room = TITLE_LIMIT - len(prefix)
+    description = " ".join(gap.description.split())
+    if len(description) <= room:
+        return prefix + description
+    cut = description[: room - 1].rsplit(" ", 1)[0].rstrip(" ,;:.")
+    return f"{prefix}{cut}…"
+
+
+def issue_body(gap, repository, commit):
+    blob = f"https://github.com/{repository}/blob/{commit}"
+    reference = gap.vmangos
+    reference_link = (
+        f"https://github.com/vmangos/core/blob/{reference['commit']}/{reference['path']}"
+    )
+    scenarios = (
+        ", ".join(f"`{scenario}`" for scenario in gap.scenarios)
+        if gap.scenarios
+        else "none yet"
+    )
+    return "\n".join([
+        f"<!-- lyracore-gap: {gap.gap_id} -->",
+        f"Known gap `{gap.gap_id}` of the Behavior `{gap.behavior}` in "
+        f"[`{gap.behavior_file}`]({blob}/{gap.behavior_file}).",
+        "",
+        "\n".join(f"> {line}" for line in gap.description.splitlines()),
+        "",
+        f"**Expected (1.12.1).** The Reference Server's result in `{reference['symbol']}`, "
+        f"[`{reference['path']}`]({reference_link}) at vmangos `{reference['commit'][:8]}`. "
+        f"Evidence: {gap.evidence}",
+        "",
+        f"**Actual** (at `{commit[:8]}`). `{gap.symbol}` in [`{gap.path}`]({blob}/{gap.path}).",
+        "",
+        f"**How it shows.** The Behavior's scenarios: {scenarios}.",
+        "",
+        "**Fix direction.** Match the Reference Server's observable result, with a test that "
+        "fails before the fix. Remove this gap's `[[known_gaps]]` entry from "
+        f"`{gap.behavior_file}` in the same pull request.",
+    ])
+
+
+def refuse(facts, text):
+    return [Action(COMMENT, f"@{facts.author} {text}"), Action(CLOSE, "not_planned")]
+
+
+def decide_gap_claim(facts):
+    if facts.author_type == "Bot" or not LOGIN.fullmatch(facts.author):
+        return []
+    requested = claim_title(facts.title)
+    if requested is None:
+        return []
+    if not GAP_ID.fullmatch(requested):
+        return refuse(facts, "A claim's title is `/claim <gap id>`, such as `/claim periodic_leech-3fa2c1d0`.")
+    gap = facts.gaps.get(requested)
+    if gap is None:
+        return refuse(facts, f"No known gap has the id `{requested}`. Pick an open task.")
+    if gap.is_data_gap:
+        return refuse(facts, f"`{requested}` is a Data Gap, fixed in the importer. Pick an open task.")
+    if gap.needs_real_client:
+        return refuse(
+            facts,
+            f"`{requested}` needs a person at a real 1.12.1 client. Pick an open task.",
+        )
+    holder = facts.holders.get(requested)
+    if holder is not None:
+        return refuse(facts, f"`{requested}` is held in #{holder}. Pick another task.")
+    if len(facts.author_claims) >= MAX_CLAIMS:
+        held = ", ".join(f"#{number}" for number in facts.author_claims)
+        return refuse(
+            facts,
+            f"You already hold {len(facts.author_claims)} claims ({held}). "
+            f"Open a pull request for one, or comment `/release` on it, then claim again.",
+        )
+    number = facts.issue_number
+    return [
+        Action(ASSIGN, facts.author),
+        Action(ADD_LABEL, GAP),
+        Action(ADD_LABEL, IN_PROGRESS),
+        Action(REWRITE, Rewrite(issue_title(gap), issue_body(gap, facts.repository, facts.commit))),
         Action(
             COMMENT,
-            f"Released {mentions(facts.assignees)}: the claim is older than 24 hours "
-            f"and no open pull request says `Closes #{facts.issue_number}`. "
-            f"Comment `/claim` to take this issue again.",
+            f"@{facts.author} Claimed. Open a draft pull request that says `Closes #{number}` "
+            f"within 24 hours, or the claim ends and the gap returns to the pool. The fix removes "
+            f"this gap's `[[known_gaps]]` entry from `{gap.behavior_file}`. "
+            f"Comment `/release` to give it up.",
         ),
     ]
 
@@ -218,8 +409,75 @@ def perform(gh, number, actions):
             gh.api("--method", "DELETE", f"{base}/labels/{quote(action.value)}")
         elif action.kind == COMMENT:
             gh.api("--method", "POST", f"{base}/comments", "-f", f"body={action.value}")
+        elif action.kind == REWRITE:
+            gh.api(
+                "--method", "PATCH", base,
+                "-f", f"title={action.value.title}", "-f", f"body={action.value.body}",
+            )
+        elif action.kind == CLOSE:
+            gh.api("--method", "PATCH", base, "-f", "state=closed", "-f", f"state_reason={action.value}")
         else:
             raise ValueError(f"unknown action {action.kind}")
+
+
+def claims_of(gh, author, number):
+    return tuple(
+        issue_number
+        for issue_number in list_issues(
+            gh, ("assignee", author), ("labels", IN_PROGRESS), jq=".number"
+        )
+        if issue_number != number
+    )
+
+
+def holders_of(gh):
+    holders = {}
+    for issue in list_issues(gh, ("labels", GAP), jq="{number, body}"):
+        held = held_gap(issue["body"])
+        if held is not None:
+            holders.setdefault(held, issue["number"])
+    return holders
+
+
+def handle_gap_claims(gh, root, commit):
+    """Answer every open `/claim` issue, oldest first; a failed claim does not stop the rest."""
+    claims = sorted(
+        (
+            issue
+            for issue in list_issues(
+                gh, jq="{number, title, author: .user.login, author_type: .user.type}"
+            )
+            if claim_title(issue["title"]) is not None
+        ),
+        key=lambda issue: issue["number"],
+    )
+    if not claims:
+        return
+    gaps = load_ledger(root)
+    failed = []
+    for issue in claims:
+        number = issue["number"]
+        try:
+            facts = GapClaimFacts(
+                title=issue["title"],
+                author=issue["author"],
+                author_type=issue["author_type"],
+                issue_number=number,
+                gaps=gaps,
+                holders=holders_of(gh),
+                author_claims=(
+                    claims_of(gh, issue["author"], number)
+                    if LOGIN.fullmatch(issue["author"])
+                    else ()
+                ),
+                repository=gh.repository,
+                commit=commit,
+            )
+            perform(gh, number, decide_gap_claim(facts))
+        except (subprocess.CalledProcessError, RuntimeError):
+            failed.append(number)
+    if failed:
+        raise RuntimeError(f"claims failed on {', '.join(f'#{n}' for n in failed)}")
 
 
 def handle_comment(gh, env):
@@ -238,13 +496,7 @@ def handle_comment(gh, env):
     )
     claims = ()
     if command_of(body) == "/claim" and LOGIN.fullmatch(author):
-        claims = tuple(
-            issue_number
-            for issue_number in list_issues(
-                gh, ("assignee", author), ("labels", IN_PROGRESS), jq=".number"
-            )
-            if issue_number != number
-        )
+        claims = claims_of(gh, author, number)
     facts = CommentFacts(
         body=body,
         author=author,
@@ -301,11 +553,14 @@ def handle_expiry(gh, now):
         perform(gh, issue["number"], decide_expiry(facts))
 
 
-def main(env, gh, now):
+def main(env, gh, now, root):
     if env["GITHUB_EVENT_NAME"] == "issue_comment":
         handle_comment(gh, env)
+    elif env["GITHUB_EVENT_NAME"] == "issues":
+        handle_gap_claims(gh, root, env["GITHUB_SHA"])
     else:
         handle_expiry(gh, now)
+        handle_gap_claims(gh, root, env["GITHUB_SHA"])
 
 
 if __name__ == "__main__":
@@ -313,4 +568,5 @@ if __name__ == "__main__":
         os.environ,
         Github(os.environ["GITHUB_REPOSITORY"]),
         datetime.now(timezone.utc),
+        Path(__file__).resolve().parents[1],
     )

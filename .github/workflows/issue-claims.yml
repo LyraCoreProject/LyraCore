@@ -3,14 +3,20 @@ name: Issue claims
 on:
   issue_comment:
     types: [created]
+  issues:
+    types: [opened]
   schedule:
     - cron: "17 4 * * *"
   workflow_dispatch:
 
 concurrency:
-  # Only claim commands share a group. An ordinary comment must not replace a queued command.
+  # Each run in the gaps group answers every open gap claim, so a pending run GitHub replaces loses none.
+  # Only claim commands share a group. An ordinary comment or issue must not replace a queued command.
   group: >-
-    ${{ github.event_name == 'issue_comment' && (startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/release'))
+    ${{ (github.event_name == 'issues' && startsWith(github.event.issue.title, '/claim')
+    || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    && 'issue-claims-gaps'
+    || github.event_name == 'issue_comment' && (startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/release'))
     && format('issue-claims-{0}', github.event.issue.number)
     || format('issue-claims-other-{0}', github.run_id) }}
   cancel-in-progress: false
@@ -23,14 +29,18 @@ permissions:
 jobs:
   claims:
     # Pull requests also raise issue_comment; they are never claims.
-    if: github.event_name != 'issue_comment' || (github.event.issue.pull_request == null && github.event.comment.user.type != 'Bot' && (startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/release')))
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'issues' && startsWith(github.event.issue.title, '/claim')
+      || github.event_name == 'issue_comment' && github.event.issue.pull_request == null && github.event.comment.user.type != 'Bot' && (startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/release'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # The default branch only: the comment is data, and no pull request code is checked out.
+      # The default branch only: issues and comments are data, and no pull request code is checked out.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A gap claim reads its issues through the API, so no issue title or body reaches this step.
       - name: Claim, release or expire
         env:
           GH_TOKEN: ${{ github.token }}

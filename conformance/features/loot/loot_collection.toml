@@ -28,6 +28,7 @@ description = "Stock-client use of CMSG_STORE_LOOT_IN_SLOT is unverified; vmango
 path = "module/src/native/mod.rs"
 symbol = "receive"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+needs_real_client = true
 
 [[known_gaps]]
 description = "Chains of Kel'Thuzad (28410), an AOE_CHARM Aura, does not close a Character's Loot Window. vmangos HandleAuraAoeCharm runs HandleModCharm for that one Spell, which releases the loot; the Module releases it for charm, possess, confuse, stun and fear Auras only."

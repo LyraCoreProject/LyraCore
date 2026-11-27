@@ -28,13 +28,27 @@ document and who reads it. The ones a first change most often needs:
 - [`docs/danger-zones.md`](docs/danger-zones.md): schema migrations, publishing, and the traps that
   have broken a Realm.
 
-## Picking an issue
+## Picking a task
 
-The maintainers file issues in one shape (see "The issue shape"). Each says what 1.12.1 does,
+A task is one known gap in the [Feature Ledger](conformance/README.md): a `[[known_gaps]]` entry in
+a Behavior file under `conformance/features/`. Data Gaps, whose `path` starts with `importer/`, and
+gaps marked `needs_real_client = true` are not tasks. Workshop
+(`https://workshop.lyracore.example`) lists the open tasks and gives each its gap id, such as
+`periodic_leech-3fa2c1d0`.
+
+To claim a task, open an issue whose title is `/claim <gap id>`; the body is ignored. A workflow
+answers on the issue. When it accepts the claim, it rewrites the issue into the issue shape, assigns
+it to you and labels it `gap` and `in progress`. Keep the rewritten issue's first line: it marks the
+gap as held. When it refuses, it says why and closes the issue. Open a draft pull request that says
+`Closes #N` within 24 hours, or the claim ends, the issue closes and the gap returns to the pool.
+The pull request removes the gap's `[[known_gaps]]` entry from the Behavior file. Comment
+`/release` on the issue to give it up.
+
+The maintainers also file issues in one shape (see "The issue shape"). Each says what 1.12.1 does,
 what LyraCore does instead and where in the code, and how to fix it.
 
 - `ready-for-agent` means the issue holds everything you need to build it, whether you work alone
-  or with an agent. Start here.
+  or with an agent.
 - An issue with **How to check** in place of **Fix direction** has its code done. It needs a person
   at a real 1.12.1 build 5875 client. If you have one, these are welcome.
 - `ready-for-human` needs a maintainer: a decision, a maintainer's Realm, or coordination. Leave
@@ -42,9 +56,8 @@ what LyraCore does instead and where in the code, and how to fix it.
 - `in progress` is taken. Pick another issue.
 
 To start a `ready-for-agent` issue, comment `/claim` as the first line. A workflow assigns the issue
-to you and marks it `in progress`. You can hold two claims at a time. Open a draft pull request that
-says `Closes #N` within 24 hours, or the claim ends and the issue returns to the pool. Comment
-`/release` to give an issue up.
+to you and marks it `in progress`. The same 24 hours and `/release` apply. You can hold two claims at
+a time, gap claims and issue claims together.
 
 ## What gets in
 
@@ -141,7 +154,7 @@ bind it. Say in the pull request which model and harness made the change.
 
 ## Lending your agent
 
-Two steps put your agent to work on a `ready-for-agent` issue. You need git and a signed-in
+Two steps put your agent to work on a task. You need git and a signed-in
 [GitHub CLI](https://cli.github.com/) (`gh auth login`).
 
 1. Run this in a terminal.
@@ -153,10 +166,10 @@ Two steps put your agent to work on a `ready-for-agent` issue. You need git and 
 2. Start your agent in that folder and paste this.
 
    ```text
-   Follow .claude/skills/contribute-fix/SKILL.md from start to finish: set up this machine, claim an open issue, fix it and open the pull request.
+   Follow .claude/skills/contribute-fix/SKILL.md from start to finish: set up this machine, claim an open task, fix it and open the pull request.
    ```
 
-The agent installs what the machine lacks, claims an issue, works from a fork, and puts an evidence
+The agent installs what the machine lacks, claims a task, works from a fork, and puts an evidence
 document in the pull request description. Claude Code and Codex also find the file as the
 `contribute-fix` skill.
 

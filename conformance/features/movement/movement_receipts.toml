@@ -24,3 +24,4 @@ description = "Stock-client use of MSG_MOVE_SET_RAW_POSITION_ACK, MSG_MOVE_TIME_
 path = "module/src/native/mod.rs"
 symbol = "receive"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+needs_real_client = true
