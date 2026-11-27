@@ -261,6 +261,10 @@ and no PR checkout or repository secrets. A maintainer creates the label before 
 Use `./conformance/run <scenario>` for one tier 1 scenario, or add `--json` for grouped,
 machine-readable differences and baseline changes. It runs only the named durable test. See the
 [run output contract](../conformance/README.md#run-one-scenario).
+`./conformance/evidence --test PACKAGE TARGET NAME --scenario <scenario>` shows each named test
+failing at the merge-base with only the PR's test files applied and passing at the head, runs each
+scenario, and prints one JSON evidence document; `--pr <number>` also writes it into the PR
+description. See the [evidence contract](../conformance/README.md#pull-request-evidence).
 For a local implementer check, run the changed scenario and `cargo fmt --all`. CI runs clippy,
 all tier 1 scenarios and the full suite. Run one test locally only to reproduce a CI failure or
 to see a new test fail before its fix.

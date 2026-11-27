@@ -332,6 +332,108 @@ The comparator marks a Behavior as nonconforming when it finds rule records. The
 check fails when either signature set changes or provenance differs, regardless of that result.
 No packet text enters this result. The scoreboard consumes it.
 
+## Pull request evidence
+
+`./conformance/evidence` proves a change on the contributor's machine and prints one evidence
+document. A pull request check reads that document, so its format is a contract.
+
+```bash
+./conformance/evidence --test lyracore-module lib spell::tests::frostbolt_slows_on_impact \
+  --features debug_reducers --scenario bank_slot_purchase
+./conformance/evidence --test lyracore-module weather weather_changes_with_the_season --pr 1400
+```
+
+`--test PACKAGE TARGET NAME` names one test by its full libtest path. `TARGET` is `lib` for unit
+tests or an integration target name; durable `#[ignore]`d targets run too. `--features` applies to
+every `--test`. `--scenario` names a tier 1 scenario. `--base` defaults to `origin/main`; a fork
+names its upstream remote, for example `--base upstream/main`. `--timeout` bounds each cargo
+command and scenario run, 3600 seconds by default. The command refuses a dirty working tree.
+
+Each test first runs at the head in the working tree. It then runs at the merge-base with the
+pull request's test files applied: every changed path under a `tests` directory and every changed
+`tests.rs` or `*_tests.rs`, with deleted ones removed. A test whose function name is defined in a
+changed non-test `.rs` file of its package is not shown, and the merge-base run is skipped, because
+its file would carry the fix too. The merge-base run is also skipped when the head does not pass.
+A test is shown when it fails or does not compile at the merge-base and passes at the head.
+`did_not_compile` covers the whole target: another applied test file can be the one that needs new
+code. Each scenario runs once at the head through `./conformance/run`.
+
+Every cargo command and scenario run starts in its own process group. When it exits or times out,
+the launcher stops every process left in that group, including a SpacetimeDB standalone a durable
+fixture leaves behind. Tests and scenarios use `./conformance/run`'s scratch directory as `TMPDIR`.
+
+The merge-base run uses a persistent worktree and target directory under
+`$HOME/.cache/lyracore-scratch/evidence/<repository>/`, or under `LYRACORE_EVIDENCE_SCRATCH`. Later
+runs rebuild only what changed since the previous merge-base. When that target directory is absent,
+the launcher clones the head target directory with `cp --reflink=always` (`cp -c` on macOS) before it
+creates the worktree, so third-party crates are reused and every workspace crate rebuilds from the
+newer merge-base sources. A filesystem that cannot clone starts that build cold. The worktree
+appears in `git worktree list`; delete the directory and run `git worktree prune` to remove it.
+Only one evidence run per repository runs at a time.
+
+Exit code 0 means every test is shown and every scenario exited 0. Exit code 1 means the document
+was printed with at least one test not shown or one scenario not at 0. Exit code 2 means setup
+failed: a dirty tree, an unknown selector, or cargo failing for a reason other than a compile error.
+No document is printed then. `--pr NUMBER` also writes the document into that pull request's
+description through `gh` after printing it. It refuses when the pull request head is another commit.
+
+### Evidence schema version 1
+
+The document is one JSON object. Every object has exactly the listed fields; a reader rejects
+unknown and missing fields, duplicate keys and any other `schema_version`. It names no user, host
+or absolute path.
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | `1` |
+| `merge_base`, `head` | 40-character commit SHAs of the merge-base with `--base` and of `HEAD` |
+| `tests[]` | One entry per `--test`, in argument order, never repeated |
+| `tests[].package`, `.target`, `.name` | The selector; `target` is `lib` or an integration target |
+| `tests[].features` | Sorted, unique Cargo features the test ran with |
+| `tests[].head` | `passed`, `failed`, `did_not_compile`, `not_found` or `timed_out` at the head |
+| `tests[].base` | The same outcomes at the merge-base with the test files applied, or `not_run` |
+| `tests[].status` | `shown` when `base` is `failed` or `did_not_compile` and `head` is `passed`; otherwise `not_shown` |
+| `tests[].reason` | Null when shown; otherwise one line of at most 500 characters saying why |
+| `scenarios[]` | One entry per `--scenario`, in argument order, never repeated |
+| `scenarios[].id` | Tier 1 scenario id |
+| `scenarios[].exit_code` | `./conformance/run` exit code 0, 1 or 2; null when it timed out |
+| `scenarios[].signature_digest` | 64 hex digits when `exit_code` is 0 or 1; null otherwise |
+| `tools.rustc` | `rustc --version` without the leading `rustc ` |
+| `tools.spacetime` | SpacetimeDB CLI version from `$SPACETIME_BIN` or `spacetime`; null when unavailable |
+| `platform.os`, `.arch` | Lowercase `platform.system()` and `platform.machine()`, such as `linux` and `x86_64` |
+
+`not_found` means libtest ran no test of that exact name. A test that crashes after it starts is
+`failed`.
+
+The signature digest is the SHA-256 hex digest of the UTF-8 compact JSON (`,` and `:` separators,
+sorted keys, ASCII escapes) of an object with `scenario_sha256`, `harness_revision`, `rule` and
+`data`. `rule` and `data` are sorted arrays of unique strings, each the same compact JSON of one
+signature with `rule`, `checkpoint`, `stream`, `opcode`, `field_path` and, when not null,
+`character`. The run's digest comes from its comparison. When the run matched the Tier 1 baseline,
+it equals `baseline_signature_digest(baseline, scenario)` computed from `tier1-baseline.json` at
+the head.
+
+`--pr` puts this section at the end of the description and removes any earlier one; other text
+stays as written, with line endings normalized to `\n`:
+
+````markdown
+<!-- lyracore-evidence -->
+<details>
+<summary>Conformance evidence</summary>
+
+```json
+{ ... }
+```
+
+</details>
+<!-- /lyracore-evidence -->
+````
+
+A check imports `conformance/evidence_format.py`: `extract(body)` returns the validated document
+or None when the body has no section, and raises `EvidenceError` for a malformed or repeated one.
+`parse(text)` validates JSON text, `validate(document)` a parsed object, and `is_test_file(path)`
+applies the test file rule above.
+
 ## White melee roll rates
 
 `white_melee_outcomes` follows [ADR 0007](../docs/adr/0007-statistical-roll-conformance.md).
