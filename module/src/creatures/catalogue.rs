@@ -172,8 +172,8 @@ pub(crate) fn equipment(ctx: &ReducerContext, entry: u32) -> TemplateEquipment {
     TemplateEquipment::Unpicked
 }
 
-pub(crate) fn display(ctx: &ReducerContext, template: &CreatureTemplate, roll: u32) -> (u32, f32) {
-    let fallback = (template.display_id, template.scale);
+/// The template's display rows when the first one repeats the template's own display and scale.
+fn template_displays(ctx: &ReducerContext, template: &CreatureTemplate) -> Vec<CreatureDisplay> {
     let mut displays: Vec<_> = ctx
         .db
         .game_creature_display()
@@ -185,9 +185,41 @@ pub(crate) fn display(ctx: &ReducerContext, template: &CreatureTemplate, roll: u
         .first()
         .is_none_or(|d| d.display_id != template.display_id || d.scale != template.scale)
     {
-        return fallback;
+        displays.clear();
     }
-    select_display(&displays, roll).map_or(fallback, |d| (d.display_id, d.scale))
+    displays
+}
+
+pub(crate) fn display(ctx: &ReducerContext, template: &CreatureTemplate, roll: u32) -> (u32, f32) {
+    let fallback = (template.display_id, template.scale);
+    select_display(&template_displays(ctx, template), roll)
+        .map_or(fallback, |d| (d.display_id, d.scale))
+}
+
+/// The scale of a creature of `template` whose native model is `display_id`, as `display` chose it
+/// at spawn; scale 0 reads as 1, as vmangos `CheckValidScale` does.
+pub(crate) fn native_scale(
+    ctx: &ReducerContext,
+    template: &CreatureTemplate,
+    display_id: u32,
+) -> f32 {
+    scale_of_display(&template_displays(ctx, template), template, display_id)
+}
+
+fn scale_of_display(
+    displays: &[CreatureDisplay],
+    template: &CreatureTemplate,
+    display_id: u32,
+) -> f32 {
+    let scale = displays
+        .iter()
+        .find(|d| d.display_id == display_id)
+        .map_or(template.scale, |d| d.scale);
+    if scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
 }
 
 #[cfg(test)]
@@ -232,5 +264,40 @@ mod tests {
             })
             .collect();
         assert_eq!(outcomes, [(100, 0.5), (200, 2.0), (200, 2.0), (200, 2.0)]);
+    }
+
+    fn big_template() -> CreatureTemplate {
+        CreatureTemplate {
+            display_id: 100,
+            scale: 2.0,
+            ..CreatureTemplate::blank(10, "Giant")
+        }
+    }
+
+    #[test]
+    fn a_native_scale_without_matching_display_rows_is_the_templates() {
+        assert_eq!(scale_of_display(&[], &big_template(), 100), 2.0);
+        assert_eq!(scale_of_display(&[], &big_template(), 777), 2.0);
+        let unscaled = CreatureTemplate {
+            scale: 0.0,
+            ..big_template()
+        };
+        assert_eq!(scale_of_display(&[], &unscaled, 100), 1.0);
+    }
+
+    #[test]
+    fn a_native_scale_with_display_rows_is_the_scale_of_its_model() {
+        let row = |id, display_id, scale| CreatureDisplay {
+            id,
+            entry: 10,
+            display_id,
+            scale,
+            weight: 1,
+            gender: 0,
+            bounding_radius: 0.389,
+        };
+        let rows = [row(1, 100, 2.0), row(2, 200, 0.5)];
+        assert_eq!(scale_of_display(&rows, &big_template(), 200), 0.5);
+        assert_eq!(scale_of_display(&rows, &big_template(), 100), 2.0);
     }
 }

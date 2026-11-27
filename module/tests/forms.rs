@@ -1697,3 +1697,119 @@ fn moonkin_form_keeps_its_unit_from_mounting() {
     );
     assert!(mounts(), "out of it");
 }
+
+const NIGHT_ELF: u8 = 4;
+const TAUREN: u8 = 6;
+const WOLF_MODEL_TEMPLATE: u32 = 12861;
+const WOLF_MODEL: u32 = 1825;
+const WOLF_TRANSFORM: u32 = 5090001;
+const WOLF_SCALE: f32 = 1.5;
+
+/// A level 20 druid of `race` who can enter the feral Forms.
+fn druid_of_race(name: &str, race: u8) -> Standalone {
+    let shard = fixture(name);
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET class = 11, race = {race} WHERE guid = 1"
+    ));
+    shard.assert_call("debug_spawn_player_entity", &[WARRIOR]);
+    shard.assert_call("debug_set_level", &[WARRIOR, "20"]);
+    shard.assert_call("debug_seed_druid_forms", &[]);
+    shard
+}
+
+/// The unit's shown model, native model and scale.
+fn model(shard: &Standalone) -> (u32, u32, f32) {
+    let unit = warrior(shard);
+    (
+        number(&unit, "display_id"),
+        number(&unit, "native_display_id"),
+        number(&unit, "scale_x"),
+    )
+}
+
+fn assert_scale(shown: f32, expected: f32) {
+    assert!((shown - expected).abs() < 1e-6, "{shown} is not {expected}");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_night_elf_and_a_tauren_in_cat_form_show_their_teams_model_at_cat_scale() {
+    for (race, cat_model) in [(NIGHT_ELF, 892), (TAUREN, 8571)] {
+        let shard = druid_of_race(&format!("forms-cat-model-{race}"), race);
+        enter(&shard, CAT_FORM);
+        let (shown, _, scale) = model(&shard);
+        assert_eq!(shown, cat_model, "race {race}");
+        assert_scale(scale, 0.8);
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_bear_forms_show_their_teams_model_at_full_scale() {
+    for (race, form_spell, bear_model) in [
+        (NIGHT_ELF, BEAR_FORM, 2281),
+        (TAUREN, BEAR_FORM, 2289),
+        (TAUREN, DIRE_BEAR_FORM, 2289),
+    ] {
+        let shard = druid_of_race(&format!("forms-bear-model-{race}-{form_spell}"), race);
+        enter(&shard, form_spell);
+        let (shown, _, scale) = model(&shard);
+        assert_eq!(shown, bear_model, "race {race}, spell {form_spell}");
+        assert_scale(scale, 1.0);
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn leaving_a_form_restores_the_native_model_and_scale() {
+    for race in [NIGHT_ELF, TAUREN] {
+        let shard = druid_of_race(&format!("forms-leave-model-{race}"), race);
+        let native = model(&shard);
+        enter(&shard, CAT_FORM);
+        assert_ne!(model(&shard).0, native.0);
+        leave(&shard, CAT_FORM);
+        let (shown, native_display, scale) = model(&shard);
+        assert_eq!((shown, native_display), (native.0, native.1), "race {race}");
+        assert_scale(scale, native.2);
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_stance_keeps_the_units_own_model() {
+    let shard = spawned("forms-stance-model");
+    let native = model(&shard);
+    enter(&shard, DEFENSIVE_STANCE);
+    assert_eq!(model(&shard), native);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_transform_during_a_form_wins_and_the_form_model_returns_when_it_ends() {
+    let shard = druid_of_race("forms-transform-model", NIGHT_ELF);
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET entry = {WOLF_MODEL_TEMPLATE}, display_id = {WOLF_MODEL}, \
+         scale = {WOLF_SCALE} WHERE entry = {}",
+        lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY
+    ));
+    insert_spell(
+        &shard,
+        WOLF_TRANSFORM,
+        "Wolf transform",
+        (0, 0, 0),
+        &[(A_TRANSFORM, 0, WOLF_MODEL_TEMPLATE as i32, P_ENTRY)],
+    );
+    enter(&shard, CAT_FORM);
+    assert_eq!(model(&shard).0, 892);
+    cast(&shard, WOLF_TRANSFORM);
+    let (shown, _, scale) = model(&shard);
+    assert_eq!(shown, WOLF_MODEL, "the transform wins over Cat Form");
+    assert_scale(scale, WOLF_SCALE);
+    shard.assert_call(
+        "debug_shed_spell_auras",
+        &[WARRIOR, &WOLF_TRANSFORM.to_string()],
+    );
+    let (shown, _, scale) = model(&shard);
+    assert_eq!(shown, 892, "Cat Form's model returns");
+    assert_scale(scale, 0.8);
+}

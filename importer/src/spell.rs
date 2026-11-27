@@ -3855,13 +3855,14 @@ mod tests {
                      acts_as_shapeshifted BOOLEAN, power_type INTEGER, power_on_entry INTEGER,
                      default_for_class INTEGER, client_form INTEGER, natural_attack_ms INTEGER,
                      attack_power_from_agility BOOLEAN, clears_snares BOOLEAN,
-                     entry_chance_spell INTEGER, blocks_mounting BOOLEAN);
+                     entry_chance_spell INTEGER, blocks_mounting BOOLEAN,
+                     alliance_display_id INTEGER, horde_display_id INTEGER, display_scale REAL);
                  CREATE TABLE game_form_spell (id INTEGER PRIMARY KEY, form_id INTEGER,
                      spell_id INTEGER);
                  CREATE TABLE game_spell_form (id INTEGER PRIMARY KEY, spell_id INTEGER,
                      form_id INTEGER, excluded BOOLEAN);
-                 INSERT INTO game_form VALUES (17,'Old Battle Stance',2457,true,1,0,1,17,0,false,false,0,false),
-                     ({PACKAGE_FORM},'Kindled Aspect',{PACKAGE_SPELL},true,1,1,0,5,0,false,false,0,false);
+                 INSERT INTO game_form VALUES (17,'Old Battle Stance',2457,true,1,0,1,17,0,false,false,0,false,0,0,1.0),
+                     ({PACKAGE_FORM},'Kindled Aspect',{PACKAGE_SPELL},true,1,1,0,5,0,false,false,0,false,0,0,1.0);
                  INSERT INTO game_form_spell VALUES ({},{PACKAGE_FORM},{PACKAGE_SPELL});
                  INSERT INTO game_spell_form VALUES ({},78,18,false),({},78,40,false),
                      ({},78,{PACKAGE_FORM},false),({},{PACKAGE_SPELL},{PACKAGE_FORM},true);",

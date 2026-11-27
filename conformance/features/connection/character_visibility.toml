@@ -260,6 +260,61 @@ path = "module/tests/forms.rs"
 function = "publish_repair_turns_a_shown_druid_form_into_its_aura"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/forms.rs"
+function = "a_night_elf_and_a_tauren_in_cat_form_show_their_teams_model_at_cat_scale"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "the_bear_forms_show_their_teams_model_at_full_scale"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "leaving_a_form_restores_the_native_model_and_scale"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "a_stance_keeps_the_units_own_model"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "a_transform_during_a_form_wins_and_the_form_model_returns_when_it_ends"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/native/visibility.rs"
+function = "a_character_whose_model_changes_sends_scale_and_display_id_in_one_mask"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell_form.rs"
+function = "the_utility_forms_show_the_units_own_pool"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell_form.rs"
+function = "the_three_feral_forms_fight_with_natural_attacks_and_clear_snares"
+rung = "unit"
+
+[[tests]]
+path = "module/src/creatures/catalogue.rs"
+function = "a_native_scale_without_matching_display_rows_is_the_templates"
+rung = "unit"
+
+[[tests]]
+path = "module/src/creatures/catalogue.rs"
+function = "a_native_scale_with_display_rows_is_the_scale_of_its_model"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/reach.rs"
+function = "a_character_in_a_form_reaches_by_the_form_scale_over_the_form_models_scale"
+rung = "unit"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/CharacterHandler.cpp"
@@ -347,7 +402,7 @@ symbol = "regenerate_characters"
 evidence = "Source reading, not measured. At d9173eca, Player.cpp Player::RegenerateAll regenerates rage, energy and mana whatever the shown power type."
 
 [[known_gaps]]
-description = "A unit in a Form keeps its own model: no Form projects a display id or scale, so peers see a night elf, tauren or troll where vmangos shows the Form's model: 892 or 8571 for Cat Form, 2281 or 2289 for the bear Forms and 15374 or 15375 for Moonkin Form, by team; 632 for Travel Form, 2428 for Aquatic Form and 4613 for Ghost Wolf. Stealth, Shadowform and the stances keep the unit's model in vmangos too."
-path = "module/src/form/mod.rs"
-symbol = "project_form"
-evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleAuraModShapeshift sets the display id and scale from GetShapeshiftDisplayInfo; the 1.12 SpellShapeshiftForm.dbc carries no display id, so the client takes the model from UNIT_FIELD_DISPLAYID."
+description = "A Character's base scale is always 1, where vmangos gives it its native display's scale, so a Character's scale_x, and the Form scale on top of it, differ from vmangos for a race whose native display scale is not 1, such as a tauren."
+path = "module/src/world/character_entity.rs"
+symbol = "build_player_entity"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::InitPlayerDisplayIds sets the object scale from GetScaleForDisplayId at line 9405, and Unit::SetTransformScale multiplies the current scale by the Form's scale over the previous override at lines 10967-10976."

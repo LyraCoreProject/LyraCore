@@ -532,6 +532,25 @@ fn creature_template_values(old: &WorldEntity, new: &WorldEntity) -> Option<(u16
     Some(codec::build_values_update_raw(new.guid, &mask))
 }
 
+/// A Character's model: scale and display id in one mask. A creature's scale rides in
+/// `creature_template_values`.
+fn player_model_values(old: &WorldEntity, new: &WorldEntity) -> Option<(u16, Vec<u8>)> {
+    use lyracore_protocol::codec::update_mask::{idx, UpdateMaskValues};
+    let scale_changed = old.scale_x != new.scale_x;
+    let display_changed = old.display_id != new.display_id;
+    if !new.is_player() || !(scale_changed || display_changed) {
+        return None;
+    }
+    let mut mask = UpdateMaskValues::new();
+    if scale_changed {
+        mask.set_f32(idx::OBJECT_SCALE_X, new.scale_x);
+    }
+    if display_changed {
+        mask.set_u32(idx::UNIT_DISPLAYID, new.display_id);
+    }
+    Some(codec::build_values_update_raw(new.guid, &mask))
+}
+
 fn values(update: SMSG_UPDATE_OBJECT) -> Update {
     Update::Shared(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(update)))
 }
@@ -562,6 +581,9 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<Update> {
         out.push(Update::Raw(opcode, body));
     }
     if let Some((opcode, body)) = creature_template_values(old, new) {
+        out.push(Update::Raw(opcode, body));
+    }
+    if let Some((opcode, body)) = player_model_values(old, new) {
         out.push(Update::Raw(opcode, body));
     }
     // Mount display and TAXI_FLIGHT must reach the client in one mask.
@@ -603,7 +625,7 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<Update> {
             )),
         ));
     }
-    if old.display_id != new.display_id {
+    if !is_player && old.display_id != new.display_id {
         out.push(values(codec::build_display_values(
             new.guid,
             new.display_id,
@@ -736,6 +758,28 @@ mod tests {
             leveled
         })
         .is_none());
+    }
+
+    #[test]
+    fn a_character_whose_model_changes_sends_scale_and_display_id_in_one_mask() {
+        let parse = |(_, body): (u16, Vec<u8>)| {
+            lyracore_protocol::codec::values_mask::parse_values_updates(&body)
+                .remove(0)
+                .fields
+        };
+        let mut cat = druid();
+        cat.scale_x = 0.8;
+        cat.display_id = 892;
+        let both = player_model_values(&druid(), &cat).unwrap();
+        assert_eq!(parse(both), [(4, 0.8f32.to_bits()), (131, 892)]);
+        let mut only_scale = druid();
+        only_scale.scale_x = 0.8;
+        let scale = player_model_values(&druid(), &only_scale).unwrap();
+        assert_eq!(parse(scale), [(4, 0.8f32.to_bits())]);
+        assert!(player_model_values(&druid(), &druid()).is_none());
+        assert!(updates(&druid(), &cat)
+            .iter()
+            .all(|update| !matches!(update, Update::Shared(_))));
     }
 
     #[test]

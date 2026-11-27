@@ -363,6 +363,9 @@ impl Table {
                         | "clears_snares"
                         | "entry_chance_spell"
                         | "blocks_mounting"
+                        | "alliance_display_id"
+                        | "horde_display_id"
+                        | "display_scale"
                 )
                 | (Self::Item, "damage_school")
                 | (
@@ -897,6 +900,9 @@ const FORM_COLUMNS: &[Column] = &[
     column("clears_snares", FieldType::Bool),
     column("entry_chance_spell", FieldType::U32),
     column("blocks_mounting", FieldType::Bool),
+    column("alliance_display_id", FieldType::U32),
+    column("horde_display_id", FieldType::U32),
+    column("display_scale", FieldType::F32),
 ];
 
 const SPELL_FORM_COLUMNS: &[Column] = &[column("excluded", FieldType::Bool)];

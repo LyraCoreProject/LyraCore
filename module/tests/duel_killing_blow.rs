@@ -97,6 +97,7 @@ fn stage_duel(name: &str, state: u8) -> StagedDuel {
             ("flag_z", &z),
             ("state", &state),
             ("countdown_deadline_micros", &i64::MAX),
+            ("created_at_micros", &i64::MAX),
         ],
     );
     wire.drain_packets();

@@ -134,6 +134,14 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                         form.natural_attack_ms
                     ));
                 }
+                if !form.display_scale.is_finite() || form.display_scale <= 0.0 {
+                    return Err(format!(
+                        "`game_form` row {} claims display scale {}, which is not finite and \
+                         positive",
+                        row.key(),
+                        form.display_scale
+                    ));
+                }
                 if !enters_form(form.spell_id, form_id) {
                     return Err(format!(
                         "`game_form` row {} names spell {}, which does not enter the Form",
@@ -621,6 +629,9 @@ fn blank_form(form_id: u32) -> Form {
         clears_snares: false,
         entry_chance_spell: 0,
         blocks_mounting: false,
+        alliance_display_id: 0,
+        horde_display_id: 0,
+        display_scale: 1.0,
     }
 }
 
@@ -638,6 +649,9 @@ fn apply_form_field(form: &mut Form, field: &str, value: &FieldValue) -> Result<
         "clears_snares" => form.clears_snares = as_bool(field, value)?,
         "entry_chance_spell" => form.entry_chance_spell = as_u32(field, value)?,
         "blocks_mounting" => form.blocks_mounting = as_bool(field, value)?,
+        "alliance_display_id" => form.alliance_display_id = as_u32(field, value)?,
+        "horde_display_id" => form.horde_display_id = as_u32(field, value)?,
+        "display_scale" => form.display_scale = as_f32(field, value)?,
         other => return Err(no_such_column("game_form", other)),
     }
     Ok(())

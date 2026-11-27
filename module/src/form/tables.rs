@@ -36,6 +36,15 @@ pub struct Form {
     /// shapeshifted.
     #[default(false)]
     pub blocks_mounting: bool,
+    /// The model an Alliance unit or a creature shows in the Form; zero keeps its own.
+    #[default(0u32)]
+    pub alliance_display_id: u32,
+    /// The model a Horde unit shows in the Form; zero keeps its own.
+    #[default(0u32)]
+    pub horde_display_id: u32,
+    /// The scale the Form's model shows at.
+    #[default(1.0f32)]
+    pub display_scale: f32,
 }
 
 /// A passive spell a unit holds while in a Form.

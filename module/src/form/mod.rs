@@ -299,9 +299,9 @@ pub(crate) fn locked(ctx: &ReducerContext, guid: u64) -> bool {
     })
 }
 
-/// Re-derives from the unit's shapeshift Aura the client form byte, the shown pool, the passives
-/// the Form brings and the equipment that depends on the Form. A byte no Form projects stays as it
-/// is.
+/// Re-derives from the unit's shapeshift Aura the client form byte, the shown pool, the model, the
+/// passives the Form brings and the equipment that depends on the Form. A byte no Form projects
+/// stays as it is.
 pub(crate) fn project_form(ctx: &ReducerContext, guid: u64) {
     let Some(unit) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
@@ -334,6 +334,7 @@ pub(crate) fn project_form(ctx: &ReducerContext, guid: u64) {
     if unit.is_player() {
         crate::items::equip::reconcile(ctx, guid);
     }
+    crate::spell::recompute_display(ctx, guid);
     crate::spell::recompute_sheet(ctx, guid);
 }
 
@@ -558,6 +559,9 @@ mod tests {
             clears_snares: true,
             entry_chance_spell: 0,
             blocks_mounting: true,
+            alliance_display_id: 632,
+            horde_display_id: 632,
+            display_scale: 0.8,
         }
     }
 

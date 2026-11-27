@@ -579,9 +579,9 @@ Projection. Idempotent, and a no-op for a rider who is not mounted.
 **Form**:
 A shapeshift state such as Battle Stance or Bear Form, held as the unit's one `A_SHAPESHIFT` Aura.
 Its `game_form` row composes the Module's building blocks: power rule, combat profile, lifecycle
-flags, class default, spell rules and 1.12 client presentation. Its id is its own, not the 1.12
-client's form byte. A new Form needs data, not Rust. Rules ask about a Form's building blocks, never
-its id.
+flags, class default, spell rules, model and 1.12 client presentation. Its id is its own, not the
+1.12 client's form byte. A new Form needs data, not Rust. Rules ask about a Form's building blocks,
+never its id.
 _Avoid_: stance (as a stored number), form byte (for the Form's id)
 
 **Combat Profile**:
@@ -590,9 +590,10 @@ swing at the Form's own speed for level-based damage, as in Cat and Bear Form.
 _Avoid_: feral form (for the rule), stance check
 
 **Form Projection**:
-The client form byte, the shown power pool, the passive Auras a Form brings and Form-dependent
-equipment, re-derived from a unit's shapeshift Aura. The passives are the Form's own and every known
-passive whose Form Set requires a Form with a `game_form` row. Never a second state machine.
+The client form byte, the shown power pool, the model, the passive Auras a Form brings and
+Form-dependent equipment, re-derived from a unit's shapeshift Aura. The passives are the Form's own
+and every known passive whose Form Set requires a Form with a `game_form` row. Never a second state
+machine.
 
 
 **Form Set**:
