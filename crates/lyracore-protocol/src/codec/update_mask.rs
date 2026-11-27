@@ -33,6 +33,7 @@ pub mod idx {
     pub const UNIT_NATIVEDISPLAYID: u16 = 132;
     /// Byte 3 carries the ghost visibility flag.
     pub const UNIT_BYTES_1: u16 = 138;
+    pub const UNIT_NPC_FLAGS: u16 = 147;
     /// Byte 0 is sheath state; gtker mislabels the setter's parameters as PLAYER_BYTES_2.
     pub const UNIT_BYTES_2: u16 = 164;
     pub const UNIT_STAT0: u16 = 150;

@@ -619,3 +619,33 @@ fn a_creature_that_spawns_while_its_event_runs_comes_in_its_event_data() {
 
     assert_eq!(wear(&shard, wolf), festival_wear(&shard));
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_that_respawns_while_its_event_runs_comes_back_in_its_event_data() {
+    let (shard, at) = realm("game-event-creature-data-respawn");
+    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
+    let wolf = wolf_guid(DRESSED_WOLF);
+    dress_for_festival(&shard, wolf);
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    import_wolves(&shard, &at, &[DRESSED_WOLF]);
+    settle(&shard);
+    assert_eq!(wear(&shard, wolf), festival_wear(&shard));
+
+    shard.assert_call(
+        "debug_kill_creature",
+        &[&CHARACTER.to_string(), &wolf.to_string()],
+    );
+    // Two virtual minutes: the corpse decays after one and the 60-second respawn is then due.
+    shard.assert_call("debug_advance_roll_batch", &["2400"]);
+
+    let spawn = shard.query_rows(&format!(
+        "SELECT life_seq FROM game_creature_spawn WHERE guid = {wolf}"
+    ));
+    assert_eq!(spawn[0]["life_seq"], "2", "the wolf lived a second life");
+    assert_eq!(
+        wear(&shard, wolf),
+        festival_wear(&shard),
+        "the new life takes its equipment and start spell again"
+    );
+}

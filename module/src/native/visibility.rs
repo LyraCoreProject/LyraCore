@@ -511,6 +511,27 @@ fn power_values(old: &WorldEntity, new: &WorldEntity, is_player: bool) -> Option
         .then(|| codec::build_power_values(new.guid, unit_bytes_0, &pools))
 }
 
+/// A creature that takes another template in place sends its entry, scale, level, faction and NPC
+/// flags in one mask.
+fn creature_template_values(old: &WorldEntity, new: &WorldEntity) -> Option<(u16, Vec<u8>)> {
+    use lyracore_protocol::codec::update_mask::{idx, UpdateMaskValues};
+    let changed = old.entry != new.entry
+        || old.scale_x != new.scale_x
+        || old.level != new.level
+        || old.faction_template != new.faction_template
+        || old.npc_flags != new.npc_flags;
+    if new.is_player() || !changed {
+        return None;
+    }
+    let mut mask = UpdateMaskValues::new();
+    mask.set_u32(idx::OBJECT_ENTRY, new.entry)
+        .set_f32(idx::OBJECT_SCALE_X, new.scale_x)
+        .set_u32(idx::UNIT_LEVEL, new.level)
+        .set_u32(idx::UNIT_FACTIONTEMPLATE, new.faction_template)
+        .set_u32(idx::UNIT_NPC_FLAGS, new.npc_flags);
+    Some(codec::build_values_update_raw(new.guid, &mask))
+}
+
 fn values(update: SMSG_UPDATE_OBJECT) -> Update {
     Update::Shared(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(update)))
 }
@@ -538,6 +559,9 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<Update> {
         out.push(values(m));
     }
     if let Some((opcode, body)) = power_values(old, new, is_player) {
+        out.push(Update::Raw(opcode, body));
+    }
+    if let Some((opcode, body)) = creature_template_values(old, new) {
         out.push(Update::Raw(opcode, body));
     }
     // Mount display and TAXI_FLIGHT must reach the client in one mask.
@@ -675,6 +699,43 @@ mod tests {
             (0, 100),
             "Cat Form starts at zero energy"
         );
+    }
+
+    // Build 5875: OBJECT_ENTRY 3, OBJECT_SCALE_X 4, UNIT_LEVEL 34, UNIT_FACTIONTEMPLATE 35,
+    // UNIT_NPC_FLAGS 147.
+    #[test]
+    fn a_creature_that_takes_another_template_sends_its_new_identity() {
+        let villager = crate::helpers::tests::entity(7, 0, 0, 0, 0);
+        let mut worgen = crate::helpers::tests::entity(7, 0, 0, 0, 0);
+        worgen.entry = 1_892;
+        worgen.scale_x = 1.5;
+        worgen.level = 21;
+        worgen.faction_template = 16;
+        worgen.npc_flags = 0;
+        let (_, body) = creature_template_values(&villager, &worgen).unwrap();
+        let fields = lyracore_protocol::codec::values_mask::parse_values_updates(&body)
+            .remove(0)
+            .fields;
+        assert_eq!(
+            fields,
+            [
+                (3, 1_892),
+                (4, 1.5f32.to_bits()),
+                (34, 21),
+                (35, 16),
+                (147, 0)
+            ]
+        );
+        assert!(
+            creature_template_values(&villager, &crate::helpers::tests::entity(7, 0, 0, 0, 0))
+                .is_none()
+        );
+        assert!(creature_template_values(&druid(), &{
+            let mut leveled = druid();
+            leveled.level += 1;
+            leveled
+        })
+        .is_none());
     }
 
     #[test]

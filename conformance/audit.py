@@ -246,6 +246,8 @@ IMPORT_CONTRACT = (
     'module/src/go_collider.rs',
     'module/src/creatures/catalogue.rs',
     'module/src/creatures/spawn.rs',
+    'module/src/creatures/event_data.rs',
+    'module/src/creatures/presentation.rs',
     'module/src/creatures/eventai/fixtures.rs',
     'module/src/creatures/eventai/loader.rs',
     'module/src/creatures/eventai/model.rs',

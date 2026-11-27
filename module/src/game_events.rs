@@ -157,7 +157,7 @@ pub enum GameEventState {
 // One pass a minute keeps each calendar boundary within a minute and corrects a missed one.
 pub(crate) const GAME_EVENT_TICK_MICROS: i64 = 60_000_000;
 
-// One pass changes at most this many spawns and pools; the next pass carries on where it stopped.
+// One pass changes at most this many spawns, pools and creatures; the next pass carries on there.
 const CHANGES_PER_PASS: usize = 500;
 
 const DAY_SECS: i64 = 86_400;
@@ -269,7 +269,7 @@ pub(crate) fn shows_for(links: impl IntoIterator<Item = (bool, GameEventState)>)
 }
 
 /// The work toward `state`: a status already heading there keeps its progress, any other starts
-/// again from the first link and pool.
+/// again from the first link, pool and creature data row.
 fn retarget(
     status: Option<GameEventStatus>,
     event_entry: u32,
@@ -428,8 +428,8 @@ impl Calendar {
     }
 }
 
-/// Brings the spawns and pools of every event whose state is not yet applied toward that state,
-/// through the spawn lifecycle; docs/schema.md#game-events.
+/// Brings the spawns, pools and creature data of every event whose state is not yet applied toward
+/// that state, through the spawn lifecycle; docs/schema.md#game-events.
 pub(crate) fn reconcile(ctx: &ReducerContext) {
     reconcile_within(ctx, CHANGES_PER_PASS);
 }
@@ -626,7 +626,7 @@ pub fn debug_event_clear(ctx: &ReducerContext, event_entry: u32) -> Result<(), S
     Ok(())
 }
 
-/// Runs one pass that changes at most `budget` spawns and pools.
+/// Runs one pass that changes at most `budget` spawns, pools and creatures.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_run_game_event_pass(ctx: &ReducerContext, budget: u32) -> Result<(), String> {

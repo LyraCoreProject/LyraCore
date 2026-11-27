@@ -67,7 +67,8 @@ pub(crate) fn dress_spawned(
 }
 
 /// vmangos `GameEventMgr::UpdateCreatureData` for `data` as its event starts (`running`) or stops,
-/// with `worn` the spawn's rows of running events; returns the creatures it changed.
+/// with `worn` the spawn's rows of running events; returns the creatures it changed. A start spell
+/// whose aura the creature already has, from its spawn, is not cast again.
 pub(crate) fn follow_event(
     ctx: &ReducerContext,
     data: &GameEventCreatureData,
@@ -120,7 +121,9 @@ fn follow_one(
             .is_some_and(|items| take_off_equipment(ctx, creature_guid, items)),
     };
     if running {
-        changed |= cast_on_itself(ctx, creature_guid, data.start_spell);
+        changed |= take_off_spell(ctx, creature_guid, data.end_spell);
+        changed |= !has_aura(ctx, creature_guid, data.start_spell)
+            && cast_on_itself(ctx, creature_guid, data.start_spell);
     } else {
         changed |= take_off_spell(ctx, creature_guid, data.start_spell);
         changed |= cast_on_itself(ctx, creature_guid, data.end_spell);
@@ -190,10 +193,13 @@ fn cast_on_itself(ctx: &ReducerContext, creature_guid: u64, spell_id: u32) -> bo
     true
 }
 
+fn has_aura(ctx: &ReducerContext, creature_guid: u64, spell_id: u32) -> bool {
+    spell_id != 0
+        && crate::spell::auras_on(ctx, creature_guid).any(|aura| aura.spell_id == spell_id)
+}
+
 fn take_off_spell(ctx: &ReducerContext, creature_guid: u64, spell_id: u32) -> bool {
-    if spell_id == 0
-        || !crate::spell::auras_on(ctx, creature_guid).any(|aura| aura.spell_id == spell_id)
-    {
+    if !has_aura(ctx, creature_guid, spell_id) {
         return false;
     }
     crate::spell::spellbook::strip_spell_auras(ctx, creature_guid, &[spell_id]);

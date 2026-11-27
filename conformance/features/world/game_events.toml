@@ -83,14 +83,14 @@ source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52da
 
 [[deliberate_deviations]]
 id = "creature_data_of_several_events"
-result = "A creature spawn with creature data rows for several running events takes the template and equipment of the first row, in source guid then event order, that names one, and the start spell of every row. The Reference Server applies the row of the event that started last, and the first row when the creature respawns, so a Stormwind City Patroller loses its Night lantern when Love is in the Air starts at night. 9 creatures in the pinned World Source have rows for two events."
+result = "A creature spawn with creature data rows for several running events takes the template and equipment of the first row, in source guid then event order, that names one, and the start spell of every row. The Reference Server applies the row of the event that started last, and the first row when the creature respawns, so a Stormwind City Patroller loses its Night lantern when Love is in the Air starts at night. Here a stop of either event leaves the creature in the other's data; the Reference Server's stop returns it to its own template and equipment (UpdateEntry with its original entry) while the other event still runs. 9 creatures in the pinned World Source have rows for two events."
 reason = "The Reference Server result depends on the order its events start and stop; a rule over the current states gives one answer for one calendar, as for spawns of several events."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/GameEventMgr.cpp"
 
 [[deliberate_deviations]]
 id = "creature_data_at_respawn"
 result = "A creature that respawns while its event runs comes back with all of its event data, its start spells included. The Reference Server's in-place respawn casts the start spell again only when it changes the creature's entry, so a creature whose row only casts a spell, such as a Lunar Festival vendor's costume, respawns without it until the event starts again."
-reason = "The start spell is part of what the creature takes while its event runs; casting it at every spawn gives the same creature for the same calendar."
+reason = "The start spell is part of what the creature takes while its event runs; casting it at every spawn gives the same creature for the same calendar. The Reference Server also casts it again on every grid load (Creature::LoadFromDB, Create, UpdateEntry, ApplyGameEventSpells), so there the creature lacks it only until its grid next loads, and LyraCore never unloads grids."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Creature.cpp"
 
 [[known_gaps]]

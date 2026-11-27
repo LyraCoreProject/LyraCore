@@ -315,7 +315,9 @@ every creature keeps its own template and equipment.
 With the updated importer, run `--family events` again; a `creatures` or `gameobjects` import also
 writes it. The import writes the table and clears `game_event_status`, so the next minute pass
 brings each living creature with a row to its running events' data: about 570 rows in the full
-world, within two passes. A rerun writes the same rows. A corpse takes the data when it respawns.
+world, within two passes. A rerun writes the same rows and walks the running events' creatures
+again, so it casts each start spell again whose aura the creature no longer has. A corpse takes the
+data when it respawns.
 
 ### Game event quest and vendor migration
 
