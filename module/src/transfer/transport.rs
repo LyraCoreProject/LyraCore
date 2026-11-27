@@ -524,6 +524,7 @@ pub(crate) const TRANSFER_TABLES_OLD_BLOBS_MAY_LACK: &[&str] = &[
     "game_character_quest_log",
     "game_character_quest_retake",
     "game_character_regeneration",
+    "game_character_stable",
     "game_drunk_sobering",
     "game_fatigue_state",
     "game_group_join_reset",

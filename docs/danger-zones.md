@@ -557,6 +557,21 @@ for spell 982.
 untagged row from an older source arrives dismissed with no saved model or vitals. An older
 destination refuses the tag before it applies any row, so update both Shards before moving Hunters.
 
+### Hunter pet stable migration
+
+`game_hunter_pet` gains the END-appended column `stable_slot`, default 0. Every existing row is a
+current pet, which is what 0 means, so no repair is needed. The private Character-owned
+`game_character_stable` table is new and starts empty, so no Character has bought a Stable slot.
+Publish through a planned update.
+
+A new tame now takes its `pet_id` from the GUID Range instead of the owner's guid, so a stabled pet
+and the next tame never share a number. Existing pets keep the owner's guid.
+
+`game_hunter_pet` now crosses in the Transfer blob under the `game_hunter_pet@stable-slot-1` tag. A
+`game_hunter_pet@presence-1` or untagged row from an older source arrives as the current pet, and a
+blob without `game_character_stable` arrives with no bought slots. An older destination refuses the
+new tag and manifest before it applies any row, so update both Shards before moving Hunters.
+
 ### DynamicObject AOI migration
 
 The native runtime adds a map, Instance and `cell` index to `game_dynamic_object`. Its new `cell`

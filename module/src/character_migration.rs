@@ -1218,6 +1218,7 @@ impl Arrival<'_> {
             display_id: 0,
             saved_health: 0,
             saved_power: 0,
+            stable_slot: crate::creatures::hunter_pet::CURRENT_PET,
         });
         Ok(())
     }

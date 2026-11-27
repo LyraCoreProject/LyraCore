@@ -163,7 +163,6 @@ fn tame_and_dismiss_keep_one_durable_identity_and_a_second_tame_is_refused() {
     let identities =
         shard.query_rows("SELECT pet_id, creature_entry FROM game_hunter_pet WHERE owner_guid = 1");
     assert_eq!(identities.len(), 1);
-    assert_eq!(identities[0]["pet_id"], HUNTER);
     let spawn = shard.query_rows(&format!(
         "SELECT respawn_at, despawn_at FROM game_creature_spawn WHERE guid = {wild}"
     ));
@@ -278,7 +277,7 @@ fn call_pet_builds_the_dismissed_pet_from_its_durable_identity() {
         shard.query_rows(&format!(
             "SELECT hunter_pet_id FROM game_live_pet_kind WHERE pet_guid = {HUNTER_PET}"
         ))[0]["hunter_pet_id"],
-        HUNTER
+        shard.query_rows("SELECT pet_id FROM game_hunter_pet WHERE owner_guid = 1")[0]["pet_id"]
     );
     let protocol = shard
         .query_rows(

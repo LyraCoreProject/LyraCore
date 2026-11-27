@@ -17,7 +17,7 @@ entry in both files.
 
 **B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Behavior](#conformance) · [Bot Capacity Lease](#bots) · [Bot Controller](#bots) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
 
-**C** [Call for Assistance](#creature-ai) · [Call for Help](#creature-ai) · [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Cast Request](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Migration](#accounts-characters-and-sessions) · [Character Name Reservation](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Combat Profile](#forms) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
+**C** [Call for Assistance](#creature-ai) · [Call for Help](#creature-ai) · [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Cast Request](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Migration](#accounts-characters-and-sessions) · [Character Name Reservation](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Combat Profile](#forms) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai) · [Current Pet](#pets)
 
 **D** [Data Gap](#conformance) · [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Drunk Value](#accounts-characters-and-sessions) · [Duel](#pvp) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
@@ -45,7 +45,7 @@ entry in both files.
 
 **R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Shard](#realm-topology) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Reference Server](#conformance) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Reserve Pool](#forms) · [Returned Mail](#mail) · [Review lane](CORE_TERMS.md#review-lane) · [Reward Letter](#mail) · [Ritual Participant](#summoning) · [Roll Conformance](#conformance) · [Rollback](#requests-and-delivery) · [Roster Revision](#groups) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
 
-**S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Soulstone](#death-and-resurrection) · [Source Profile](#realm-topology) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Summon Offer](#summoning) · [Summoning Ritual](#summoning) · [Swing Error](#procs)
+**S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Soulstone](#death-and-resurrection) · [Source Profile](#realm-topology) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Stable](#pets) · [Stable Master](#pets) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Summon Offer](#summoning) · [Summoning Ritual](#summoning) · [Swing Error](#procs)
 
 **T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Task](#conformance) · [Temporary Enchantment](#random-properties) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#realm-topology) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Trigger Child Cast](#procs) · [Trigger Depth](#procs) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
@@ -573,6 +573,20 @@ the effective run speed. Never a second state machine.
 **Dismount**:
 The one shared operation that removes the active Land Mount's aura rows and re-derives the Mount
 Projection. Idempotent, and a no-op for a rider who is not mounted.
+
+### Pets
+
+**Current Pet**:
+The one Hunter pet a Character keeps out of the Stable, whether out, dismissed or dead. Call Pet,
+Revive Pet, a tame's Gate and world entry consider only it.
+
+**Stable**:
+The Hunter pets a Character leaves with a Stable Master, one in each Stable slot it has bought, at
+most two. A stabled pet keeps its identity and progress, and nothing builds it until it is the
+Current Pet again.
+
+**Stable Master**:
+An NPC with the stable master flag (`0x2000`). Only a Hunter can use one.
 
 ### Forms
 

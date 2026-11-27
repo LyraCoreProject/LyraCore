@@ -55,6 +55,7 @@ pub mod npc_flags {
     pub const PETITIONER: u32 = 0x0000_0200;
     pub const TABARDDESIGNER: u32 = 0x0000_0400;
     pub const AUCTIONEER: u32 = 0x0000_1000;
+    pub const STABLEMASTER: u32 = 0x0000_2000;
     // Vanilla REPAIR is 0x4000; 0x1000 is AUCTIONEER.
     pub const REPAIR: u32 = 0x0000_4000;
 }

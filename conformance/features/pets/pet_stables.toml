@@ -5,11 +5,10 @@ scope = "A hunter can list, store, retrieve and swap pets at a stable master; a 
 requests = ["0x026F", "0x0270", "0x0271", "0x0272", "0x0274", "0x0275"]
 replies = []
 dependencies = []
-required_rungs = ["tier1", "conformance_audit", "real_client"]
+required_rungs = ["durable_module", "tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
-prerequisites = []
-tests = []
+prerequisites = ["The Character is a Hunter beside a Stable Master."]
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -20,7 +19,43 @@ symbol = "WorldSession::HandleListStabledPetsOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "The Module returns an unavailable response for MSG_LIST_STABLED_PETS, CMSG_STABLE_PET, CMSG_UNSTABLE_PET, CMSG_BUY_STABLE_SLOT, CMSG_STABLE_SWAP_PET."
-path = "module/src/native/unavailable.rs"
-symbol = "responses"
-evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
+description = "A Stable Master request interrupts no spell and removes no Aura with AURA_INTERRUPT_INTERACTING_CANCELS (0x400), which vmangos does before every stable handler; no NPC interaction in the Module does this yet."
+path = "module/src/creatures/stable.rs"
+symbol = "stable_master"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/NPCHandler.cpp#L508-L520"
+
+[[known_gaps]]
+description = "Unstabling or swapping in a living pet while mounted builds it at once. vmangos Pet::LoadPetFromDB refuses a pet that must stay temporarily unsummoned, and the handler then answers STABLE_ERR_STABLE after it has moved the slots."
+path = "module/src/creatures/stable.rs"
+symbol = "bring_out"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Pet.cpp"
+
+[[tests]]
+path = "module/tests/pet_stable.rs"
+function = "a_hunter_buys_a_slot_stables_its_pet_and_swaps_it_for_a_second_tame"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/pet_stable.rs"
+function = "a_stabled_pet_stays_stabled_through_logout_and_a_dead_one_unstables_without_a_build"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/creatures/stable.rs"
+function = "a_pet_takes_the_first_bought_slot_no_pet_holds"
+rung = "unit"
+
+[[tests]]
+path = "module/src/native/stable.rs"
+function = "a_stable_refusal_sends_err_stable_and_only_a_slot_it_cannot_afford_sends_err_money"
+rung = "unit"
+
+[[tests]]
+path = "module/src/native/stable.rs"
+function = "the_listing_names_the_stable_master_then_counts_pets_and_bought_slots"
+rung = "codec"
+
+[[tests]]
+path = "module/src/transfer/legacy_item_rows_tests.rs"
+function = "a_hunter_pet_that_travelled_before_stables_arrives_as_the_current_pet"
+rung = "unit"

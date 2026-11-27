@@ -16,11 +16,12 @@ const FORMATS: &[(&str, &str)] = &[
     ("game_mail", "game_mail@letter-text-1"),
     ("game_mail_escrow", "game_mail_escrow@letter-text-1"),
     ("game_auction_hold", "game_auction_hold@letter-text-1"),
-    ("game_hunter_pet", "game_hunter_pet@presence-1"),
+    ("game_hunter_pet", "game_hunter_pet@stable-slot-1"),
 ];
 const RANDOM_PROPERTY_ITEM_INSTANCE: &str = "game_item_instance@random-property-1";
 const RANDOM_PROPERTY_MAIL: &str = "game_mail@random-property-1";
 const MAIL_HEADER_MAIL: &str = "game_mail@mail-header-1";
+const PRESENCE_HUNTER_PET: &str = "game_hunter_pet@presence-1";
 
 // Older Modules refuse these payload tags before applying rows.
 pub(super) fn mark_current(payload: &mut [TableRows]) {
@@ -47,6 +48,10 @@ pub(super) fn prepare(payload: &[TableRows]) -> Result<Vec<TableRows>, String> {
             entry.rows = upgrade::<MailHeaderMail, Mail>(&entry.rows)
                 .map_err(|error| format!("table {}: {error}", entry.table))?;
             entry.table = "game_mail".to_owned();
+        } else if entry.table == PRESENCE_HUNTER_PET {
+            entry.rows = upgrade::<PresenceHunterPet, HunterPet>(&entry.rows)
+                .map_err(|error| format!("table {}: {error}", entry.table))?;
+            entry.table = "game_hunter_pet".to_owned();
         } else if entry.table == RANDOM_PROPERTY_ITEM_INSTANCE {
             entry.rows = upgrade::<RandomPropertyItemInstance, ItemInstance>(&entry.rows)
                 .map_err(|error| format!("table {}: {error}", entry.table))?;
@@ -401,7 +406,7 @@ struct LegacyHunterPet {
 // A pet that travelled before `presence` arrives dismissed with no model or vitals saved.
 impl From<LegacyHunterPet> for HunterPet {
     fn from(row: LegacyHunterPet) -> Self {
-        Self {
+        PresenceHunterPet {
             pet_id: row.pet_id,
             owner_guid: row.owner_guid,
             creature_entry: row.creature_entry,
@@ -421,6 +426,58 @@ impl From<LegacyHunterPet> for HunterPet {
             display_id: 0,
             saved_health: 0,
             saved_power: 0,
+        }
+        .into()
+    }
+}
+
+#[derive(SpacetimeType)]
+struct PresenceHunterPet {
+    pet_id: u64,
+    owner_guid: u64,
+    creature_entry: u32,
+    creature_family: u32,
+    name: String,
+    rename_allowed: bool,
+    level: u32,
+    pet_xp: u32,
+    loyalty_level: u8,
+    loyalty_progress: u32,
+    happiness: u32,
+    created_at: Timestamp,
+    care_updated_at: Timestamp,
+    loyalty_updated_at: Timestamp,
+    name_timestamp: u32,
+    presence: u8,
+    display_id: u32,
+    saved_health: u32,
+    saved_power: u32,
+}
+
+// A source without Stables had only a current pet.
+impl From<PresenceHunterPet> for HunterPet {
+    fn from(row: PresenceHunterPet) -> Self {
+        Self {
+            pet_id: row.pet_id,
+            owner_guid: row.owner_guid,
+            creature_entry: row.creature_entry,
+            creature_family: row.creature_family,
+            name: row.name,
+            rename_allowed: row.rename_allowed,
+            level: row.level,
+            pet_xp: row.pet_xp,
+            loyalty_level: row.loyalty_level,
+            loyalty_progress: row.loyalty_progress,
+            happiness: row.happiness,
+            created_at: row.created_at,
+            care_updated_at: row.care_updated_at,
+            loyalty_updated_at: row.loyalty_updated_at,
+            name_timestamp: row.name_timestamp,
+            presence: row.presence,
+            display_id: row.display_id,
+            saved_health: row.saved_health,
+            saved_power: row.saved_power,
+            stable_slot: crate::creatures::hunter_pet::CURRENT_PET,
         }
     }
 }

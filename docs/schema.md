@@ -520,8 +520,16 @@ it back; 2 once it dies, so only Revive Pet does. Abandon, and a summon with a c
 live Hunter pet, delete the row. `display_id` is the pet's model; 0 until the first build, which
 stores the model it chose. `saved_health` and `saved_power` hold the vitals of a living pet that
 left the world; 0 health means none are saved, and each build clears them. A Transfer carries all
-four columns under the `game_hunter_pet@presence-1` tag; see the
+four columns; see the
 [Hunter pet presence migration](danger-zones.md#hunter-pet-presence-migration).
+
+`game_hunter_pet` also end-appends `stable_slot`: 0 for the owner's one current pet, otherwise the
+Stable slot, 1 or 2, that holds it. A stabled pet keeps its row, so its level, XP, name, loyalty and
+happiness wait unchanged; care stops while it is not out, and world entry never builds it. A new
+tame takes its `pet_id` from the GUID Range; the client sees the low 32 bits as the pet number.
+`game_character_stable` (`module/src/creatures/stable.rs`) holds the slots one Character has
+bought, by `character_guid`; no row means none. It is private and Character-owned, and a Transfer
+carries it. See the [Hunter pet stable migration](danger-zones.md#hunter-pet-stable-migration).
 
 ### Forms (`module/src/form/`)
 
