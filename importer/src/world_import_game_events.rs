@@ -1,4 +1,4 @@
-// vmangos `GameEventMgr::LoadFromDB` for spawns, creature data, quests and vendor items; read
+// vmangos `GameEventMgr::LoadFromDB` for spawns, creature data, quests, vendor items and mail;
 // docs/schema.md#game-events first.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,6 +8,7 @@ use lyracore_shared::game_event::DARKMOON_FAIRE_EVENTS;
 
 use super::{
     collect_gameobject_spawns, gameobject_pools, go_guid, world_guid, DumpPlan, WorldImportArgs,
+    ALL_PLAYABLE_RACE_MASK,
 };
 use crate::creature_population;
 use crate::dump::{insert_row_count, parse_table, push_insert, sql_str, TableRows};
@@ -359,6 +360,71 @@ fn entries(dump: &(impl TableRows + ?Sized), table: &str) -> Result<BTreeSet<u32
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EventMail {
+    event: i32,
+    race_mask: u32,
+    quest: u32,
+    mail_template: u32,
+    sender: u32,
+}
+
+/// What the World Source holds that a `game_event_mail` row names.
+struct MailSources {
+    /// Events of a length above 0, which vmangos `GameEventData::isValid` accepts.
+    events: BTreeSet<u32>,
+    quests: BTreeSet<u32>,
+    creature_templates: BTreeSet<u32>,
+}
+
+/// The `game_event_mail` rows vmangos `GameEventMgr::LoadFromDB` keeps: a valid event, a race mask
+/// that names a playable race, no quest or one that exists, and a creature sender. vmangos reads
+/// `event` as unsigned, so a negative (event stop) row names no event and is dropped. The mail
+/// template is client data, so the Module checks it when it sends.
+fn event_mails(rows: impl IntoIterator<Item = EventMail>, sources: &MailSources) -> Vec<EventMail> {
+    rows.into_iter()
+        .filter(|mail| {
+            u32::try_from(mail.event)
+                .is_ok_and(|event| event != 0 && sources.events.contains(&event))
+                && mail.race_mask & ALL_PLAYABLE_RACE_MASK != 0
+                && (mail.quest == 0 || sources.quests.contains(&mail.quest))
+                && sources.creature_templates.contains(&mail.sender)
+        })
+        .collect()
+}
+
+fn mail_sources(
+    dump: &(impl TableRows + ?Sized),
+    creature_templates: BTreeSet<u32>,
+) -> Result<MailSources> {
+    let mut events = BTreeSet::new();
+    for row in parse_table(dump, "game_event")?.iter() {
+        if row.number::<u32>("length")? > 0 {
+            events.insert(row.number("entry")?);
+        }
+    }
+    Ok(MailSources {
+        events,
+        quests: entries(dump, "quest_template")?,
+        creature_templates,
+    })
+}
+
+fn source_mails(dump: &(impl TableRows + ?Sized)) -> Result<Vec<EventMail>> {
+    parse_table(dump, "game_event_mail")?
+        .iter()
+        .map(|row| {
+            Ok(EventMail {
+                event: row.number("event")?,
+                race_mask: row.number("raceMask")?,
+                quest: row.number("quest")?,
+                mail_template: row.number("mailTemplateId")?,
+                sender: row.number("senderEntry")?,
+            })
+        })
+        .collect()
+}
+
 /// The scripted events whose script the Module lacks, for the `events.scripted` finding.
 fn unscripted_events(scripted: Vec<u32>) -> Vec<u32> {
     scripted
@@ -395,6 +461,7 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
             .collect::<Result<Vec<_>>>()?,
     );
     let vendor_items = event_vendor_items(vendor_offers(dump)?, &active_event_conditions(dump)?);
+    let creature_templates = entries(dump, "creature_template")?;
     let event_creatures = creature_data(
         source_creature_data(dump)?,
         &CreatureDataSources {
@@ -404,10 +471,16 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
                 .map(|spawn| (spawn.0 as u32, world_guid(spawn.1, spawn.0)))
                 .collect(),
             equipment: &equipment_choices(dump)?,
-            creature_templates: &entries(dump, "creature_template")?,
+            creature_templates: &creature_templates,
             spells: &entries(dump, "spell_template")?,
         },
     );
+    let source_mails = source_mails(dump)?;
+    let mails = if source_mails.is_empty() {
+        Vec::new()
+    } else {
+        event_mails(source_mails, &mail_sources(dump, creature_templates)?)
+    };
 
     // An event the World Source leaves out for patch 1.12 is disabled, as vmangos disables it, so
     // its spawns stay hidden and its quests and vendor items are not offered.
@@ -432,6 +505,7 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         "DELETE FROM game_event_quest WHERE quest_entry >= 0".to_string(),
         "DELETE FROM game_event_vendor_item WHERE id >= 0".to_string(),
         "DELETE FROM game_event_creature_data WHERE data_id >= 0".to_string(),
+        "DELETE FROM game_event_mail WHERE id >= 0".to_string(),
         "DELETE FROM game_event WHERE event_entry >= 0".to_string(),
     ];
     push_insert(
@@ -504,18 +578,35 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         "data_id,spawn_guid,event_entry,creature_entry,main_hand,off_hand,ranged,start_spell,end_spell",
         &creature_data_rows,
     );
+    let mail_rows: Vec<String> = mails
+        .iter()
+        .zip(1u64..)
+        .map(|(mail, id)| {
+            format!(
+                "({id},{},{},{},{},{})",
+                mail.event, mail.race_mask, mail.quest, mail.mail_template, mail.sender
+            )
+        })
+        .collect();
+    push_insert(
+        &mut stmts,
+        "game_event_mail",
+        "id,event_entry,race_mask,quest_entry,mail_template_id,sender_entry",
+        &mail_rows,
+    );
     // Each statement commits alone, so a pass that ran part way through the import settled on a
     // partial link set. Dropping the statuses last makes the next pass walk every link again.
     stmts.push("DELETE FROM game_event_status WHERE event_entry >= 0".to_string());
     eprintln!(
-        "game events: {} links, {} event pools, {} event quests, {} event vendor items and {} \
-         creature data rows; {} links and {} creature data rows name a spawn the import leaves out, \
-         {} negative links on pooled placements are unsupported",
+        "game events: {} links, {} event pools, {} event quests, {} event vendor items, {} \
+         creature data rows and {} event mails; {} links and {} creature data rows name a spawn \
+         the import leaves out, {} negative links on pooled placements are unsupported",
         link_rows.len(),
         pool_rows.len(),
         quest_rows.len(),
         vendor_rows.len(),
         creature_data_rows.len(),
+        mail_rows.len(),
         links.absent,
         event_creatures.absent,
         links.pooled_absences
@@ -691,6 +782,38 @@ mod tests {
         assert_eq!(plan.displays, [76]);
         assert_eq!(plan.equipment_choices, BTreeSet::from([60]));
         assert_eq!(plan.rows[0].equipment, [0; 3]);
+    }
+
+    #[test]
+    fn only_a_start_row_of_a_valid_event_for_a_playable_race_from_a_creature_is_kept() {
+        let kept = EventMail {
+            event: 26,
+            race_mask: 0x1,
+            quest: 8_311,
+            mail_template: 140,
+            sender: 15_864,
+        };
+        let rows = [
+            kept,
+            EventMail { event: 0, ..kept },
+            EventMail { event: -26, ..kept },
+            EventMail { event: 27, ..kept },
+            EventMail {
+                race_mask: 0x100,
+                ..kept
+            },
+            EventMail {
+                quest: 8_312,
+                ..kept
+            },
+            EventMail { sender: 1, ..kept },
+        ];
+        let sources = MailSources {
+            events: BTreeSet::from([26]),
+            quests: BTreeSet::from([8_311]),
+            creature_templates: BTreeSet::from([15_864]),
+        };
+        assert_eq!(event_mails(rows, &sources), [kept]);
     }
 
     #[test]

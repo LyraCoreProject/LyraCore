@@ -267,6 +267,7 @@ IMPORT_CONTRACT = (
     'module/src/talent.rs',
     'module/src/weather.rs',
     'module/src/game_events.rs',
+    'module/src/game_events/mail.rs',
     'module/src/skill.rs',
     'module/src/helpers.rs',
     'module/src/time.rs',

@@ -1,4 +1,4 @@
-// vmangos `GameEventMgr` spawn, creature data, quest and vendor rules; read
+// vmangos `GameEventMgr` spawn, creature data, quest, vendor and mail rules; read
 // docs/schema.md#game-events first.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,6 +8,7 @@ use spacetimedb::{
 };
 
 mod darkmoon_faire;
+mod mail;
 
 /// One vmangos `game_event` row: its calendar on the Realm Clock.
 #[table(accessor = game_event)]
@@ -428,14 +429,16 @@ impl Calendar {
     }
 }
 
-/// Brings the spawns, pools and creature data of every event whose state is not yet applied toward
-/// that state, through the spawn lifecycle; docs/schema.md#game-events.
+/// Sends the mail of each event that started, then brings the spawns, pools and creature data of
+/// every event whose state is not yet applied toward that state, through the spawn lifecycle;
+/// docs/schema.md#game-events.
 pub(crate) fn reconcile(ctx: &ReducerContext) {
     reconcile_within(ctx, CHANGES_PER_PASS);
 }
 
 fn reconcile_within(ctx: &ReducerContext, mut budget: usize) {
     let calendar = Calendar::load(ctx);
+    mail::follow(ctx, &calendar.states);
     let statuses = ctx.db.game_event_status();
     let mut pending: Vec<GameEventStatus> = calendar
         .states

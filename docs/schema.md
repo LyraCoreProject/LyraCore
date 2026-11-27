@@ -971,8 +971,8 @@ place like any chest.
 
 ### Game events
 
-`module/src/game_events.rs` runs vmangos Game Events for spawns, creature data, quests and vendor
-items, as `GameEventMgr` does.
+`module/src/game_events.rs` runs vmangos Game Events for spawns, creature data, quests, vendor
+items and mail, as `GameEventMgr` does.
 `game_event` holds each event's calendar: `start_secs` and `end_secs` on the Realm Clock, and every
 `occurrence_mins` the event runs for `length_mins`. `scripted` marks a vmangos `hardcoded` event,
 which its script runs instead of the calendar, and `disabled` an event vmangos disables or leaves
@@ -983,8 +983,9 @@ GameObject pool that rolls only while its event runs. `game_event_quest` ties a 
 and `game_event_vendor_item` a vendor's item to the event its vmangos condition asks for.
 `game_event_creature_data` holds a vmangos `game_event_creature_data` row: the template, the three
 virtual equipment item entries and the start and end spells a creature spawn's source guid takes
-for its event, each 0 when the row leaves it as it is. No Package claims or reads these tables, so
-they stay out of the table catalogue.
+for its event, each 0 when the row leaves it as it is. `game_event_mail` holds a vmangos
+`game_event_mail` row, and `game_event_started` each event this Shard has started and not yet
+stopped. No Package claims or reads these tables, so they stay out of the table catalogue.
 
 An event is running while the Realm Clock is inside its start and end and within its length of the
 latest occurrence. A yearly event shorter than a year skips each 29 February since its start, so it
@@ -1041,6 +1042,22 @@ in the log when the event ends, and a turn-in request at its ender still rewards
 vmangos. A vendor item tied to an event is left out of the vendor's list and refused as an item the
 vendor does not sell while the event does not run. Both read the event's state at the moment of
 the request, not the minute pass.
+
+Each pass first follows every event's start, as vmangos `ApplyNewEvent` does. An event that runs
+and is not in `game_event_started` is recorded there, and each of its `game_event_mail` rows sends
+a letter to every Character the Shard holds whose race is in the row's mask and, when the row
+names a quest, whose reward of that quest is recorded. The letter comes from the sender creature
+with the mail template's id, body and item, at once and marked returned so it cannot be returned,
+as vmangos `MassMailMgr` sends it. A missing mail template or item template sends nothing and logs
+the row. An event that stops, or that becomes disabled or zero length, leaves `game_event_started`,
+so its next start mails again, as vmangos `EnableEvent` stops an event it disables. A stop sends no
+mail, as vmangos drops its negative rows. An event that no `game_event` row defines, such as one an
+import has deleted and not yet written again, is not followed, so an import mails no one again.
+Each Shard mails the Characters it holds, except one still arriving by Transfer: the Shard it
+leaves sends that letter and mail routing takes it to the new home. On a split Realm a Character
+so gets one letter from its own World Shard; the known gaps in
+`conformance/features/world/game_events.toml` say when it can get two or none. One pass writes
+every letter of a start, with no limit per pass.
 
 Before the `events` family is imported no link exists, and a creature population member's
 `event_ids` keep a member with a positive event out of its population's selection, as they did
