@@ -7,7 +7,10 @@ use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_shared::constants::unit_flags::IN_COMBAT;
 use lyracore_shared::guid;
 use lyracore_shared::spell::taxonomy::CAST_FLAG_CHANNELED;
-use lyracore_shared::spell::taxonomy::{A_ABSORB, A_PERIODIC_DAMAGE, CAST_FLAG_IGNORE_RESISTANCES};
+use lyracore_shared::spell::taxonomy::{
+    A_ABSORB, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, CAST_FLAG_IGNORE_RESISTANCES,
+    P_MANA_SHIELD_MASK, P_SCHOOL_MASK,
+};
 use lyracore_shared::spell_custom::CHAN_NO_DIST_LIMIT;
 use support::{event_rows, number, poll_until, Row, Standalone, POLL_TIMEOUT};
 
@@ -24,6 +27,8 @@ const ALL_SCHOOLS: i32 = 127;
 // Mana Shield's EffectMultipleValue 2.0 in hundredths, as an Aura's `eff_p1` keeps it.
 const MANA_SHIELD_COST: i32 = 200;
 const SECOND_ABSORB: u32 = SHIELD + 1;
+const ENERGIZE: u32 = SHIELD + 1;
+const ENERGIZE_AMOUNT: i32 = 50;
 const MANA_SHIELD_POOL: i32 = 500;
 const PROC_ROOT: u32 = 9_000_034;
 /// `SpellCastEventKind::PeriodicLog`.
@@ -239,12 +244,12 @@ fn in_combat(standalone: &Standalone, guid: u64) -> bool {
     flags & IN_COMBAT != 0
 }
 
-/// An absorb Aura staged on the Character: the school mask it covers, its pool and the mana it
-/// costs per point absorbed in hundredths, 0 for a school absorb.
+/// An absorb Aura staged on the Character: the school mask it covers, its pool and, for a Mana
+/// Shield, the mana it costs per point absorbed in hundredths.
 struct Absorb {
     mask: i32,
     pool: i32,
-    mana_cost: i32,
+    mana_cost: Option<i32>,
 }
 
 /// A Character at `health` of 10,000 behind a `shield` point absorb, under `debuffs` wolf Auras;
@@ -259,7 +264,7 @@ fn stage_shielded_character(
     let shield = Absorb {
         mask: ALL_SCHOOLS,
         pool: shield,
-        mana_cost: 0,
+        mana_cost: None,
     };
     stage_absorbing_character(name, health, &[shield], tick, debuffs)
 }
@@ -270,6 +275,18 @@ fn stage_absorbing_character(
     name: &str,
     health: u32,
     absorbs: &[Absorb],
+    tick: i32,
+    debuffs: u8,
+) -> Standalone {
+    stage_buffed_character(name, health, absorbs, 0, tick, debuffs)
+}
+
+/// As [`stage_absorbing_character`], with `extra_buffs` plain buffs after the absorbs.
+fn stage_buffed_character(
+    name: &str,
+    health: u32,
+    absorbs: &[Absorb],
+    extra_buffs: usize,
     tick: i32,
     debuffs: u8,
 ) -> Standalone {
@@ -288,15 +305,18 @@ fn stage_absorbing_character(
             &CHARACTER.to_string(),
             &CHARACTER.to_string(),
             "false",
-            &absorbs.len().to_string(),
+            &(absorbs.len() + extra_buffs).to_string(),
         ],
     );
     for (slot, absorb) in absorbs.iter().enumerate() {
         standalone.assert_sql(&format!(
-            "UPDATE game_aura SET eff_kind = {A_ABSORB}, eff_p0 = {}, eff_p1 = {}, \
-             amount_remaining = {} WHERE spell_id = {}",
+            "UPDATE game_aura SET eff_kind = {A_ABSORB}, eff_p0 = {}, eff_p0_kind = {}, \
+             eff_p1 = {}, amount_remaining = {} WHERE spell_id = {}",
             absorb.mask,
-            absorb.mana_cost,
+            absorb
+                .mana_cost
+                .map_or(P_SCHOOL_MASK, |_| P_MANA_SHIELD_MASK),
+            absorb.mana_cost.unwrap_or(0),
             absorb.pool,
             SHIELD as usize + slot
         ));
@@ -376,7 +396,7 @@ fn mana_shield() -> Absorb {
     Absorb {
         mask: PHYSICAL,
         pool: MANA_SHIELD_POOL,
-        mana_cost: MANA_SHIELD_COST,
+        mana_cost: Some(MANA_SHIELD_COST),
     }
 }
 
@@ -386,7 +406,7 @@ fn a_fire_ward_takes_a_fire_tick() {
     let ward = Absorb {
         mask: FIRE,
         pool: 100,
-        mana_cost: 0,
+        mana_cost: None,
     };
     let standalone = stage_absorbing_character("absorb-fire-ward-fire", 10_000, &[ward], 30, 1);
     stage_dot_school(&standalone, FIRE);
@@ -404,7 +424,7 @@ fn a_fire_ward_takes_no_shadow_tick() {
     let ward = Absorb {
         mask: FIRE,
         pool: 100,
-        mana_cost: 0,
+        mana_cost: None,
     };
     let standalone = stage_absorbing_character("absorb-fire-ward-shadow", 10_000, &[ward], 30, 1);
     stage_dot_school(&standalone, SHADOW);
@@ -485,7 +505,7 @@ fn a_power_word_shield_takes_damage_before_an_older_mana_shield() {
     let power_word_shield = Absorb {
         mask: ALL_SCHOOLS,
         pool: 40,
-        mana_cost: 0,
+        mana_cost: None,
     };
     let standalone = stage_absorbing_character(
         "absorb-shield-before-mana-shield",
@@ -504,7 +524,36 @@ fn a_power_word_shield_takes_damage_before_an_older_mana_shield() {
     assert_eq!(absorb_left(&standalone, SHIELD), Some(440));
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_mana_shield_spend_survives_an_energize_tick_of_the_same_pass() {
+    let standalone = stage_buffed_character(
+        "absorb-mana-shield-energize",
+        10_000,
+        &[mana_shield()],
+        1,
+        30,
+        1,
+    );
+    stage_dot_school(&standalone, PHYSICAL);
+    set_mana(&standalone, 500);
+    standalone.assert_sql(&format!(
+        "UPDATE game_aura SET eff_kind = {A_PERIODIC_ENERGIZE}, amount = {ENERGIZE_AMOUNT} \
+         WHERE spell_id = {ENERGIZE}"
+    ));
+
+    let tick = tick_auras_due(&standalone, "");
+
+    assert_eq!(number::<u32>(&tick, "absorbed"), 30);
+    assert_eq!(mana(&standalone), 500 + ENERGIZE_AMOUNT as u32 - 60);
+}
+
 fn tick_once(standalone: &Standalone) -> Row {
+    tick_auras_due(standalone, &format!("WHERE spell_id = {DOT}"))
+}
+
+/// Makes the Auras `filter` selects due, and returns the DOT's periodic log.
+fn tick_auras_due(standalone: &Standalone, filter: &str) -> Row {
     let ticks = standalone.subscribe(&[&format!(
         "SELECT * FROM game_spell_cast_event_live WHERE spell_id = {DOT} AND kind = {PERIODIC_LOG}"
     )]);
@@ -514,7 +563,7 @@ fn tick_once(standalone: &Standalone) -> Row {
         .as_micros() as i64
         - 1_000_000;
     standalone.assert_sql(&format!(
-        "UPDATE game_aura SET period_ms = 600000, next_tick_micros = {due} WHERE spell_id = {DOT}"
+        "UPDATE game_aura SET period_ms = 600000, next_tick_micros = {due} {filter}"
     ));
     let mut rows = Vec::new();
     assert!(

@@ -177,15 +177,13 @@ List zero counts remain visible, as in
 ### Absorb school migration
 
 No schema changes. A school absorb Aura (aura 69) now takes damage only when its `eff_p0` school
-mask covers the damage's school, and a Mana Shield (aura 97) is an `A_ABSORB` row with its school
-mask in `p0` and its mana cost per absorbed point in hundredths in `p1`; a school absorb has `p1`
-0. School absorbs run first, then Mana Shields, which spend that mana and absorb no more than the
-unit's mana pays. Reimport the `spell` family straight after the publish, then call
-`debug_repair_after_publish`. Until the reimport a Mana Shield row has mask 0 and `p1` 0, so it
-absorbs nothing, and a live Mana Shield Aura keeps that until the repair copies the new row onto it.
-Every other absorb row already carries its mask. A Realm that has not yet run the Follow-up claim
-reimport still holds the old Weakened Soul link in `p1` of Power Word: Shield rank 1, which now
-reads as a Mana Shield; run that reimport first.
+mask covers the damage's school, and a Mana Shield (aura 97) is an `A_ABSORB` row marked by
+`p0_kind` `P_MANA_SHIELD_MASK`, with its school mask in `p0` and its mana cost per absorbed point
+in `p1`; see [Absorb auras](schema.md#absorb-auras). School absorbs run first, then Mana Shields,
+which spend that mana and absorb no more than the unit's mana pays. Reimport the `spell` family
+straight after the publish, then call `debug_repair_after_publish`. Until the reimport a Mana
+Shield row has mask 0 and no marker, so it absorbs nothing, and a live Mana Shield Aura keeps that
+until the repair copies the new row onto it. Every other absorb row already carries its mask.
 
 ### Base reputation migration
 

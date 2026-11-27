@@ -666,6 +666,7 @@ pub(crate) fn deal_damage(
     attacker_guid: u64,
     target_guid: u64,
     basis: i32,
+    school_mask: u8,
     hit: Hit,
 ) -> (u32, u32) {
     let entities = ctx.db.game_world_entity();
@@ -690,7 +691,7 @@ pub(crate) fn deal_damage(
         attacker_guid,
         target_guid,
         basis.max(0) as u32,
-        crate::spell::spell_school_mask(ctx, hit.spell_id),
+        school_mask,
     );
     if resolved.amount() == 0 && !resolved.damage.lethal_prevented {
         if resolved.absorbed() > 0 {

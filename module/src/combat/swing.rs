@@ -10,6 +10,8 @@ use crate::{
     RangedImpactSchedule,
 };
 
+const SHOOT_SPELL_ID: u32 = 5019;
+
 #[reducer]
 pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
     if !crate::time::scheduler_authorized(ctx) {
@@ -642,7 +644,7 @@ fn fire_melee_swing(
         attacker_guid,
         target_guid,
         rolled,
-        SCHOOL_MASK_PHYSICAL,
+        fired.map_or(SCHOOL_MASK_PHYSICAL, FiredStrike::school_mask),
     );
     let (projected_swing, projected_seal) = split_damage_projection(damage.amount(), seal_portion);
 
@@ -738,6 +740,12 @@ struct FiredStrike<'a> {
 }
 
 impl FiredStrike<'_> {
+    fn school_mask(self) -> u8 {
+        self.header.map_or(SCHOOL_MASK_PHYSICAL, |spell| {
+            crate::spell::damage_school_mask(spell.school_mask)
+        })
+    }
+
     fn weapon_procs(self) -> bool {
         self.header
             .is_some_and(|spell| spell.cast_flags & crate::spell::CAST_FLAG_WEAPON_PROCS != 0)
@@ -837,10 +845,13 @@ fn land_chained_strike(
     if unit.hit_info == AttackOutcome::Dodge {
         arm_react(ctx, attacker.guid, ReactKind::Overpower);
     }
-    let school_mask = strike.header.map_or(SCHOOL_MASK_PHYSICAL, |spell| {
-        crate::spell::damage_school_mask(spell.school_mask)
-    });
-    let damage = resolve_damage(ctx, attacker.guid, target_guid, unit.rolled, school_mask);
+    let damage = resolve_damage(
+        ctx,
+        attacker.guid,
+        target_guid,
+        unit.rolled,
+        strike.school_mask(),
+    );
     SpellCastEvent::insert(
         ctx,
         SpellCastEvent {
@@ -975,6 +986,15 @@ fn split_damage_projection(final_damage: u32, seal_portion: u32) -> (u32, u32) {
     (final_damage - seal, seal)
 }
 
+// vmangos Spell::Spell gives Shoot, the wand spell, the school of the equipped wand.
+fn ranged_damage_school_mask(ctx: &ReducerContext, attacker_guid: u64, ranged_spell_id: u32) -> u8 {
+    if ranged_spell_id == SHOOT_SPELL_ID {
+        1 << super::folds::ranged_school(ctx, attacker_guid)
+    } else {
+        crate::spell::spell_school_mask(ctx, ranged_spell_id)
+    }
+}
+
 fn fire_ranged_shot(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
@@ -1043,7 +1063,7 @@ fn fire_ranged_shot(
         attacker_guid,
         target_guid,
         roll.damage,
-        crate::spell::spell_school_mask(ctx, ranged_spell_id),
+        ranged_damage_school_mask(ctx, attacker_guid, ranged_spell_id),
     );
 
     let speed_yps = ctx
@@ -1179,7 +1199,7 @@ fn schedule_ranged_impact(
             damage: damage.amount(),
             ranged_spell_id,
             is_crit,
-            school: if ranged_spell_id == 5019 {
+            school: if ranged_spell_id == SHOOT_SPELL_ID {
                 super::folds::ranged_school(ctx, attacker_guid)
             } else {
                 ctx.db

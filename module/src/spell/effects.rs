@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{game_aura, game_spell, Aura};
 use lyracore_shared::packing::power_type;
-use lyracore_shared::spell::taxonomy::SPELLMOD_OP_MULTIPLE_VALUE;
+use lyracore_shared::spell::taxonomy::{P_MANA_SHIELD_MASK, SPELLMOD_OP_MULTIPLE_VALUE};
 
 pub(crate) fn arm_spell_retaliation(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
     crate::combat::engage_passive_creature(ctx, target_guid, caster_guid);
@@ -247,8 +247,9 @@ pub(crate) fn absorb_incoming(
         return incoming;
     }
     shields.sort_by_key(|a| a.id);
-    let (mana_shields, school_shields): (Vec<Aura>, Vec<Aura>) =
-        shields.into_iter().partition(|a| a.eff_p1 != 0);
+    let (mana_shields, school_shields): (Vec<Aura>, Vec<Aura>) = shields
+        .into_iter()
+        .partition(|a| a.eff_p0_kind == P_MANA_SHIELD_MASK);
     let (mut updated, mut deleted, remaining_damage) = drain_shields(school_shields, incoming);
     let mana_shields = mana_shields
         .into_iter()

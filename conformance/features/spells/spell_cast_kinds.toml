@@ -708,6 +708,16 @@ function = "a_power_word_shield_takes_damage_before_an_older_mana_shield"
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_mana_shield_spend_survives_an_energize_tick_of_the_same_pass"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/channelled_ground_area.rs"
+function = "a_frost_ward_absorbs_a_frost_ground_area_tick"
+rung = "durable_module"
+
+[[tests]]
 path = "module/src/spell/formulas.rs"
 function = "a_mana_shield_costs_its_multiple_of_mana_per_point_absorbed"
 rung = "unit"

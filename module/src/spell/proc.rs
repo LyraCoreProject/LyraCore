@@ -886,6 +886,7 @@ fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) ->
         row.target_guid,
         counterparty_guid,
         after_resist,
+        crate::spell::damage_school_mask(school_mask),
         Hit::spell(HitSource::Triggered, row.spell_id, false),
     );
     if dealt > 0 || absorbed > 0 || points > after_resist {
