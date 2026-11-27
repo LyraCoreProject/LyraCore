@@ -420,8 +420,13 @@ pub(crate) fn insert_creature_entity(ctx: &spacetimedb::ReducerContext, mut enti
         y: entity.y,
         z: entity.z,
     };
+    super::presentation::wear_default_equipment(
+        ctx,
+        &entity,
+        super::event_data::worn_equipment(&worn),
+    );
     entity.insert(ctx);
-    super::event_data::dress_spawned(ctx, payload.guid, &worn);
+    super::event_data::cast_at_spawn(ctx, payload.guid, &worn);
     // Fire after insertion because handlers may resolve the creature by guid.
     crate::hooks::fire_on_creature_spawn(ctx, &payload);
 }

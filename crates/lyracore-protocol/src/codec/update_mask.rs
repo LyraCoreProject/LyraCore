@@ -18,6 +18,8 @@ pub mod idx {
     /// Packed race, class, gender and power, one byte each.
     pub const UNIT_BYTES_0: u16 = 36;
     pub const UNIT_VIRTUAL_ITEM_SLOT_DISPLAY: u16 = 37;
+    /// Two words per virtual item slot.
+    pub const UNIT_VIRTUAL_ITEM_INFO: u16 = 40;
     pub const UNIT_FLAGS: u16 = 46;
 
     pub const UNIT_AURA: u16 = 47;

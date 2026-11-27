@@ -561,7 +561,7 @@ fn validate_definition_dependencies(
                         faction.faction_template,
                     ));
                 }
-                RelayInstruction::SetEquipment(equipment) => {
+                RelayInstruction::SetEquipment(equipment) if !equipment.reset_default => {
                     for entry in [equipment.main_hand, equipment.off_hand, equipment.ranged] {
                         let entry = u32::try_from(entry).map_err(|_| {
                             format!(
@@ -889,13 +889,11 @@ fn validate_step_capability(relay_id: u32, step: &RelayStep) -> Result<(), Strin
             ))
         }
         RelayInstruction::SetEquipment(equipment)
-            if equipment.reset_default
-                || equipment.main_hand < 0
-                || equipment.off_hand < 0
-                || equipment.ranged < 0 =>
+            if !equipment.reset_default
+                && (equipment.main_hand < 0 || equipment.off_hand < 0 || equipment.ranged < 0) =>
         {
             Err(format!(
-                "relay {relay_id} step {} needs an unavailable equipment-reset authority",
+                "relay {relay_id} step {} keeps a virtual item slot, which relays cannot do",
                 step.source_order
             ))
         }
@@ -1829,6 +1827,14 @@ fn apply_leaf_for_pair(
         }
         RelayInstruction::DespawnGameObject(_) => {
             crate::gameobject::despawn_from_relay(ctx, target_guid)
+        }
+        RelayInstruction::SetEquipment(equipment) if equipment.reset_default => {
+            let creature = crate::helpers::live_entity(ctx, guid)
+                .ok()
+                .filter(|entity| !entity.is_player())
+                .ok_or_else(|| format!("relay equipment subject {guid} is unavailable"))?;
+            crate::creatures::presentation::wear_default_equipment(ctx, &creature, None);
+            Ok(())
         }
         RelayInstruction::SetEquipment(equipment) => {
             let slot = |entry: i32| {

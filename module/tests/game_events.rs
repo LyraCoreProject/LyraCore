@@ -34,6 +34,8 @@ const ELWYNN_FAIRE_LANTERN: u32 = 5_300_403;
 const MULGORE_FAIRE_LANTERN: u32 = 5_300_404;
 
 const FESTIVAL_MAIL_TEMPLATE: u32 = 5_300_600;
+const WOLF_AXE: u32 = 5_300_700;
+const WOLF_AXE_DISPLAY: u32 = 8_478;
 // The mask bit of vmangos race 1, Human; the seeded Character is a Human.
 const HUMAN_RACE_MASK: u32 = 0x1;
 const HUMAN: &str = "1";
@@ -656,6 +658,109 @@ fn a_creature_that_respawns_while_its_event_runs_comes_back_in_its_event_data() 
         wear(&shard, wolf),
         festival_wear(&shard),
         "the new life takes its equipment and start spell again"
+    );
+}
+
+fn arm_wolves(shard: &Standalone) {
+    shard.insert_row(
+        "game_item_template",
+        &[
+            ("entry", &WOLF_AXE),
+            ("name", &"Fixture wolf axe"),
+            ("class", &2u8),
+            ("display_id", &WOLF_AXE_DISPLAY),
+            ("inventory_type", &13u8),
+            ("sheath", &3u8),
+        ],
+    );
+    shard.insert_row(
+        "game_creature_equipment",
+        &[
+            ("id", &(u64::from(TEST_WOLF_ENTRY) << 8)),
+            ("entry", &TEST_WOLF_ENTRY),
+            ("weight", &1u32),
+            ("main_hand", &WOLF_AXE),
+            ("off_hand", &0u32),
+            ("ranged", &0u32),
+        ],
+    );
+}
+
+fn armed_wear() -> Wear {
+    Wear {
+        main_hand_display: WOLF_AXE_DISPLAY,
+        ..own_wear()
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_shows_its_template_equipment_and_takes_it_again_when_its_event_template_ends() {
+    let (shard, at) = realm("creature-template-equipment-entry");
+    arm_wolves(&shard);
+    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
+    let wolf = wolf_guid(DRESSED_WOLF);
+    dress_for_festival(&shard, wolf);
+    import_wolves(&shard, &at, &[DRESSED_WOLF]);
+    settle(&shard);
+    assert_eq!(
+        wear(&shard, wolf),
+        armed_wear(),
+        "the spawned wolf shows its axe"
+    );
+
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    assert_eq!(wear(&shard, wolf), festival_wear(&shard));
+
+    shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
+    assert_eq!(
+        wear(&shard, wolf),
+        armed_wear(),
+        "its own template comes back with its axe"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_takes_its_template_equipment_back_when_its_event_equipment_comes_off() {
+    let (shard, at) = realm("creature-template-equipment-take-off");
+    arm_wolves(&shard);
+    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
+    let wolf = wolf_guid(DRESSED_WOLF);
+    shard.insert_row(
+        "game_event_creature_data",
+        &[
+            ("data_id", &1u64),
+            ("spawn_guid", &wolf),
+            ("event_entry", &FESTIVAL),
+            ("creature_entry", &0u32),
+            ("main_hand", &FIXTURE_BLADE),
+            ("off_hand", &0u32),
+            ("ranged", &0u32),
+            ("start_spell", &0u32),
+            ("end_spell", &0u32),
+        ],
+    );
+    import_wolves(&shard, &at, &[DRESSED_WOLF]);
+    settle(&shard);
+    assert_eq!(wear(&shard, wolf), armed_wear());
+
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    let blade = festival_wear(&shard).main_hand_display;
+    assert_eq!(
+        wear(&shard, wolf),
+        Wear {
+            main_hand_display: blade,
+            ..own_wear()
+        },
+        "the same wolf holds the event's blade"
+    );
+
+    shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
+    assert_eq!(
+        wear(&shard, wolf),
+        armed_wear(),
+        "the blade comes off for its axe"
     );
 }
 

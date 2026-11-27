@@ -193,6 +193,7 @@ pub struct EncounterSpawn {
     pub guid: u64,
 }
 
+/// The virtual equipment a creature shows: item displays, then the item entries they came from.
 #[table(accessor = game_encounter_equip, public, index(accessor = by_instance, btree(columns = [instance_id])))]
 pub struct EncounterEquip {
     #[primary_key]
@@ -201,6 +202,12 @@ pub struct EncounterEquip {
     pub main_hand: u32,
     pub off_hand: u32,
     pub ranged: u32,
+    #[default(0u32)]
+    pub main_hand_item: u32,
+    #[default(0u32)]
+    pub off_hand_item: u32,
+    #[default(0u32)]
+    pub ranged_item: u32,
 }
 
 impl EncounterEquip {
@@ -219,6 +226,20 @@ impl EncounterEquip {
         if let Some(row) = table.creature_guid().find(guid) {
             table.creature_guid().delete(guid);
             crate::native::creature::equipment_changed(ctx, &row, true);
+        }
+    }
+
+    pub(crate) fn clear_main_hand(ctx: &ReducerContext, guid: u64) {
+        let Some(row) = ctx.db.game_encounter_equip().creature_guid().find(guid) else {
+            return;
+        };
+        if row.main_hand != 0 || row.main_hand_item != 0 {
+            Self {
+                main_hand: 0,
+                main_hand_item: 0,
+                ..row
+            }
+            .replace(ctx);
         }
     }
 }

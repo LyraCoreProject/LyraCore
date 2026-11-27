@@ -1,6 +1,8 @@
 use super::item::{build_set_proficiency_msgs, ItemInstanceView};
 use super::update_mask;
-use super::values::{build_sheet_stats_values, SheetStatsValues};
+use super::values::{
+    build_sheet_stats_values, virtual_item_fields, SheetStatsValues, VirtualItemView,
+};
 use anyhow::{anyhow, Result};
 use lyracore_shared::constants::speeds;
 use lyracore_shared::packing::unpack4;
@@ -93,6 +95,8 @@ pub struct EntityView {
     pub spline: Option<CreateSpline>,
     /// The Auras in the 48 client-visible slots, which vmangos `BuildValuesUpdate` writes into CREATE.
     pub auras: Vec<update_mask::AuraSlot>,
+    /// A creature's main hand, off hand and ranged virtual items; a Character's stay unwritten.
+    pub virtual_items: [VirtualItemView; 3],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -619,20 +623,41 @@ pub fn build_create_object(
         has_transport: 0,
         objects: vec![create],
     };
+    add_create_extras(&mut message, entity, is_player)?;
+    Ok(message)
+}
+
+fn add_create_extras(
+    message: &mut SMSG_UPDATE_OBJECT,
+    entity: &EntityView,
+    is_player: bool,
+) -> Result<()> {
     let offhand_attack_time_ms = if is_player {
         entity.offhand_attack_time_ms
     } else {
         Some(entity.base_attack_time_ms)
     };
-    if offhand_attack_time_ms.is_some() || !entity.auras.is_empty() {
-        add_create_fields(&mut message, |mask| {
+    // vmangos `Object::_SetCreateBits` writes only the non-zero fields into a CREATE.
+    let virtual_items: Vec<_> = if is_player {
+        Vec::new()
+    } else {
+        virtual_item_fields(&entity.virtual_items)
+            .into_iter()
+            .filter(|&(_, value)| value != 0)
+            .collect()
+    };
+    if offhand_attack_time_ms.is_some() || !entity.auras.is_empty() || !virtual_items.is_empty() {
+        add_create_fields(message, |mask| {
             if let Some(delay) = offhand_attack_time_ms {
                 mask.set_u32(127, delay);
             }
             update_mask::write_auras(mask, &entity.auras);
+            for (index, value) in virtual_items {
+                mask.set_u32(index, value);
+            }
         })?;
     }
-    Ok(message)
+    Ok(())
 }
 
 pub fn build_self_create_object(

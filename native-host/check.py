@@ -1683,7 +1683,7 @@ def check_world_objects(host):
     assert create_index < rotation_index
     host.call('debug_enter_instance', [first_guid, instance])
     restored = first.collect()
-    assert [values(restored, creature)[i] for i in (37, 38, 39)] == [weapon, 0, weapon]
+    assert [values(restored, creature, create=True).get(i, 0) for i in (37, 38, 39)] == [weapon, 0, weapon]
     second.collect()
     outside.collect()
     host.call('debug_encounter_equip', [creature, 0, 5090050, 0])

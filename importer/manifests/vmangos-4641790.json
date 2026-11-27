@@ -549,6 +549,20 @@
         ]
       }
     },
+    "creature_equip_template": {
+      "columns": {
+        "integer": [
+          "entry",
+          "item1",
+          "item2",
+          "item3",
+          "patch_max",
+          "patch_min",
+          "probability"
+        ]
+      },
+      "locked_rows": 5182
+    },
     "creature_groups": {
       "columns": {
         "integer": [
@@ -849,6 +863,7 @@
           "display_probability4",
           "display_total_probability",
           "entry",
+          "equipment_id",
           "faction",
           "flags_extra",
           "gold_max",
@@ -1175,6 +1190,21 @@
         ]
       },
       "locked_rows": 3064
+    },
+    "game_event_creature_data": {
+      "columns": {
+        "integer": [
+          "display_id",
+          "entry_id",
+          "equipment_id",
+          "event",
+          "guid",
+          "patch",
+          "spell_end",
+          "spell_start"
+        ]
+      },
+      "locked_rows": 576
     },
     "game_event_gameobject": {
       "columns": {

@@ -215,17 +215,51 @@ pub fn build_target_values(guid: u64, target: u64) -> SMSG_UPDATE_OBJECT {
     })
 }
 
-pub fn build_virtual_item_values(
-    guid: u64,
-    main_hand_display: u32,
-    off_hand_display: u32,
-    ranged_display: u32,
-) -> (u16, Vec<u8>) {
+/// What a creature's virtual item slot shows: the item's display and the facts vmangos
+/// `Creature::SetVirtualItem` writes beside it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VirtualItemView {
+    pub display_id: u32,
+    pub class: u8,
+    pub subclass: u8,
+    pub material: u8,
+    pub inventory_type: u8,
+    pub sheath: u8,
+}
+
+impl VirtualItemView {
+    // UNIT_VIRTUAL_ITEM_INFO pair: class, subclass, material and inventory type, then sheath.
+    fn info(&self) -> [u32; 2] {
+        [
+            u32::from_le_bytes([
+                self.class,
+                self.subclass,
+                self.material,
+                self.inventory_type,
+            ]),
+            u32::from(self.sheath),
+        ]
+    }
+}
+
+pub fn virtual_item_fields(items: &[VirtualItemView; 3]) -> [(u16, u32); 9] {
+    let display = update_mask::idx::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY;
+    let info = update_mask::idx::UNIT_VIRTUAL_ITEM_INFO;
+    let mut fields = [(0, 0); 9];
+    for (slot, item) in (0u16..).zip(items) {
+        let [first, second] = item.info();
+        fields[usize::from(slot)] = (display + slot, item.display_id);
+        fields[usize::from(3 + slot * 2)] = (info + slot * 2, first);
+        fields[usize::from(4 + slot * 2)] = (info + slot * 2 + 1, second);
+    }
+    fields
+}
+
+pub fn build_virtual_item_values(guid: u64, items: &[VirtualItemView; 3]) -> (u16, Vec<u8>) {
     let mut mask = update_mask::UpdateMaskValues::new();
-    let first = update_mask::idx::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY;
-    mask.set_u32(first, main_hand_display);
-    mask.set_u32(first + 1, off_hand_display);
-    mask.set_u32(first + 2, ranged_display);
+    for (index, value) in virtual_item_fields(items) {
+        mask.set_u32(index, value);
+    }
     build_values_update_raw(guid, &mask)
 }
 

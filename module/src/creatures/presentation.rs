@@ -1,4 +1,4 @@
-use spacetimedb::{table, ReducerContext, Table};
+use spacetimedb::{log, table, ReducerContext, Table};
 
 use super::eventai::RelayFlagOperation;
 use super::eventai::{CreaturePresentationInstruction, CreaturePresentationMount, FlagOverride};
@@ -30,16 +30,62 @@ pub(crate) fn equip_swap(
     if e.is_player() {
         return Err("equip_swap targets creatures only".to_string());
     }
-    let [main_hand, off_hand, ranged] = equipment_displays(ctx, [main_hand, off_hand, ranged])?;
+    let items = [main_hand, off_hand, ranged];
+    shown_equipment(
+        creature_guid,
+        e.instance_id,
+        items,
+        equipment_displays(ctx, items)?,
+    )
+    .replace(ctx);
+    Ok(())
+}
+
+/// vmangos `Creature::LoadDefaultEquipment`: `creature` shows `event` equipment when given, else a
+/// choice of its template's equipment, else none; a template whose choices weigh 0 keeps the
+/// current slots. An item the Realm lacks leaves its slot empty.
+pub(crate) fn wear_default_equipment(
+    ctx: &ReducerContext,
+    creature: &crate::WorldEntity,
+    event: Option<[u32; 3]>,
+) {
+    use super::catalogue::TemplateEquipment;
+    let items = match event.map_or_else(
+        || super::catalogue::equipment(ctx, creature.entry),
+        TemplateEquipment::Items,
+    ) {
+        TemplateEquipment::Items(items) => items,
+        TemplateEquipment::Unpicked => return,
+        TemplateEquipment::NoEquipment => {
+            crate::EncounterEquip::delete(ctx, creature.guid);
+            return;
+        }
+    };
+    let displays = items.map(|entry| {
+        item_display(ctx, entry).unwrap_or_else(|reason| {
+            log::warn!("creature {} shows an empty slot: {reason}", creature.guid);
+            0
+        })
+    });
+    shown_equipment(creature.guid, creature.instance_id, items, displays).replace(ctx);
+}
+
+fn shown_equipment(
+    creature_guid: u64,
+    instance_id: u64,
+    [main_hand_item, off_hand_item, ranged_item]: [u32; 3],
+    [main_hand, off_hand, ranged]: [u32; 3],
+) -> crate::EncounterEquip {
     crate::EncounterEquip {
         creature_guid,
-        instance_id: e.instance_id,
+        instance_id,
         main_hand,
         off_hand,
         ranged,
+        main_hand_item,
+        off_hand_item,
+        ranged_item,
     }
-    .replace(ctx);
-    Ok(())
 }
 
 /// The item display ids virtual equipment shows for main hand, off hand and ranged item entries.
@@ -47,18 +93,23 @@ pub(crate) fn equipment_displays(
     ctx: &ReducerContext,
     items: [u32; 3],
 ) -> Result<[u32; 3], String> {
-    let display = |entry: u32| -> Result<u32, String> {
-        if entry == 0 {
-            return Ok(0);
-        }
-        ctx.db
-            .game_item_template()
-            .entry()
-            .find(entry)
-            .map(|item| item.display_id)
-            .ok_or_else(|| format!("virtual equipment item {entry} is missing"))
-    };
-    Ok([display(items[0])?, display(items[1])?, display(items[2])?])
+    Ok([
+        item_display(ctx, items[0])?,
+        item_display(ctx, items[1])?,
+        item_display(ctx, items[2])?,
+    ])
+}
+
+fn item_display(ctx: &ReducerContext, entry: u32) -> Result<u32, String> {
+    if entry == 0 {
+        return Ok(0);
+    }
+    ctx.db
+        .game_item_template()
+        .entry()
+        .find(entry)
+        .map(|item| item.display_id)
+        .ok_or_else(|| format!("virtual equipment item {entry} is missing"))
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,6 +219,7 @@ pub(crate) fn apply_eventai_instruction(
         CreaturePresentationInstruction::EmptyMana => state.mana_emptied = true,
         CreaturePresentationInstruction::ClearVirtualMainHand => {
             state.virtual_main_hand_cleared = true;
+            crate::EncounterEquip::clear_main_hand(ctx, creature_guid);
         }
         CreaturePresentationInstruction::SetNotAttackable => {
             state.not_attackable = FlagOverride::Set;
@@ -345,7 +397,8 @@ pub(crate) fn update_entry(
         .find(creature_guid)
         .ok_or_else(|| format!("template subject {creature_guid} disappeared"))?;
     take_template(ctx, &mut entity, &template);
-    entity.update(ctx);
+    let entity = entity.update(ctx);
+    wear_default_equipment(ctx, &entity, None);
     crate::creatures::clear_gossip_menu_override(ctx, creature_guid);
     Ok(())
 }

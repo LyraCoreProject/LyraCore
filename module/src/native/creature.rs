@@ -8,7 +8,8 @@ use spacetimedb::{ConnectionId, ReducerContext, Table};
 use super::game_native_player;
 use crate::{
     aoi::{game_aoi_grant, WORLD_ENTITY},
-    game_creature_spline, game_world_entity, CreatureSpline,
+    game_creature_spline, game_encounter_equip, game_item_template, game_world_entity,
+    CreatureSpline,
 };
 
 fn packet(row: &CreatureSpline, replay_at: Option<u64>) -> Option<Packet> {
@@ -145,17 +146,6 @@ pub(crate) fn spline_changed(ctx: &ReducerContext, row: &CreatureSpline) {
 }
 
 pub(super) fn replay(ctx: &ReducerContext, connection: ConnectionId, guid: u64) {
-    use crate::game_encounter_equip;
-    if let Some(row) = ctx
-        .db
-        .game_encounter_equip()
-        .creature_guid()
-        .find(guid)
-        .filter(|row| equipment_is_current(ctx, row))
-    {
-        let (opcode, body) = equipment_packet(&row, false);
-        super::send_raw(ctx, connection, opcode, body, false);
-    }
     let now = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64;
     if let Some(packet) = ctx
         .db
@@ -177,18 +167,54 @@ fn equipment_is_current(ctx: &ReducerContext, row: &crate::EncounterEquip) -> bo
         .is_some_and(|entity| !entity.is_player() && entity.instance_id == row.instance_id)
 }
 
-fn equipment_packet(row: &crate::EncounterEquip, cleared: bool) -> (u16, Vec<u8>) {
-    let (main_hand, off_hand, ranged) = if cleared {
-        (0, 0, 0)
-    } else {
-        (row.main_hand, row.off_hand, row.ranged)
+fn shown_items(ctx: &ReducerContext, row: &crate::EncounterEquip) -> [codec::VirtualItemView; 3] {
+    let item = |display_id: u32, entry: u32| {
+        let template = if entry == 0 {
+            None
+        } else {
+            ctx.db.game_item_template().entry().find(entry)
+        };
+        template.map_or(
+            codec::VirtualItemView {
+                display_id,
+                ..Default::default()
+            },
+            |template| codec::VirtualItemView {
+                display_id,
+                class: template.class,
+                subclass: template.subclass,
+                // The item template keeps no material.
+                material: 0,
+                inventory_type: template.inventory_type,
+                sheath: template.sheath,
+            },
+        )
     };
-    codec::build_virtual_item_values(row.creature_guid, main_hand, off_hand, ranged)
+    [
+        item(row.main_hand, row.main_hand_item),
+        item(row.off_hand, row.off_hand_item),
+        item(row.ranged, row.ranged_item),
+    ]
+}
+
+/// The virtual items a creature's CREATE carries.
+pub(super) fn virtual_items(ctx: &ReducerContext, guid: u64) -> [codec::VirtualItemView; 3] {
+    ctx.db
+        .game_encounter_equip()
+        .creature_guid()
+        .find(guid)
+        .filter(|row| equipment_is_current(ctx, row))
+        .map_or_else(Default::default, |row| shown_items(ctx, &row))
 }
 
 pub(crate) fn equipment_changed(ctx: &ReducerContext, row: &crate::EncounterEquip, cleared: bool) {
     if equipment_is_current(ctx, row) {
-        let (opcode, body) = equipment_packet(row, cleared);
+        let items = if cleared {
+            Default::default()
+        } else {
+            shown_items(ctx, row)
+        };
+        let (opcode, body) = codec::build_virtual_item_values(row.creature_guid, &items);
         super::visibility::broadcast(ctx, row.creature_guid, opcode, body, false);
     }
 }

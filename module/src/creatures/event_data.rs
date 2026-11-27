@@ -27,12 +27,12 @@ fn worn_template(
     (template.entry != own_entry).then_some(template)
 }
 
-fn worn_equipment(worn: &[GameEventCreatureData]) -> Option<[u32; 3]> {
+pub(crate) fn worn_equipment(worn: &[GameEventCreatureData]) -> Option<[u32; 3]> {
     worn.iter().find_map(GameEventCreatureData::equipment)
 }
 
 /// Gives a creature about to enter the world the template of the event data its spawn wears, as
-/// vmangos `Creature::LoadFromDB` does; `dress_spawned` finishes it once it is in the world.
+/// vmangos `Creature::LoadFromDB` does; `cast_at_spawn` finishes it once it is in the world.
 pub(crate) fn wear_at_spawn(
     ctx: &ReducerContext,
     entity: &mut WorldEntity,
@@ -52,15 +52,11 @@ pub(crate) fn wear_at_spawn(
     worn
 }
 
-/// Gives a creature that just entered the world the equipment and start spells of `worn`.
-pub(crate) fn dress_spawned(
+pub(crate) fn cast_at_spawn(
     ctx: &ReducerContext,
     creature_guid: u64,
     worn: &[GameEventCreatureData],
 ) {
-    if let Some(items) = worn_equipment(worn) {
-        wear_equipment(ctx, creature_guid, items);
-    }
     for data in worn {
         cast_on_itself(ctx, creature_guid, data.start_spell);
     }
@@ -160,14 +156,22 @@ fn wear_equipment(ctx: &ReducerContext, creature_guid: u64, items: [u32; 3]) -> 
     true
 }
 
-/// Takes off the event's equipment `items`; equipment something else gave the creature stays.
+/// Takes off the event's equipment `items` for the creature's own; equipment something else gave
+/// the creature stays.
 fn take_off_equipment(ctx: &ReducerContext, creature_guid: u64, items: [u32; 3]) -> bool {
     let worn = super::presentation::equipment_displays(ctx, items)
         .is_ok_and(|displays| shown_equipment(ctx, creature_guid) == Some(displays));
-    if worn {
-        crate::EncounterEquip::delete(ctx, creature_guid);
-    }
-    worn
+    let Some(creature) = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(creature_guid)
+        .filter(|_| worn)
+    else {
+        return false;
+    };
+    super::presentation::wear_default_equipment(ctx, &creature, None);
+    true
 }
 
 /// vmangos `CastSpell(this, spell, true)`: a triggered cast on itself.
