@@ -1,6 +1,8 @@
 mod support;
 
-use lyracore_shared::spell::taxonomy::{A_INERT, E_NEXT_SWING, P_NONE, T_SELF, T_TARGET_ENEMY};
+use lyracore_shared::spell::taxonomy::{
+    A_INERT, CAST_FLAG_DISCOUNT_POWER_ON_MISS, E_NEXT_SWING, P_NONE, T_SELF, T_TARGET_ENEMY,
+};
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,6 +45,10 @@ const DAMAGE_CLASS_MELEE: u8 = 2;
 // The victim at the usual 1 yd, a wolf 3 yd past it and one 6.5 yd past it, beyond Cleave's 5 yd.
 const CLEAVE_WOLF_OFFSETS: [&str; 3] = ["1.0", "4.0", "7.5"];
 const WOLF_HEALTH: u32 = 100_000;
+const DODGE: &str = "3";
+// A level 63 wolf gives the fixture blade's unskilled swing the 6000 basis point miss cap and then
+// a dodge band of over 3000, so this table draw is a dodge.
+const DODGE_DRAW: u32 = 7000;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -274,6 +280,46 @@ fn a_queued_strike_raises_the_victims_melee_ability_proc_and_a_white_swing_does_
         watch_charges(&standalone, wolf),
         Some(WATCH_CHARGES - 1),
         "vmangos gives a queued strike's victim PROC_FLAG_TAKE_MELEE_ABILITY"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_dodged_heroic_strike_gives_back_82_percent_of_its_rage() {
+    let mut standalone = Standalone::start("queued-strike-dodge-refund");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
+    stage_on_next_swing_spell(
+        &standalone,
+        QueuedStrike::rage(HEROIC_STRIKE, "Heroic Strike", HEROIC_STRIKE_COST),
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell SET cast_flags = {CAST_FLAG_DISCOUNT_POWER_ON_MISS} \
+         WHERE spell_id = {HEROIC_STRIKE}"
+    ));
+    standalone.assert_call("debug_spawn_player_entity", &["1"]);
+    standalone.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
+    let wolf = spawn_target(&standalone);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 63 WHERE guid = {wolf}"
+    ));
+    engage(&standalone, wolf);
+    stage_power(&standalone, 1000);
+    cast(&standalone, HEROIC_STRIKE, wolf);
+    standalone.assert_call(
+        "debug_script_swing_draws",
+        &["1", &format!("[{DODGE_DRAW}]")],
+    );
+
+    let (_, landed) = swing(&standalone);
+
+    assert_eq!(landed["spell_swing"], "true", "{landed:?}");
+    assert_eq!(landed["hit_info"], DODGE, "{landed:?}");
+    assert_eq!(
+        power(&player(&standalone)),
+        1000 - HEROIC_STRIKE_COST + 123,
+        "vmangos gives back lroundf(150 * 0.82) rage on a dodge"
     );
 }
 

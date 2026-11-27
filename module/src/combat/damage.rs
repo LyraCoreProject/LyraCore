@@ -175,6 +175,8 @@ pub(crate) struct Hit {
     pub periodic: bool,
     /// A unit after the first that one cast reached, vmangos `m_targetNum > 1`.
     pub secondary_target: bool,
+    /// The victim was a Character that did not stand when the hit struck.
+    pub seated_victim: bool,
 }
 
 impl Hit {
@@ -186,6 +188,7 @@ impl Hit {
             blocked: false,
             periodic: false,
             secondary_target: false,
+            seated_victim: false,
         }
     }
 
@@ -197,6 +200,7 @@ impl Hit {
             blocked: false,
             periodic: false,
             secondary_target: false,
+            seated_victim: false,
         }
     }
 
@@ -213,6 +217,7 @@ impl Hit {
             blocked: false,
             periodic: false,
             secondary_target: false,
+            seated_victim: false,
         }
     }
 
@@ -226,6 +231,13 @@ impl Hit {
     pub(crate) fn as_secondary_target(self) -> Self {
         Self {
             secondary_target: true,
+            ..self
+        }
+    }
+
+    pub(crate) fn on_seated_victim(self, seated_victim: bool) -> Self {
+        Self {
+            seated_victim,
             ..self
         }
     }

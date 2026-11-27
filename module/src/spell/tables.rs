@@ -1030,6 +1030,7 @@ pub const CAST_MISS_MISS: u8 = 1;
 pub const CAST_MISS_RESIST: u8 = 2;
 pub const CAST_MISS_DODGE: u8 = 3;
 pub const CAST_MISS_PARRY: u8 = 4;
+pub const CAST_MISS_BLOCK: u8 = 5;
 pub const CAST_MISS_EVADE: u8 = 6;
 pub const CAST_MISS_IMMUNE: u8 = 7;
 pub const CAST_MISS_IMMUNE2: u8 = 8;

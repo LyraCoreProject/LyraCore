@@ -733,7 +733,10 @@ The primary target's outcome when a harmful spell's hit roll fails, recorded on 
 roll runs once per target, before any effect runs, and a missed target takes none of the spell's
 effects. The spell's damage class picks the roll, whatever its effects: a magic spell is resisted
 outright; a melee or ranged spell rolls the Attack Table, which also decides its crit, so its
-target can miss, dodge or parry it; a ranged one can only miss. Damage class 0 rolls none. A
+target can miss, dodge or parry it; a ranged one can only miss. A melee spell with
+SPELL_ATTR_EX3_COMPLETELY_BLOCKED, such as Kick or Shield Bash, can also be blocked whole. An
+avoided spell with SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS gives back 82% of an energy cost on a
+miss, dodge, parry or immunity, or of a rage cost on a dodge or parry. Damage class 0 rolls none. A
 creature returning home evades every cast by another unit before any roll or immunity test, and
 every swing too.
 _Avoid_: spell miss flag, resist flag
@@ -742,7 +745,10 @@ _Avoid_: spell miss flag, resist flag
 The one roll that decides a weapon attack's outcome: miss, dodge, parry, glancing, block, crit,
 crushing or hit. White swings, queued strikes, ranged attacks and melee or ranged spells share
 it; the attack type and the delivered Spell's facts select which bands apply. A ranged attack rolls
-only miss and crit. Damage stays with the caller. See `module/src/combat/attack_table.rs`.
+only miss and crit. A cast Spell crits only through an effect that deals or heals an amount. A
+sitting, sleeping or kneeling Character is never missed and always crit, unless the attack cannot
+crit or is a Character's white swing with no crit chance; the crit of a white swing it sat for
+raises no crit proc for it. Damage stays with the caller. See `module/src/combat/attack_table.rs`.
 _Avoid_: combat table, swing table
 
 **Weapon Strike**:

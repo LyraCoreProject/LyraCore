@@ -1,4 +1,6 @@
-use lyracore_shared::spell::taxonomy::{CAST_FLAG_RANGED_AUTO_REPEAT, E_REVIVE_PET};
+use lyracore_shared::spell::taxonomy::{
+    CAST_FLAG_DISCOUNT_POWER_ON_MISS, CAST_FLAG_RANGED_AUTO_REPEAT, E_REVIVE_PET,
+};
 use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
@@ -167,7 +169,7 @@ fn resolve_loaded_cast(
         .as_ref()
         .is_some_and(|craft| craft.used_up_item.is_some());
     // The GO precedes the cost, dismount and effect packets, so the client releases its cast slot.
-    let launched = launch_cast(ctx, spell, request, CastOrigin::Direct(phase));
+    let mut launched = launch_cast(ctx, spell, request, CastOrigin::Direct(phase));
     // Charge the live row, so the cost write keeps whatever the target pass wrote.
     if let Ok(live) = crate::helpers::live_entity(ctx, caster_guid) {
         caster = live;
@@ -178,6 +180,7 @@ fn resolve_loaded_cast(
     {
         charge_spell_cost(ctx, &mut caster, hdr);
         caster.update(ctx);
+        launched.targets.cost_paid = true;
     }
 
     let untriggered = phase != CastPhase::Trigger;
@@ -289,6 +292,46 @@ pub(crate) fn charge_spell_cost(ctx: &ReducerContext, caster: &mut WorldEntity, 
     if hdr.cost > 0 && hdr.power_type == lyracore_shared::packing::power_type::MANA {
         let now_ms = crate::time::now_ms(ctx);
         caster.mana_regen_paused_until_ms = now_ms + 5000;
+    }
+}
+
+/// vmangos `Spell::DoAllEffectOnTarget`: the paid cost a SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS
+/// Spell gives back for a target's `CAST_MISS_*` code, 82% rounded to nearest.
+fn avoided_cost_refund(hdr: &Spell, miss: u8) -> u32 {
+    use crate::spell::{
+        CAST_MISS_DODGE, CAST_MISS_IMMUNE, CAST_MISS_IMMUNE2, CAST_MISS_MISS, CAST_MISS_PARRY,
+    };
+    use lyracore_shared::packing::power_type::{ENERGY, RAGE};
+    let refunds = hdr.cast_flags & CAST_FLAG_DISCOUNT_POWER_ON_MISS != 0
+        && match hdr.power_type {
+            ENERGY => matches!(
+                miss,
+                CAST_MISS_MISS
+                    | CAST_MISS_DODGE
+                    | CAST_MISS_PARRY
+                    | CAST_MISS_IMMUNE
+                    | CAST_MISS_IMMUNE2
+            ),
+            RAGE => matches!(miss, CAST_MISS_DODGE | CAST_MISS_PARRY),
+            _ => false,
+        };
+    if refunds {
+        // vmangos lroundf(m_powerCost * 0.82f): single precision, halves away from zero.
+        (hdr.cost as f32 * 0.82_f32).round() as u32
+    } else {
+        0
+    }
+}
+
+/// Gives the caster back part of a cost it paid when the cast's target avoided it.
+pub(crate) fn refund_avoided_cost(ctx: &ReducerContext, caster_guid: u64, hdr: &Spell, miss: u8) {
+    let refund = avoided_cost_refund(hdr, miss);
+    if refund == 0 {
+        return;
+    }
+    if let Some(mut caster) = ctx.db.game_world_entity().guid().find(caster_guid) {
+        caster.gain_power(hdr.power_type, refund);
+        caster.update(ctx);
     }
 }
 
@@ -674,6 +717,7 @@ struct CastTargets<'a> {
     weapon_targets: Vec<u64>,
     seen_weapon_targets: std::collections::HashSet<u64>,
     capped: CappedPicks,
+    cost_paid: bool,
 }
 
 impl<'a> CastTargets<'a> {
@@ -702,6 +746,7 @@ impl<'a> CastTargets<'a> {
             weapon_targets: Vec::new(),
             seen_weapon_targets: std::collections::HashSet::new(),
             capped: CappedPicks::default(),
+            cost_paid: false,
         }
     }
 
@@ -775,7 +820,7 @@ impl<'a> CastTargets<'a> {
                         let level = self.level;
                         *self.rolls.entry(t).or_insert_with(|| {
                             self.rolled.push(t);
-                            hit_roll(ctx, caster_guid, level, t, table, hdr)
+                            hit_roll(ctx, caster_guid, level, t, table, spell)
                         })
                     }
                     _ => AttackOutcome::Normal,
@@ -815,6 +860,21 @@ impl<'a> CastTargets<'a> {
     fn answer_rest(&mut self) {
         for t in self.rolled.clone() {
             self.answer(t);
+        }
+    }
+
+    /// Gives back part of the paid cost once for each target that avoided the cast.
+    fn refund_avoided_cost(&self) {
+        if !self.cost_paid {
+            return;
+        }
+        for &t in &self.units {
+            refund_avoided_cost(
+                self.ctx,
+                self.caster_guid,
+                &self.spell.header,
+                self.miss_info(t),
+            );
         }
     }
 
@@ -934,7 +994,7 @@ fn run_spell_effects(
                 continue;
             };
             targets.answer(t);
-            if roll.is_avoided() {
+            if roll.refuses_spell() {
                 continue;
             }
             if immune {
@@ -989,10 +1049,11 @@ fn run_spell_effects(
     }
     let in_flight = flights.launch(ctx);
     targets.answer_rest();
+    targets.refund_avoided_cost();
     answer_whole_refusals(ctx, &targets.immunity, caster_guid, origin, spell);
     // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
     if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0
-        && !targets.roll(target_guid).is_avoided()
+        && !targets.roll(target_guid).refuses_spell()
         && targets.immunity.miss(target_guid).is_none()
     {
         crate::combo::spend_combo(ctx, caster_guid);
@@ -1275,10 +1336,10 @@ fn hit_roll(
     level: u8,
     target_guid: u64,
     table: HitTable,
-    spell: &Spell,
+    spell: &LoadedSpell,
 ) -> AttackOutcome {
     let HitTable::Weapon { ranged } = table else {
-        return if super::targeting::spell_misses(ctx, level, target_guid, spell) {
+        return if super::targeting::spell_misses(ctx, level, target_guid, &spell.header) {
             AttackOutcome::Miss
         } else {
             AttackOutcome::Normal
@@ -1300,7 +1361,10 @@ fn hit_roll(
                 &caster,
                 &target,
                 attack_type,
-                Some(crate::combat::DeliveredSpell::cast(spell)),
+                Some(
+                    crate::combat::DeliveredSpell::cast(&spell.header)
+                        .crits_through(&spell.effects),
+                ),
             );
             roll
         }
@@ -1352,13 +1416,14 @@ fn arm_avoidance_reacts(
             arm_react(ctx, caster_guid, ReactKind::Overpower);
             arm_react(ctx, target_guid, ReactKind::Revenge);
         }
-        AttackOutcome::Parry => arm_react(ctx, target_guid, ReactKind::Revenge),
+        AttackOutcome::Parry | AttackOutcome::Block => {
+            arm_react(ctx, target_guid, ReactKind::Revenge);
+        }
         AttackOutcome::Normal
         | AttackOutcome::Crit
         | AttackOutcome::Miss
         | AttackOutcome::Glancing
         | AttackOutcome::Crushing
-        | AttackOutcome::Block
         | AttackOutcome::Immune
         | AttackOutcome::Evade => {}
     }
@@ -1373,11 +1438,11 @@ pub(crate) fn cast_miss(roll: AttackOutcome, weapon: bool) -> u8 {
         AttackOutcome::Miss => crate::spell::CAST_MISS_RESIST,
         AttackOutcome::Immune => crate::spell::CAST_MISS_IMMUNE,
         AttackOutcome::Evade => crate::spell::CAST_MISS_EVADE,
+        AttackOutcome::Block => crate::spell::CAST_MISS_BLOCK,
         AttackOutcome::Normal
         | AttackOutcome::Crit
         | AttackOutcome::Glancing
-        | AttackOutcome::Crushing
-        | AttackOutcome::Block => crate::spell::CAST_MISS_NONE,
+        | AttackOutcome::Crushing => crate::spell::CAST_MISS_NONE,
     }
 }
 
@@ -3392,6 +3457,67 @@ mod eventai_hit_tests {
 mod cast_miss_tests {
     use super::*;
 
+    fn refunding(power_type: u8, cost: u32) -> Spell {
+        Spell {
+            power_type,
+            cost,
+            cast_flags: CAST_FLAG_DISCOUNT_POWER_ON_MISS,
+            ..Spell::blank(1766, "Kick")
+        }
+    }
+
+    #[test]
+    fn an_avoided_energy_spell_gives_back_82_percent_of_its_cost_rounded() {
+        use crate::spell::{
+            CAST_MISS_BLOCK, CAST_MISS_DODGE, CAST_MISS_EVADE, CAST_MISS_IMMUNE, CAST_MISS_IMMUNE2,
+            CAST_MISS_MISS, CAST_MISS_NONE, CAST_MISS_PARRY,
+        };
+        use lyracore_shared::packing::power_type::ENERGY;
+        let kick = refunding(ENERGY, 25);
+        let refunds = [
+            CAST_MISS_MISS,
+            CAST_MISS_DODGE,
+            CAST_MISS_PARRY,
+            CAST_MISS_IMMUNE,
+            CAST_MISS_IMMUNE2,
+        ]
+        .map(|miss| avoided_cost_refund(&kick, miss));
+        assert_eq!(refunds, [21; 5], "lroundf(25 * 0.82) is 21");
+        for miss in [CAST_MISS_NONE, CAST_MISS_BLOCK, CAST_MISS_EVADE] {
+            assert_eq!(avoided_cost_refund(&kick, miss), 0);
+        }
+        assert_eq!(
+            avoided_cost_refund(&refunding(ENERGY, 45), CAST_MISS_DODGE),
+            37
+        );
+    }
+
+    #[test]
+    fn an_avoided_rage_spell_gives_back_82_percent_only_when_dodged_or_parried() {
+        use crate::spell::{CAST_MISS_BLOCK, CAST_MISS_DODGE, CAST_MISS_MISS, CAST_MISS_PARRY};
+        use lyracore_shared::packing::power_type::RAGE;
+        let heroic_strike = refunding(RAGE, 150);
+        assert_eq!(avoided_cost_refund(&heroic_strike, CAST_MISS_DODGE), 123);
+        assert_eq!(avoided_cost_refund(&heroic_strike, CAST_MISS_PARRY), 123);
+        assert_eq!(avoided_cost_refund(&heroic_strike, CAST_MISS_MISS), 0);
+        assert_eq!(avoided_cost_refund(&heroic_strike, CAST_MISS_BLOCK), 0);
+    }
+
+    #[test]
+    fn only_a_spell_with_the_discount_attribute_or_an_energy_or_rage_cost_refunds() {
+        use crate::spell::CAST_MISS_DODGE;
+        use lyracore_shared::packing::power_type::{MANA, RAGE};
+        let plain = Spell {
+            cast_flags: 0,
+            ..refunding(RAGE, 150)
+        };
+        assert_eq!(avoided_cost_refund(&plain, CAST_MISS_DODGE), 0);
+        assert_eq!(
+            avoided_cost_refund(&refunding(MANA, 150), CAST_MISS_DODGE),
+            0
+        );
+    }
+
     #[test]
     fn a_failed_magic_roll_is_a_resist_and_a_failed_weapon_roll_a_miss() {
         assert_eq!(
@@ -3421,6 +3547,10 @@ mod cast_miss_tests {
         assert_eq!(
             cast_miss(AttackOutcome::Parry, true),
             crate::spell::CAST_MISS_PARRY
+        );
+        assert_eq!(
+            cast_miss(AttackOutcome::Block, true),
+            crate::spell::CAST_MISS_BLOCK
         );
     }
 }

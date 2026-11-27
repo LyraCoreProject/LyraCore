@@ -190,7 +190,9 @@ fn resolve_offhand_swing(
     );
 
     let dealt = damage.amount();
-    let hit = Hit::weapon(HitSource::OffHand, hit_info == AttackOutcome::Crit).with_block(blocked);
+    let hit = Hit::weapon(HitSource::OffHand, hit_info == AttackOutcome::Crit)
+        .with_block(blocked)
+        .on_seated_victim(seated_character(ctx, target_guid));
     let combat_ended = damage
         .land(ctx, attacker_guid, target_guid, hit)
         .combat_ended();
@@ -603,6 +605,7 @@ fn fire_melee_swing(
     let fired = swing_is_spell.then_some(FiredStrike {
         spell_id: queued_spell,
         header: queued_header.as_ref(),
+        paid: attacker.is_player(),
     });
     let chained = strike.map_or_else(Vec::new, |strike| {
         roll_chained_strikes(ctx, attacker, target_guid, queued_header.as_ref(), strike)
@@ -716,6 +719,8 @@ fn fire_melee_swing(
 struct FiredStrike<'a> {
     spell_id: u32,
     header: Option<&'a crate::Spell>,
+    /// A Character paid its cost when the swing fired; a creature pays none.
+    paid: bool,
 }
 
 impl FiredStrike<'_> {
@@ -859,8 +864,16 @@ fn land_main_hand(
     let dealt = damage.amount();
     let hit = swing
         .hit(hit_info == AttackOutcome::Crit)
-        .with_block(blocked);
+        .with_block(blocked)
+        .on_seated_victim(seated_character(ctx, target_guid));
     let strike = swing.strike();
+    if let Some(header) = strike
+        .filter(|strike| strike.paid)
+        .and_then(|strike| strike.header)
+    {
+        let miss = crate::spell::cast::resolve::cast_miss(hit_info, true);
+        crate::spell::refund_avoided_cost(ctx, attacker_guid, header, miss);
+    }
     // vmangos adds a queued strike's table threat unless it was avoided or refused as immune.
     if let Some(strike) = strike.filter(|_| !hit_info.is_avoided()) {
         crate::threat::add_table_threat(
@@ -924,6 +937,15 @@ fn land_main_hand(
         arm_react(ctx, target_guid, ReactKind::Revenge);
     }
     false
+}
+
+// Read before the hit lands, since the hit stands the Character up.
+fn seated_character(ctx: &ReducerContext, guid: u64) -> bool {
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(guid)
+        .is_some_and(|unit| unit.is_player() && !unit.is_standing_up())
 }
 
 // vmangos HITINFO_AFFECTS_VICTIM: the swing connected and either dealt damage or was blocked.

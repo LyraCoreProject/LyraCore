@@ -652,7 +652,8 @@ mod fixture {
         spell.attributes_ex_3 = 1024;
         spell.spell_level = 1;
         spell.is_negative = true;
-        spell.cast_flags = crate::spell::CAST_FLAG_WEAPON_PROCS;
+        spell.cast_flags =
+            crate::spell::CAST_FLAG_WEAPON_PROCS | crate::spell::CAST_FLAG_DISCOUNT_POWER_ON_MISS;
         spell.family_name = 4;
         spell.family_flags = 64;
         spell.proc_chance = 101;
@@ -699,7 +700,9 @@ mod fixture {
         spell.attributes_ex_3 = 1024;
         spell.spell_level = 40;
         spell.is_negative = true;
-        spell.cast_flags = crate::spell::CAST_FLAG_WEAPON_PROCS | CAST_FLAG_REFUSES_SELF_CAST;
+        spell.cast_flags = crate::spell::CAST_FLAG_WEAPON_PROCS
+            | crate::spell::CAST_FLAG_DISCOUNT_POWER_ON_MISS
+            | CAST_FLAG_REFUSES_SELF_CAST;
         spell.family_name = 4;
         spell.family_flags = 33554432;
         spell.custom_flags = lyracore_shared::spell_custom::FACE_TARGET;
