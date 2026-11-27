@@ -78,6 +78,12 @@ symbol = "is_immune_to_effect"
 evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::IsImmuneToSpellEffect also refuses an effect whose Effect is in m_spellImmune[IMMUNITY_EFFECT] or whose EffectApplyAuraName is in m_spellImmune[IMMUNITY_STATE]; is_immune_to_effect reads only mechanics. The count is the newest spell_template row through build 5875 in the vmangos 4641790 snapshot."
 
 [[known_gaps]]
+description = "The school purge of an immunity, and every school immunity check, call a Spell harmful by the importer's negative flag. vmangos IsPositiveEffect also treats a mechanic immunity to 16, 19, 21 and 25 as harmful, so Divine Shield, Ice Block and Blessing of Protection keep Weakened Soul 6788 where vmangos removes it."
+path = "module/src/spell/school_immunity.rs"
+symbol = "school_refuses_spell"
+evidence = "Source reading, not measured. At d9173eca, SpellEntry.cpp:974-986 IsPositiveEffect returns false for SPELL_AURA_MECHANIC_IMMUNITY with misc 16, 19, 21 or 25, and Aura::HandleAuraModSchoolImmunity removes the Auras of a school that SpellAuraHolder::IsPositive calls harmful."
+
+[[known_gaps]]
 description = "An aura-state immunity (aura 38) with SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT removes only the Auras whose row keeps its source aura id (A_CONTROL, A_FLAG and A_IMMUNITY). Other Auras of the aura type stay."
 path = "module/src/spell/immunity_purge.rs"
 symbol = "purge_on_land"
@@ -964,4 +970,14 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/immunity_purge.rs"
 function = "a_harmful_school_immunity_removes_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/immunity_purge.rs"
+function = "a_feared_character_casts_will_of_the_forsaken_and_the_fear_is_gone"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/immunity_purge.rs"
+function = "a_feared_character_cannot_cast_an_immunity_that_does_not_cover_fear"
 rung = "durable_module"

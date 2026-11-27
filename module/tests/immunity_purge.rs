@@ -18,7 +18,7 @@ const NO_IMMUNITIES: u32 = 0x2000_0000;
 const MECHANIC_CHARM: i32 = 1;
 const MECHANIC_FEAR: u8 = 5;
 const MECHANIC_SLEEP: i32 = 10;
-// Source aura ids in an effect's p1: docs/schema.md#immunity-purge.
+// Source aura ids in an effect's p1: docs/schema.md#damage-shields and #flag-auras.
 const AURA_MOD_FEAR: i32 = 7;
 const AURA_MOD_SILENCE: i32 = 27;
 const AURA_MECHANIC_IMMUNITY: i32 = 77;
@@ -226,7 +226,55 @@ fn a_harmful_school_immunity_removes_nothing() {
 
     cast(&standalone, PLAYER, WARD, PLAYER);
 
+    assert_eq!(held(&standalone, WARD), 1);
     assert_eq!(held(&standalone, SHADOW_DEBUFF), 1);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_feared_character_casts_will_of_the_forsaken_and_the_fear_is_gone() {
+    let mut standalone = Standalone::start("immunity-purge-feared-cast");
+    let wolf = stage(&mut standalone);
+    insert_fear(&standalone);
+    insert_will_of_the_forsaken(&standalone, PURGES_EFFECT);
+    cast(&standalone, wolf, FEAR, PLAYER);
+    assert_eq!(held(&standalone, FEAR), 1, "the fear lands");
+
+    standalone.assert_call("debug_begin_cast", &["1", &WARD.to_string(), "1"]);
+    standalone.assert_call("debug_advance_virtual_clock", &["50000"]);
+
+    assert_eq!(held(&standalone, FEAR), 0);
+    assert_eq!(held(&standalone, WARD), 3);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_feared_character_cannot_cast_an_immunity_that_does_not_cover_fear() {
+    let mut standalone = Standalone::start("immunity-purge-feared-refused");
+    let wolf = stage(&mut standalone);
+    insert_fear(&standalone);
+    insert_spell(
+        &standalone,
+        WARD,
+        &[("attributes_ex", &PURGES_EFFECT)],
+        &[(
+            A_IMMUNITY,
+            T_SELF,
+            MECHANIC_CHARM,
+            P_MECHANIC,
+            AURA_MECHANIC_IMMUNITY,
+        )],
+    );
+    cast(&standalone, wolf, FEAR, PLAYER);
+
+    let output = standalone.call("debug_begin_cast", &["1", &WARD.to_string(), "1"]);
+
+    assert!(
+        !output.status.success(),
+        "a feared caster cannot cast an immunity to charm"
+    );
+    assert_eq!(held(&standalone, FEAR), 1);
+    assert_eq!(held(&standalone, WARD), 0);
 }
 
 fn insert_fear(standalone: &Standalone) {

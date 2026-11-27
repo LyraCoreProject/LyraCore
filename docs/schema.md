@@ -1819,6 +1819,10 @@ item's Aura.
 
 State and dispel purges spare no `SPELL_ATTR_NO_IMMUNITIES` Spell, as in vmangos.
 
+A stun, fear or polymorph refuses every cast, except a Spell with the attribute whose mechanic, school
+or dispel immunity covers each Aura that causes the state, as vmangos `Spell::CheckCasterAuras` does.
+So a feared Undead can cast Will of the Forsaken, and a stunned one cannot.
+
 ### Follow-up casts
 
 `game_spell_follow_up` names, for a spell, the spell its caster casts as a Follow-up Cast at each

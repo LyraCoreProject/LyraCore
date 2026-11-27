@@ -16,6 +16,7 @@ mod control;
 mod effects;
 mod formulas;
 mod immunity_purge;
+pub(crate) use immunity_purge::caster_is_blocked;
 mod leech;
 mod power;
 pub(crate) mod proc;

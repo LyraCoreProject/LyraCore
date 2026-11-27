@@ -16,19 +16,18 @@ use crate::{game_item_instance, game_item_template, game_spell_reagent};
 
 use crate::spell::{
     apply_effect, aura_apply, break_channel, break_stealth, cost_gate_blocks, cost_refusal_reason,
-    effect_amount, faction_target_violation, is_action_blocked, is_stealthed, level_gate_blocks,
-    place_ground_area, recipe_reagents, select_targets, CastGateRefusal, CastHandle,
-    CastRefusalKind, CastRefusalReason, CastStart, FormRefusal, ItemGrantOutcome,
-    SpellCastEventKind, A_FLAG, A_MOUNTED, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER,
-    CAST_FLAG_INCAP_OPENER, CAST_FLAG_REQ_BEHIND, CAST_FLAG_REQ_DAGGER, CAST_FLAG_REQ_OVERPOWER,
-    CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH, CAST_FLAG_STEALTH_SAFE, CAST_FLAG_WEAPON_PROCS,
-    E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY,
-    E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING, E_PERSISTENT_AREA, E_SCRIPTED,
-    E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE, E_WEAPON_STRIKE, HUMANOID_TYPE,
-    KIND_AURA_BIT, SPELLMOD_OP_CASTING_TIME, SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT,
-    T_AREA_ALLY, T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CHAIN_ALLY, T_CHAIN_ENEMY, T_PARTY_AREA,
-    T_RAID_AREA, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY, T_TARGET_GROUP_CLASS,
-    T_TARGET_SUBGROUP,
+    effect_amount, faction_target_violation, is_stealthed, level_gate_blocks, place_ground_area,
+    recipe_reagents, select_targets, CastGateRefusal, CastHandle, CastRefusalKind,
+    CastRefusalReason, CastStart, FormRefusal, ItemGrantOutcome, SpellCastEventKind, A_FLAG,
+    A_MOUNTED, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER, CAST_FLAG_INCAP_OPENER,
+    CAST_FLAG_REQ_BEHIND, CAST_FLAG_REQ_DAGGER, CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE,
+    CAST_FLAG_REQ_STEALTH, CAST_FLAG_STEALTH_SAFE, CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM,
+    E_DAMAGE, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT,
+    E_NEXT_SWING, E_PERSISTENT_AREA, E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE,
+    E_TAME_CREATURE, E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, SPELLMOD_OP_CASTING_TIME,
+    SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_AREA_NOT_HOSTILE,
+    T_CHAIN_ALLY, T_CHAIN_ENEMY, T_PARTY_AREA, T_RAID_AREA, T_TARGET_ALLY, T_TARGET_ANY,
+    T_TARGET_ENEMY, T_TARGET_GROUP_CLASS, T_TARGET_SUBGROUP,
 };
 use crate::{
     game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
@@ -2083,7 +2082,7 @@ impl GateCheck<'_> {
             CastGate::GroundPointRange => Ok(()),
             CastGate::Power => check_power(ctx, caster, spell, request),
             CastGate::CasterControl => {
-                if is_action_blocked(ctx, caster.guid) {
+                if crate::spell::caster_is_blocked(ctx, caster.guid, hdr, effects) {
                     return Err(CastGateRefusal::new(
                         CastRefusalKind::CannotAct,
                         CastRefusalReason::Stunned,
