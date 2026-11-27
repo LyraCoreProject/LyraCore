@@ -41,9 +41,9 @@ const CLEAVE: u32 = 845;
 const CLEAVE_CHAIN_TARGETS: u8 = 2;
 // The victim in melee reach, a wolf 3 yd past it and one 6.5 yd past it, beyond Cleave's 5 yd.
 const CLEAVE_WOLF_OFFSETS: [f32; 3] = [1.5, 4.5, 8.0];
-// Two 50 ms batches pass a 100 ms melee tick, which swings the 50 ms fist.
-const SWING_TICKS: &str = "2";
-// A dodge or miss can spare a wolf; 20 Cleaves leave it a negligible chance.
+// Four 50 ms batches pass a 100 ms melee tick; a due swing fires once, then waits its attack time.
+const SWING_TICKS: &str = "4";
+// A level 1 wolf rarely avoids a level 60 Character; 20 Cleaves leave each a negligible chance.
 const CLEAVE_ATTEMPTS: usize = 20;
 
 #[test]
@@ -120,14 +120,19 @@ fn a_queued_cleave_strikes_its_victim_and_the_enemy_in_reach_but_not_one_beyond(
     let shard = open_shard("queued-cleave-chain");
     let [victim, near, far] = CLEAVE_WOLF_OFFSETS.map(|offset| spawn_wolf(&shard, offset));
     insert_queued_cleave(&shard);
-    shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET godmode = true, base_attack_time_ms = 50 \
-         WHERE guid = {CHARACTER}"
-    ));
+    for wolf in [victim, near, far] {
+        shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET level = 1 WHERE guid = {wolf}"
+        ));
+    }
     let mut wire = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
     wire.call("native_world_open", json!([42])).unwrap();
     wire.call("debug_native_enter_world", json!([CHARACTER]))
         .unwrap();
+    // World entry rebuilds the Character's entity, so stage it afterwards.
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET godmode = true WHERE guid = {CHARACTER}"
+    ));
     let mut session = WorldSessionObserver::new(wire.connection_id());
     shard.assert_call(
         "debug_engage",
@@ -135,6 +140,9 @@ fn a_queued_cleave_strikes_its_victim_and_the_enemy_in_reach_but_not_one_beyond(
     );
 
     let mut cleave = || {
+        shard.assert_sql(&format!(
+            "UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = {CHARACTER}"
+        ));
         shard.assert_call(
             "debug_force_cast_at",
             &[
@@ -158,6 +166,15 @@ fn a_queued_cleave_strikes_its_victim_and_the_enemy_in_reach_but_not_one_beyond(
         gos.extend(cleave());
     }
 
+    assert!(
+        !gos.is_empty(),
+        "no swing fired the queued Cleave in {CLEAVE_ATTEMPTS} attempts"
+    );
+    assert!(
+        gos.iter().any(|go| go_units(go).0.contains(&victim)),
+        "the Cleave fired {} times but never hit its victim",
+        gos.len()
+    );
     assert_eq!(
         hit(&shard, [victim, near, far]),
         [true, true, false],
