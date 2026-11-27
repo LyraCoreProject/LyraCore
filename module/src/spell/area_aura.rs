@@ -18,7 +18,17 @@ pub struct AreaAuraSource {
     pub aura_id: u64,
 }
 
-crate::outside_table_catalog!(game_area_aura_source);
+#[table(
+    accessor = game_area_aura_copy,
+    index(accessor = by_source, btree(columns = [source_aura_id]))
+)]
+pub struct AreaAuraCopy {
+    #[primary_key]
+    pub aura_id: u64,
+    pub source_aura_id: u64,
+}
+
+crate::outside_table_catalog!(game_area_aura_source, game_area_aura_copy);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Reach {
@@ -78,10 +88,34 @@ pub(crate) fn inserted(ctx: &ReducerContext, aura: &Aura) {
     }
 }
 
-/// Removes every copy of a source Aura whose row was deleted.
+/// Forgets a deleted copy, and removes every copy of a deleted source.
 pub(crate) fn deleted(ctx: &ReducerContext, aura: &Aura) {
+    ctx.db.game_area_aura_copy().aura_id().delete(aura.id);
     if ctx.db.game_area_aura_source().aura_id().delete(aura.id) {
-        crate::spell::shed_auras(ctx, copies_of(ctx, aura));
+        crate::spell::shed_auras(ctx, copies_of(ctx, aura.id));
+    }
+}
+
+/// Whether an Aura is a copy that its source spread; a Character Transfer leaves copies behind.
+pub(crate) fn is_copy(ctx: &ReducerContext, aura_id: u64) -> bool {
+    ctx.db
+        .game_area_aura_copy()
+        .aura_id()
+        .find(aura_id)
+        .is_some()
+}
+
+/// Records the area Auras a unit holds of its own when it enters the world.
+pub(crate) fn entered_world(ctx: &ReducerContext, unit_guid: u64) {
+    let held: Vec<Aura> = ctx
+        .db
+        .game_aura()
+        .by_target()
+        .filter(unit_guid)
+        .filter(|aura| aura.caster_guid == unit_guid)
+        .collect();
+    for aura in &held {
+        inserted(ctx, aura);
     }
 }
 
@@ -100,7 +134,7 @@ pub(crate) fn record_existing_sources(ctx: &ReducerContext) -> u64 {
     ctx.db.game_area_aura_source().count() - before
 }
 
-/// One vmangos `AreaAura::Update` pass over every source.
+/// One vmangos `AreaAura::Update` pass over every source, then over copies whose source is gone.
 pub(crate) fn spread(ctx: &ReducerContext) {
     let sources: Vec<u64> = ctx
         .db
@@ -113,6 +147,27 @@ pub(crate) fn spread(ctx: &ReducerContext) {
             Some(source) => keep_in_step(ctx, &source),
             None => {
                 ctx.db.game_area_aura_source().aura_id().delete(aura_id);
+            }
+        }
+    }
+    let orphans: Vec<u64> = ctx
+        .db
+        .game_area_aura_copy()
+        .iter()
+        .filter(|copy| {
+            ctx.db
+                .game_area_aura_source()
+                .aura_id()
+                .find(copy.source_aura_id)
+                .is_none()
+        })
+        .map(|copy| copy.aura_id)
+        .collect();
+    for aura_id in orphans {
+        match ctx.db.game_aura().id().find(aura_id) {
+            Some(copy) => crate::spell::shed_auras(ctx, vec![copy]),
+            None => {
+                ctx.db.game_area_aura_copy().aura_id().delete(aura_id);
             }
         }
     }
@@ -138,14 +193,16 @@ impl Area {
     }
 }
 
+// A source whose caster left the world stops being one; `entered_world` records it again.
 fn keep_in_step(ctx: &ReducerContext, source: &Aura) {
+    let caster = ctx.db.game_world_entity().guid().find(source.caster_guid);
     let spell = ctx.db.game_spell().spell_id().find(source.spell_id);
     let reach = spell.as_ref().and_then(reach_of);
     let effect = ctx.db.game_spell_effect().id().find(source.effect_id);
-    let caster = ctx.db.game_world_entity().guid().find(source.caster_guid);
-    let (Some(spell), Some(reach), Some(effect), Some(caster)) = (spell, reach, effect, caster)
+    let (Some(caster), Some(spell), Some(reach), Some(effect)) = (caster, spell, reach, effect)
     else {
-        crate::spell::shed_auras(ctx, copies_of(ctx, source));
+        ctx.db.game_area_aura_source().aura_id().delete(source.id);
+        crate::spell::shed_auras(ctx, copies_of(ctx, source.id));
         return;
     };
     let area = Area {
@@ -153,29 +210,33 @@ fn keep_in_step(ctx: &ReducerContext, source: &Aura) {
         reach,
         radius_yd: effect.radius_yd,
     };
-    let leaving = copies_of(ctx, source)
+    let (kept, leaving): (Vec<Aura>, Vec<Aura>) = copies_of(ctx, source.id)
         .into_iter()
-        .filter(|copy| !keeps_copy(ctx, &area, copy.target_guid))
-        .collect();
+        .partition(|copy| keeps_copy(ctx, &area, copy.target_guid));
     crate::spell::shed_auras(ctx, leaving);
+    let holders: std::collections::BTreeSet<u64> =
+        kept.iter().map(|copy| copy.target_guid).collect();
+    for mut copy in kept {
+        if copy.expires_at != source.expires_at {
+            copy.expires_at = source.expires_at;
+            copy.update(ctx);
+        }
+    }
     for unit in gains(ctx, &area) {
-        give_copy(ctx, source, &spell, &unit);
+        if !holders.contains(&unit.guid) {
+            give_copy(ctx, source, &spell, reach, &unit);
+        }
     }
 }
 
 /// The copies on other units that a source Aura spread; each keeps the caster's guid.
-fn copies_of(ctx: &ReducerContext, source: &Aura) -> Vec<Aura> {
-    let chain = crate::spell::first_rank(ctx, source.spell_id);
-    let index = effect_index(source.effect_id);
+fn copies_of(ctx: &ReducerContext, source_aura_id: u64) -> Vec<Aura> {
+    let auras = ctx.db.game_aura();
     ctx.db
-        .game_aura()
-        .by_caster()
-        .filter(source.caster_guid)
-        .filter(|aura| {
-            aura.target_guid != source.caster_guid
-                && effect_index(aura.effect_id) == index
-                && crate::spell::first_rank(ctx, aura.spell_id) == chain
-        })
+        .game_area_aura_copy()
+        .by_source()
+        .filter(source_aura_id)
+        .filter_map(|copy| auras.id().find(copy.aura_id))
         .collect()
 }
 
@@ -244,11 +305,12 @@ fn party_members(ctx: &ReducerContext, character_guid: u64) -> Option<Vec<WorldE
     )
 }
 
-/// vmangos skips a duelling member, an unfriendly one, and a flagged one when the caster is not.
+/// vmangos skips a dead, duelling or unfriendly member, and a flagged one under an unflagged caster.
 fn member_gains(ctx: &ReducerContext, area: &Area, owner_guid: u64, member: &WorldEntity) -> bool {
     let caster_flagged =
         crate::pvp::affecting_character(ctx, &area.caster).is_some_and(|by| by.flagged);
-    (member.guid == owner_guid || crate::duel::duel_involving(ctx, member.guid).is_none())
+    !member.dead
+        && (member.guid == owner_guid || crate::duel::duel_involving(ctx, member.guid).is_none())
         && area.friendly_to(ctx, member)
         && (caster_flagged || !crate::pvp::is_flagged(member))
 }
@@ -276,21 +338,36 @@ fn keeps_copy(ctx: &ReducerContext, area: &Area, target_guid: u64) -> bool {
     }
 }
 
-fn give_copy(ctx: &ReducerContext, source: &Aura, spell: &Spell, unit: &WorldEntity) {
-    let Some(rank) = rank_for_level(ctx, spell, unit.level) else {
+fn give_copy(ctx: &ReducerContext, source: &Aura, spell: &Spell, reach: Reach, unit: &WorldEntity) {
+    let rank = match reach {
+        Reach::Party => rank_for_level(ctx, spell, unit.level),
+        Reach::Pet => Some(spell.clone()),
+    };
+    let Some(rank) = rank else {
         return;
     };
     if rank.attributes_ex_3 & SPELL_ATTR_EX3_ONLY_ON_PLAYER != 0 && !unit.is_player() {
         return;
     }
     let index = effect_index(source.effect_id);
-    if holds_as_strong(ctx, unit.guid, &rank, index) {
+    let held = family_on(ctx, unit.guid, &rank, index);
+    let incoming = strength(ctx, &rank);
+    if held
+        .iter()
+        .any(|(aura, strength)| aura.caster_guid == unit.guid || *strength >= incoming)
+    {
         return;
     }
     let id = lyracore_package_delta::packed_spell_effect_id(rank.spell_id, index);
     let Some(effect) = ctx.db.game_spell_effect().id().find(id) else {
         return;
     };
+    let weaker = held
+        .into_iter()
+        .map(|(aura, _)| aura)
+        .filter(|aura| is_copy(ctx, aura.id))
+        .collect();
+    crate::spell::shed_auras(ctx, weaker);
     // vmangos recalculates a lower rank's base points; a totem's own Aura holds none to pass on.
     let points = if rank.spell_id == spell.spell_id && !holds_inert(ctx, spell, source.caster_guid)
     {
@@ -304,7 +381,7 @@ fn give_copy(ctx: &ReducerContext, source: &Aura, spell: &Spell, unit: &WorldEnt
     } else {
         unit.guid
     };
-    place_aura(
+    let placed = place_aura(
         ctx,
         &effect,
         &rank,
@@ -318,24 +395,52 @@ fn give_copy(ctx: &ReducerContext, source: &Aura, spell: &Spell, unit: &WorldEnt
             expires: source.expires_at,
         },
     );
+    let copy = ctx
+        .db
+        .game_aura()
+        .by_target()
+        .filter(unit.guid)
+        .find(|aura| aura.caster_guid == source.caster_guid && aura.effect_id == effect.id);
+    if let Some(copy) = copy.filter(|_| placed) {
+        let copies = ctx.db.game_area_aura_copy();
+        if copies.aura_id().find(copy.id).is_none() {
+            copies.insert(AreaAuraCopy {
+                aura_id: copy.id,
+                source_aura_id: source.id,
+            });
+        }
+    }
 }
 
-/// Whether the unit holds its own Aura of this chain's effect, or a copy of at least this rank.
-fn holds_as_strong(ctx: &ReducerContext, unit_guid: u64, rank: &Spell, index: u8) -> bool {
+/// The unit's Auras of the rank's family (docs/schema.md#area-auras) at one effect index.
+fn family_on(
+    ctx: &ReducerContext,
+    unit_guid: u64,
+    rank: &Spell,
+    index: u8,
+) -> Vec<(Aura, (u8, u8))> {
     let chain = crate::spell::first_rank(ctx, rank.spell_id);
-    let incoming = crate::spell::stacking::rank_of(ctx, rank.spell_id);
+    let spells = ctx.db.game_spell();
     ctx.db
         .game_aura()
         .by_target()
         .filter(unit_guid)
-        .filter(|aura| {
-            effect_index(aura.effect_id) == index
-                && crate::spell::first_rank(ctx, aura.spell_id) == chain
+        .filter(|aura| effect_index(aura.effect_id) == index)
+        .filter_map(|aura| {
+            let spell = spells.spell_id().find(aura.spell_id)?;
+            let related = crate::spell::first_rank(ctx, aura.spell_id) == chain
+                || (!rank.name.is_empty() && spell.name == rank.name && reach_of(&spell).is_some());
+            related.then(|| (aura, strength(ctx, &spell)))
         })
-        .any(|aura| {
-            aura.caster_guid == unit_guid
-                || crate::spell::stacking::rank_of(ctx, aura.spell_id) >= incoming
-        })
+        .collect()
+}
+
+/// Orders a family: chain rank, then spell level.
+fn strength(ctx: &ReducerContext, spell: &Spell) -> (u8, u8) {
+    (
+        crate::spell::stacking::rank_of(ctx, spell.spell_id),
+        spell.spell_level,
+    )
 }
 
 /// vmangos `SelectAuraRankForLevel`: the highest rank at most ten levels above `level`, or none.

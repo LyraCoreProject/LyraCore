@@ -9,8 +9,8 @@ use crate::game_item_instance;
 use crate::{game_character, game_creature_template, game_world_entity, WorldEntity};
 
 use crate::spell::tables::{
-    SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT, SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS,
-    SPELL_ATTR_EX3_ONLY_ON_PLAYER,
+    SPELL_ATTR_DO_NOT_DISPLAY, SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT,
+    SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS, SPELL_ATTR_EX3_ONLY_ON_PLAYER,
 };
 use crate::spell::*;
 
@@ -978,17 +978,19 @@ pub(crate) fn place_aura(
         && !(source_item != 0 && hdr.equip_passive())
     {
         let spells = ctx.db.game_spell();
+        let chain = crate::spell::first_rank(ctx, hdr.spell_id);
+        // vmangos RemoveNoStackAurasDueToAuraHolder keeps a passive Aura of another spell chain.
         let other_rank_ids: std::collections::HashSet<u32> = auras
             .by_target()
             .filter(&target_guid)
             .filter(|a| a.spell_id != hdr.spell_id)
             .map(|a| a.spell_id)
             .filter(|&sp| {
-                spells
-                    .spell_id()
-                    .find(sp)
-                    .map(|s| s.name == hdr.name)
-                    .unwrap_or(false)
+                spells.spell_id().find(sp).is_some_and(|s| {
+                    s.name == hdr.name
+                        && (s.attributes & (SPELL_ATTR_PASSIVE | SPELL_ATTR_DO_NOT_DISPLAY) == 0
+                            || crate::spell::first_rank(ctx, sp) == chain)
+                })
             })
             .collect();
         displace_auras(ctx, target_guid, &other_rank_ids);

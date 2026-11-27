@@ -303,6 +303,41 @@ function = "a_pet_area_aura_reaches_only_its_owner"
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "two_casters_of_one_unchained_aura_leave_the_stronger_copy_and_it_stays"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_copy_keeps_a_passive_of_the_same_name_from_another_chain"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_flagged_member_gets_no_copy_from_an_unflagged_caster"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_dead_members_pet_gets_no_copy"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_recast_moves_every_copys_expiry_with_the_casters_aura"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_copy_whose_source_is_not_on_this_shard_goes"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_character_transfer_moves_own_auras_and_leaves_copies_behind"
+rung = "durable_module"
+
+[[tests]]
 path = "importer/src/spell.rs"
 function = "area_aura_visibility_preserves_party_and_pet_effect_origins"
 rung = "unit"
@@ -730,3 +765,9 @@ description = "A party or pet area Aura copy lands or goes at the next Aura pass
 path = "module/src/spell/area_aura.rs"
 symbol = "spread"
 evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp AreaAura::AreaAura applies SPELLMOD_RADIUS and AreaAura::Update calls IsWithinDistInMap and RefreshAuraPeriodicTimers. The Module runs the pass from tick_auras, armed once a second."
+
+[[known_gaps]]
+description = "A unit that holds its own Aura of a party Aura's family, such as a Paladin with a lower rank of Devotion Aura, gets no copy of another caster's higher rank. A member who levels past a lower-rank copy keeps it until the copy goes. vmangos applies the higher rank and removes the lower one."
+path = "module/src/spell/area_aura.rs"
+symbol = "give_copy"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp AreaAura::Update skips a unit only when it holds the rank SelectAuraRankForLevel picks, and Unit.cpp RemoveNoStackAurasDueToAuraHolder removes the lower rank of one chain."

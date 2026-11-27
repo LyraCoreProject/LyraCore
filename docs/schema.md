@@ -952,23 +952,33 @@ slot visibility must use these flags instead of inferring the source effect from
 Ordinary passives use slot 255; visual passives, recipient area auras and totem auras can use
 visible slots. Repair applies the same rule to stored cast auras.
 
-The caster's own Aura of such a spell is the source. `game_area_aura_source`
-(`module/src/spell/area_aura.rs`) lists the source Aura ids; it is private, and every Aura insert
-and delete keeps it current. Each Aura pass, once a second, follows vmangos `AreaAura::Update`:
+The caster's own Aura of such a spell is the source. Two private tables in
+`module/src/spell/area_aura.rs` hold the links: `game_area_aura_source` lists the source Aura ids
+and `game_area_aura_copy` maps each copy to its source. The Aura insert and delete paths keep both
+current. Each Aura pass, once a second, follows vmangos `AreaAura::Update`:
 
 - A party Aura reaches the living members of the owner's Subgroup within the effect radius, and
-  their pets. It skips a member in a Duel with someone else, an unfriendly one, and a PvP-flagged
-  one when the caster is not flagged. With no Group it reaches the owner and the caster's pet.
+  their pets. It skips a dead member, a member in a Duel with someone else, an unfriendly one, and
+  a PvP-flagged one when the caster is not flagged; a skipped member's pet is skipped too. With no
+  Group it reaches the owner and the caster's pet.
 - A pet Aura reaches only its caster's owner.
-- A member gets the highest rank at most ten levels above their own (`SelectAuraRankForLevel`). The
-  caster's rank passes on the caster's amount; a lower rank takes that rank's base points.
-- A unit that holds its own Aura of the spell chain, or a copy of the same or a higher rank, gets
-  no second copy.
-- A copy keeps the caster's guid and the source's expiry. It goes when its unit leaves the radius
-  or the Subgroup, or the caster stops being friendly to it. A party Aura's copy on the caster's
-  owner or pet skips the Subgroup check. Deleting the source deletes its copies at once.
+- A party Aura member gets the highest rank at most ten levels above their own
+  (`SelectAuraRankForLevel`). The caster's rank passes on the caster's amount; a lower rank takes
+  that rank's base points.
+- A family is one spell chain, or one spell name for ranks with no chain, such as the totem Auras.
+  It is ordered by chain rank, then spell level. A unit that holds its own Aura of the family, or a
+  copy at least as strong, gets no copy. A stronger copy replaces a weaker one.
+- A copy keeps the caster's guid and the source's expiry, and follows the source when it is
+  refreshed. It goes when its unit leaves the radius or the Subgroup, or the caster stops being
+  friendly to it. A party Aura's copy on the caster's owner or pet skips the Subgroup check.
+  Deleting the source deletes its copies at once, and the pass removes a copy whose source is gone.
+- A source whose caster has left the world stops being a source; its copies go, and world entry
+  records it again. A Character Transfer moves the sources and leaves the copies behind.
 - A totem's own party Aura holds no amount, as vmangos gives it `SPELL_AURA_NONE`; its copies take
   the effect's base points.
+
+Any Aura's same-name removal of another rank keeps a passive Aura of another spell chain, such as a
+racial resistance beside a totem's resistance copy (vmangos `RemoveNoStackAurasDueToAuraHolder`).
 
 ### GameObject pools
 

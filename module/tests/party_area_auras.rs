@@ -2,13 +2,13 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
-use lyracore_shared::constants::type_mask;
+use lyracore_shared::constants::{type_mask, unit_flags};
 use lyracore_shared::guid;
 use lyracore_shared::spell::taxonomy::{
-    A_MOD_STAT, CAST_FLAG_AREA_AURA, CAST_FLAG_PET_AREA_AURA, P_STAT_ID, STAT_STR, TOTEM_TYPE,
-    T_SELF,
+    A_MOD_STAT, CAST_FLAG_AREA_AURA, CAST_FLAG_PET_AREA_AURA, P_STAT_ID, SPELL_ATTR_PASSIVE,
+    STAT_STR, TOTEM_TYPE, T_SELF,
 };
-use support::{number, Standalone};
+use support::{actor, number, Standalone};
 
 const CHARACTER: u64 = 1;
 const GROUP: u64 = 13_740;
@@ -23,7 +23,19 @@ const HIGH_RANK: u32 = 5_137_403;
 const HIGH_RANK_POINTS: i32 = 40;
 const HIGH_RANK_LEVEL: u8 = 30;
 const PET_AURA: u32 = 5_137_404;
+// Strength of Earth 8076 and 8162 shape: two ranks of one name with no chain.
+const WEAK_TOTEM_AURA: u32 = 5_137_405;
+const WEAK_TOTEM_POINTS: i32 = 10;
+const STRONG_TOTEM_AURA: u32 = 5_137_406;
+const STRONG_TOTEM_POINTS: i32 = 20;
+// Tauren Nature Resistance 20551 shape: a passive of the party Aura's name and no chain.
+const RACIAL: u32 = 5_137_407;
+const RACIAL_POINTS: i32 = 7;
+const TIMED_AURA: u32 = 5_137_408;
+const PERMANENT_MS: u32 = u32::MAX;
+const TIMED_MS: u32 = 60_000;
 const TOTEM: u64 = guid::compose(guid::UNIT, 13_742);
+const TRANSFER: &str = "513740";
 // One Aura pass: game_aura_schedule runs every second, 20 ticks of the 50 ms virtual clock.
 const AURA_PASS_TICKS: &str = "20";
 
@@ -177,6 +189,177 @@ fn a_pet_area_aura_reaches_only_its_owner() {
     );
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn two_casters_of_one_unchained_aura_leave_the_stronger_copy_and_it_stays() {
+    let shard = stage("party-aura-two-casters");
+    let shaman = character(&shard, "Shaman", 5.0);
+    let mate = character(&shard, "Mate", 10.0);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 60 WHERE guid = {shaman}"
+    ));
+    group(&shard, &[CHARACTER, shaman, mate]);
+    cast(&shard, CHARACTER, WEAK_TOTEM_AURA);
+    cast(&shard, shaman, STRONG_TOTEM_AURA);
+    for _ in 0..3 {
+        pass(&shard);
+        assert_eq!(
+            auras(&shard, mate),
+            vec![(STRONG_TOTEM_AURA, shaman, STRONG_TOTEM_POINTS)],
+            "the higher-level rank of one name stays on the member on every pass"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_copy_keeps_a_passive_of_the_same_name_from_another_chain() {
+    let shard = stage("party-aura-racial");
+    let member = character(&shard, "Member", 5.0);
+    group(&shard, &[CHARACTER, member]);
+    cast(&shard, member, RACIAL);
+    cast(&shard, CHARACTER, PARTY_AURA);
+    pass(&shard);
+    assert_eq!(
+        auras(&shard, member),
+        vec![
+            (PARTY_AURA, CHARACTER, PARTY_AURA_POINTS),
+            (RACIAL, member, RACIAL_POINTS)
+        ],
+        "vmangos RemoveNoStackAurasDueToAuraHolder keeps a passive of another spell chain"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_flagged_member_gets_no_copy_from_an_unflagged_caster() {
+    let shard = stage("party-aura-pvp");
+    let member = character(&shard, "Member", 5.0);
+    group(&shard, &[CHARACTER, member]);
+    set_flagged(&shard, member);
+    cast(&shard, CHARACTER, PARTY_AURA);
+    pass(&shard);
+    assert!(
+        auras(&shard, member).is_empty(),
+        "vmangos AreaAura::Update: a PvP-flagged member needs a flagged caster"
+    );
+
+    set_flagged(&shard, CHARACTER);
+    pass(&shard);
+    assert_eq!(
+        auras(&shard, member),
+        vec![(PARTY_AURA, CHARACTER, PARTY_AURA_POINTS)]
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_dead_members_pet_gets_no_copy() {
+    let shard = stage("party-aura-dead-owner");
+    let member = character(&shard, "Member", 5.0);
+    group(&shard, &[CHARACTER, member]);
+    let pet = creature(&shard, pet_guid(member), member, 6.0);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET dead = true, health = 0 WHERE guid = {member}"
+    ));
+    cast(&shard, CHARACTER, PARTY_AURA);
+    pass(&shard);
+    assert!(
+        auras(&shard, pet).is_empty(),
+        "vmangos adds a member's pet only when the member passes the checks"
+    );
+
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET dead = false, health = 100 WHERE guid = {member}"
+    ));
+    pass(&shard);
+    assert_eq!(
+        auras(&shard, pet),
+        vec![(PARTY_AURA, CHARACTER, PARTY_AURA_POINTS)]
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_recast_moves_every_copys_expiry_with_the_casters_aura() {
+    let shard = stage("party-aura-refresh");
+    let member = character(&shard, "Member", 5.0);
+    group(&shard, &[CHARACTER, member]);
+    cast(&shard, CHARACTER, TIMED_AURA);
+    pass(&shard);
+    let first = expiry(&shard, CHARACTER, TIMED_AURA);
+    assert_eq!(expiry(&shard, member, TIMED_AURA), first);
+
+    pass(&shard);
+    cast(&shard, CHARACTER, TIMED_AURA);
+    pass(&shard);
+    let refreshed = expiry(&shard, CHARACTER, TIMED_AURA);
+    assert_ne!(refreshed, first);
+    assert_eq!(expiry(&shard, member, TIMED_AURA), refreshed);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_copy_whose_source_is_not_on_this_shard_goes() {
+    let shard = stage("party-aura-orphan");
+    let member = character(&shard, "Member", 5.0);
+    group(&shard, &[CHARACTER, member]);
+    cast(&shard, CHARACTER, PARTY_AURA);
+    pass(&shard);
+    assert_eq!(auras(&shard, member).len(), 1);
+
+    shard.assert_sql("DELETE FROM game_area_aura_source");
+    pass(&shard);
+    assert!(auras(&shard, member).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_character_transfer_moves_own_auras_and_leaves_copies_behind() {
+    let source = stage("party-aura-transfer-source");
+    let mut destination = Standalone::start("party-aura-transfer-destination");
+    destination.publish_module();
+    destination.assert_call("claim_operator", &[]);
+    destination.assert_call("install_guid_range", &["1000000000"]);
+    let paladin = character(&source, "Paladin", 5.0);
+    group(&source, &[CHARACTER, paladin]);
+    cast(&source, paladin, PARTY_AURA);
+    cast(&source, CHARACTER, PET_AURA);
+    pass(&source);
+    assert_eq!(
+        auras(&source, CHARACTER),
+        vec![
+            (PARTY_AURA, paladin, PARTY_AURA_POINTS),
+            (PET_AURA, CHARACTER, PARTY_AURA_POINTS)
+        ]
+    );
+
+    source.assert_call(
+        "begin_transfer",
+        &[
+            TRANSFER,
+            &actor(CHARACTER),
+            "0",
+            "0",
+            "1200",
+            "1200",
+            "50",
+            "0",
+            "true",
+        ],
+    );
+    let out = source.query_rows(&format!(
+        "SELECT blob FROM game_transfer_out WHERE transfer_id = {TRANSFER}"
+    ));
+    let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
+    destination.assert_call("import_character_blob", &[TRANSFER, &blob, &actor("0")]);
+    assert_eq!(
+        auras(&destination, CHARACTER),
+        vec![(PET_AURA, CHARACTER, PARTY_AURA_POINTS)],
+        "a copy stays with its source's Shard; vmangos drops a copy whose caster is gone"
+    );
+}
+
 fn stage(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
     shard.publish_module();
@@ -201,21 +384,9 @@ fn stage(name: &str) -> Standalone {
         ],
     );
     set_faction(&shard, CHARACTER, CHARACTER_FACTION);
-    insert_area_aura(
-        &shard,
-        PARTY_AURA,
-        1,
-        PARTY_AURA_POINTS,
-        CAST_FLAG_AREA_AURA,
-    );
-    insert_area_aura(&shard, LOW_RANK, 1, LOW_RANK_POINTS, CAST_FLAG_AREA_AURA);
-    insert_area_aura(
-        &shard,
-        HIGH_RANK,
-        HIGH_RANK_LEVEL,
-        HIGH_RANK_POINTS,
-        CAST_FLAG_AREA_AURA,
-    );
+    for fixture in &FIXTURES {
+        insert_area_aura(&shard, fixture);
+    }
     for (spell_id, prev_spell, rank) in [(LOW_RANK, 0, 1), (HIGH_RANK, LOW_RANK, 2)] {
         shard.insert_row(
             "game_spell_chain",
@@ -228,52 +399,93 @@ fn stage(name: &str) -> Standalone {
             ],
         );
     }
-    insert_area_aura(
-        &shard,
-        PET_AURA,
-        1,
-        PARTY_AURA_POINTS,
-        CAST_FLAG_AREA_AURA | CAST_FLAG_PET_AREA_AURA,
-    );
     shard
 }
 
-/// A permanent Strength Aura on its caster that reaches units within `RADIUS_YD`.
-fn insert_area_aura(
-    shard: &Standalone,
+struct Fixture {
     spell_id: u32,
-    spell_level: u8,
-    base_points: i32,
-    cast_flags: u32,
-) {
     // Ranks of one spell share its name, as Spell.dbc gives them.
-    let name = if matches!(spell_id, LOW_RANK | HIGH_RANK) {
-        "Area aura fixture ranks".to_string()
-    } else {
-        format!("Area aura fixture {spell_id}")
-    };
+    name: &'static str,
+    spell_level: u8,
+    points: i32,
+    cast_flags: u32,
+    attributes: u32,
+    duration_ms: u32,
+}
+
+const FIXTURES: [Fixture; 8] = [
+    area_fixture(PARTY_AURA, "Area aura fixture", 1, PARTY_AURA_POINTS),
+    area_fixture(LOW_RANK, "Area aura fixture ranks", 1, LOW_RANK_POINTS),
+    area_fixture(
+        HIGH_RANK,
+        "Area aura fixture ranks",
+        HIGH_RANK_LEVEL,
+        HIGH_RANK_POINTS,
+    ),
+    Fixture {
+        cast_flags: CAST_FLAG_AREA_AURA | CAST_FLAG_PET_AREA_AURA,
+        ..area_fixture(PET_AURA, "Area aura fixture pet", 1, PARTY_AURA_POINTS)
+    },
+    area_fixture(
+        WEAK_TOTEM_AURA,
+        "Area aura fixture totem",
+        10,
+        WEAK_TOTEM_POINTS,
+    ),
+    area_fixture(
+        STRONG_TOTEM_AURA,
+        "Area aura fixture totem",
+        24,
+        STRONG_TOTEM_POINTS,
+    ),
+    Fixture {
+        cast_flags: 0,
+        attributes: SPELL_ATTR_PASSIVE,
+        ..area_fixture(RACIAL, "Area aura fixture", 1, RACIAL_POINTS)
+    },
+    Fixture {
+        duration_ms: TIMED_MS,
+        ..area_fixture(TIMED_AURA, "Area aura fixture timed", 1, PARTY_AURA_POINTS)
+    },
+];
+
+/// A permanent party Strength Aura on its caster that reaches units within `RADIUS_YD`.
+const fn area_fixture(spell_id: u32, name: &'static str, spell_level: u8, points: i32) -> Fixture {
+    Fixture {
+        spell_id,
+        name,
+        spell_level,
+        points,
+        cast_flags: CAST_FLAG_AREA_AURA,
+        attributes: 0,
+        duration_ms: PERMANENT_MS,
+    }
+}
+
+fn insert_area_aura(shard: &Standalone, fixture: &Fixture) {
     shard.insert_row(
         "game_spell",
         &[
-            ("spell_id", &spell_id),
-            ("name", &name),
+            ("spell_id", &fixture.spell_id),
+            ("name", &fixture.name),
             ("range_yd", &0),
             ("is_negative", &false),
             ("gcd_ms", &0),
             ("cooldown_ms", &0),
-            ("duration_ms", &u32::MAX),
-            ("spell_level", &spell_level),
-            ("cast_flags", &cast_flags),
+            ("duration_ms", &fixture.duration_ms),
+            ("spell_level", &fixture.spell_level),
+            ("cast_flags", &fixture.cast_flags),
+            ("attributes", &fixture.attributes),
         ],
     );
     shard.insert_row(
         "game_spell_effect",
         &[
-            ("id", &packed_spell_effect_id(spell_id, 0)),
-            ("spell_id", &spell_id),
+            ("id", &packed_spell_effect_id(fixture.spell_id, 0)),
+            ("spell_id", &fixture.spell_id),
             ("kind", &A_MOD_STAT),
             ("target", &T_SELF),
-            ("base_points", &base_points),
+            ("base_points", &fixture.points),
             ("radius_yd", &RADIUS_YD),
             ("p0", &i32::from(STAT_STR)),
             ("p0_kind", &P_STAT_ID),
@@ -383,7 +595,7 @@ fn auras(shard: &Standalone, target: u64) -> Vec<(u32, u64, i32)> {
                 number(row, "amount"),
             )
         })
-        .filter(|&(spell_id, _, _)| (PARTY_AURA..=PET_AURA).contains(&spell_id))
+        .filter(|&(spell_id, _, _)| (PARTY_AURA..=TIMED_AURA).contains(&spell_id))
         .collect();
     held.sort_unstable();
     held
@@ -407,4 +619,25 @@ fn set_faction(shard: &Standalone, guid: u64, faction: u32) {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET faction_template = {faction} WHERE guid = {guid}"
     ));
+}
+
+fn set_flagged(shard: &Standalone, guid: u64) {
+    let row = shard
+        .query_rows(&format!(
+            "SELECT unit_flags FROM game_world_entity WHERE guid = {guid}"
+        ))
+        .remove(0);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags = {} WHERE guid = {guid}",
+        number::<u32>(&row, "unit_flags") | unit_flags::PVP
+    ));
+}
+
+fn expiry(shard: &Standalone, target: u64, spell_id: u32) -> String {
+    shard
+        .query_rows(&format!(
+            "SELECT expires_at FROM game_aura WHERE target_guid = {target} AND spell_id = {spell_id}"
+        ))
+        .remove(0)["expires_at"]
+        .clone()
 }

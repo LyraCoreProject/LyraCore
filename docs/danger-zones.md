@@ -557,11 +557,12 @@ manifest, so update both Shards before moving active World Sessions.
 
 ### Party area Aura migration
 
-A plain Module publish adds the private `game_area_aura_source` table, which starts empty. Publish
-through a planned update; development reload requires an unchanged schema. Then run
-`debug_repair_after_publish`: it records the party and pet area Auras that casters already
-hold as sources, so their copies reach the Subgroup at the next Aura pass. Until the repair, such an
-Aura stays on its caster alone until it is cast again.
+A plain Module publish adds the private `game_area_aura_source` and `game_area_aura_copy` tables,
+which start empty. Publish through a planned update; development reload requires an unchanged
+schema. Then run `debug_repair_after_publish`: it records the party and pet area Auras that casters
+in the world already hold as sources, so their copies reach the Subgroup at the next Aura pass. A
+Character who is offline is recorded at world entry. Until then, such an Aura stays on its caster
+alone.
 
 Reimport `spell` to set `CAST_FLAG_PET_AREA_AURA` (0x0100_0000) on the effect 119 spells, such as
 Spirit Bond, Soul Link and Master Demonologist. Until that reimport they carry only

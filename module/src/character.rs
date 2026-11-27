@@ -567,6 +567,7 @@ pub(crate) fn apply_player_login(
     }
     crate::pvp::enter_world(ctx, &mut entity);
     entity.insert(ctx);
+    crate::spell::area_aura::entered_world(ctx, character_guid);
     if entry == WorldEntry::Login {
         crate::drunk::sweep_delete_game_drunk_sobering(ctx, character_guid);
     }
