@@ -41,8 +41,10 @@ what LyraCore does instead and where in the code, and how to fix it.
   these to the maintainers.
 - `in progress` is taken. Pick another issue.
 
-When you start an issue, open a draft pull request that says `Closes #N` as soon as you have a
-first commit. A maintainer then marks the issue `in progress`.
+To start a `ready-for-agent` issue, comment `/claim` as the first line. A workflow assigns the issue
+to you and marks it `in progress`. You can hold two claims at a time. Open a draft pull request that
+says `Closes #N` within 24 hours, or the claim ends and the issue returns to the pool. Comment
+`/release` to give an issue up.
 
 ## What gets in
 
