@@ -318,9 +318,7 @@ pub(super) fn leave(
     super::motion_permit::withdraw(ctx, connection_id);
     crate::online::world_session_ended(ctx, guid);
     super::social::presence(ctx, guid, false);
-    if departure == CharacterDeparture::Logout {
-        super::guild::presence(ctx, guid, false);
-    }
+    super::guild::presence(ctx, guid, false);
 
     if let Some(entity) = ctx.db.game_world_entity().guid().find(guid) {
         crate::character::remove_live_character(ctx, entity, departure);

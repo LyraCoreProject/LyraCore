@@ -13,6 +13,7 @@ use spacetimedb::{
 use super::{
     directory, game_native_player,
     realm_party::{self, PartyCharacter},
+    realm_shard::NativeAway,
     Rollback,
 };
 use crate::{
@@ -210,8 +211,8 @@ fn current(ctx: &ReducerContext, facts: &Facts) -> bool {
         && realm_party::current(ctx, &facts.character) == Some(ctx.sender())
 }
 
-/// A member counts online while its World Session lives on a Shard, even if another Shard reported it.
-fn counts_online(ctx: &ReducerContext, character: &PartyCharacter) -> bool {
+/// Why a report can be stale after a Transfer: docs/architecture.md, "Groups across World Shards".
+pub(super) fn counts_online(ctx: &ReducerContext, character: &PartyCharacter) -> bool {
     realm_party::counts_online(
         character.online,
         character.world,
@@ -310,6 +311,29 @@ pub(super) fn record_presence(ctx: &ReducerContext, facts: Facts) -> Result<(), 
         publish(ctx, BTreeSet::from([member.guild_id]));
     }
     Ok(())
+}
+
+/// Signs a member off when its away World Session ends while its guild row still says online.
+pub(super) fn away_ended(ctx: &ReducerContext, away: &NativeAway) {
+    let Some(row) = ctx
+        .db
+        .game_guild_character()
+        .guid()
+        .find(away.character_guid)
+    else {
+        return;
+    };
+    let mut facts = row.facts;
+    if !facts.character.online || facts.character.connection != away.connection_id.to_u128() {
+        return;
+    }
+    facts.character.online = false;
+    facts.character.stats = None;
+    facts.character.revision = directory::revision(ctx);
+    facts.logout_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    if let Err(error) = record_presence(ctx, facts) {
+        spacetimedb::log::warn!("guild sign-off of {}: {error}", away.character_guid);
+    }
 }
 
 #[table(accessor = game_realm_guild_command, outbox(remote::idc_realm_guild_command))]
@@ -640,7 +664,7 @@ pub(super) fn deliver(
         return;
     };
     let character = row.facts.character;
-    if !character.online || realm_party::current(ctx, &character) != Some(character.world) {
+    if !counts_online(ctx, &character) {
         return;
     }
     super::realm_communication::deliver(

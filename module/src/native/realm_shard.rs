@@ -712,6 +712,7 @@ pub(super) fn drop_away(
             && arrival.is_none_or(|arrival| arrival == away.arrival)
     }) {
         crate::meeting_stone::remove_solo_seeker(ctx, away.character_guid);
+        super::realm_guild::away_ended(ctx, &away);
         aways.account_id().delete(account_id);
     }
 }

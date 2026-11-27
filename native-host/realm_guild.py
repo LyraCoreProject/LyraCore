@@ -113,7 +113,6 @@ def check(host, worlds, character, received):
     membership([guid, peer_guid])
     client.collect()
     peer.collect()
-    [[logout]] = host.rows(f'SELECT logout_micros FROM game_guild_character WHERE guid = {peer_guid}')
     [[left]] = host.rows(f'SELECT world FROM game_character_directory WHERE guid = {peer_guid}')
     host.call('debug_teleport', [peer_guid, 0, 10, 0, 0, 0], database=western)
     received(peer, 0x3e, auto_ack=False)
@@ -130,7 +129,14 @@ def check(host, worlds, character, received):
     settled(eastern)
     crossing = [(opcode, body) for opcode, body in packets + peer.collect() + client.collect() if opcode == 0x92]
     assert not [body for _, body in crossing if body[0] in (2, 12, 13)], crossing
-    assert host.rows(f'SELECT logout_micros FROM game_guild_character WHERE guid = {peer_guid}') == [[logout]]
+    [[account_id, connection]] = host.rows(f'SELECT account_id, connection_id FROM game_native_away WHERE character_guid = {peer_guid}')
+    [[[world_hex]]] = host.rows(f'SELECT world FROM game_character_directory WHERE guid = {peer_guid}')
+    world = {'__identity__': f'0x{int(world_hex, 16):064x}'}
+    host.call('debug_native_drop_away', [account_id, connection])
+    host.wait_until(lambda: host.rows(f'SELECT logout_micros FROM game_guild_character WHERE guid = {peer_guid}') != [[0]],
+        'dropping the away record did not sign the member off')
+    assert received(client, 0x92).count(event(13, ['Guildbeta'], peer_guid)) == 1
+    host.call('debug_native_away', [account_id, connection, world, peer_guid])
     membership([guid, peer_guid])
     peer.send(0x89)
     assert roster(received(peer, 0x8a)[-1][1])[2][peer_guid][2] == 3

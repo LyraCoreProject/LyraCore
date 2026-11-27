@@ -217,6 +217,27 @@ pub fn debug_native_away_round_trip(
     Ok(())
 }
 
+/// Drops the away World Session of `connection`, as the close report of its World Shard does.
+#[reducer]
+pub fn debug_native_drop_away(
+    ctx: &ReducerContext,
+    account_id: u64,
+    connection: u128,
+) -> Result<(), String> {
+    use super::realm_shard::game_native_away;
+    crate::helpers::require_operator(ctx)?;
+    let world = ctx
+        .db
+        .game_native_away()
+        .account_id()
+        .find(account_id)
+        .filter(|away| away.connection_id == ConnectionId::from_u128(connection))
+        .and_then(|away| away.world.or_else(|| crate::peer::world_shard(ctx)))
+        .ok_or("the Account has no away World Session for this connection")?;
+    super::realm_shard::drop_away(ctx, account_id, connection, world, None);
+    Ok(())
+}
+
 /// Delivers an Ok answer from this Realm Shard's World Shard to a send of the end of `connection`
 /// that no owed end counts, as a late answer does.
 #[reducer]

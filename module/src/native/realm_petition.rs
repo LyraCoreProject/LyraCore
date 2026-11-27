@@ -566,11 +566,7 @@ pub(super) fn request(
                 .game_guild_character()
                 .guid()
                 .find(request.target.guid())
-                .filter(|row| {
-                    row.facts.character.online
-                        && super::realm_party::current(ctx, &row.facts.character)
-                            == Some(row.facts.character.world)
-                })
+                .filter(|row| super::realm_guild::counts_online(ctx, &row.facts.character))
                 .ok_or_else(|| Rollback::silent("petition target is not in world"))?;
             run(
                 GuildOp::OfferPetition(GuildPetitionOffer {
