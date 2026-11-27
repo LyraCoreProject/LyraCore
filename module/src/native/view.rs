@@ -52,6 +52,7 @@ pub(super) fn character(ctx: &ReducerContext, character: Character) -> codec::Ch
         played_total_secs: character.played_total_secs,
         session_start_micros: character.session_start_micros,
         guild_id,
+        hide_equipment_flags: character.hide_equipment_flags,
     }
 }
 pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView {

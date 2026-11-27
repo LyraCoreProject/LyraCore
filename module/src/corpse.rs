@@ -142,7 +142,7 @@ pub struct Corpse {
     // PLAYER_FLAGS_HIDE_HELM and PLAYER_FLAGS_HIDE_CLOAK of the owner at death; bones carry none.
     #[default(0u32)]
     pub hide_equipment_flags: u32,
-    // CORPSE_FIELD_ITEM values by equipment slot; None for bones.
+    // CORPSE_FIELD_ITEM values by equipment slot; None for bones and for a Corpse made before this column.
     #[default(None::<Vec<u32>>)]
     pub worn_items: Option<Vec<u32>>,
 }

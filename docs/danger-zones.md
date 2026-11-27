@@ -519,7 +519,9 @@ unit gets its own hit roll, damage log, threat and procs.
 publish keeps no guild, no hidden gear and no worn items in its CREATE; a Character that releases
 after the publish gets them. A Character Transfer row from a Shard before the publish arrives with
 everything shown, and an older destination refuses the longer row, so update both Shards before you
-move a Character. No repair is needed. Package Deltas do not read these columns.
+move a Character. No repair is needed. Package Deltas do not read these columns. The reducer
+`migrate_character` takes a new last argument, `hide_equipment_flags`, so use the Character Migration
+tool from the same revision as the Module; a plan file written before it still reads.
 
 ### Group join reset migration
 
