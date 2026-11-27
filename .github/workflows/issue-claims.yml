@@ -1,0 +1,42 @@
+name: Issue claims
+
+on:
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  # Only claim commands share a group. An ordinary comment must not replace a queued command.
+  group: >-
+    ${{ github.event_name == 'issue_comment' && (startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/release'))
+    && format('issue-claims-{0}', github.event.issue.number)
+    || format('issue-claims-other-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  claims:
+    # Pull requests also raise issue_comment; they are never claims.
+    if: github.event_name != 'issue_comment' || (github.event.issue.pull_request == null && github.event.comment.user.type != 'Bot' && (startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/release')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The default branch only: the comment is data, and no pull request code is checked out.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Claim, release or expire
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          COMMENT_AUTHOR_TYPE: ${{ github.event.comment.user.type }}
+          COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: python3 -I -B scripts/issue_claims.py
