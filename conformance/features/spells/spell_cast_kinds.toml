@@ -244,6 +244,16 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/src/spell/proc.rs"
+function = "a_queued_strike_raises_the_swing_and_the_melee_ability_events_on_both_sides"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/queued_strike.rs"
+function = "a_queued_strike_raises_the_victims_melee_ability_proc_and_a_white_swing_does_not"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
 function = "a_proc_that_triggers_always_fires_on_an_avoided_swing_and_any_other_does_not"
 rung = "unit"
 

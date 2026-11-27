@@ -1,6 +1,6 @@
 mod support;
 
-use lyracore_shared::spell::taxonomy::{E_NEXT_SWING, T_TARGET_ENEMY};
+use lyracore_shared::spell::taxonomy::{A_INERT, E_NEXT_SWING, P_NONE, T_SELF, T_TARGET_ENEMY};
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,6 +31,11 @@ const NO_POWER: &str = "1";
 const INTERRUPTED: &str = "2";
 const RAGE: u32 = 1;
 const MANA: u32 = 0;
+const PROC_WATCH: u32 = 5_131_703;
+const WATCH_CHARGES: u8 = 3;
+const WATCH_DURATION_MS: u32 = 600_000;
+// vmangos PROC_FLAG_TAKE_MELEE_ABILITY.
+const TAKEN_MELEE_SPELL_HIT: u32 = 0x20;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -221,6 +226,47 @@ fn a_queued_raptor_strike_spends_mana_and_starts_its_cooldown_when_the_swing_fir
         after["mana_regen_paused_until_ms"],
         (fired_ms + 5000).to_string(),
         "spending mana pauses mana regeneration for five seconds"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_queued_strike_raises_the_victims_melee_ability_proc_and_a_white_swing_does_not() {
+    let mut standalone = Standalone::start("queued-strike-ability-proc");
+    standalone.publish_module();
+    stage_on_next_swing_spell(
+        &standalone,
+        QueuedStrike::rage(HEROIC_STRIKE, "Heroic Strike", HEROIC_STRIKE_COST),
+    );
+    standalone.assert_call("debug_spawn_player_entity", &["1"]);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET godmode = true WHERE guid = {PLAYER}"
+    ));
+    let wolf = spawn_target(&standalone);
+    engage(&standalone, wolf);
+    stage_proc_watch(&standalone, wolf);
+    assert_eq!(watch_charges(&standalone, wolf), Some(WATCH_CHARGES));
+
+    landed_swing(&standalone, || stage_power(&standalone, 0));
+    assert_eq!(
+        watch_charges(&standalone, wolf),
+        Some(WATCH_CHARGES),
+        "a white swing raises no melee-ability event"
+    );
+
+    for _ in 0..20 {
+        stage_power(&standalone, HEROIC_STRIKE_COST);
+        cast(&standalone, HEROIC_STRIKE, wolf);
+        let (_, landed) = swing(&standalone);
+        assert_eq!(landed["spell_swing"], "true");
+        if landed["damage"] != "0" {
+            break;
+        }
+    }
+    assert_eq!(
+        watch_charges(&standalone, wolf),
+        Some(WATCH_CHARGES - 1),
+        "vmangos gives a queued strike's victim PROC_FLAG_TAKE_MELEE_ABILITY"
     );
 }
 
@@ -698,6 +744,54 @@ fn stage_on_next_swing_spell(standalone: &Standalone, strike: QueuedStrike) {
             ("target", &T_TARGET_ENEMY),
         ],
     );
+}
+
+fn stage_proc_watch(standalone: &Standalone, wolf: u64) {
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &PROC_WATCH),
+            ("name", &"Proc watch fixture"),
+            ("school_mask", &1),
+            ("range_yd", &30),
+            ("duration_ms", &WATCH_DURATION_MS),
+            ("spell_level", &1),
+            ("proc_flags", &TAKEN_MELEE_SPELL_HIT),
+            ("proc_chance", &100),
+            ("proc_charges", &WATCH_CHARGES),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(PROC_WATCH, 0)),
+            ("spell_id", &PROC_WATCH),
+            ("effect_index", &0),
+            ("kind", &A_INERT),
+            ("base_points", &0),
+            ("target", &T_SELF),
+            ("p_0", &0),
+            ("p_0_kind", &P_NONE),
+        ],
+    );
+    standalone.assert_call(
+        "debug_force_cast_at",
+        &[
+            &wolf.to_string(),
+            &PROC_WATCH.to_string(),
+            &wolf.to_string(),
+        ],
+    );
+}
+
+fn watch_charges(standalone: &Standalone, wolf: u64) -> Option<u8> {
+    standalone
+        .query_rows(&format!(
+            "SELECT proc_charges FROM game_aura WHERE target_guid = {wolf} \
+             AND spell_id = {PROC_WATCH}"
+        ))
+        .first()
+        .map(|row| row["proc_charges"].parse().unwrap())
 }
 
 fn spawn_target(standalone: &Standalone) -> u64 {

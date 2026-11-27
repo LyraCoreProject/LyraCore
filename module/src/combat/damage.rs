@@ -196,6 +196,11 @@ impl Hit {
         }
     }
 
+    /// A queued strike's hit: a main-hand hit that carries the strike's Spell id.
+    pub(crate) fn is_queued_strike(&self) -> bool {
+        self.source == HitSource::MainHand && self.spell_id != 0
+    }
+
     pub(crate) fn triggered() -> Self {
         Self {
             source: HitSource::Triggered,
