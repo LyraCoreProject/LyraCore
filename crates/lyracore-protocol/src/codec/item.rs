@@ -75,6 +75,8 @@ pub struct ItemTemplateView {
     pub spellid_5: u32,
     pub spelltrigger_5: u8,
     pub spell_categories: [u32; 5],
+    /// vmangos SpellCharges per spell slot: negative is expendable, zero is unlimited.
+    pub spell_charges: [i32; 5],
     pub required_skill: u32,
     pub required_skill_rank: u32,
     pub required_reputation_faction: u32,
@@ -106,6 +108,8 @@ pub struct ItemInstanceView {
     pub item_text_id: u32,
     pub enchantment: u32,
     pub temporary_enchantment: TemporaryEnchantmentView,
+    /// The charges left per spell slot, signed as the template's.
+    pub spell_charges: [i32; 5],
 }
 
 /// A zero `enchantment` is an empty slot. `duration_ms` is the time left as the item is sent.
@@ -116,6 +120,7 @@ pub struct TemporaryEnchantmentView {
     pub charges: u32,
 }
 
+pub const ITEM_FIELD_SPELL_CHARGES: u16 = 16;
 pub const ITEM_FIELD_ENCHANTMENT: u16 = 22;
 // vmangos TEMP_ENCHANTMENT_SLOT; each slot holds id, duration and charges words.
 pub const TEMPORARY_ENCHANTMENT_SLOT: u16 = 1;
@@ -133,12 +138,17 @@ const RANDOM_PROPERTY_ENCHANT_ID_FIELDS: [u16; 3] = [
     ITEM_FIELD_ENCHANTMENT + 5 * 3,
 ];
 
-/// The typed CREATE reaches only enchantment slot 0; later slots follow in VALUES.
-pub fn build_enchantment_slot_values(inst: &ItemInstanceView) -> Option<(u16, Vec<u8>)> {
-    if inst.random_property_enchant_ids == [0; 3] && inst.temporary_enchantment.enchantment == 0 {
+/// The typed CREATE reaches only the first spell charges word and enchantment slot 0; the rest
+/// follow in VALUES.
+pub fn build_item_followup_values(inst: &ItemInstanceView) -> Option<(u16, Vec<u8>)> {
+    if inst.spell_charges == [0; 5]
+        && inst.random_property_enchant_ids == [0; 3]
+        && inst.temporary_enchantment.enchantment == 0
+    {
         return None;
     }
     let mut mask = update_mask::UpdateMaskValues::new();
+    set_spell_charges(&mut mask, inst.spell_charges);
     if inst.temporary_enchantment.enchantment != 0 {
         set_temporary_enchantment(&mut mask, inst.temporary_enchantment);
     }
@@ -150,6 +160,19 @@ pub fn build_enchantment_slot_values(inst: &ItemInstanceView) -> Option<(u16, Ve
         mask.set_u32(field, enchant_id);
     }
     Some(build_values_update_raw(inst.guid, &mask))
+}
+
+/// Writes all five words, so a spent charge reaches the client's tooltip.
+pub fn build_spell_charge_values(item_guid: u64, charges: [i32; 5]) -> (u16, Vec<u8>) {
+    let mut mask = update_mask::UpdateMaskValues::new();
+    set_spell_charges(&mut mask, charges);
+    build_values_update_raw(item_guid, &mask)
+}
+
+fn set_spell_charges(mask: &mut update_mask::UpdateMaskValues, charges: [i32; 5]) {
+    for (field, charge) in (ITEM_FIELD_SPELL_CHARGES..).zip(charges) {
+        mask.set_u32(field, charge as u32);
+    }
 }
 
 /// Writes all three words, so an empty view clears the slot.
@@ -234,8 +257,13 @@ pub fn build_item_query_response(
     spells[2] = spell_slot(t.spellid_3, t.spelltrigger_3);
     spells[3] = spell_slot(t.spellid_4, t.spelltrigger_4);
     spells[4] = spell_slot(t.spellid_5, t.spelltrigger_5);
-    for (spell, category) in spells.iter_mut().zip(t.spell_categories) {
+    for ((spell, category), charges) in spells
+        .iter_mut()
+        .zip(t.spell_categories)
+        .zip(t.spell_charges)
+    {
         spell.spell_category = category;
+        spell.spell_charges = charges;
     }
     SMSG_ITEM_QUERY_SINGLE_RESPONSE {
         item: t.entry,
@@ -366,6 +394,11 @@ pub fn build_inventory_refusal(
             item2,
             bag_type_subclass,
         },
+        ItemRefusal::CantEquipRank => SMSG_INVENTORY_CHANGE_FAILURE::CantEquipRank {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
         ItemRefusal::PlayerDead => SMSG_INVENTORY_CHANGE_FAILURE::YouAreDead {
             item1,
             item2,
@@ -386,13 +419,13 @@ pub fn build_inventory_refusal(
             item2,
             bag_type_subclass,
         },
-        ItemRefusal::NotRightNow | ItemRefusal::SpellCooldown(_) => {
-            SMSG_INVENTORY_CHANGE_FAILURE::CantDoRightNow {
-                item1,
-                item2,
-                bag_type_subclass,
-            }
-        }
+        ItemRefusal::NotRightNow
+        | ItemRefusal::SpellCooldown(_)
+        | ItemRefusal::NoChargesRemain(_) => SMSG_INVENTORY_CHANGE_FAILURE::CantDoRightNow {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
         ItemRefusal::CouldntSplitItems => SMSG_INVENTORY_CHANGE_FAILURE::CouldntSplitItems {
             item1,
             item2,

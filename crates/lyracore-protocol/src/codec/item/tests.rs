@@ -194,7 +194,7 @@ fn suffix_item(random_property_enchant_ids: [u32; 3]) -> ItemInstanceView {
 }
 
 fn enchantment_slot_fields(inst: &ItemInstanceView) -> Vec<(u16, u32)> {
-    let (opcode, body) = build_enchantment_slot_values(inst).expect("a slot update");
+    let (opcode, body) = build_item_followup_values(inst).expect("a slot update");
     assert_eq!(opcode, 0x00A9);
     let updates = crate::codec::values_mask::parse_values_updates(&body);
     assert_eq!(updates.len(), 1);
@@ -221,7 +221,63 @@ fn a_single_enchant_random_property_leaves_the_other_slots_unwritten() {
 
 #[test]
 fn an_item_without_property_or_temporary_enchantments_sends_no_slot_update() {
-    assert_eq!(build_enchantment_slot_values(&suffix_item([0; 3])), None);
+    assert_eq!(build_item_followup_values(&suffix_item([0; 3])), None);
+}
+
+fn charged_item(spell_charges: [i32; 5]) -> ItemInstanceView {
+    ItemInstanceView {
+        spell_charges,
+        ..suffix_item([0; 3])
+    }
+}
+
+/// ITEM_FIELD_SPELL_CHARGES holds five signed words from word 16.
+#[test]
+fn a_charged_item_follows_its_create_with_all_five_charge_words() {
+    assert_eq!(
+        enchantment_slot_fields(&charged_item([-3, 0, 2, 0, 0])),
+        vec![(16, -3i32 as u32), (17, 0), (18, 2), (19, 0), (20, 0)]
+    );
+}
+
+#[test]
+fn a_spent_last_charge_writes_its_zero_word() {
+    let (opcode, body) = build_spell_charge_values(0x4000_0000_0000_0102, [0; 5]);
+    assert_eq!(opcode, 0x00A9);
+    let updates = crate::codec::values_mask::parse_values_updates(&body);
+    assert_eq!(updates.len(), 1);
+    assert_eq!(
+        updates[0].fields,
+        vec![(16, 0), (17, 0), (18, 0), (19, 0), (20, 0)]
+    );
+}
+
+#[test]
+fn an_item_query_carries_the_charges_of_each_spell_slot() {
+    let template = ItemTemplateView {
+        entry: 5232,
+        spellid_1: 8690,
+        spell_charges: [-1, 0, 0, 0, 5],
+        ..Default::default()
+    };
+    let message = ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(Box::new(
+        build_item_query_response(5232, Some(&template)),
+    ));
+    let mut wire = Vec::new();
+    message.write_unencrypted_server(&mut wire).unwrap();
+    let ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(reply) =
+        ServerOpcodeMessage::read_unencrypted(&mut wire.as_slice()).unwrap()
+    else {
+        panic!("expected item query response");
+    };
+    let charges: Vec<i32> = reply
+        .found
+        .unwrap()
+        .spells
+        .iter()
+        .map(|spell| spell.spell_charges)
+        .collect();
+    assert_eq!(charges, [-1, 0, 0, 0, 5]);
 }
 
 const INSTANT_POISON: TemporaryEnchantmentView = TemporaryEnchantmentView {
@@ -626,6 +682,7 @@ fn item_create_object_is_item_typed_and_serializes() {
         item_text_id: 0,
         enchantment: 0,
         temporary_enchantment: TemporaryEnchantmentView::default(),
+        spell_charges: [0; 5],
     };
     let msg = build_item_create_object(&inst);
     let mut buf = Vec::new();
@@ -666,6 +723,7 @@ fn a_copied_letters_create_block_carries_its_item_text_id() {
         item_text_id: 7,
         enchantment: 0,
         temporary_enchantment: TemporaryEnchantmentView::default(),
+        spell_charges: [0; 5],
     };
     match &build_item_create_object(&inst).objects[0] {
         Object::CreateObject {
@@ -709,6 +767,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
         item_text_id: 0,
         enchantment: 0,
         temporary_enchantment: TemporaryEnchantmentView::default(),
+        spell_charges: [0; 5],
     };
     let msg = build_item_create_object(&inst);
     let mut buf = Vec::new();

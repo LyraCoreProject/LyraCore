@@ -539,6 +539,7 @@ pub(crate) fn apply_item_use_on(
         let refusal = match result {
             InventoryResult::NoRequiredProficiency => ItemRefusal::NoProficiency,
             InventoryResult::CantEquipSkill => ItemRefusal::RequiredSkill,
+            InventoryResult::CantEquipRank => ItemRefusal::CantEquipRank,
             _ => ItemRefusal::ItemNotUsable,
         };
         refuse(refusal, format!("item {} needs another user", inst.entry))
@@ -627,10 +628,13 @@ pub(crate) fn apply_item_use_on(
     )
     .map(|_| ())
     .map_err(|detail| {
-        refuse(
-            detail.item_refusal.unwrap_or(ItemRefusal::NotRightNow),
-            detail,
-        )
+        let refusal = match detail.reason {
+            crate::spell::CastRefusalReason::NoChargesRemain => {
+                ItemRefusal::NoChargesRemain(spell_id)
+            }
+            _ => detail.item_refusal.unwrap_or(ItemRefusal::NotRightNow),
+        };
+        refuse(refusal, detail)
     })
 }
 

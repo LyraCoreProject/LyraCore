@@ -160,6 +160,12 @@ pub struct ItemTemplate {
     pub spellcharges_4: i32,
     #[default(0i32)]
     pub spellcharges_5: i32,
+    // The spell a Character must know to use the item, as vmangos required_spell.
+    #[default(0u32)]
+    pub required_spell: u32,
+    // The honor rank a Character needs to use the item, as vmangos required_honor_rank.
+    #[default(0u32)]
+    pub required_honor_rank: u32,
 }
 
 impl ItemTemplate {
@@ -243,6 +249,8 @@ impl ItemTemplate {
             spellcharges_3: 0,
             spellcharges_4: 0,
             spellcharges_5: 0,
+            required_spell: 0,
+            required_honor_rank: 0,
         }
     }
 }

@@ -1361,3 +1361,50 @@ fn equip_review_7598_ranged_crit_uses_the_ranged_weapon_skill() {
     let trained = fields(review_packets(&mut connection));
     assert_eq!(f32::from_bits(trained[&1110]), 7.0);
 }
+
+fn use_item_frame(bag_slot: u8) -> Vec<u8> {
+    let mut frame = Vec::new();
+    CMSG_USE_ITEM {
+        bag_index: 255,
+        bag_slot,
+        spell_index: 0,
+        targets: SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::default(),
+        },
+    }
+    .write_unencrypted_client(&mut std::io::Cursor::new(&mut frame))
+    .unwrap();
+    frame[6..].to_vec()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_item_use_with_no_charges_left_answers_no_charges_remain_and_the_client_sees_each_charge() {
+    let (shard, mut connection, guid, _) = fixture("item-use-no-charges");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET max_stack = 1, spellid_1 = {USE}, spelltrigger_1 = 0, spellcharges_1 = 1, spellcategory_1 = 0 WHERE entry = {FIXTURE_JERKY}"
+    ));
+    let jerky = grant(&shard, guid, FIXTURE_JERKY, 1, 23);
+
+    let packets = request(&mut connection, 0xab, use_item_frame(23));
+    let charge_words_after_use = packets
+        .iter()
+        .filter(|(opcode, _)| *opcode == 0xa9)
+        .flat_map(|(_, body)| lyracore_protocol::codec::values_mask::parse_values_updates(body))
+        .find(|update| update.guid == jerky)
+        .map(|update| update.fields);
+    assert_eq!(
+        charge_words_after_use,
+        Some(vec![(16, 0), (17, 0), (18, 0), (19, 0), (20, 0)]),
+        "{packets:?}"
+    );
+
+    advance(&shard, 2000);
+    assert_eq!(
+        request(&mut connection, 0xab, use_item_frame(23)),
+        vec![(
+            0x130,
+            lyracore_protocol::codec::build_cast_result_failed(USE, 0x44)
+        )]
+    );
+}

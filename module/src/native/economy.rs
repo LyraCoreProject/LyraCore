@@ -87,7 +87,7 @@ pub(super) fn replay_buyback(
             ))),
             false,
         )?;
-        if let Some((opcode, body)) = codec::build_enchantment_slot_values(&view) {
+        if let Some((opcode, body)) = codec::build_item_followup_values(&view) {
             super::send_raw(ctx, connection, opcode, body, false);
         }
         buyback_values(
