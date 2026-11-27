@@ -2527,6 +2527,9 @@ def check_mail(host):
     assert not mail_packets(send(box=0))
     for name, code in [('Missingmail', 4), ('mAiLoNe', 2), ('Mailhorde', 5)]:
         result(send(name=name), 0, 0, code)
+    host.call('debug_set_money', [first_guid, 29])
+    result(send(name='Mailhorde'), 0, 0, 3)
+    host.call('debug_set_money', [first_guid, 1000])
     host.call('debug_teleport', [first_guid, 0, 1020, 1000, 0, 0])
     first.collect()
     assert not mail_packets(send())

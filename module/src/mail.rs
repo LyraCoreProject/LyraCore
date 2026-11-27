@@ -140,7 +140,7 @@ pub(crate) fn detach_item(
         .filter(|item| item.owner_guid == sender_guid)
         .ok_or(MailRefusal::NotYourItem)?;
     let equipped = inst.slot <= crate::items::equip_slot::END;
-    // vmangos HandleSendMail refuses a bank position and Item::CanBeTraded an equipped bag.
+    // vmangos HandleSendMailCallback refuses a bank position and Item::CanBeTraded an equipped bag.
     if !equipped
         && (!crate::items::is_unequipped_carried_slot(inst.slot)
             || crate::items::validate_bag_dest_slot(ctx, sender_guid, inst.slot).is_err())
@@ -167,7 +167,7 @@ pub(crate) fn detach_item(
     {
         return Err(lyracore_shared::mail::ITEM_IS_CONJURED.to_string().into());
     }
-    // vmangos HandleSendMail answers MAIL_ERR_INTERNAL_ERROR when Item::CanBeTraded refuses.
+    // vmangos HandleSendMailCallback answers MAIL_ERR_INTERNAL_ERROR when Item::CanBeTraded refuses.
     if crate::loot::has_generated_loot(ctx, inst.guid) {
         return Err(lyracore_shared::mail::ITEM_HAS_LOOT.to_string().into());
     }
@@ -461,6 +461,19 @@ pub fn debug_seed_mail(
     );
     Ok(())
 }
+/// Refuses a sender who cannot pay postage and sent money; debits nothing (vmangos checks this before any other send check).
+pub(crate) fn check_postage(
+    ctx: &ReducerContext,
+    sender_guid: u64,
+    money: u32,
+) -> Result<(), MailRefusal> {
+    let sender = crate::helpers::acting_entity_by_guid(ctx, sender_guid)
+        .ok_or_else(|| lyracore_shared::mail::NOT_IN_WORLD.to_string())?;
+    if sender.money < lyracore_shared::mail::total_cost(money) {
+        return Err(MailRefusal::NotEnoughMoney);
+    }
+    Ok(())
+}
 pub(crate) fn debit_purse(
     ctx: &ReducerContext,
     payer_guid: u64,
@@ -517,7 +530,8 @@ fn send(
     mail: OutgoingMail,
     same_account: bool,
 ) -> Result<(), MailRefusal> {
-    // vmangos HandleSendMail refuses any send while the sender has a trade, even a proposed one.
+    check_postage(ctx, sender_guid, mail.money)?;
+    // vmangos HandleSendMailCallback refuses any send while the sender has a trade, even a proposed one.
     if crate::trade::session_involving(ctx, sender_guid).is_some() {
         return Err(lyracore_shared::mail::SENDER_IS_TRADING.to_string().into());
     }
