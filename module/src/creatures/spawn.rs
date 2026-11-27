@@ -402,6 +402,7 @@ pub(crate) fn scale_creature_damage_for_level(
 }
 
 pub(crate) fn insert_creature_entity(ctx: &spacetimedb::ReducerContext, mut entity: WorldEntity) {
+    let worn = super::event_data::wear_at_spawn(ctx, &mut entity);
     if let Some(floor) = crate::vmap::floor_z(
         ctx,
         entity.map_id,
@@ -420,6 +421,7 @@ pub(crate) fn insert_creature_entity(ctx: &spacetimedb::ReducerContext, mut enti
         z: entity.z,
     };
     entity.insert(ctx);
+    super::event_data::dress_spawned(ctx, payload.guid, &worn);
     // Fire after insertion because handlers may resolve the creature by guid.
     crate::hooks::fire_on_creature_spawn(ctx, &payload);
 }

@@ -971,8 +971,8 @@ place like any chest.
 
 ### Game events
 
-`module/src/game_events.rs` runs vmangos Game Events for spawns, quests and vendor items, as
-`GameEventMgr` does.
+`module/src/game_events.rs` runs vmangos Game Events for spawns, creature data, quests and vendor
+items, as `GameEventMgr` does.
 `game_event` holds each event's calendar: `start_secs` and `end_secs` on the Realm Clock, and every
 `occurrence_mins` the event runs for `length_mins`. `scripted` marks a vmangos `hardcoded` event,
 which its script runs instead of the calendar, and `disabled` an event vmangos disables or leaves
@@ -980,8 +980,11 @@ out of patch 1.12.
 `game_event_link` holds a Game Event Link: a creature spawn's source guid or a world GameObject's
 guid, its event, and `while_inactive` for a negative vmangos id. `game_event_pool` names a top-level
 GameObject pool that rolls only while its event runs. `game_event_quest` ties a quest to its event
-and `game_event_vendor_item` a vendor's item to the event its vmangos condition asks for. No Package
-claims or reads these tables, so they stay out of the table catalogue.
+and `game_event_vendor_item` a vendor's item to the event its vmangos condition asks for.
+`game_event_creature_data` holds a vmangos `game_event_creature_data` row: the template, the three
+virtual equipment item entries and the start and end spells a creature spawn's source guid takes
+for its event, each 0 when the row leaves it as it is. No Package claims or reads these tables, so
+they stay out of the table catalogue.
 
 An event is running while the Realm Clock is inside its start and end and within its length of the
 latest occurrence. A yearly event shorter than a year skips each 29 February since its start, so it
@@ -1008,6 +1011,20 @@ stands in for it. A hidden GameObject is despawned with no respawn time and show
 state, a chest or gather node unused. A pass makes at most 500 changes; each pending event gets an
 equal share first and the rest goes to them in entry order, so one large event holds no other
 back. The cursors keep the place for the next pass. The Operator verbs run the same pass at once.
+
+After its pools the pass walks the event's creature data rows, with a third cursor, and brings each
+living creature of the row's spawn and its copies to the data it wears now
+(`module/src/creatures/event_data.rs`). A creature wears the rows of its running events: the
+template and equipment of the first row, in source guid then event order, that names one, and the
+start spell of each. A changed template is taken in place, as vmangos `Creature::UpdateEntry` takes
+it, with a newly chosen model and the same share of its health. The equipment shows through
+`game_encounter_equip`; when no running row names one, the stopped event's equipment comes off, and
+equipment something else gave the creature stays. As the event starts its row's start spell is cast
+on the creature, triggered; as it stops that spell's auras come off and the end spell is cast. A
+corpse waits for its respawn. `insert_creature_entity` gives every creature that enters the world
+the data its spawn wears, the template before it is inserted and the equipment and start spells
+after, so a respawn or an Instance copy comes in its event's data. See the
+deliberate deviations in `conformance/features/world/game_events.toml`.
 
 Every path that brings a spawn up asks the same question: the creature respawn pass, the GameObject
 respawn timer, import and Package insert claims, pool rolls (`arm_pools`, `arm_all_pools` and an

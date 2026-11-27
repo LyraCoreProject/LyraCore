@@ -1,7 +1,7 @@
 schema_version = 1
 id = "game_events"
 system = "world"
-scope = "Game Events run on the Realm Clock calendar and decide which creature and GameObject spawns exist, which event quests givers offer and which event items vendors sell."
+scope = "Game Events run on the Realm Clock calendar and decide which creature and GameObject spawns exist, which template, equipment and spells their event creatures take, which event quests givers offer and which event items vendors sell."
 requests = []
 replies = []
 dependencies = []
@@ -43,6 +43,10 @@ tests = [
     { path = "module/src/game_events.rs", function = "the_darkmoon_faire_runs_on_its_schedule_without_an_operator", rung = "unit" },
     { path = "importer/src/world_import_game_events.rs", function = "the_darkmoon_faire_events_leave_the_scripted_finding", rung = "unit" },
     { path = "module/tests/game_events.rs", function = "the_darkmoon_faire_builds_then_opens_at_its_months_site_without_an_operator", rung = "durable_module" },
+    { path = "importer/src/world_import_game_events.rs", function = "a_creature_data_row_drops_what_the_world_source_lacks_and_a_row_left_empty", rung = "unit" },
+    { path = "importer/src/world_import_game_events.rs", function = "a_creature_data_model_and_an_equipment_with_several_choices_are_counted", rung = "unit" },
+    { path = "module/tests/game_events.rs", function = "a_live_creature_takes_its_event_data_as_the_event_starts_and_its_own_as_it_stops", rung = "durable_module" },
+    { path = "module/tests/game_events.rs", function = "a_creature_that_spawns_while_its_event_runs_comes_in_its_event_data", rung = "durable_module" },
 ]
 
 [vmangos]
@@ -77,11 +81,41 @@ result = "A spawn tied to several events shows while any of them runs and no eve
 reason = "The Reference Server result depends on the order its events start and stop; a rule over the current states gives one answer for one calendar."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/GameEventMgr.cpp"
 
+[[deliberate_deviations]]
+id = "creature_data_of_several_events"
+result = "A creature spawn with creature data rows for several running events takes the template and equipment of the first row, in source guid then event order, that names one, and the start spell of every row. The Reference Server applies the row of the event that started last, and the first row when the creature respawns, so a Stormwind City Patroller loses its Night lantern when Love is in the Air starts at night. 9 creatures in the pinned World Source have rows for two events."
+reason = "The Reference Server result depends on the order its events start and stop; a rule over the current states gives one answer for one calendar, as for spawns of several events."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/GameEventMgr.cpp"
+
+[[deliberate_deviations]]
+id = "creature_data_at_respawn"
+result = "A creature that respawns while its event runs comes back with all of its event data, its start spells included. The Reference Server's in-place respawn casts the start spell again only when it changes the creature's entry, so a creature whose row only casts a spell, such as a Lunar Festival vendor's costume, respawns without it until the event starts again."
+reason = "The start spell is part of what the creature takes while its event runs; casting it at every spawn gives the same creature for the same calendar."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Creature.cpp"
+
 [[known_gaps]]
-description = "Creature model, equipment, entry and spell changes for a running event (game_event_creature_data) are not imported."
+description = "A creature data row's model (display_id) is not applied, and an equipment entry with several item choices shows no equipment; the Compatibility Manifest counts them as events.creature-display and events.equipment-choice. The pinned World Source has neither."
 path = "importer/src/world_import_game_events.rs"
-symbol = "plan"
-evidence = "vmangos GameEventMgr::UpdateCreatureData at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
+symbol = "creature_data"
+evidence = "vmangos Creature::ChooseDisplayId and EquipmentTemplate::ChooseEquipmentEntry at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
+
+[[known_gaps]]
+description = "Creature template equipment (creature_equip_template through creature_template) is not imported, so a creature shows no equipment when its event's equipment is taken off; the Reference Server shows its template equipment again."
+path = "module/src/creatures/event_data.rs"
+symbol = "take_off_equipment"
+evidence = "vmangos Creature::LoadDefaultEquipment at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
+
+[[known_gaps]]
+description = "A corpse keeps its template and equipment when its event starts or stops and takes the event data that applies when it respawns; the Reference Server changes the corpse in place."
+path = "module/src/creatures/event_data.rs"
+symbol = "follow_one"
+evidence = "vmangos GameEventUpdateCreatureDataInMapsWorker at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
+
+[[known_gaps]]
+description = "The first pass on a new Realm or after an events import casts each stopped event's end spell on its living creatures again; the Reference Server casts it only when the event stops. The pinned World Source has no end spell."
+path = "module/src/creatures/event_data.rs"
+symbol = "follow_one"
+evidence = "vmangos Creature::ApplyGameEventSpells at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
 [[known_gaps]]
 description = "Event start and end mail (game_event_mail) is not sent."

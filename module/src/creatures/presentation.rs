@@ -30,6 +30,23 @@ pub(crate) fn equip_swap(
     if e.is_player() {
         return Err("equip_swap targets creatures only".to_string());
     }
+    let [main_hand, off_hand, ranged] = equipment_displays(ctx, [main_hand, off_hand, ranged])?;
+    crate::EncounterEquip {
+        creature_guid,
+        instance_id: e.instance_id,
+        main_hand,
+        off_hand,
+        ranged,
+    }
+    .replace(ctx);
+    Ok(())
+}
+
+/// The item display ids virtual equipment shows for main hand, off hand and ranged item entries.
+pub(crate) fn equipment_displays(
+    ctx: &ReducerContext,
+    items: [u32; 3],
+) -> Result<[u32; 3], String> {
     let display = |entry: u32| -> Result<u32, String> {
         if entry == 0 {
             return Ok(0);
@@ -41,16 +58,7 @@ pub(crate) fn equip_swap(
             .map(|item| item.display_id)
             .ok_or_else(|| format!("virtual equipment item {entry} is missing"))
     };
-    let (main_hand, off_hand, ranged) = (display(main_hand)?, display(off_hand)?, display(ranged)?);
-    crate::EncounterEquip {
-        creature_guid,
-        instance_id: e.instance_id,
-        main_hand,
-        off_hand,
-        ranged,
-    }
-    .replace(ctx);
-    Ok(())
+    Ok([display(items[0])?, display(items[1])?, display(items[2])?])
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -308,7 +316,8 @@ pub(crate) fn apply_relay_stand_state(
     Ok(())
 }
 
-pub(crate) fn update_template_from_relay(
+/// vmangos `Creature::UpdateEntry` on a live creature: it takes template `entry` in place.
+pub(crate) fn update_entry(
     ctx: &ReducerContext,
     creature_guid: u64,
     entry: u32,
@@ -318,13 +327,13 @@ pub(crate) fn update_template_from_relay(
         .game_creature_template()
         .entry()
         .find(entry)
-        .ok_or_else(|| format!("relay creature template {entry} is missing"))?;
+        .ok_or_else(|| format!("creature template {entry} is missing"))?;
     let entities = ctx.db.game_world_entity();
     let old = entities
         .guid()
         .find(creature_guid)
         .filter(|entity| !entity.is_player() && !entity.dead)
-        .ok_or_else(|| format!("relay template subject {creature_guid} is unavailable"))?;
+        .ok_or_else(|| format!("template subject {creature_guid} is unavailable"))?;
     if old.entry == entry {
         return Ok(());
     }
@@ -334,9 +343,19 @@ pub(crate) fn update_template_from_relay(
     let mut entity = entities
         .guid()
         .find(creature_guid)
-        .ok_or_else(|| format!("relay template subject {creature_guid} disappeared"))?;
-    let old_health = entity.health;
-    let old_max_health = entity.max_health;
+        .ok_or_else(|| format!("template subject {creature_guid} disappeared"))?;
+    take_template(ctx, &mut entity, &template);
+    entity.update(ctx);
+    crate::creatures::clear_gossip_menu_override(ctx, creature_guid);
+    Ok(())
+}
+
+/// Gives `entity` `template`'s entry, stats and flags, a new model and the same share of health.
+pub(crate) fn take_template(
+    ctx: &ReducerContext,
+    entity: &mut crate::WorldEntity,
+    template: &crate::CreatureTemplate,
+) {
     let (level, base_health) = crate::creatures::rolled_creature_stats(
         template.level,
         template.max_level,
@@ -344,7 +363,7 @@ pub(crate) fn update_template_from_relay(
         template.max_level_health,
         ctx.random(),
     );
-    let stats = super::catalogue::level_stats(ctx, &template, level);
+    let stats = super::catalogue::level_stats(ctx, template, level);
     let max_health = stats
         .as_ref()
         .map_or_else(
@@ -352,10 +371,10 @@ pub(crate) fn update_template_from_relay(
             |stats| stats.health,
         )
         .max(1);
-    let (display_id, scale) = super::catalogue::display(ctx, &template, ctx.random());
-    let health = health_after_template_update(old_health, old_max_health, max_health);
+    let (display_id, scale) = super::catalogue::display(ctx, template, ctx.random());
+    let health = health_after_template_update(entity.health, entity.max_health, max_health);
     let in_combat = entity.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT;
-    entity.entry = entry;
+    entity.entry = template.entry;
     entity.scale_x = if scale > 0.0 { scale } else { 1.0 };
     entity.display_id = display_id;
     entity.native_display_id = display_id;
@@ -367,9 +386,6 @@ pub(crate) fn update_template_from_relay(
     entity.unit_flags = template.unit_flags | in_combat;
     entity.base_attack_time_ms = template.base_attack_time_ms;
     entity.armor = stats.map_or(template.armor, |stats| stats.armor);
-    entity.update(ctx);
-    crate::creatures::clear_gossip_menu_override(ctx, creature_guid);
-    Ok(())
 }
 
 fn health_after_template_update(old_health: u32, old_max_health: u32, new_max_health: u32) -> u32 {

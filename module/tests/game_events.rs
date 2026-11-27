@@ -1,6 +1,8 @@
 mod support;
 
-use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::fixture_ids::{
+    FIXTURE_BLADE, TEST_WOLF_ELDER_ENTRY, TEST_WOLF_ENTRY, WELL_FED_SPELL,
+};
 use lyracore_package_delta::{packed_creature_spawn_guid, packed_gameobject_spawn_guid};
 use lyracore_shared::game_event::{
     DARKMOON_FAIRE_ELWYNN, DARKMOON_FAIRE_ELWYNN_BUILDING, DARKMOON_FAIRE_EVENTS,
@@ -27,6 +29,7 @@ const PARTIAL_LANTERNS: u32 = 5_300_501;
 // 2026-12-06 23:59:30 UTC, thirty seconds before the Darkmoon Faire opens in Elwynn.
 const FAIRE_BUILDING_SECS: i64 = 1_796_601_570;
 const FAIRE_BUILDER_WOLF: u32 = 3_000_003;
+const DRESSED_WOLF: u32 = 3_000_004;
 const ELWYNN_FAIRE_LANTERN: u32 = 5_300_403;
 const MULGORE_FAIRE_LANTERN: u32 = 5_300_404;
 
@@ -137,21 +140,7 @@ fn festival_spawns(shard: &Standalone, at: &Place) {
 }
 
 fn import_spawns(shard: &Standalone, at: &Place, wolves: &[u32], lanterns: &[u32]) {
-    let wolves = wolves
-        .iter()
-        .map(|&low| {
-            format!(
-                "{},{TEST_WOLF_ENTRY},{},{},{},{},0,0,60",
-                wolf_guid(low),
-                at.map_id,
-                at.x,
-                at.y,
-                at.z
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(";");
-    shard.assert_call("import_creature_spawns_append", &[&wolves]);
+    import_wolves(shard, at, wolves);
     let lanterns = lanterns
         .iter()
         .map(|&low| {
@@ -167,6 +156,24 @@ fn import_spawns(shard: &Standalone, at: &Place, wolves: &[u32], lanterns: &[u32
         .collect::<Vec<_>>()
         .join(";");
     shard.assert_call("import_gameobjects_append", &[&lanterns]);
+}
+
+fn import_wolves(shard: &Standalone, at: &Place, wolves: &[u32]) {
+    let wolves = wolves
+        .iter()
+        .map(|&low| {
+            format!(
+                "{},{TEST_WOLF_ENTRY},{},{},{},{},0,0,60",
+                wolf_guid(low),
+                at.map_id,
+                at.x,
+                at.y,
+                at.z
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+    shard.assert_call("import_creature_spawns_append", &[&wolves]);
 }
 
 fn in_world(shard: &Standalone, guid: u64) -> bool {
@@ -502,4 +509,113 @@ fn the_darkmoon_faire_builds_then_opens_at_its_months_site_without_an_operator()
         [false, true, false],
         "the Faire opens in Elwynn on December's first Monday"
     );
+}
+
+/// While the festival runs, the spawn is a Test Wolf Elder with the fixture blade and Well Fed.
+fn dress_for_festival(shard: &Standalone, spawn_guid: u64) {
+    shard.insert_row(
+        "game_event_creature_data",
+        &[
+            ("data_id", &1u64),
+            ("spawn_guid", &spawn_guid),
+            ("event_entry", &FESTIVAL),
+            ("creature_entry", &TEST_WOLF_ELDER_ENTRY),
+            ("main_hand", &FIXTURE_BLADE),
+            ("off_hand", &0u32),
+            ("ranged", &0u32),
+            ("start_spell", &WELL_FED_SPELL),
+            ("end_spell", &0u32),
+        ],
+    );
+}
+
+#[derive(Debug, PartialEq)]
+struct Wear {
+    entry: u32,
+    level: u32,
+    main_hand_display: u32,
+    well_fed: bool,
+}
+
+fn wear(shard: &Standalone, guid: u64) -> Wear {
+    let entity = shard.query_rows(&format!(
+        "SELECT entry, level FROM game_world_entity WHERE guid = {guid}"
+    ));
+    assert_eq!(entity.len(), 1, "creature {guid} is in the world");
+    let main_hand_display = shard
+        .query_rows(&format!(
+            "SELECT main_hand FROM game_encounter_equip WHERE creature_guid = {guid}"
+        ))
+        .first()
+        .map_or(0, |row| number(row, "main_hand"));
+    let well_fed = shard
+        .query_rows(&format!(
+            "SELECT spell_id FROM game_aura WHERE target_guid = {guid}"
+        ))
+        .iter()
+        .any(|row| number::<u32>(row, "spell_id") == WELL_FED_SPELL);
+    Wear {
+        entry: number(&entity[0], "entry"),
+        level: number(&entity[0], "level"),
+        main_hand_display,
+        well_fed,
+    }
+}
+
+fn own_wear() -> Wear {
+    Wear {
+        entry: TEST_WOLF_ENTRY,
+        level: 1,
+        main_hand_display: 0,
+        well_fed: false,
+    }
+}
+
+fn festival_wear(shard: &Standalone) -> Wear {
+    let blade = shard.query_rows(&format!(
+        "SELECT display_id FROM game_item_template WHERE entry = {FIXTURE_BLADE}"
+    ));
+    Wear {
+        entry: TEST_WOLF_ELDER_ENTRY,
+        level: 8,
+        main_hand_display: number(&blade[0], "display_id"),
+        well_fed: true,
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_live_creature_takes_its_event_data_as_the_event_starts_and_its_own_as_it_stops() {
+    let (shard, at) = realm("game-event-creature-data-live");
+    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
+    let wolf = wolf_guid(DRESSED_WOLF);
+    dress_for_festival(&shard, wolf);
+    import_wolves(&shard, &at, &[DRESSED_WOLF]);
+    settle(&shard);
+    assert_eq!(wear(&shard, wolf), own_wear());
+
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    assert_eq!(
+        wear(&shard, wolf),
+        festival_wear(&shard),
+        "the same creature changes in place"
+    );
+
+    shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
+    assert_eq!(wear(&shard, wolf), own_wear());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_that_spawns_while_its_event_runs_comes_in_its_event_data() {
+    let (shard, at) = realm("game-event-creature-data-spawn");
+    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
+    let wolf = wolf_guid(DRESSED_WOLF);
+    dress_for_festival(&shard, wolf);
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+
+    import_wolves(&shard, &at, &[DRESSED_WOLF]);
+    settle(&shard);
+
+    assert_eq!(wear(&shard, wolf), festival_wear(&shard));
 }

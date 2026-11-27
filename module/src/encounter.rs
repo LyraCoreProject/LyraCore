@@ -214,7 +214,7 @@ impl EncounterEquip {
         crate::native::creature::equipment_changed(ctx, &row, false);
     }
 
-    fn delete(ctx: &ReducerContext, guid: u64) {
+    pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
         let table = ctx.db.game_encounter_equip();
         if let Some(row) = table.creature_guid().find(guid) {
             table.creature_guid().delete(guid);

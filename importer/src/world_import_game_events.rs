@@ -1,4 +1,4 @@
-// vmangos `GameEventMgr::LoadFromDB` for spawns, quests and vendor items; read
+// vmangos `GameEventMgr::LoadFromDB` for spawns, creature data, quests and vendor items; read
 // docs/schema.md#game-events first.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Context, Result};
 use lyracore_shared::game_event::DARKMOON_FAIRE_EVENTS;
 
-use super::{collect_gameobject_spawns, gameobject_pools, go_guid, DumpPlan, WorldImportArgs};
+use super::{
+    collect_gameobject_spawns, gameobject_pools, go_guid, world_guid, DumpPlan, WorldImportArgs,
+};
 use crate::creature_population;
 use crate::dump::{insert_row_count, parse_table, push_insert, sql_str, TableRows};
 
@@ -221,6 +223,142 @@ fn vendor_offers(dump: &(impl TableRows + ?Sized)) -> Result<Vec<(u32, u32, u32)
     Ok(offers)
 }
 
+/// A `game_event_creature_data` row after patch selection.
+#[derive(Clone, Copy, Debug)]
+struct SourceCreatureData {
+    guid: u32,
+    event: u32,
+    entry: u32,
+    display: u32,
+    equipment: u32,
+    start_spell: u32,
+    end_spell: u32,
+}
+
+/// What the World Source holds that a creature data row names.
+struct CreatureDataSources<'a> {
+    /// Each kept creature placement's spawn guid, by source guid.
+    spawns: &'a BTreeMap<u32, u64>,
+    /// `creature_equip_template` item choices by equipment entry.
+    equipment: &'a BTreeMap<u32, Vec<[u32; 3]>>,
+    creature_templates: &'a BTreeSet<u32>,
+    spells: &'a BTreeSet<u32>,
+}
+
+/// A `game_event_creature_data` row as the Module applies it.
+#[derive(Debug, PartialEq)]
+struct CreatureData {
+    spawn_guid: u64,
+    event: u32,
+    entry: u32,
+    equipment: [u32; 3],
+    start_spell: u32,
+    end_spell: u32,
+}
+
+#[derive(Debug, Default)]
+struct CreatureDataPlan {
+    rows: Vec<CreatureData>,
+    /// Rows whose placement the import leaves out.
+    absent: usize,
+    /// Source guids of rows that name a model, which the Module does not apply.
+    displays: Vec<u32>,
+    /// Equipment entries with several item choices, of which the Module shows none.
+    equipment_choices: BTreeSet<u32>,
+}
+
+/// vmangos `GameEventMgr::LoadFromDB` for `game_event_creature_data`: event 0 is reserved, and an
+/// equipment, entry or spell the World Source lacks becomes none. A row left with nothing to change
+/// is dropped. Rows keep source guid then event order, the order the Module tries them in.
+fn creature_data(
+    rows: impl IntoIterator<Item = SourceCreatureData>,
+    sources: &CreatureDataSources,
+) -> CreatureDataPlan {
+    let mut rows: Vec<SourceCreatureData> = rows.into_iter().filter(|row| row.event != 0).collect();
+    rows.sort_by_key(|row| (row.guid, row.event));
+    let mut plan = CreatureDataPlan::default();
+    for row in rows {
+        let Some(&spawn_guid) = sources.spawns.get(&row.guid) else {
+            plan.absent += 1;
+            continue;
+        };
+        if row.display != 0 {
+            plan.displays.push(row.guid);
+        }
+        let equipment = match sources.equipment.get(&row.equipment).map(Vec::as_slice) {
+            Some([items]) => *items,
+            Some([]) | None => [0; 3],
+            Some(_) => {
+                plan.equipment_choices.insert(row.equipment);
+                [0; 3]
+            }
+        };
+        let known = |spell: u32| {
+            if sources.spells.contains(&spell) {
+                spell
+            } else {
+                0
+            }
+        };
+        let data = CreatureData {
+            spawn_guid,
+            event: row.event,
+            entry: if sources.creature_templates.contains(&row.entry) {
+                row.entry
+            } else {
+                0
+            },
+            equipment,
+            start_spell: known(row.start_spell),
+            end_spell: known(row.end_spell),
+        };
+        if data.entry != 0
+            || data.equipment != [0; 3]
+            || data.start_spell != 0
+            || data.end_spell != 0
+        {
+            plan.rows.push(data);
+        }
+    }
+    plan
+}
+
+fn source_creature_data(dump: &(impl TableRows + ?Sized)) -> Result<Vec<SourceCreatureData>> {
+    parse_table(dump, "game_event_creature_data")?
+        .iter()
+        .map(|row| {
+            Ok(SourceCreatureData {
+                guid: row.number("guid")?,
+                event: row.number("event")?,
+                entry: row.number("entry_id")?,
+                display: row.number("display_id")?,
+                equipment: row.number("equipment_id")?,
+                start_spell: row.number("spell_start")?,
+                end_spell: row.number("spell_end")?,
+            })
+        })
+        .collect()
+}
+
+fn equipment_choices(dump: &(impl TableRows + ?Sized)) -> Result<BTreeMap<u32, Vec<[u32; 3]>>> {
+    let mut choices: BTreeMap<u32, Vec<[u32; 3]>> = BTreeMap::new();
+    for row in parse_table(dump, "creature_equip_template")?.iter() {
+        choices.entry(row.number("entry")?).or_default().push([
+            row.number("item1")?,
+            row.number("item2")?,
+            row.number("item3")?,
+        ]);
+    }
+    Ok(choices)
+}
+
+fn entries(dump: &(impl TableRows + ?Sized), table: &str) -> Result<BTreeSet<u32>> {
+    dump.columns(table, &["entry"])?
+        .iter()
+        .map(|row| row.number("entry"))
+        .collect()
+}
+
 /// The scripted events whose script the Module lacks, for the `events.scripted` finding.
 fn unscripted_events(scripted: Vec<u32>) -> Vec<u32> {
     scripted
@@ -257,6 +395,19 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
             .collect::<Result<Vec<_>>>()?,
     );
     let vendor_items = event_vendor_items(vendor_offers(dump)?, &active_event_conditions(dump)?);
+    let event_creatures = creature_data(
+        source_creature_data(dump)?,
+        &CreatureDataSources {
+            spawns: &creatures
+                .spawns
+                .iter()
+                .map(|spawn| (spawn.0 as u32, world_guid(spawn.1, spawn.0)))
+                .collect(),
+            equipment: &equipment_choices(dump)?,
+            creature_templates: &entries(dump, "creature_template")?,
+            spells: &entries(dump, "spell_template")?,
+        },
+    );
 
     // An event the World Source leaves out for patch 1.12 is disabled, as vmangos disables it, so
     // its spawns stay hidden and its quests and vendor items are not offered.
@@ -266,7 +417,8 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         .map(|&(_, event, _)| event)
         .chain(links.pools.values().copied())
         .chain(quests.values().copied())
-        .chain(vendor_items.values().copied());
+        .chain(vendor_items.values().copied())
+        .chain(event_creatures.rows.iter().map(|data| data.event));
     for event in linked {
         definitions
             .entry(event)
@@ -279,6 +431,7 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         "DELETE FROM game_event_pool WHERE pool_id >= 0".to_string(),
         "DELETE FROM game_event_quest WHERE quest_entry >= 0".to_string(),
         "DELETE FROM game_event_vendor_item WHERE id >= 0".to_string(),
+        "DELETE FROM game_event_creature_data WHERE data_id >= 0".to_string(),
         "DELETE FROM game_event WHERE event_entry >= 0".to_string(),
     ];
     push_insert(
@@ -333,17 +486,38 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         "id,creature_entry,item_entry,event_entry",
         &vendor_rows,
     );
+    let creature_data_rows: Vec<String> = event_creatures
+        .rows
+        .iter()
+        .zip(1u64..)
+        .map(|(data, data_id)| {
+            let [main_hand, off_hand, ranged] = data.equipment;
+            format!(
+                "({data_id},{},{},{},{main_hand},{off_hand},{ranged},{},{})",
+                data.spawn_guid, data.event, data.entry, data.start_spell, data.end_spell
+            )
+        })
+        .collect();
+    push_insert(
+        &mut stmts,
+        "game_event_creature_data",
+        "data_id,spawn_guid,event_entry,creature_entry,main_hand,off_hand,ranged,start_spell,end_spell",
+        &creature_data_rows,
+    );
     // Each statement commits alone, so a pass that ran part way through the import settled on a
     // partial link set. Dropping the statuses last makes the next pass walk every link again.
     stmts.push("DELETE FROM game_event_status WHERE event_entry >= 0".to_string());
     eprintln!(
-        "game events: {} links, {} event pools, {} event quests and {} event vendor items; {} links \
-         name a spawn the import leaves out, {} negative links on pooled placements are unsupported",
+        "game events: {} links, {} event pools, {} event quests, {} event vendor items and {} \
+         creature data rows; {} links and {} creature data rows name a spawn the import leaves out, \
+         {} negative links on pooled placements are unsupported",
         link_rows.len(),
         pool_rows.len(),
         quest_rows.len(),
         vendor_rows.len(),
+        creature_data_rows.len(),
         links.absent,
+        event_creatures.absent,
         links.pooled_absences
     );
 
@@ -363,6 +537,8 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
         "findings": [
             {"code": "events.scripted", "classification": "unsupported", "occurrences": scripted.len(), "source_ids": scripted},
             {"code": "events.pooled-absence", "classification": "unsupported", "occurrences": links.pooled_absences},
+            {"code": "events.creature-display", "classification": "unsupported", "occurrences": event_creatures.displays.len(), "source_ids": event_creatures.displays},
+            {"code": "events.equipment-choice", "classification": "unsupported", "occurrences": event_creatures.equipment_choices.len(), "source_ids": event_creatures.equipment_choices},
         ],
     });
     Ok(DumpPlan {
@@ -438,6 +614,83 @@ mod tests {
             &conditions,
         );
         assert_eq!(items, BTreeMap::from([((295, 21_813), 8)]));
+    }
+
+    fn source_row(
+        guid: u32,
+        event: u32,
+        entry: u32,
+        equipment: u32,
+        start_spell: u32,
+    ) -> SourceCreatureData {
+        SourceCreatureData {
+            guid,
+            event,
+            entry,
+            display: 0,
+            equipment,
+            start_spell,
+            end_spell: 0,
+        }
+    }
+
+    fn creature_data_of(rows: &[SourceCreatureData]) -> CreatureDataPlan {
+        creature_data(
+            rows.iter().copied(),
+            &CreatureDataSources {
+                spawns: &BTreeMap::from([(76, 900), (77, 901)]),
+                equipment: &BTreeMap::from([
+                    (50_001, vec![[2_715, 143, 0]]),
+                    (60, vec![[1, 0, 0], [2, 0, 0]]),
+                ]),
+                creature_templates: &BTreeSet::from([15_724]),
+                spells: &BTreeSet::from([26_115]),
+            },
+        )
+    }
+
+    #[test]
+    fn a_creature_data_row_drops_what_the_world_source_lacks_and_a_row_left_empty() {
+        let plan = creature_data_of(&[
+            source_row(77, 34, 15_724, 0, 26_115),
+            source_row(76, 35, 99, 7, 33_014),
+            source_row(76, 27, 0, 50_001, 0),
+            source_row(76, 0, 15_724, 0, 0),
+            source_row(78, 34, 15_724, 0, 26_115),
+        ]);
+        assert_eq!(
+            plan.rows,
+            [
+                CreatureData {
+                    spawn_guid: 900,
+                    event: 27,
+                    entry: 0,
+                    equipment: [2_715, 143, 0],
+                    start_spell: 0,
+                    end_spell: 0,
+                },
+                CreatureData {
+                    spawn_guid: 901,
+                    event: 34,
+                    entry: 15_724,
+                    equipment: [0; 3],
+                    start_spell: 26_115,
+                    end_spell: 0,
+                },
+            ]
+        );
+        assert_eq!(plan.absent, 1);
+    }
+
+    #[test]
+    fn a_creature_data_model_and_an_equipment_with_several_choices_are_counted() {
+        let plan = creature_data_of(&[SourceCreatureData {
+            display: 1_234,
+            ..source_row(76, 8, 15_724, 60, 0)
+        }]);
+        assert_eq!(plan.displays, [76]);
+        assert_eq!(plan.equipment_choices, BTreeSet::from([60]));
+        assert_eq!(plan.rows[0].equipment, [0; 3]);
     }
 
     #[test]
