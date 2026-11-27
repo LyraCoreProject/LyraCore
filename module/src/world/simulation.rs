@@ -52,6 +52,7 @@ impl WorldEntity {
             entity.cell,
         );
         crate::aoi::entity_changed(ctx, None, &entity);
+        crate::spell::area_aura::entered_world(ctx, entity.guid);
         if entity.is_player() {
             crate::combat::enter_character_regeneration(ctx, &entity);
             crate::native::realm_party::package::presence(ctx, entity.guid);

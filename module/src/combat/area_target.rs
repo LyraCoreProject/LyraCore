@@ -97,7 +97,7 @@ fn targetable_by(
 }
 
 /// vmangos `Creature::IsImmuneToAoe`: since patch 1.10 an area spell passes over a totem.
-fn is_totem(ctx: &ReducerContext, unit: &WorldEntity) -> bool {
+pub(crate) fn is_totem(ctx: &ReducerContext, unit: &WorldEntity) -> bool {
     !unit.is_player()
         && ctx
             .db

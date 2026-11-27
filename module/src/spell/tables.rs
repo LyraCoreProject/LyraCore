@@ -5,7 +5,7 @@ use super::{fire_pending_cast, fire_spell_impact, tick_auras, tick_ground_areas}
 use crate::WorldEntity;
 use lyracore_shared::form::DBC_MASK_FORMS;
 
-const SPELL_ATTR_DO_NOT_DISPLAY: u32 = 0x80;
+pub(crate) const SPELL_ATTR_DO_NOT_DISPLAY: u32 = 0x80;
 const SPELL_ATTR_NOT_SHAPESHIFT: u32 = 0x10000;
 pub(crate) const SPELL_ATTR_NOT_IN_COMBAT_ONLY_PEACEFUL: u32 = 0x1000_0000;
 const SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x80000;
@@ -677,6 +677,7 @@ impl Aura {
         }
         crate::skill::aura_changed(ctx, None, Some(&aura));
         crate::native::aura::changed(ctx, None, Some(&aura));
+        super::area_aura::record_source(ctx, &aura);
         if aura.releases_loot() {
             crate::native::loot::close_window(ctx, aura.target_guid);
         }
@@ -745,6 +746,7 @@ impl Aura {
             }
             crate::skill::aura_changed(ctx, Some(aura), None);
             crate::native::aura::changed(ctx, Some(aura), None);
+            super::area_aura::deleted(ctx, aura);
         }
         previous
     }
@@ -905,7 +907,8 @@ crate::character_owned!(transfer, fn sweep_transfer_game_aura(ctx, character_gui
     crate::transfer::move_rows(
         ctx, io,
         || ctx.db.game_aura().by_target().filter(character_guid)
-            .filter(|aura| aura.item_guid(ctx) == 0).collect(),
+            .filter(|aura| aura.item_guid(ctx) == 0 && !super::area_aura::is_copy(ctx, aura.id))
+            .collect(),
         |ctx, mut aura: Aura| { aura.id = 0; aura.insert(ctx); },
     );
 });

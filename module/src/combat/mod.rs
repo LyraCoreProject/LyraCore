@@ -41,7 +41,7 @@ pub(crate) use leash::{beyond_combat_backstop, pursuit_deadline_ms, should_evade
 #[cfg(test)]
 pub(crate) use tables::PURSUIT_WINDOW_MS;
 
-pub(crate) use area_target::{area_may_harm, area_may_help};
+pub(crate) use area_target::{area_may_harm, area_may_help, is_totem};
 pub use engage::AttackStart;
 pub(crate) use engage::{
     answer_creature_assistance, answer_creature_help, apply_start_attack,
