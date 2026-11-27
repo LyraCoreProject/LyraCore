@@ -133,7 +133,7 @@ fn stable(name: &str) -> Stable {
 impl Stable {
     fn request(&mut self, opcode: u32, pet_number: Option<u32>) -> Vec<(u16, Vec<u8>)> {
         let mut body = self.master.to_le_bytes().to_vec();
-        body.extend(pet_number.map(u32::to_le_bytes).unwrap_or_default());
+        body.extend(pet_number.into_iter().flat_map(u32::to_le_bytes));
         send(&mut self.wire, opcode, body)
     }
 
