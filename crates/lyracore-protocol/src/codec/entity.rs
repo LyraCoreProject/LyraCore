@@ -623,6 +623,15 @@ pub fn build_create_object(
         has_transport: 0,
         objects: vec![create],
     };
+    add_create_extras(&mut message, entity, is_player)?;
+    Ok(message)
+}
+
+fn add_create_extras(
+    message: &mut SMSG_UPDATE_OBJECT,
+    entity: &EntityView,
+    is_player: bool,
+) -> Result<()> {
     let offhand_attack_time_ms = if is_player {
         entity.offhand_attack_time_ms
     } else {
@@ -638,7 +647,7 @@ pub fn build_create_object(
             .collect()
     };
     if offhand_attack_time_ms.is_some() || !entity.auras.is_empty() || !virtual_items.is_empty() {
-        add_create_fields(&mut message, |mask| {
+        add_create_fields(message, |mask| {
             if let Some(delay) = offhand_attack_time_ms {
                 mask.set_u32(127, delay);
             }
@@ -648,7 +657,7 @@ pub fn build_create_object(
             }
         })?;
     }
-    Ok(message)
+    Ok(())
 }
 
 pub fn build_self_create_object(
