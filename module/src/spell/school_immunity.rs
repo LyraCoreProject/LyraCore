@@ -30,7 +30,7 @@ pub(crate) fn spell_school_mask(ctx: &ReducerContext, spell_id: u32) -> u8 {
 }
 
 // Source aura ids in the low byte of an immunity Aura's p1: docs/schema.md#damage-shields.
-const SOURCE_SCHOOL_IMMUNITY: i32 = 39;
+pub(super) const SOURCE_SCHOOL_IMMUNITY: i32 = 39;
 const SOURCE_DAMAGE_IMMUNITY: i32 = 40;
 // vmangos SPELL_ATTR_EX2_NO_SCHOOL_IMMUNITIES, kept in `attributes_ex_2`.
 const SPELL_ATTR_EX2_NO_SCHOOL_IMMUNITIES: u32 = 0x0400_0000;

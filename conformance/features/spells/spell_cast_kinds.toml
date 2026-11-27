@@ -78,10 +78,10 @@ symbol = "is_immune_to_effect"
 evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::IsImmuneToSpellEffect also refuses an effect whose Effect is in m_spellImmune[IMMUNITY_EFFECT] or whose EffectApplyAuraName is in m_spellImmune[IMMUNITY_STATE]; is_immune_to_effect reads only mechanics. The count is the newest spell_template row through build 5875 in the vmangos 4641790 snapshot."
 
 [[known_gaps]]
-description = "Applying a mechanic immunity Aura does not remove the Auras it makes the unit immune to, so Will of the Forsaken cast while feared leaves the fear on."
-path = "module/src/spell/cast/targeting.rs"
-symbol = "aura_apply"
-evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleModMechanicImmunity and HandleModMechanicImmunityMask call Unit::RemoveAurasAtMechanicImmunity on apply for a spell with SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT."
+description = "An aura-state immunity (aura 38) with SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT removes only the Auras whose row keeps its source aura id (A_CONTROL, A_FLAG and A_IMMUNITY). Other Auras of the aura type stay."
+path = "module/src/spell/immunity_purge.rs"
+symbol = "purge_on_land"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleAuraModStateImmunity removes every Aura of the type through Unit::GetAurasByType; an Aura row keeps no source aura id for other kinds."
 
 [[known_gaps]]
 description = "The PvP trinkets are unverified as immunity Auras: Insignia of the Alliance and Horde and Escape Artist may be Dispel Mechanic effects in vmangos, which this change does not touch."
@@ -156,10 +156,10 @@ symbol = "seal_holy_on_swing"
 evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp casts spell 25742 for the Seal of Righteousness melee proc, and its hit goes through Spell::SpellHitResult; seal_holy_on_swing adds the portion to the swing damage without an immunity test."
 
 [[known_gaps]]
-description = "A helpful spell with SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT is still refused by a school immunity of the other polarity, and a refused harmful spell with SPELL_ATTR_EX_NO_THREAT still draws the creature into combat. Both attributes are in AttributesEx, which the game_spell row does not keep."
+description = "A helpful spell with SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT is still refused by a school immunity of the other polarity, and a refused harmful spell with SPELL_ATTR_EX_NO_THREAT still draws the creature into combat. game_spell.attributes_ex holds AttributesEx, and no code reads these two attributes."
 path = "module/src/spell/school_immunity.rs"
 symbol = "school_refuses_spell"
-evidence = "Source reading, not measured. At d9173eca, Unit::IsImmuneToSpell and Unit::IsImmuneToSchool skip school immunity for SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT (0x8000), and Spell::DoAllEffectOnTarget skips the engagement for SPELL_ATTR_EX_NO_THREAT; game_spell keeps attributes, attributes_ex_2, attributes_ex_3 and attributes_ex_4 only."
+evidence = "Source reading, not measured. At d9173eca, Unit::IsImmuneToSpell and Unit::IsImmuneToSchool skip school immunity for SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT (0x8000), and Spell::DoAllEffectOnTarget skips the engagement for SPELL_ATTR_EX_NO_THREAT; school_refuses_spell and the engagement read neither bit of attributes_ex."
 
 [[known_gaps]]
 description = "A queued strike refused as immune, like one that misses or is dodged or parried, sends no SMSG_ATTACKERSTATEUPDATE. vmangos sends the next-swing spell's attack state with the victim state of its miss."
@@ -925,3 +925,43 @@ rung = "durable_module"
 path = "module/src/native/spell.rs"
 function = "a_leech_tick_logs_its_damage_on_the_target_and_its_heal_on_the_caster"
 rung = "unit"
+
+[[tests]]
+path = "module/tests/immunity_purge.rs"
+function = "will_of_the_forsaken_removes_a_fear_and_keeps_its_own_aura"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/immunity_purge.rs"
+function = "an_immunity_without_the_attribute_removes_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/immunity_purge.rs"
+function = "an_aura_whose_spell_has_no_immunities_survives_the_mechanic_purge"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/immunity_purge.rs"
+function = "a_mechanic_mask_immunity_removes_the_auras_of_the_mechanics_in_its_mask"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/immunity_purge.rs"
+function = "a_state_immunity_removes_the_auras_of_its_aura_type_only"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/immunity_purge.rs"
+function = "a_dispel_immunity_removes_the_auras_of_its_dispel_type_only"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/immunity_purge.rs"
+function = "a_helpful_school_immunity_removes_harmful_auras_of_its_school_and_keeps_helpful_ones"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/immunity_purge.rs"
+function = "a_harmful_school_immunity_removes_nothing"
+rung = "durable_module"

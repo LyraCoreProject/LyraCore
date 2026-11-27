@@ -15,6 +15,7 @@ pub(crate) mod bonuses;
 mod control;
 mod effects;
 mod formulas;
+mod immunity_purge;
 mod leech;
 mod power;
 pub(crate) mod proc;

@@ -626,6 +626,18 @@ whose `damage_class` is 3 (ranged) rolls a partial block for an Auto Shot or a c
 Strike, and not one with `SPELL_ATTR_NO_ACTIVE_DEFENSE` or `SPELL_ATTR_EX3_COMPLETELY_BLOCKED`, so a
 ranged shot with no imported Spell row never blocks.
 
+### Spell attributes migration
+
+`game_spell.attributes_ex` holds the Spell.dbc AttributesEx. It is END-appended with default 0, so
+no repair is needed. Publish through a planned update; development reload requires an unchanged
+schema.
+
+Until you reimport `spell`, every row has 0 and no immunity purges what it covers ([immunity
+purge](schema.md#immunity-purge)): Will of the Forsaken leaves a fear on. Reimport `spell` from this
+revision before play resumes. A Package Delta written before this revision has no `attributes_ex`, so
+its new spells carry no AttributesEx bits. Emit the Package again from a Base Snapshot of this
+revision, or set the field, before you apply it.
+
 ### Spell hit table migration
 
 No schema changes. The importer sets the new `CAST_FLAG_LEVEL_SKILL` (0x0040_0000) on a melee or
