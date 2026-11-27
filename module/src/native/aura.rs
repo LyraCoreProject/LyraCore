@@ -297,17 +297,19 @@ pub(super) fn life_changed(
 pub(super) fn armor(ctx: &ReducerContext, guid: u64, current: &[Aura]) -> Option<Packet> {
     let entity = ctx.db.game_world_entity().guid().find(guid)?;
     let resistances = std::array::from_fn(|index| {
-        crate::modifiers::effective_resistance(
-            if index == 0 { entity.armor } else { 0 },
-            crate::modifiers::resistance_bonus(ctx, guid, 1 << index),
-        )
+        crate::modifiers::effective_resistance(ctx, &entity, 1 << index)
     });
     Some(packet(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
         codec::build_armor_values(
             guid,
             resistances,
             crate::modifiers::positive_armor(
-                current.iter().map(crate::modifiers::AuraAmount::from),
+                ctx,
+                &entity,
+                &current
+                    .iter()
+                    .map(crate::modifiers::AuraAmount::from)
+                    .collect::<Vec<_>>(),
             ),
         ),
     ))))

@@ -28,6 +28,7 @@ pub(crate) struct AuraAmount {
     pub(crate) parameter: i32,
     pub(crate) amount: i32,
     pub(crate) stacks: u8,
+    pub(crate) p1: i32,
 }
 
 impl AuraAmount {
@@ -43,6 +44,7 @@ impl From<&Aura> for AuraAmount {
             parameter: aura.eff_p0,
             amount: aura.amount,
             stacks: aura.stacks,
+            p1: aura.eff_p1,
         }
     }
 }

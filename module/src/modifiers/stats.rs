@@ -142,6 +142,7 @@ mod tests {
             parameter: i32::from(stat),
             amount,
             stacks: 1,
+            p1: 0,
         }
     }
 

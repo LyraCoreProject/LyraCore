@@ -1,5 +1,8 @@
 use lyracore_shared::item_property as stat;
-use lyracore_shared::spell::taxonomy::{A_MOD_RESISTANCE, RESIST_ARMOR};
+use lyracore_shared::spell::taxonomy::{
+    A_MOD_RESISTANCE, RESISTANCE_BASE_PCT, RESISTANCE_BASE_VALUE, RESISTANCE_TOTAL_PCT,
+    RESISTANCE_TOTAL_VALUE, RESIST_ARMOR,
+};
 use spacetimedb::ReducerContext;
 
 use super::{aura_amounts, AuraAmount};
@@ -26,89 +29,184 @@ pub(crate) struct ResistanceItem {
     pub(crate) property_enchants: [u32; 3],
 }
 
-pub(crate) fn resistance_bonus(ctx: &ReducerContext, unit_guid: u64, school_mask: u8) -> i32 {
-    aura_and_gear_resistance(
+/// vmangos Unit::GetTotalResistanceValue: (((create + base) * base_pct) + total) * total_pct, in f32.
+#[derive(Clone, Copy, Debug)]
+struct ResistanceTerms {
+    base: i32,
+    base_pct: f32,
+    total: i32,
+    total_pct: f32,
+}
+
+/// What `game_world_entity.armor` adds to armor: a Character stores its agility armor, a flat
+/// term the percents of the base value never multiply, and a creature its template armor, which
+/// is part of the base value. Magic schools take nothing from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EntityArmor {
+    AgilityArmor(u32),
+    TemplateArmor(u32),
+    None,
+}
+
+impl EntityArmor {
+    fn of(unit: &WorldEntity, school_mask: u8) -> Self {
+        match (school_mask == RESIST_ARMOR, unit.is_player()) {
+            (false, _) => Self::None,
+            (true, true) => Self::AgilityArmor(unit.armor),
+            (true, false) => Self::TemplateArmor(unit.armor),
+        }
+    }
+}
+
+impl ResistanceTerms {
+    fn with_auras(mut self, school_mask: u8, auras: impl IntoIterator<Item = AuraAmount>) -> Self {
+        for aura in auras {
+            if aura.kind != A_MOD_RESISTANCE || aura.parameter as u32 & u32::from(school_mask) == 0
+            {
+                continue;
+            }
+            match aura.p1 {
+                RESISTANCE_BASE_VALUE => self.base = self.base.saturating_add(aura.total()),
+                RESISTANCE_BASE_PCT => self.base_pct *= percent_factor(aura.total()),
+                RESISTANCE_TOTAL_PCT => self.total_pct *= percent_factor(aura.total()),
+                _ => self.total = self.total.saturating_add(aura.total()),
+            }
+        }
+        self
+    }
+
+    fn resolve(self, entity_armor: EntityArmor) -> i32 {
+        let (create, agility) = match entity_armor {
+            EntityArmor::TemplateArmor(armor) => (armor, 0),
+            EntityArmor::AgilityArmor(armor) => (0, armor),
+            EntityArmor::None => (0, 0),
+        };
+        let base = create as f32 + self.base as f32;
+        let total = i64::from(self.total) + i64::from(agility);
+        ((base * self.base_pct + total as f32) * self.total_pct) as i32
+    }
+}
+
+fn percent_factor(percent: i32) -> f32 {
+    // vmangos ApplyPercentModFloatVar keeps a -100 percent modifier from zeroing the unit modifier.
+    let percent = if percent == -100 {
+        -99.99
+    } else {
+        percent as f32
+    };
+    (100.0 + percent) / 100.0
+}
+
+fn gear_terms(
+    school_mask: u8,
+    items: impl IntoIterator<Item = ResistanceItem>,
+    mut enchant_stat: impl FnMut(u32, u8) -> i32,
+) -> ResistanceTerms {
+    let mut terms = ResistanceTerms {
+        base: 0,
+        base_pct: 1.0,
+        total: 0,
+        total_pct: 1.0,
+    };
+    let Some(index) = school_index(school_mask) else {
+        return terms;
+    };
+    let kind = STAT_KINDS[index];
+    for item in items.into_iter().filter(|item| {
+        lyracore_shared::item::grants_equipped_stats(
+            item.slot,
+            item.max_durability,
+            item.durability,
+        )
+    }) {
+        terms.base = terms.base.saturating_add(item.template[index]);
+        let enchant = if item.enchant_id == 0 {
+            0
+        } else {
+            enchant_stat(item.enchant_id, kind)
+        };
+        let property = stat::property_stat(item.property_enchants, |id| {
+            if id == 0 {
+                0
+            } else {
+                enchant_stat(id, kind)
+            }
+        });
+        terms.total = terms
+            .total
+            .saturating_add(stat::item_stat(0, enchant, property));
+    }
+    terms
+}
+
+fn unit_gear_terms(ctx: &ReducerContext, unit_guid: u64, school_mask: u8) -> ResistanceTerms {
+    gear_terms(
         school_mask,
-        aura_amounts(ctx, unit_guid),
         crate::items::resistance_items(ctx, unit_guid),
         |id, kind| crate::items::enchant_stat(ctx, id, kind),
     )
 }
 
+/// The signed Aura and gear resistance of a school, before any floor at zero.
+pub(crate) fn resistance_bonus(ctx: &ReducerContext, unit_guid: u64, school_mask: u8) -> i32 {
+    unit_gear_terms(ctx, unit_guid, school_mask)
+        .with_auras(school_mask, aura_amounts(ctx, unit_guid))
+        .resolve(EntityArmor::None)
+}
+
 pub(crate) fn effective_armor(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
-    effective_resistance(unit.armor, resistance_bonus(ctx, unit.guid, RESIST_ARMOR))
+    effective_resistance(ctx, unit, RESIST_ARMOR)
 }
 
-pub(crate) fn effective_resistance(base: u32, bonus: i32) -> u32 {
-    (i64::from(base) + i64::from(bonus)).clamp(0, i64::from(u32::MAX)) as u32
+/// The UNIT_FIELD_RESISTANCES value of a school, floored at zero.
+pub(crate) fn effective_resistance(
+    ctx: &ReducerContext,
+    unit: &WorldEntity,
+    school_mask: u8,
+) -> u32 {
+    unit_gear_terms(ctx, unit.guid, school_mask)
+        .with_auras(school_mask, aura_amounts(ctx, unit.guid))
+        .resolve(EntityArmor::of(unit, school_mask))
+        .max(0) as u32
 }
 
-pub(crate) fn positive_armor(auras: impl IntoIterator<Item = AuraAmount>) -> u32 {
-    auras
-        .into_iter()
-        .map(|a| aura_contribution(a, SCHOOL_BITS[0]))
-        .filter(|&amount| amount > 0)
-        .fold(0u32, |sum, amount| sum.saturating_add(amount as u32))
+/// The client's positive armor buff field: what each flat or total percent Aura with a positive
+/// amount adds to armor, as vmangos `ApplyResistanceBuffModsMod` records it.
+pub(crate) fn positive_armor(
+    ctx: &ReducerContext,
+    unit: &WorldEntity,
+    auras: &[AuraAmount],
+) -> u32 {
+    let gear = unit_gear_terms(ctx, unit.guid, RESIST_ARMOR);
+    positive_buff(auras, |held| {
+        gear.with_auras(RESIST_ARMOR, held.iter().copied())
+            .resolve(EntityArmor::of(unit, RESIST_ARMOR))
+    })
+}
+
+fn positive_buff(auras: &[AuraAmount], armor_with: impl Fn(&[AuraAmount]) -> i32) -> u32 {
+    let with_all = armor_with(auras);
+    let mut sum = 0u32;
+    for (index, aura) in auras.iter().enumerate() {
+        let buffs_armor = aura.kind == A_MOD_RESISTANCE
+            && matches!(aura.p1, RESISTANCE_TOTAL_VALUE | RESISTANCE_TOTAL_PCT)
+            && aura.parameter as u32 & u32::from(RESIST_ARMOR) != 0
+            && aura.total() > 0;
+        if buffs_armor {
+            let others: Vec<AuraAmount> = auras
+                .iter()
+                .enumerate()
+                .filter_map(|(other, held)| (other != index).then_some(*held))
+                .collect();
+            sum = sum.saturating_add((with_all - armor_with(&others)).max(0) as u32);
+        }
+    }
+    sum
 }
 
 fn school_index(school_mask: u8) -> Option<usize> {
     let index = school_mask.trailing_zeros() as usize;
     (index < SCHOOL_BITS.len()).then_some(index)
-}
-
-fn aura_contribution(aura: AuraAmount, school_mask: u8) -> i32 {
-    if aura.kind == A_MOD_RESISTANCE && aura.parameter as u32 & u32::from(school_mask) != 0 {
-        aura.total()
-    } else {
-        0
-    }
-}
-
-fn aura_and_gear_resistance(
-    school_mask: u8,
-    auras: impl IntoIterator<Item = AuraAmount>,
-    items: impl IntoIterator<Item = ResistanceItem>,
-    mut enchant_stat: impl FnMut(u32, u8) -> i32,
-) -> i32 {
-    let aura: i32 = auras
-        .into_iter()
-        .map(|a| aura_contribution(a, school_mask))
-        .sum();
-    let gear = school_index(school_mask).map_or(0, |index| {
-        let kind = STAT_KINDS[index];
-        stat::equipped_stat(
-            items
-                .into_iter()
-                .filter(|item| {
-                    lyracore_shared::item::grants_equipped_stats(
-                        item.slot,
-                        item.max_durability,
-                        item.durability,
-                    )
-                })
-                .map(|item| {
-                    let enchant = if item.enchant_id == 0 {
-                        0
-                    } else {
-                        enchant_stat(item.enchant_id, kind)
-                    };
-                    let property = stat::property_stat(item.property_enchants, |id| {
-                        if id == 0 {
-                            0
-                        } else {
-                            enchant_stat(id, kind)
-                        }
-                    });
-                    (
-                        item.slot,
-                        item.max_durability,
-                        item.durability,
-                        stat::item_stat(item.template[index], enchant, property),
-                    )
-                }),
-        )
-    });
-    aura.saturating_add(gear)
 }
 
 #[cfg(test)]
@@ -126,26 +224,50 @@ mod tests {
         }
     }
 
+    fn aura(parameter: i32, amount: i32, stacks: u8, p1: i32) -> AuraAmount {
+        AuraAmount {
+            kind: A_MOD_RESISTANCE,
+            parameter,
+            amount,
+            stacks,
+            p1,
+        }
+    }
+
+    fn positive(auras: &[AuraAmount]) -> u32 {
+        let gear = gear_terms(1, [chest()], enchants);
+        positive_buff(auras, |held| {
+            gear.with_auras(1, held.iter().copied())
+                .resolve(EntityArmor::AgilityArmor(40))
+        })
+    }
+
+    fn enchants(id: u32, kind: u8) -> i32 {
+        match (id, kind) {
+            (1, stat::ARMOR) => 11,
+            (2, stat::ARMOR) => 7,
+            (3, stat::ARMOR) => -2,
+            (2, stat::FIRE_RESISTANCE) => 9,
+            _ => 0,
+        }
+    }
+
+    fn resistance(
+        school_mask: u8,
+        auras: impl IntoIterator<Item = AuraAmount>,
+        items: impl IntoIterator<Item = ResistanceItem>,
+    ) -> ResistanceTerms {
+        gear_terms(school_mask, items, enchants).with_auras(school_mask, auras)
+    }
+
     #[test]
     fn resistance_combines_stack_masks_equipment_and_property_effects() {
         let auras = [
-            AuraAmount {
-                kind: A_MOD_RESISTANCE,
-                parameter: 5,
-                amount: 20,
-                stacks: 0,
-            },
-            AuraAmount {
-                kind: A_MOD_RESISTANCE,
-                parameter: 1,
-                amount: -10,
-                stacks: 3,
-            },
+            aura(5, 20, 0, RESISTANCE_TOTAL_VALUE),
+            aura(1, -10, 3, RESISTANCE_TOTAL_VALUE),
             AuraAmount {
                 kind: 0,
-                parameter: 1,
-                amount: 500,
-                stacks: 1,
+                ..aura(1, 500, 1, RESISTANCE_TOTAL_VALUE)
             },
         ];
         let items = [
@@ -167,41 +289,139 @@ mod tests {
                 template: [5; 7],
             },
         ];
-        let enchant = |id, kind| match (id, kind) {
-            (1, stat::ARMOR) => 11,
-            (2, stat::ARMOR) => 7,
-            (3, stat::ARMOR) => -2,
-            (2, stat::FIRE_RESISTANCE) => 9,
-            _ => 0,
-        };
         assert_eq!(
-            effective_resistance(40, aura_and_gear_resistance(1, auras, items, enchant)),
+            resistance(1, auras, items).resolve(EntityArmor::AgilityArmor(40)),
             171
         );
-        assert_eq!(aura_and_gear_resistance(4, auras, items, enchant), 36);
-        assert_eq!(aura_and_gear_resistance(5, auras, items, enchant), 131);
-        assert_eq!(positive_armor(auras), 20);
+        assert_eq!(resistance(4, auras, items).resolve(EntityArmor::None), 36);
+        assert_eq!(resistance(5, auras, items).resolve(EntityArmor::None), 131);
+        assert_eq!(positive(&auras), 20);
     }
 
     #[test]
-    fn signed_bonus_saturates_before_base_and_final_clamp() {
+    fn a_base_percent_multiplies_only_the_template_and_base_value_armor() {
+        let auras = [
+            aura(1, 180, 1, RESISTANCE_BASE_PCT),
+            aura(1, 10, 1, RESISTANCE_BASE_VALUE),
+            aura(1, 30, 1, RESISTANCE_TOTAL_VALUE),
+        ];
+        let item = ResistanceItem {
+            template: [100, 0, 0, 0, 0, 0, 0],
+            ..chest()
+        };
+        let terms = resistance(1, auras, [item]);
+        assert_eq!(
+            terms.resolve(EntityArmor::AgilityArmor(40)),
+            308 + 30 + 11 + 7 - 2 + 40
+        );
+        assert_eq!(
+            terms.resolve(EntityArmor::TemplateArmor(40)),
+            420 + 30 + 11 + 7 - 2
+        );
+        assert_eq!(positive(&auras), 30);
+    }
+
+    #[test]
+    fn base_percents_compound_and_a_negative_hundred_percent_leaves_the_total_value() {
+        let item = ResistanceItem {
+            enchant_id: 0,
+            property_enchants: [0; 3],
+            ..chest()
+        };
+        let compounded = [
+            aura(1, 100, 1, RESISTANCE_BASE_PCT),
+            aura(1, 100, 1, RESISTANCE_BASE_PCT),
+        ];
+        assert_eq!(
+            resistance(1, compounded, [item]).resolve(EntityArmor::None),
+            480
+        );
+        let weakened = [
+            aura(1, -100, 1, RESISTANCE_BASE_PCT),
+            aura(1, 30, 1, RESISTANCE_TOTAL_VALUE),
+        ];
+        assert_eq!(
+            resistance(1, weakened, [item]).resolve(EntityArmor::AgilityArmor(5)),
+            35
+        );
+        let other_school = [aura(4, 180, 1, RESISTANCE_BASE_PCT)];
+        assert_eq!(
+            resistance(1, other_school, [item]).resolve(EntityArmor::None),
+            120
+        );
+    }
+
+    #[test]
+    fn a_base_percent_multiplies_a_school_resistance_from_items() {
+        let auras = [aura(4, 100, 1, RESISTANCE_BASE_PCT)];
+        assert_eq!(
+            resistance(4, auras, [chest()]).resolve(EntityArmor::None),
+            4 + 9
+        );
+    }
+
+    #[test]
+    fn resistance_saturates_and_ignores_masks_without_a_school() {
         let item = ResistanceItem {
             template: [i32::MAX; 7],
             ..chest()
         };
-        let aura = AuraAmount {
-            kind: A_MOD_RESISTANCE,
-            parameter: 1,
-            amount: 10,
-            stacks: 1,
-        };
+        let auras = [aura(1, 10, 1, RESISTANCE_TOTAL_VALUE)];
         assert_eq!(
-            effective_resistance(40, aura_and_gear_resistance(1, [aura], [item], |_, _| 0)),
-            i32::MAX as u32 + 40
+            resistance(1, auras, [item]).resolve(EntityArmor::AgilityArmor(40)),
+            i32::MAX
         );
-        assert_eq!(effective_resistance(40, -100), 0);
-        assert_eq!(effective_resistance(u32::MAX, 10), u32::MAX);
-        assert_eq!(aura_and_gear_resistance(0, [aura], [item], |_, _| 100), 0);
-        assert_eq!(aura_and_gear_resistance(128, [aura], [item], |_, _| 100), 0);
+        assert_eq!(resistance(0, auras, [item]).resolve(EntityArmor::None), 0);
+        assert_eq!(resistance(128, auras, [item]).resolve(EntityArmor::None), 0);
+    }
+
+    #[test]
+    fn a_total_percent_multiplies_the_whole_value_including_flat_terms() {
+        let item = ResistanceItem {
+            enchant_id: 0,
+            property_enchants: [0; 3],
+            ..chest()
+        };
+        let inspiration = [
+            aura(1, 25, 1, RESISTANCE_TOTAL_PCT),
+            aura(1, 100, 1, RESISTANCE_BASE_PCT),
+            aura(1, 30, 1, RESISTANCE_TOTAL_VALUE),
+        ];
+        let terms = resistance(1, inspiration, [item]);
+        assert_eq!(terms.resolve(EntityArmor::AgilityArmor(10)), 350);
+        let recklessness = [aura(1, -35, 1, RESISTANCE_TOTAL_PCT)];
+        assert_eq!(
+            resistance(1, recklessness, [item]).resolve(EntityArmor::AgilityArmor(40)),
+            104
+        );
+        let sickness = [aura(126, -75, 1, RESISTANCE_TOTAL_PCT)];
+        assert_eq!(
+            resistance(4, sickness, [chest()]).resolve(EntityArmor::None),
+            2
+        );
+        let erased = [aura(1, -100, 1, RESISTANCE_TOTAL_PCT)];
+        assert_eq!(resistance(1, erased, [item]).resolve(EntityArmor::None), 0);
+    }
+
+    #[test]
+    fn the_positive_buff_field_counts_flat_and_total_percent_auras_only() {
+        let held = [
+            aura(1, 20, 1, RESISTANCE_TOTAL_VALUE),
+            aura(1, 25, 1, RESISTANCE_TOTAL_PCT),
+            aura(1, 180, 1, RESISTANCE_BASE_PCT),
+            aura(1, 10, 1, RESISTANCE_BASE_VALUE),
+            aura(1, -35, 1, RESISTANCE_TOTAL_PCT),
+            aura(4, 50, 1, RESISTANCE_TOTAL_VALUE),
+        ];
+        let armor_with = |held: &[AuraAmount]| {
+            gear_terms(1, [chest()], enchants)
+                .with_auras(1, held.iter().copied())
+                .resolve(EntityArmor::AgilityArmor(40))
+        };
+        let flat_only = [held[0]];
+        assert_eq!(positive_buff(&flat_only, armor_with), 20);
+        let inspired = [held[1]];
+        assert_eq!(positive_buff(&inspired, armor_with), 44);
+        assert_eq!(positive_buff(&held[2..], armor_with), 0);
     }
 }

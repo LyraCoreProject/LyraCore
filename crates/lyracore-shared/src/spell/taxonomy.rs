@@ -233,6 +233,11 @@ pub const STAT_INT: u8 = 3;
 pub const STAT_SPI: u8 = 4;
 pub const STAT_ALL: u8 = 0xFF;
 pub const RESIST_ARMOR: u8 = 0x01;
+// A_MOD_RESISTANCE p1: the unit modifier layer, as docs/schema.md#resistance-auras names it.
+pub const RESISTANCE_TOTAL_VALUE: i32 = 0;
+pub const RESISTANCE_BASE_VALUE: i32 = 1;
+pub const RESISTANCE_BASE_PCT: i32 = 2;
+pub const RESISTANCE_TOTAL_PCT: i32 = 3;
 pub const CAST_FLAG_CHANNELED: u32 = 0x0080;
 pub const CAST_FLAG_RANGED_AUTO_REPEAT: u32 = 0x0200;
 // vmangos SpellEntry::CanTriggerWeaponProcs: the hit rolls the main-hand weapon's Chance on Hit.

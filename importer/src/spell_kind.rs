@@ -174,6 +174,15 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
     }
 }
 
+pub fn resistance_layer(aura: AuraMod) -> i32 {
+    match aura {
+        AuraMod::ModBaseResistance => RESISTANCE_BASE_VALUE,
+        AuraMod::ModBaseResistancePct => RESISTANCE_BASE_PCT,
+        AuraMod::ModResistancePct => RESISTANCE_TOTAL_PCT,
+        _ => RESISTANCE_TOTAL_VALUE,
+    }
+}
+
 pub fn equip_aura_supported(aura: u32, misc: u32, equipment: [u32; 3]) -> bool {
     use AuraMod::*;
     match AuraMod::from_int(aura).ok() {

@@ -127,10 +127,7 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
         npc_flags: e.npc_flags,
         effective_armor: crate::modifiers::effective_armor(ctx, e),
         magic_resistances: std::array::from_fn(|index| {
-            crate::modifiers::effective_resistance(
-                0,
-                crate::modifiers::resistance_bonus(ctx, e.guid, 1 << (index + 1)),
-            )
+            crate::modifiers::effective_resistance(ctx, e, 1 << (index + 1))
         }),
         owner_guid: e.owner_guid,
         home_map: character.as_ref().map_or(0, |c| c.home_map),

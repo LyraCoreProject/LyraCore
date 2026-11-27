@@ -1730,6 +1730,21 @@ caster as healer and victim, even for a heal of 0. A tick that kills the target 
 target had left. A dead caster does not tick, and a persistent-area leech still imports as a ground
 area.
 
+### Resistance auras
+
+`A_MOD_RESISTANCE` keeps the school mask in `p0` and the unit modifier layer in `p1`: 0 adds flat
+resistance (source aura 22, vmangos `TOTAL_VALUE`), 1 adds to the base value (aura 83, `BASE_VALUE`)
+2 is a percent of the base value (aura 142, `BASE_PCT`) and 3 is a percent of the whole value (aura
+101, `TOTAL_PCT`). `module/src/modifiers/resistance.rs`
+resolves a school as vmangos `GetTotalResistanceValue` does: the base value (item template
+resistance and layer 1 Auras) times the base percents, plus flat Auras, item enchantment and
+random property resistance and, for armor, agility, all times the total percents. A percent
+factor is `(100 + amount) / 100`, percents multiply, and -100 percent counts as -99.99. A Character's `game_world_entity.armor` is
+its agility armor, which no base percent multiplies; a creature's is its template armor, which one
+does. Only layer 0 and 3 Auras with a positive amount count in the client's positive armor buff
+field, each as the armor it adds. Source aura 182 still imports as layer 0, and aura 143 as
+`A_INERT`.
+
 ### Flag auras
 
 An `A_FLAG` effect keeps its source aura id (`EffectApplyAuraName`) in `p1`, and its Aura copies it
