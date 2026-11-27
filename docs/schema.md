@@ -890,11 +890,6 @@ data the importer writes, the third is a per-aura snapshot.
 `game_spell` carries the selected vmangos `spell_template` fields: `proc_flags`, the vanilla
 `procFlags` bitmask with no translation table, `proc_chance` (a whole percent) and `proc_charges` (0 means unlimited).
 
-`game_spell.cast_flags` retains party and pet area-aura origins as `CAST_FLAG_AREA_AURA`.
-Their translated target can be self, so slot visibility must use this flag instead of inferring
-the source effect from the target. Ordinary passives use slot 255; visual passives, recipient
-area auras and totem auras can use visible slots. Repair applies the same rule to stored cast auras.
-
 `game_spell_proc_event` carries the source proc-event overlay: `ppm_rate`,
 `icd_ms`, `proc_ex` (the hit result that fires it, or `PROC_EX_TRIGGER_ALWAYS`), the `school_mask`, `family_name` and
 `family_flags` filter on triggering spells, a `proc_flags` override and a `custom_chance`. It is
@@ -948,6 +943,32 @@ refresh freezes the other columns again and refills charges, and leaves a runnin
 That is why `debug_repair_after_publish` freezes profiles again: an Aura applied before its profile
 was frozen reads as "never procs, no charges", and a permanent self-buff never refreshes on its
 own.
+
+### Area Auras
+
+`game_spell.cast_flags` retains party and pet area-aura origins as `CAST_FLAG_AREA_AURA`, and pet
+origins (effect 119) also as `CAST_FLAG_PET_AREA_AURA`. Their translated target can be self, so
+slot visibility must use these flags instead of inferring the source effect from the target.
+Ordinary passives use slot 255; visual passives, recipient area auras and totem auras can use
+visible slots. Repair applies the same rule to stored cast auras.
+
+The caster's own Aura of such a spell is the source. `game_area_aura_source`
+(`module/src/spell/area_aura.rs`) lists the source Aura ids; it is private, and every Aura insert
+and delete keeps it current. Each Aura pass, once a second, follows vmangos `AreaAura::Update`:
+
+- A party Aura reaches the living members of the owner's Subgroup within the effect radius, and
+  their pets. It skips a member in a Duel with someone else, an unfriendly one, and a PvP-flagged
+  one when the caster is not flagged. With no Group it reaches the owner and the caster's pet.
+- A pet Aura reaches only its caster's owner.
+- A member gets the highest rank at most ten levels above their own (`SelectAuraRankForLevel`). The
+  caster's rank passes on the caster's amount; a lower rank takes that rank's base points.
+- A unit that holds its own Aura of the spell chain, or a copy of the same or a higher rank, gets
+  no second copy.
+- A copy keeps the caster's guid and the source's expiry. It goes when its unit leaves the radius
+  or the Subgroup, or the caster stops being friendly to it. A party Aura's copy on the caster's
+  owner or pet skips the Subgroup check. Deleting the source deletes its copies at once.
+- A totem's own party Aura holds no amount, as vmangos gives it `SPELL_AURA_NONE`; its copies take
+  the effect's base points.
 
 ### GameObject pools
 

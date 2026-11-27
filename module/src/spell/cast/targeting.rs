@@ -801,7 +801,6 @@ fn displace_auras(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
 pub(crate) fn aura_apply(
     ctx: &ReducerContext,
     e: &SpellEffect,
@@ -814,37 +813,8 @@ pub(crate) fn aura_apply(
     source_item: u64,
 ) {
     let now = crate::time::now(ctx);
-    let points = if e.p0_kind == lyracore_shared::spell::taxonomy::P_COMBAT_PERCENT {
-        points.saturating_mul(100)
-    } else {
-        points
-    };
-    let points = if e.p0_kind == P_PCT_MAX_POWER {
-        let max_power = ctx
-            .db
-            .game_world_entity()
-            .guid()
-            .find(caster_guid)
-            .map(|c| c.max_power)
-            .unwrap_or(0);
-        ((max_power as i64) * (points as i64) / 100) as i32
-    } else {
-        points
-    };
-    let points = if matches!(e.kind, A_PERIODIC_DAMAGE | A_PERIODIC_HEAL | A_ABSORB) {
-        let power = if e.kind == A_PERIODIC_HEAL {
-            healing_power(ctx, caster_guid, hdr.school_mask)
-        } else {
-            spell_power(ctx, caster_guid, hdr.school_mask)
-        };
-        if e.kind == A_PERIODIC_DAMAGE {
-            bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, points as f32, true) as i32
-        } else {
-            source_behavior::bonus_magnitude(points, power, e.bonus_coefficient, hdr.custom_flags)
-        }
-    } else {
-        points
-    };
+    let points = aura_points(ctx, e, hdr, caster_guid, points);
+    let points = crate::spell::area_aura::own_points(ctx, hdr, caster_guid, target_guid, points);
     let duration_ms = if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0 {
         let combo = crate::combo::held_points(ctx, caster_guid);
         crate::combo::finisher_duration_ms(hdr.duration_ms, hdr.max_duration_ms, combo)
@@ -879,6 +849,100 @@ pub(crate) fn aura_apply(
         now.checked_add(TimeDuration::from_micros((duration_ms as i64) * 1000))
             .unwrap_or(now)
     };
+    let placement = AuraPlacement {
+        caster_guid,
+        target_guid,
+        cast_target_guid,
+        level,
+        points,
+        source_item,
+        expires,
+    };
+    if !place_aura(ctx, e, hdr, &placement) {
+        return;
+    }
+    // Advance diminishing returns only after successful aura placement.
+    if let Some(category) = dr_category {
+        crate::spell::stacking::bump_dr_level(
+            ctx,
+            target_guid,
+            category,
+            now_micros,
+            expires.to_micros_since_unix_epoch(),
+        );
+    }
+}
+
+/// An Aura's amount after its source-specific scaling, before any duration or placement rule.
+pub(crate) fn aura_points(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    hdr: &Spell,
+    caster_guid: u64,
+    points: i32,
+) -> i32 {
+    let points = if e.p0_kind == lyracore_shared::spell::taxonomy::P_COMBAT_PERCENT {
+        points.saturating_mul(100)
+    } else {
+        points
+    };
+    let points = if e.p0_kind == P_PCT_MAX_POWER {
+        let max_power = ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(caster_guid)
+            .map(|c| c.max_power)
+            .unwrap_or(0);
+        ((max_power as i64) * (points as i64) / 100) as i32
+    } else {
+        points
+    };
+    if matches!(e.kind, A_PERIODIC_DAMAGE | A_PERIODIC_HEAL | A_ABSORB) {
+        let power = if e.kind == A_PERIODIC_HEAL {
+            healing_power(ctx, caster_guid, hdr.school_mask)
+        } else {
+            spell_power(ctx, caster_guid, hdr.school_mask)
+        };
+        if e.kind == A_PERIODIC_DAMAGE {
+            bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, points as f32, true) as i32
+        } else {
+            source_behavior::bonus_magnitude(points, power, e.bonus_coefficient, hdr.custom_flags)
+        }
+    } else {
+        points
+    }
+}
+
+/// Where and how long one Aura lands; `points` is its final amount.
+pub(crate) struct AuraPlacement {
+    pub(crate) caster_guid: u64,
+    pub(crate) target_guid: u64,
+    pub(crate) cast_target_guid: u64,
+    pub(crate) level: u8,
+    pub(crate) points: i32,
+    pub(crate) source_item: u64,
+    pub(crate) expires: Timestamp,
+}
+
+/// Puts or refreshes one Aura; false when stacking or a full slot bar refuses it.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn place_aura(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    hdr: &Spell,
+    placement: &AuraPlacement,
+) -> bool {
+    let &AuraPlacement {
+        caster_guid,
+        target_guid,
+        cast_target_guid,
+        level,
+        points,
+        source_item,
+        expires,
+    } = placement;
+    let now = crate::time::now(ctx);
     // Channels without periodic effects still need the indexed cadence for range checks.
     let period_ms = if e.period_ms == 0 && hdr.cast_flags & CAST_FLAG_CHANNELED != 0 {
         100
@@ -1006,7 +1070,7 @@ pub(crate) fn aura_apply(
                 points.saturating_abs(),
             )
         {
-            return;
+            return false;
         }
         let existing: Vec<(u8, u32)> = auras
             .by_target()
@@ -1051,7 +1115,7 @@ pub(crate) fn aura_apply(
                     )
                 },
             );
-            return;
+            return false;
         };
         Aura {
             id: 0,
@@ -1099,17 +1163,6 @@ pub(crate) fn aura_apply(
 
     source_behavior::finish_aura_apply(ctx, hdr, caster_guid, target_guid);
 
-    // Advance diminishing returns only after successful aura placement.
-    if let Some(category) = dr_category {
-        crate::spell::stacking::bump_dr_level(
-            ctx,
-            target_guid,
-            category,
-            now_micros,
-            expires.to_micros_since_unix_epoch(),
-        );
-    }
-
     crate::spell::AuraProjections::of(hdr.spell_id, e.kind, e.p0).refresh(ctx, target_guid);
 
     if hdr.negative() {
@@ -1129,6 +1182,7 @@ pub(crate) fn aura_apply(
             crate::threat::add_threat(ctx, target_guid, caster_guid, 0);
         }
     }
+    true
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -555,6 +555,19 @@ spent charges, as they refuse an opened item, until their rows can carry the cha
 and imports with no rows; an older Shard has spent no charges. An older destination refuses the new
 manifest, so update both Shards before moving active World Sessions.
 
+### Party area Aura migration
+
+A plain Module publish adds the private `game_area_aura_source` table, which starts empty. Publish
+through a planned update; development reload requires an unchanged schema. Then run
+`debug_repair_after_publish`: it records the party and pet area Auras that casters already
+hold as sources, so their copies reach the Subgroup at the next Aura pass. Until the repair, such an
+Aura stays on its caster alone until it is cast again.
+
+Reimport `spell` to set `CAST_FLAG_PET_AREA_AURA` (0x0100_0000) on the effect 119 spells, such as
+Spirit Bond, Soul Link and Master Demonologist. Until that reimport they carry only
+`CAST_FLAG_AREA_AURA` and spread to the owner's Subgroup like a party Aura, instead of reaching the
+owner alone. [Area Auras](schema.md#area-auras) gives the rule.
+
 ### Pet learn migration
 
 Spell effect 36 aimed at the caster's pet (implicit target 5: grimoires and the pet spells of Dash,

@@ -14,8 +14,8 @@ pub(crate) use resolve::{
 #[cfg(feature = "debug_reducers")]
 pub(crate) use targeting::blink_forward;
 pub(crate) use targeting::{
-    apply_direct_heal, apply_effect, aura_apply, aura_has_visible_slot, end_ground_area,
-    faction_target_violation, helps_units, holds_channelled_area, is_channelled_area,
-    place_ground_area, queued_strike_chain, recipe_reagents, revive_amount, select_targets,
-    spell_misses, ItemGrantOutcome,
+    apply_direct_heal, apply_effect, aura_apply, aura_has_visible_slot, aura_points,
+    end_ground_area, faction_target_violation, helps_units, holds_channelled_area,
+    is_channelled_area, place_aura, place_ground_area, queued_strike_chain, recipe_reagents,
+    revive_amount, select_targets, spell_misses, AuraPlacement, ItemGrantOutcome,
 };

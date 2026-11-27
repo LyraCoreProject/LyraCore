@@ -584,6 +584,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     for target_guid in dot_damaged {
         break_auras_on_damage(ctx, target_guid, 0, true);
     }
+    area_aura::spread(ctx);
 }
 
 #[derive(Clone, Copy)]

@@ -50,7 +50,7 @@ use lyracore_shared::spell::taxonomy::{
     A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER,
     A_SEAL, A_SELF_RESURRECT, A_SHAPESHIFT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM,
     CAST_FLAG_AREA_AURA, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER, CAST_FLAG_ITEM_TARGET,
-    CAST_FLAG_LEVEL_SKILL, CAST_FLAG_LOCKS_FORM, CAST_FLAG_NO_AURA_CANCEL,
+    CAST_FLAG_LEVEL_SKILL, CAST_FLAG_LOCKS_FORM, CAST_FLAG_NO_AURA_CANCEL, CAST_FLAG_PET_AREA_AURA,
     CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST, CAST_FLAG_RIGHTEOUSNESS,
     CAST_FLAG_WEAPON_PROCS, COMBAT_ATTACK_POWER, COMBAT_ATTACK_POWER_PCT, COMBAT_CRIT,
     COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER_PCT,
@@ -887,6 +887,13 @@ fn push_spell_header_row(
         })
     {
         cast_flags |= CAST_FLAG_AREA_AURA;
+    }
+    if s.effect
+        .iter()
+        .zip(s.effect_aura.iter())
+        .any(|(effect, aura)| *effect == EFFECT_APPLY_AREA_AURA_PET && *aura != 0)
+    {
+        cast_flags |= CAST_FLAG_PET_AREA_AURA;
     }
     if crate::spell_form::locks_form(spell_id) {
         cast_flags |= CAST_FLAG_LOCKS_FORM;
@@ -4124,7 +4131,7 @@ mod tests {
         for (effect, aura, expected) in [
             (6, 137, 0),
             (35, 137, CAST_FLAG_AREA_AURA),
-            (119, 137, CAST_FLAG_AREA_AURA),
+            (119, 137, CAST_FLAG_AREA_AURA | CAST_FLAG_PET_AREA_AURA),
             (35, 0, 0),
         ] {
             let mut dbc = fixture_tables();
@@ -4139,7 +4146,10 @@ mod tests {
                 ..Default::default()
             }];
             let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
-            assert_eq!(rows.headers[0].cast_flags & CAST_FLAG_AREA_AURA, expected);
+            assert_eq!(
+                rows.headers[0].cast_flags & (CAST_FLAG_AREA_AURA | CAST_FLAG_PET_AREA_AURA),
+                expected
+            );
         }
     }
 

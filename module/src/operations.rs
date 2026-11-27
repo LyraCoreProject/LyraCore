@@ -38,6 +38,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     let mail_timers = crate::mail_timer::arm_missing(ctx);
     let proc_profiles = refreeze_proc_profiles(ctx);
     let opened_chests = crate::gameobject::stamp_opened_chests(ctx);
+    let area_aura_sources = crate::spell::area_aura::record_existing_sources(ctx);
 
     let repaired = stealth_remnants
         + form_sets
@@ -49,14 +50,16 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + auction_expiries
         + mail_timers
         + proc_profiles
-        + opened_chests;
+        + opened_chests
+        + area_aura_sources;
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", repaired);
     log::info!(
         "debug_repair_after_publish: {stealth_remnants} Stealth remnant Aura(s), {form_sets} spell \
          Form Set(s), {gm_levels} GM level(s), {lesser_heal_target} Lesser Heal \
          target(s), {weather_climate} weather row(s), {schedules} schedule(s), {auction_mail} \
          Auction mail, {auction_expiries} Auction expiry(ies), {mail_timers} Mail Timer(s), \
-         {proc_profiles} Proc profile(s), {opened_chests} opened chest(s)"
+         {proc_profiles} Proc profile(s), {opened_chests} opened chest(s), \
+         {area_aura_sources} area Aura source(s)"
     );
     Ok(())
 }

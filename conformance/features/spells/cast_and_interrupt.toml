@@ -268,6 +268,46 @@ function = "a_friendly_area_spell_heals_a_friendly_unit_and_spares_a_neutral_one
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_party_member_holds_the_aura_in_range_and_loses_it_out_of_range"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_member_who_leaves_the_group_loses_the_aura"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "removing_the_casters_aura_removes_every_copy_at_once"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_totem_buffs_its_owners_party_and_its_own_aura_does_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_lower_level_member_gets_the_rank_fit_for_their_level"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_pets_party_aura_reaches_its_owner_without_a_group"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_pet_area_aura_reaches_only_its_owner"
+rung = "durable_module"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "area_aura_visibility_preserves_party_and_pet_effect_origins"
+rung = "unit"
+
+[[tests]]
 path = "importer/src/vmangos_spell.rs"
 function = "a_spells_max_affected_targets_reaches_the_source_spell"
 rung = "unit"
@@ -578,12 +618,6 @@ symbol = "reconcile_passives"
 evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleShapeshiftBoosts finds the SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE Aura with SpellIconID 240 and misc 3 and casts HotWSpellId with CastCustomSpell at that Aura's amount."
 
 [[known_gaps]]
-description = "Moonkin Aura reaches only the druid: Moonkin Form's trigger spell 24907 gives the druid +3% spell crit but no party member. The Module applies a party area Aura to its caster alone."
-path = "module/src/spell/cast/targeting.rs"
-symbol = "aura_has_visible_slot"
-evidence = "Source reading, not measured. At d9173eca, 24907 is SPELL_EFFECT_APPLY_AREA_AURA_PARTY with SPELL_AURA_MOD_SPELL_CRIT_CHANCE, which vmangos AreaAura::Update gives to party members in range."
-
-[[known_gaps]]
 description = "A percent of base armor adds as flat armor: Bear Form 1178 adds 180 armor, and Dire Bear Form 9635 and Moonkin Form 24905 add 360, where vmangos multiplies the armor from items by 2.8 or 4.6."
 path = "importer/src/spell_kind.rs"
 symbol = "aura_mod_to_kind"
@@ -684,3 +718,15 @@ description = "A chain jumps to a unit whose center is within 10 yd of the last 
 path = "module/src/spell/cast/targeting.rs"
 symbol = "chain_jumps"
 evidence = "Source reading, not measured. vmangos Object.cpp WorldObject::IsWithinDist and IsWithinDistInMap, GridNotifiers.h AnyAoEVisibleTargetUnitInObjectRangeCheck, and Spell.cpp SetTargetMap CHAIN_SPELL_JUMP_RADIUS at d9173eca. LyraCore select_targets filters the gathered units by center distance squared."
+
+[[known_gaps]]
+description = "A creature's own party area Aura reaches no other unit. vmangos gives it to the creature's group, or to the units of its faction when it has none, within the radius."
+path = "module/src/spell/area_aura.rs"
+symbol = "gains"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp AreaAura::AreaAura makes a party Aura AREA_AURA_CREATURE_GROUP when its unit is not owned by a Character, and AreaAura::Update searches AnyCreatureGroupMembersInObjectRangeCheck or AnySameFactionUnitInObjectRangeCheck. The Module has no creature groups."
+
+[[known_gaps]]
+description = "A party or pet area Aura copy lands or goes at the next Aura pass, up to a second late, its radius is measured between unit centers and no SPELLMOD_RADIUS modifier widens it. A periodic copy, such as a Tranquility or Healing Stream Totem heal, ticks one period after it lands. vmangos runs AreaAura::Update on every unit update, adds both units' bounding radii, applies the caster's radius modifiers and keeps each copy's tick in step with the caster's."
+path = "module/src/spell/area_aura.rs"
+symbol = "spread"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp AreaAura::AreaAura applies SPELLMOD_RADIUS and AreaAura::Update calls IsWithinDistInMap and RefreshAuraPeriodicTimers. The Module runs the pass from tick_auras, armed once a second."

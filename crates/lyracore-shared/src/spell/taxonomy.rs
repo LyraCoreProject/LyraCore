@@ -252,6 +252,8 @@ pub const CAST_FLAG_LOCKS_FORM: u32 = 0x0020_0000;
 pub const CAST_FLAG_LEVEL_SKILL: u32 = 0x0040_0000;
 // SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS: an avoided cast gives back part of its energy or rage.
 pub const CAST_FLAG_DISCOUNT_POWER_ON_MISS: u32 = 0x0080_0000;
+// Source effect 119 (APPLY_AREA_AURA_PET): the area Aura reaches only its caster's owner.
+pub const CAST_FLAG_PET_AREA_AURA: u32 = 0x0100_0000;
 
 #[cfg(test)]
 mod tests {

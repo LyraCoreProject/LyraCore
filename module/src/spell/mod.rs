@@ -1,3 +1,4 @@
+pub(crate) mod area_aura;
 pub(crate) mod cast;
 pub(crate) mod chance_on_hit;
 mod outcome;
