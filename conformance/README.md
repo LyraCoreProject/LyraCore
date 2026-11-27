@@ -434,6 +434,50 @@ or None when the body has no section, and raises `EvidenceError` for a malformed
 `parse(text)` validates JSON text, `validate(document)` a parsed object, and `is_test_file(path)`
 applies the test file rule above.
 
+## Contribution check
+
+The `Contribution check` workflow judges a pull request whose author is not an owner, member or
+collaborator. For other authors it reports "not applicable" and passes. A maintainer can run it
+by hand with a pull request number: it then judges that pull request as an outside one and writes
+only the job summary. Otherwise it writes the job summary and one pull request comment, which it
+updates in place on later runs. It runs again on every push and description edit.
+
+The check fails when the description has no evidence section, a malformed one or more than one;
+when the evidence `head` is not the pull request head or its `merge_base` is not the merge-base
+of the head and the base branch; when a test does not pass at the head; or when a scenario did
+not exit 0 or its `signature_digest` differs from the head's `tier1-baseline.json`. Each failure
+says what to run.
+
+When nothing fails, the check names a review lane. The lane is advice to reviewers during the
+pilot; nothing merges automatically. The pull request is in the slow lane, with every reason
+listed, when one of these holds; otherwise it is in the fast lane:
+
+| Reason | Rule |
+| --- | --- |
+| Maintainer-only path | A changed path matches `MAINTAINER_ONLY_PATHS` in `check_contribution.py`, ignoring case, and not `CONTRIBUTOR_PATHS` |
+| Deliberate Deviation | A changed `features/**/*.toml` adds or changes a `deliberate_deviations` entry, in any TOML form, or does not parse |
+| Table or row struct | A changed file other than Markdown or the Feature Ledger holds `SpacetimeType`, `table as` or `table` inside an attribute, at the merge-base or the head |
+| Dependency | A changed `Cargo.toml`, `Cargo.lock`, `package.json` or `bun.lock` anywhere |
+| Nothing shown failing | No test is `shown` with base `failed`; `did_not_compile` alone does not show the behavior |
+| Test not shown | Any test is `not_shown` |
+| No scenario measured the fix | The [signature ratchet](#pull-request-signature-ratchet) comparison finds no removed rule signature |
+| Incomplete inspection | GitHub counts more changed files than `git diff` lists, or a file is larger than 2 MiB |
+
+The maintainer-only paths hold agent and contributor instructions, CI and repository settings,
+toolchain and companion-tool pins, the launcher, install and deploy scripts, the evidence and
+conformance tooling, decision records and Native Host runtime patches. `features/`,
+`tier1-baseline.json` and `support/properties/` stay open, because a fix changes them.
+
+The workflow uses `pull_request_target` and runs only code from the base commit. It fetches the
+pull request head as Git objects and reads changed paths and files with `git diff` and
+`git cat-file`, and the description through the API. It never checks out, imports or runs pull
+request content. Its token has `contents: read` and `pull-requests: write`; the write access only
+creates or edits the check's own comment, found by author `github-actions[bot]` and a hidden
+marker. Checkout credentials are not persisted. The comment never shows the description or test
+`reason` strings. Paths, test names and evidence errors appear only as inline code limited to a
+safe character set, 120 characters each and 10 items per reason, so they cannot mention anyone,
+link or close their code span. The workflow takes effect after it lands on `main`.
+
 ## White melee roll rates
 
 `white_melee_outcomes` follows [ADR 0007](../docs/adr/0007-statistical-roll-conformance.md).
