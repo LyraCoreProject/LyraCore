@@ -1858,7 +1858,7 @@ fn apply_leaf_for_pair(
             super::mobility::set_active_object(ctx, guid, active.enabled)
         }
         RelayInstruction::UpdateCreatureTemplate(update) => {
-            crate::creatures::presentation::update_template_from_relay(ctx, guid, update.entry)
+            crate::creatures::presentation::update_entry(ctx, guid, update.entry)
         }
         RelayInstruction::SetGossipMenu(menu) => {
             crate::creatures::set_creature_gossip_menu(ctx, guid, menu.menu_id)

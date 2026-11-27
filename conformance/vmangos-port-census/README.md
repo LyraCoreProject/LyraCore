@@ -15,7 +15,8 @@ Milestone 4 family counts predate that ownership change. Combined rows are uncha
 
 The `events` Import Family now imports Game Event Links, so the importer no longer reports the
 `creatures.game-event` and `gameobjects.game-event` findings these reports list; its own manifest
-reports `events.scripted` and `events.pooled-absence`.
+reports `events.scripted`, `events.pooled-absence`, `events.creature-display` and
+`events.equipment-choice`.
 
 The [Feature Ledger](../README.md) records the remaining gaps, including
 the generated per-creature behavior comparison. These reports describe source and import plans;

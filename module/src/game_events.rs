@@ -1,4 +1,5 @@
-// vmangos `GameEventMgr` spawn, quest and vendor rules; read docs/schema.md#game-events first.
+// vmangos `GameEventMgr` spawn, creature data, quest and vendor rules; read
+// docs/schema.md#game-events first.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -69,6 +70,38 @@ pub struct GameEventVendorItem {
     pub event_entry: u32,
 }
 
+/// A vmangos `game_event_creature_data` row: what a creature spawn becomes while its event runs.
+#[table(
+    accessor = game_event_creature_data,
+    index(accessor = by_spawn, btree(columns = [spawn_guid])),
+    index(accessor = by_event, btree(columns = [event_entry]))
+)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct GameEventCreatureData {
+    #[primary_key]
+    pub data_id: u64,
+    // A creature spawn's source guid, as in `game_event_link`.
+    pub spawn_guid: u64,
+    pub event_entry: u32,
+    // The creature template it takes; 0 keeps its own.
+    pub creature_entry: u32,
+    // The item entries its virtual equipment shows; all three 0 keep its own.
+    pub main_hand: u32,
+    pub off_hand: u32,
+    pub ranged: u32,
+    // Cast on itself as the event starts and taken off as it stops; 0 for none.
+    pub start_spell: u32,
+    // Cast on itself as the event stops; 0 for none.
+    pub end_spell: u32,
+}
+
+impl GameEventCreatureData {
+    pub(crate) fn equipment(&self) -> Option<[u32; 3]> {
+        let items = [self.main_hand, self.off_hand, self.ranged];
+        (items != [0; 3]).then_some(items)
+    }
+}
+
 /// The state an event's spawns are being brought to, and how far that has come.
 #[table(accessor = game_event_status)]
 #[derive(Clone, Debug, PartialEq)]
@@ -76,9 +109,12 @@ pub struct GameEventStatus {
     #[primary_key]
     pub event_entry: u32,
     pub state: GameEventState,
-    // The lowest link and pool not yet brought to `state`; `u64::MAX` and `u32::MAX` once all are.
+    // The lowest link, pool and creature data row not yet brought to `state`; the type's maximum
+    // once all are.
     pub next_link_id: u64,
     pub next_pool_id: u32,
+    #[default(u64::MAX)]
+    pub next_creature_data_id: u64,
 }
 
 /// An Operator's start or stop, which holds until the Operator clears it.
@@ -104,6 +140,7 @@ crate::outside_table_catalog!(
     game_event_pool,
     game_event_quest,
     game_event_vendor_item,
+    game_event_creature_data,
     game_event_status,
     game_event_override,
     game_event_schedule
@@ -120,7 +157,7 @@ pub enum GameEventState {
 // One pass a minute keeps each calendar boundary within a minute and corrects a missed one.
 pub(crate) const GAME_EVENT_TICK_MICROS: i64 = 60_000_000;
 
-// One pass changes at most this many spawns and pools; the next pass carries on where it stopped.
+// One pass changes at most this many spawns, pools and creatures; the next pass carries on there.
 const CHANGES_PER_PASS: usize = 500;
 
 const DAY_SECS: i64 = 86_400;
@@ -148,7 +185,9 @@ impl GameEvent {
 
 impl GameEventStatus {
     fn settled(&self) -> bool {
-        self.next_link_id == u64::MAX && self.next_pool_id == u32::MAX
+        self.next_link_id == u64::MAX
+            && self.next_pool_id == u32::MAX
+            && self.next_creature_data_id == u64::MAX
     }
 }
 
@@ -230,7 +269,7 @@ pub(crate) fn shows_for(links: impl IntoIterator<Item = (bool, GameEventState)>)
 }
 
 /// The work toward `state`: a status already heading there keeps its progress, any other starts
-/// again from the first link and pool.
+/// again from the first link, pool and creature data row.
 fn retarget(
     status: Option<GameEventStatus>,
     event_entry: u32,
@@ -243,6 +282,7 @@ fn retarget(
             state,
             next_link_id: 0,
             next_pool_id: 0,
+            next_creature_data_id: 0,
         },
     }
 }
@@ -316,6 +356,36 @@ pub(crate) fn pool_shows(ctx: &ReducerContext, pool_id: u32) -> bool {
         .is_none_or(|pool| state_of(ctx, pool.event_entry, now) == GameEventState::Active)
 }
 
+/// The data rows of the creature spawn's running events, in the order they apply.
+fn worn_data(
+    ctx: &ReducerContext,
+    spawn_guid: u64,
+    state: impl Fn(u32) -> GameEventState,
+) -> Vec<GameEventCreatureData> {
+    let mut worn: Vec<GameEventCreatureData> = ctx
+        .db
+        .game_event_creature_data()
+        .by_spawn()
+        .filter(spawn_guid)
+        .filter(|data| state(data.event_entry) == GameEventState::Active)
+        .collect();
+    worn.sort_unstable_by_key(|data| data.data_id);
+    worn
+}
+
+/// vmangos `GetCreatureUpdateDataForActiveEvent`: the data rows the creature spawn source
+/// `spawn_guid` wears now; see the deliberate deviations in
+/// `conformance/features/world/game_events.toml`.
+pub(crate) fn creature_data_worn(
+    ctx: &ReducerContext,
+    spawn_guid: u64,
+) -> Vec<GameEventCreatureData> {
+    let now = crate::time::now_secs(ctx) as i64;
+    worn_data(ctx, spawn_guid, |event_entry| {
+        state_of(ctx, event_entry, now)
+    })
+}
+
 /// Every event's state at one instant.
 struct Calendar {
     states: BTreeMap<u32, GameEventState>,
@@ -358,8 +428,8 @@ impl Calendar {
     }
 }
 
-/// Brings the spawns and pools of every event whose state is not yet applied toward that state,
-/// through the spawn lifecycle; docs/schema.md#game-events.
+/// Brings the spawns, pools and creature data of every event whose state is not yet applied toward
+/// that state, through the spawn lifecycle; docs/schema.md#game-events.
 pub(crate) fn reconcile(ctx: &ReducerContext) {
     reconcile_within(ctx, CHANGES_PER_PASS);
 }
@@ -403,8 +473,8 @@ fn reconcile_within(ctx: &ReducerContext, mut budget: usize) {
     }
 }
 
-/// Brings the event's links, then its pools, from the status cursors toward its state, until
-/// `budget` changes are spent.
+/// Brings the event's links, then its pools, then its creature data rows, from the status cursors
+/// toward its state, until `budget` changes are spent.
 fn advance(
     ctx: &ReducerContext,
     calendar: &Calendar,
@@ -457,6 +527,30 @@ fn advance(
             *budget -= usize::from(crate::gameobject::show_event_pool(ctx, pool_id, shows));
         }
         status.next_pool_id = u32::MAX;
+    }
+    if status.next_creature_data_id != u64::MAX {
+        let from = status.next_creature_data_id;
+        let mut rows: Vec<GameEventCreatureData> = ctx
+            .db
+            .game_event_creature_data()
+            .by_event()
+            .filter(status.event_entry)
+            .filter(|data| data.data_id >= from)
+            .collect();
+        rows.sort_unstable_by_key(|data| data.data_id);
+        let running = calendar.state(status.event_entry) == GameEventState::Active;
+        for data in rows {
+            if *budget == 0 {
+                status.next_creature_data_id = data.data_id;
+                return;
+            }
+            let worn = worn_data(ctx, data.spawn_guid, |event_entry| {
+                calendar.state(event_entry)
+            });
+            let changed = crate::creatures::event_data::follow_event(ctx, &data, running, &worn);
+            *budget = budget.saturating_sub(changed);
+        }
+        status.next_creature_data_id = u64::MAX;
     }
 }
 
@@ -532,7 +626,7 @@ pub fn debug_event_clear(ctx: &ReducerContext, event_entry: u32) -> Result<(), S
     Ok(())
 }
 
-/// Runs one pass that changes at most `budget` spawns and pools.
+/// Runs one pass that changes at most `budget` spawns, pools and creatures.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_run_game_event_pass(ctx: &ReducerContext, budget: u32) -> Result<(), String> {
@@ -717,6 +811,7 @@ mod tests {
             state,
             next_link_id,
             next_pool_id: 0,
+            next_creature_data_id: 0,
         }
     }
 

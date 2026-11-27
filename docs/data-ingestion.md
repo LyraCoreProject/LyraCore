@@ -196,6 +196,11 @@ first event and skipping event 0, and ties each `npc_vendor` or `npc_vendor_temp
 condition is a plain `CONDITION_ACTIVE_GAME_EVENT` to that event; the first offer of an item to a
 creature decides, as the `items` family keeps it, after both leave out an offer with a stock limit
 but no restock time, or the reverse. Those vendor items leave the `items.vendor-condition` finding.
+It reads `game_event_creature_data` for the creature placements the creatures family keeps, skipping
+event 0 and resolving `equipment_id` to its `creature_equip_template` items; an equipment, entry or
+spell the World Source lacks becomes none, and a row left with nothing to change is dropped. A row's
+model and an equipment entry with several item choices are not applied and appear as
+`events.creature-display` and `events.equipment-choice`.
 A `creatures` or `gameobjects` import writes the `events` family with it. The Module rules are in
 [Game events](schema.md#game-events).
 

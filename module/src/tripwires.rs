@@ -300,6 +300,10 @@ pub(crate) mod character_owned_tripwire {
             &["game_event_link"],
             "imported Game Event Link to a creature spawn or world GameObject, never a Character",
         ),
+        (
+            &["game_event_creature_data"],
+            "imported Game Event creature data for a creature spawn's source guid, never a Character",
+        ),
     ];
 
     pub(crate) fn scanned_files() -> Vec<PathBuf> {
