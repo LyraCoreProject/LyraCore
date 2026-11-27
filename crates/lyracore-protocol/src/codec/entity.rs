@@ -1,6 +1,8 @@
 use super::item::{build_set_proficiency_msgs, ItemInstanceView};
 use super::update_mask;
-use super::values::{build_sheet_stats_values, SheetStatsValues};
+use super::values::{
+    build_sheet_stats_values, write_virtual_items, SheetStatsValues, VirtualItemView,
+};
 use anyhow::{anyhow, Result};
 use lyracore_shared::constants::speeds;
 use lyracore_shared::packing::unpack4;
@@ -93,6 +95,8 @@ pub struct EntityView {
     pub spline: Option<CreateSpline>,
     /// The Auras in the 48 client-visible slots, which vmangos `BuildValuesUpdate` writes into CREATE.
     pub auras: Vec<update_mask::AuraSlot>,
+    /// A creature's main hand, off hand and ranged virtual items; a Character's stay unwritten.
+    pub virtual_items: [VirtualItemView; 3],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -624,12 +628,17 @@ pub fn build_create_object(
     } else {
         Some(entity.base_attack_time_ms)
     };
-    if offhand_attack_time_ms.is_some() || !entity.auras.is_empty() {
+    let virtual_items = (!is_player && entity.virtual_items != [VirtualItemView::default(); 3])
+        .then_some(&entity.virtual_items);
+    if offhand_attack_time_ms.is_some() || !entity.auras.is_empty() || virtual_items.is_some() {
         add_create_fields(&mut message, |mask| {
             if let Some(delay) = offhand_attack_time_ms {
                 mask.set_u32(127, delay);
             }
             update_mask::write_auras(mask, &entity.auras);
+            if let Some(items) = virtual_items {
+                write_virtual_items(mask, items);
+            }
         })?;
     }
     Ok(message)

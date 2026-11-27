@@ -148,6 +148,11 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
                 .filter(e.guid)
                 .collect::<Vec<_>>(),
         ),
+        virtual_items: if e.is_player() {
+            Default::default()
+        } else {
+            super::creature::virtual_items(ctx, e.guid)
+        },
     }
 }
 

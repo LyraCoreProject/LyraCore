@@ -284,6 +284,60 @@ fn create_object_builds_unit_for_a_creature() {
 }
 
 #[test]
+fn creature_create_carries_its_virtual_items() {
+    let bow = VirtualItemView {
+        display_id: 8106,
+        class: 2,
+        subclass: 2,
+        material: 2,
+        inventory_type: 15,
+        sheath: 0,
+    };
+    let guard = EntityView {
+        guid: lyracore_shared::guid::creature(68, 1),
+        type_mask: lyracore_shared::constants::type_mask::CREATURE,
+        entry: 68,
+        scale_x: 1.0,
+        health: 100,
+        max_health: 100,
+        level: 55,
+        run_speed_mult_bp: 10_000,
+        unit_bytes_0: 0x0101,
+        virtual_items: [VirtualItemView::default(), VirtualItemView::default(), bow],
+        ..Default::default()
+    };
+    let msg = build_create_object(&guard, CreateKind::Peer, &[], &[]).unwrap();
+    let Object::CreateObject { guid3, mask2, .. } = msg.objects[0].clone() else {
+        panic!("expected a creature CREATE");
+    };
+    let values = SMSG_UPDATE_OBJECT {
+        has_transport: 0,
+        objects: vec![Object::Values {
+            guid1: guid3,
+            mask1: mask2,
+        }],
+    };
+    let mut bytes = Vec::new();
+    values.write_unencrypted_server(&mut bytes).unwrap();
+    let updates = crate::codec::values_mask::parse_values_updates(&bytes[4..]);
+    let field = |index: u16| {
+        updates[0]
+            .fields
+            .iter()
+            .find(|(field, _)| *field == index)
+            .map(|(_, value)| *value)
+    };
+    assert_eq!(field(39), Some(8106), "ranged display");
+    assert_eq!(
+        field(44),
+        Some(u32::from_le_bytes([2, 2, 2, 15])),
+        "ranged item info"
+    );
+    assert_eq!(field(45), Some(0), "ranged sheath");
+    assert_eq!(field(37), Some(0), "the empty main hand is written as zero");
+}
+
+#[test]
 fn creature_create_carries_npc_flags() {
     let vendor = EntityView {
         guid: lyracore_shared::guid::creature(6741, 1),

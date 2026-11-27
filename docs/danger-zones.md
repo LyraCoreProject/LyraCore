@@ -401,6 +401,23 @@ Deltas may claim the column; one that omits it keeps the default. The Operator C
 carry it, so a created template has no school immunity and an update keeps the template's mask.
 Direct SQL INSERTs may omit it; shared import SQL defaults fill older inserts.
 
+### Creature template equipment migration
+
+The public `game_creature_equipment` table is new and starts empty. The public
+`game_encounter_equip` gains the END-appended columns `main_hand_item`, `off_hand_item` and
+`ranged_item` with default 0; a row written before the publish keeps its displays and sends no
+item class, subclass, inventory type or sheath. No reducer argument changes. Packages read
+`game_encounter_equip` displays, which keep their meaning, and neither build nor claim the new
+table. A publish alone changes nothing a player sees: with no equipment rows every creature shows
+what it showed before.
+
+Reimport the `creatures` family to fill the table: 5,137 choices for 5,126 templates in the full
+world of the pinned World Source. The Source Profile now also approves `creature_equip_template` and
+`game_event_creature_data`, which the `events` family already read. A creature takes its template
+equipment as it enters the world; the reimport despawns every creature and the respawn pass brings
+each back armed. Nothing arms a living creature in place. A creature's CREATE now carries its
+virtual items, so a viewer no longer receives them as a separate values update after the CREATE.
+
 ### Drunk value migration
 
 `game_character` gains the END-appended column `drunk_value` with default 0, so every Character

@@ -47,6 +47,7 @@ tests = [
     { path = "importer/src/world_import_game_events.rs", function = "a_creature_data_model_and_an_equipment_with_several_choices_are_counted", rung = "unit" },
     { path = "module/tests/game_events.rs", function = "a_live_creature_takes_its_event_data_as_the_event_starts_and_its_own_as_it_stops", rung = "durable_module" },
     { path = "module/tests/game_events.rs", function = "a_creature_that_spawns_while_its_event_runs_comes_in_its_event_data", rung = "durable_module" },
+    { path = "module/tests/game_events.rs", function = "a_creature_shows_its_template_equipment_and_takes_it_back_when_its_event_equipment_comes_off", rung = "durable_module" },
     { path = "module/src/game_events/mail.rs", function = "an_event_mails_when_it_starts_and_again_only_after_it_stopped", rung = "unit" },
     { path = "module/src/game_events/mail.rs", function = "an_unscheduled_event_stops_once_started_and_never_starts", rung = "unit" },
     { path = "module/src/game_events/mail.rs", function = "a_mail_goes_to_the_races_of_its_mask_who_were_rewarded_its_quest", rung = "unit" },
@@ -105,12 +106,6 @@ description = "A creature data row's model (display_id) is not applied, and an e
 path = "importer/src/world_import_game_events.rs"
 symbol = "creature_data"
 evidence = "vmangos Creature::ChooseDisplayId and EquipmentTemplate::ChooseEquipmentEntry at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
-
-[[known_gaps]]
-description = "Creature template equipment (creature_equip_template through creature_template) is not imported, so a creature shows no equipment when its event's equipment is taken off; the Reference Server shows its template equipment again."
-path = "module/src/creatures/event_data.rs"
-symbol = "take_off_equipment"
-evidence = "vmangos Creature::LoadDefaultEquipment at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
 [[known_gaps]]
 description = "A corpse keeps its template and equipment when its event starts or stops and takes the event data that applies when it respawns; the Reference Server changes the corpse in place."

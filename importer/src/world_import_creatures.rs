@@ -172,6 +172,57 @@ fn display_reaches(
         .collect()
 }
 
+// vmangos `ObjectMgr::LoadEquipmentTemplates` keeps items of these inventory types: weapons,
+// shields, held off-hand items, ranged and thrown weapons and relics.
+const HAND_INVENTORY_TYPES: [u32; 10] = [13, 14, 15, 17, 21, 22, 23, 25, 26, 28];
+
+/// `creature_equip_template` choices as `(probability, main hand, off hand, ranged)` by equipment
+/// entry, in source order. An item the World Source lacks or no hand holds becomes no item.
+fn equipment_choices(dump: &impl TableRows) -> Result<BTreeMap<u32, Vec<(u32, [u32; 3])>>> {
+    let mut hand_items = HashSet::new();
+    for row in dump
+        .columns("item_template", &["entry", "inventory_type"])?
+        .iter()
+    {
+        if HAND_INVENTORY_TYPES.contains(&row.number("inventory_type")?) {
+            hand_items.insert(row.number::<u32>("entry")?);
+        }
+    }
+    let held = |item: u32| if hand_items.contains(&item) { item } else { 0 };
+    let mut choices: BTreeMap<u32, Vec<(u32, [u32; 3])>> = BTreeMap::new();
+    for row in dump.rows("creature_equip_template")?.iter() {
+        choices.entry(row.number("entry")?).or_default().push((
+            row.number("probability")?,
+            [
+                held(row.number("item1")?),
+                held(row.number("item2")?),
+                held(row.number("item3")?),
+            ],
+        ));
+    }
+    Ok(choices)
+}
+
+/// A template's `game_creature_equipment` rows: each choice vmangos
+/// `EquipmentTemplate::ChooseEquipmentEntry` can pick, which leaves out a zero probability.
+fn equipment_rows(entry: u64, choices: &[(u32, [u32; 3])]) -> Result<Vec<String>> {
+    choices
+        .iter()
+        .filter(|(probability, _)| *probability > 0)
+        .zip(0u64..)
+        .map(|(&(probability, [main_hand, off_hand, ranged]), index)| {
+            anyhow::ensure!(
+                index < 256,
+                "creature {entry}: more than 256 equipment choices"
+            );
+            Ok(format!(
+                "({},{entry},{probability},{main_hand},{off_hand},{ranged})",
+                (entry << 8) | index
+            ))
+        })
+        .collect()
+}
+
 fn template_findings(row: &Row, entry: u64, restored: u32, findings: &mut Findings) -> Result<()> {
     let extra = row.number::<u32>("flags_extra")?;
     if !row
@@ -226,6 +277,8 @@ fn templates(
     let mut levels = Vec::new();
     let mut displays = Vec::new();
     let mut defenses = Vec::new();
+    let mut equipment = Vec::new();
+    let choices = equipment_choices(dump)?;
     for row in dump.rows("creature_template")?.iter() {
         let entry: u64 = row.number("entry")?;
         if u32::try_from(entry).is_ok_and(lyracore_package_delta::ids::is_operator_template_id) {
@@ -357,6 +410,9 @@ fn templates(
             "creature {entry}: display probability total differs from slots"
         );
         displays.extend(display_rows);
+        if let Some(choices) = choices.get(&row.number("equipment_id")?) {
+            equipment.extend(equipment_rows(entry, choices)?);
+        }
         let fields = [
             "faction",
             "npc_flags",
@@ -390,6 +446,7 @@ fn templates(
         ("game_creature_defense", "entry", "entry,no_parry,no_block,no_defense", defenses),
         ("game_creature_level_stats", "id", "id,entry,level,health,damage_min,damage_max,armor", levels),
         ("game_creature_display", "id", "id,entry,display_id,scale,weight,gender,bounding_radius", displays),
+        ("game_creature_equipment", "id", "id,entry,weight,main_hand,off_hand,ranged", equipment),
         ("game_display_combat_reach", "display_id", "display_id,combat_reach,display_scale", display_reaches(&models, &scales)),
     ] {
         statements.push(format!("DELETE FROM {table} WHERE {key} > 0"));
@@ -697,7 +754,7 @@ mod tests {
 
     fn template_source() -> WorldSource {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
-        let fields = "entry patch unit_class level_min level_max health_multiplier damage_multiplier armor_multiplier damage_variance static_flags1 static_flags2 display_total_probability display_id1 display_probability1 display_scale1 display_id2 display_probability2 display_scale2 display_id3 display_probability3 display_scale3 display_id4 display_probability4 display_scale4 faction npc_flags type pet_family rank base_attack_time gold_min gold_max pickpocket_loot_id skinning_loot_id trainer_type trainer_class spawn_spell_id totem_spell_id immunity_flags mechanic_immune_mask school_immune_mask flags_extra call_for_help_range";
+        let fields = "entry patch unit_class level_min level_max health_multiplier damage_multiplier armor_multiplier damage_variance static_flags1 static_flags2 display_total_probability display_id1 display_probability1 display_scale1 display_id2 display_probability2 display_scale2 display_id3 display_probability3 display_scale3 display_id4 display_probability4 display_scale4 faction npc_flags type pet_family rank base_attack_time gold_min gold_max pickpocket_loot_id skinning_loot_id trainer_type trainer_class spawn_spell_id totem_spell_id immunity_flags mechanic_immune_mask school_immune_mask flags_extra call_for_help_range equipment_id";
         let columns = fields
             .split_whitespace()
             .map(|name| format!("{name} INTEGER DEFAULT 0"))
@@ -709,7 +766,9 @@ mod tests {
             CREATE TABLE creature_ai_scripts (id INTEGER,command INTEGER,datalong INTEGER,datalong2 INTEGER);
             CREATE TABLE creature_display_info_addon (display_id INTEGER, build INTEGER, gender INTEGER, display_id_other_gender INTEGER, bounding_radius REAL DEFAULT 0.389, combat_reach REAL DEFAULT 1.5, PRIMARY KEY(display_id,build));
             CREATE TABLE creature_classlevelstats (class INTEGER, level INTEGER, health REAL, melee_damage REAL, armor REAL);
-            INSERT INTO creature_classlevelstats VALUES (1,10,100,20,50);")).unwrap();
+            INSERT INTO creature_classlevelstats VALUES (1,10,100,20,50);
+            CREATE TABLE creature_equip_template (entry INTEGER, probability INTEGER DEFAULT 1, item1 INTEGER DEFAULT 0, item2 INTEGER DEFAULT 0, item3 INTEGER DEFAULT 0, patch_min INTEGER DEFAULT 0, patch_max INTEGER DEFAULT 10, PRIMARY KEY (entry,item1,item2,item3));
+            CREATE TABLE item_template (entry INTEGER, patch INTEGER DEFAULT 0, inventory_type INTEGER, PRIMARY KEY (entry,patch));")).unwrap();
         WorldSource::fixture(connection)
     }
 
@@ -876,6 +935,40 @@ mod tests {
         assert!(
             !findings.contains_key("creatures.template-behavior"),
             "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn template_equipment_keeps_each_choice_vmangos_can_pick_with_hand_items_only() {
+        let source = template_source();
+        source
+            .fixture_connection()
+            .execute_batch(
+                "UPDATE creature_template SET equipment_id = 7;
+                INSERT INTO item_template (entry,inventory_type) VALUES (2488,13),(2129,14),(6256,2);
+                INSERT INTO creature_equip_template (entry,probability,item1,item2,item3) VALUES
+                    (7,3,2488,2129,0),(7,0,2488,0,0),(7,1,6256,0,9999),(8,1,2488,0,0);",
+            )
+            .unwrap();
+        let mut statements = Vec::new();
+        templates(
+            &source,
+            &HashSet::from([5090042]),
+            &HashSet::new(),
+            None,
+            &mut statements,
+            &mut Findings::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let first = 5090042u64 << 8;
+        assert!(
+            statements.iter().any(|sql| sql
+                == &format!(
+                    "INSERT INTO game_creature_equipment (id,entry,weight,main_hand,off_hand,ranged) VALUES ({first},5090042,3,2488,2129,0),({},5090042,1,0,0,0)",
+                    first + 1
+                )),
+            "{statements:?}"
         );
     }
 

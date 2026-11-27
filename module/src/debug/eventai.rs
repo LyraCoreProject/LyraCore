@@ -87,6 +87,26 @@ pub fn debug_verify_eventai_spell_guardian_cleanup(ctx: &ReducerContext) -> Resu
             equipment.main_hand, equipment.off_hand, equipment.ranged
         ));
     }
+
+    let catalogue_version =
+        crate::creatures::replace_single_relay_for_debug(ctx, 90_001, "set-equipment:1:-1:-1:-1")?;
+    crate::creatures::start_imported_relay(
+        ctx,
+        90_001,
+        FIXTURE_OWNER_GUID,
+        FIXTURE_OWNER_GUID,
+        1,
+        catalogue_version,
+    )?;
+    if ctx
+        .db
+        .game_encounter_equip()
+        .creature_guid()
+        .find(FIXTURE_OWNER_GUID)
+        .is_some()
+    {
+        return Err("a reset relay left equipment on a template that has none".to_string());
+    }
     Ok(())
 }
 

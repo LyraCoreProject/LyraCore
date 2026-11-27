@@ -180,14 +180,32 @@ fn raw_values_body_matches_gtker_envelope() {
 }
 
 #[test]
-fn creature_virtual_items_use_all_three_display_fields_without_object_type() {
+fn creature_virtual_items_write_displays_and_item_info_without_object_type() {
     let guid = 0xF130_0000_0000_002Au64;
-    let (opcode, body) = build_virtual_item_values(guid, 2196, 2716, 0);
+    let sword = VirtualItemView {
+        display_id: 2196,
+        class: 2,
+        subclass: 7,
+        material: 1,
+        inventory_type: 13,
+        sheath: 3,
+    };
+    let shield = VirtualItemView {
+        display_id: 2716,
+        class: 4,
+        subclass: 6,
+        material: 1,
+        inventory_type: 14,
+        sheath: 4,
+    };
+    let (opcode, body) =
+        build_virtual_item_values(guid, &[sword, shield, VirtualItemView::default()]);
     assert_eq!(opcode, 0x00A9);
 
-    // Two mask blocks; fields 37..=39 are bits 5..=7 of the second, with no OBJECT_FIELD_TYPE bit.
+    // Two mask blocks; fields 37..=45 are bits 5..=13 of the second, with no OBJECT_FIELD_TYPE bit.
     let expected = [
-        2, 0, 0, 0, 0, 0xE0, 0, 0, 0, 0x94, 0x08, 0, 0, 0x9C, 0x0A, 0, 0, 0, 0, 0, 0,
+        2, 0, 0, 0, 0, 0xE0, 0x3F, 0, 0, 0x94, 0x08, 0, 0, 0x9C, 0x0A, 0, 0, 0, 0, 0, 0, 2, 7, 1,
+        13, 3, 0, 0, 0, 4, 6, 1, 14, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
     assert!(body.ends_with(&expected), "{body:02X?}");
 }

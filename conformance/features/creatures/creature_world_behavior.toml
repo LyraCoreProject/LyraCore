@@ -13530,6 +13530,30 @@ path = "module/src/creatures/assistance.rs"
 symbol = "called_neighbours"
 evidence = "vmangos d9173eca3ea08dd985c52dabbcc826898d1d0b77 GridNotifiers.h:976-1008 CallOfHelpCreatureInRangeDo."
 
+[[known_gaps]]
+description = "A spawn's own equipment (creature_addon.equipment_id) is not imported, so 35 spawns at the pin show their template's equipment instead of their own and 6 show it instead of none."
+path = "importer/src/world_import_creatures.rs"
+symbol = "templates"
+evidence = "vmangos d9173eca3ea08dd985c52dabbcc826898d1d0b77 Creature::LoadDefaultEquipment; World Source 464179081673cfd240f7ffe7f0daf96bca0b5a70 creature_addon at patch 10."
+
+[[known_gaps]]
+description = "A creature whose template has CREATURE_STATIC_FLAG_CAN_WIELD_LOOT (38 templates at the pin) shows its template equipment; the Reference Server rolls its loot at spawn and shows the weapons, shield and ranged weapon it carries."
+path = "module/src/creatures/presentation.rs"
+symbol = "wear_default_equipment"
+evidence = "vmangos d9173eca3ea08dd985c52dabbcc826898d1d0b77 Creature::LoadDefaultEquipment."
+
+[[known_gaps]]
+description = "A creature's virtual equipment is only shown. In the Reference Server a weapon in the off hand makes the creature swing with it, Disarm fails on a creature that holds no weapon, a weapon-percent damage spell from a creature without a weapon deals its flat damage, and a creature's shot shows the projectile of its bow, gun or thrown weapon. A weapon changes neither its damage school, which comes from creature_template.damage_school, nor gives it a ranged auto-attack, in both servers."
+path = "module/src/combat/swing.rs"
+symbol = "resolve_offhand_swing"
+evidence = "vmangos d9173eca3ea08dd985c52dabbcc826898d1d0b77 Unit::HaveOffhandWeapon, Creature::CanBeDisarmed, Creature::HasWeapon, Spell::WriteAmmoToPacket and Creature::UpdateEntry (SetMeleeDamageSchool)."
+
+[[known_gaps]]
+description = "A virtual item's material byte in UNIT_VIRTUAL_ITEM_INFO is sent as 0, because the Module's item template keeps no material."
+path = "module/src/native/creature.rs"
+symbol = "shown_items"
+evidence = "vmangos d9173eca3ea08dd985c52dabbcc826898d1d0b77 Creature::SetVirtualItem."
+
 [[tests]]
 path = "importer/src/world_import_creatures.rs"
 function = "mechanic_immune_mask_reaches_the_template_and_is_no_finding"
@@ -13539,3 +13563,23 @@ rung = "unit"
 path = "importer/src/world_import_creatures.rs"
 function = "school_immune_mask_reaches_the_template_and_is_no_finding"
 rung = "unit"
+
+[[tests]]
+path = "importer/src/world_import_creatures.rs"
+function = "template_equipment_keeps_each_choice_vmangos_can_pick_with_hand_items_only"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/entity/tests.rs"
+function = "creature_create_carries_its_virtual_items"
+rung = "codec"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/values/tests.rs"
+function = "creature_virtual_items_write_displays_and_item_info_without_object_type"
+rung = "codec"
+
+[[tests]]
+path = "module/tests/game_events.rs"
+function = "a_creature_shows_its_template_equipment_and_takes_it_back_when_its_event_equipment_comes_off"
+rung = "durable_module"

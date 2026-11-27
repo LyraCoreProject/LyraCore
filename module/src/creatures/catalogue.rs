@@ -37,6 +37,18 @@ pub struct CreatureDisplay {
     pub bounding_radius: f32,
 }
 
+/// One of a template's virtual equipment choices, by item entry; one is chosen by weight at spawn.
+#[table(accessor = game_creature_equipment, public, index(accessor = by_entry, btree(columns = [entry])))]
+pub struct CreatureEquipment {
+    #[primary_key]
+    pub id: u64,
+    pub entry: u32,
+    pub weight: u32,
+    pub main_hand: u32,
+    pub off_hand: u32,
+    pub ranged: u32,
+}
+
 /// A display's combat reach in yards, measured at `display_scale`, its CreatureDisplayInfo.dbc scale.
 #[table(accessor = game_display_combat_reach, public)]
 pub struct DisplayCombatReach {
@@ -50,6 +62,7 @@ crate::outside_table_catalog!(
     game_creature_defense,
     game_creature_level_stats,
     game_creature_display,
+    game_creature_equipment,
     game_display_combat_reach
 );
 
@@ -118,6 +131,30 @@ fn select_display(displays: &[CreatureDisplay], roll: u32) -> Option<&CreatureDi
             return Some(display);
         }
         roll -= u64::from(display.weight);
+    }
+    None
+}
+
+/// vmangos `EquipmentTemplate::ChooseEquipmentEntry`: the main hand, off hand and ranged item
+/// entries of the template's choice that `roll` lands on; none without a weighted choice.
+pub(crate) fn equipment(ctx: &ReducerContext, entry: u32, roll: u32) -> Option<[u32; 3]> {
+    let mut choices: Vec<_> = ctx
+        .db
+        .game_creature_equipment()
+        .by_entry()
+        .filter(entry)
+        .collect();
+    choices.sort_by_key(|choice| choice.id);
+    let total: u64 = choices.iter().map(|choice| u64::from(choice.weight)).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut roll = u64::from(roll) % total;
+    for choice in choices {
+        if roll < u64::from(choice.weight) {
+            return Some([choice.main_hand, choice.off_hand, choice.ranged]);
+        }
+        roll -= u64::from(choice.weight);
     }
     None
 }
