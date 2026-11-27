@@ -927,6 +927,8 @@ pub(crate) enum SpellCastEventKind {
     Pushback = 4,
     ProcLog = 5,
     PeriodicLog = 6,
+    LeechLog = 7,
+    LeechHealLog = 8,
 }
 
 #[table(
@@ -1090,21 +1092,22 @@ impl SpellCastEvent {
         )
     }
 
-    /// Addressed at the target, since the caster may be far away or gone.
-    pub(crate) fn periodic_log(
+    /// Addressed at `unit`, since the caster may be far away or gone.
+    pub(crate) fn tick_log(
         ctx: &ReducerContext,
         caster_guid: u64,
         spell_id: u32,
-        target: &WorldEntity,
+        unit: &WorldEntity,
+        kind: SpellCastEventKind,
     ) -> Self {
         Self {
-            target_guid: target.guid,
+            target_guid: unit.guid,
             ..Self::signal_addr(
                 ctx,
                 caster_guid,
                 spell_id,
-                crate::helpers::entity_addr(target),
-                SpellCastEventKind::PeriodicLog,
+                crate::helpers::entity_addr(unit),
+                kind,
             )
         }
     }

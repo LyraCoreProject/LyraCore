@@ -263,10 +263,14 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         }
         match a.eff_kind {
             A_PERIODIC_DAMAGE => {
-                // vmangos Aura::PeriodicTick: a gone caster ends the tick; a dead one still ticks.
+                // vmangos Aura::PeriodicTick: a gone caster ends the tick; a dead one ticks unless it leeches.
                 let Some(caster) = entities.guid().find(a.caster_guid) else {
                     continue;
                 };
+                let draining = super::leech::is_leech(a);
+                if draining && (caster.dead || dying.contains_key(&a.caster_guid)) {
+                    continue;
+                }
                 if !crate::combat::may_harm(ctx, &caster, &target) {
                     continue;
                 }
@@ -332,6 +336,11 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 if enters_combat {
                     engage_for_channelled_tick(ctx, &caster, &target);
                 }
+                let tick_kind = if draining {
+                    SpellCastEventKind::LeechLog
+                } else {
+                    SpellCastEventKind::PeriodicLog
+                };
                 crate::SpellCastEvent::insert(
                     ctx,
                     SpellCastEvent {
@@ -339,7 +348,13 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                         school: crate::spell::school_index(school),
                         resisted: points.saturating_sub(after_resist).max(0) as u32,
                         absorbed,
-                        ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
+                        ..SpellCastEvent::tick_log(
+                            ctx,
+                            a.caster_guid,
+                            a.spell_id,
+                            &target,
+                            tick_kind,
+                        )
                     },
                 );
                 if amount > 0 {
@@ -385,6 +400,35 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     }
                     crate::combat::DamageResult::Survives => {
                         pending.insert(a.target_guid, damaged_value(cur, amount as i32));
+                    }
+                }
+                if draining {
+                    let remaining = pending.get(&a.target_guid).copied().unwrap_or(0);
+                    let healed = if duel_losers.contains(&a.caster_guid) {
+                        0
+                    } else {
+                        super::leech::heal_caster(
+                            ctx,
+                            a,
+                            &caster,
+                            cur.saturating_sub(remaining),
+                            &mut pending,
+                        )
+                    };
+                    if caster.is_player() {
+                        crate::SpellCastEvent::insert(
+                            ctx,
+                            SpellCastEvent {
+                                healed,
+                                ..SpellCastEvent::tick_log(
+                                    ctx,
+                                    a.caster_guid,
+                                    a.spell_id,
+                                    &caster,
+                                    SpellCastEventKind::LeechHealLog,
+                                )
+                            },
+                        );
                     }
                 }
                 let lost = pending
@@ -442,7 +486,13 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                         ctx,
                         SpellCastEvent {
                             healed: healing.max(0) as u32,
-                            ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
+                            ..SpellCastEvent::tick_log(
+                                ctx,
+                                a.caster_guid,
+                                a.spell_id,
+                                &target,
+                                SpellCastEventKind::PeriodicLog,
+                            )
                         },
                     );
                 }
@@ -472,7 +522,13 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     SpellCastEvent {
                         energized: a.amount.max(0) as u32,
                         power_type: pool.power_type,
-                        ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
+                        ..SpellCastEvent::tick_log(
+                            ctx,
+                            a.caster_guid,
+                            a.spell_id,
+                            &target,
+                            SpellCastEventKind::PeriodicLog,
+                        )
                     },
                 );
                 if a.enters_combat {

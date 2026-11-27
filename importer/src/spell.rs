@@ -316,6 +316,15 @@ fn power_burn_ratio_bp(multiple: f32) -> i32 {
     (multiple * 100.0).round() as i32
 }
 
+// SPELL_AURA_PERIODIC_LEECH heals the caster for the damage times this; vmangos treats zero or less as 1.
+fn leech_multiple_hundredths(multiple: f32) -> i32 {
+    if multiple > 0.0 {
+        ((multiple * 100.0).round() as i32).max(1)
+    } else {
+        100
+    }
+}
+
 fn soulstone_option_spell(aura_spell_id: u32) -> Option<i32> {
     spell_overrides::SOULSTONE_OPTIONS
         .iter()
@@ -1159,6 +1168,8 @@ fn push_spell_effect_rows(
             s.requires_spell_focus as i32
         } else if kind == E_POWER_BURN {
             power_burn_ratio_bp(s.effect_multiple_values[i])
+        } else if kind == A_PERIODIC_DAMAGE && s.effect_aura[i] == AuraMod::PeriodicLeech as u32 {
+            leech_multiple_hundredths(s.effect_multiple_values[i])
         } else if kind == A_SPELLMOD_FLAT || kind == A_SPELLMOD_PCT {
             // The Module's p1 mask holds 32 bits; wider source masks have a manifest finding.
             s.effect_item_type[i] as i32
@@ -4705,6 +4716,42 @@ mod tests {
         assert_eq!(power_burn_ratio_bp(0.5), 50);
         assert_eq!(power_burn_ratio_bp(1.0), 100);
         assert_eq!(power_burn_ratio_bp(0.0), 0);
+    }
+
+    #[test]
+    fn a_leech_multiple_of_zero_or_less_heals_the_damage_dealt() {
+        assert_eq!(leech_multiple_hundredths(1.2), 120);
+        assert_eq!(leech_multiple_hundredths(0.0), 100);
+        assert_eq!(leech_multiple_hundredths(-1.0), 100);
+        assert_eq!(leech_multiple_hundredths(0.001), 1);
+    }
+
+    #[test]
+    fn a_health_leech_aura_imports_as_periodic_damage_carrying_its_multiple_in_p1() {
+        let spell = |id, aura: AuraMod, multiple| Spell {
+            id,
+            name: "Leech fixture".into(),
+            effect: [EFFECT_APPLY_AURA, 0, 0],
+            effect_aura: [aura as u32, 0, 0],
+            effect_multiple_values: [multiple, 0.0, 0.0],
+            implicit_target_a: [6, 0, 0],
+            ..Default::default()
+        };
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![
+            spell(900_001, AuraMod::PeriodicLeech, 1.5),
+            spell(900_002, AuraMod::PeriodicDamage, 1.5),
+        ];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let p1 = |spell_id| {
+            rows.effects
+                .iter()
+                .find(|effect| effect.spell_id == spell_id)
+                .map(|effect| (effect.kind, effect.p1))
+        };
+        assert_eq!(p1(900_001), Some((A_PERIODIC_DAMAGE, 150)));
+        assert_eq!(p1(900_002), Some((A_PERIODIC_DAMAGE, 0)));
     }
 
     #[test]

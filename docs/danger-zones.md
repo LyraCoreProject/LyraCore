@@ -510,6 +510,14 @@ World Shard before moving active World Sessions. A dungeon admission request gai
 Group at queue time. An older Instance Shard ignores it, and a request from an older source decodes
 without it and keeps the carried binding. No repair or `debug_repair_after_publish` step is needed.
 
+### Health leech migration
+
+A `SPELL_AURA_PERIODIC_LEECH` effect's `p1` now keeps its `EffectMultipleValue` in hundredths, and the
+Module reads it to heal the caster on each tick. No schema changes. Reimport `spell`, then call
+`debug_repair_after_publish` to copy the new `p1` to live leech Auras (`spell/repair.rs` copies
+`effect.p1` onto them). Until the reimport, every leech effect keeps `p1` 0 and ticks as plain periodic
+damage that heals nothing, as before.
+
 ### Hunter pet presence migration
 
 `game_hunter_pet` gains the END-appended columns `presence`, `display_id`, `saved_health` and
