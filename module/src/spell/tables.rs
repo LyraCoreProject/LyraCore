@@ -672,16 +672,25 @@ impl Aura {
         }
         crate::skill::aura_changed(ctx, None, Some(&aura));
         crate::native::aura::changed(ctx, None, Some(&aura));
-        if aura.stuns_or_fears() {
+        if aura.releases_loot() {
             crate::native::loot::close_window(ctx, aura.target_guid);
         }
         aura
     }
 
-    /// vmangos `HandleAuraModStun` and `ModConfuseSpell` release a hit Character's loot.
-    fn stuns_or_fears(&self) -> bool {
+    /// vmangos releases a hit Character's loot on a stun, fear, confuse, charm or possess Aura.
+    fn releases_loot(&self) -> bool {
         use lyracore_shared::spell::taxonomy::{A_CONTROL, M_FEAR, M_STUN};
-        self.eff_kind == A_CONTROL && (self.eff_p0 == M_STUN || self.eff_p0 == M_FEAR)
+        const AURA_MOD_POSSESS: i32 = 2;
+        const AURA_MOD_CONFUSE: i32 = 5;
+        const AURA_MOD_CHARM: i32 = 6;
+        const AURA_MOD_STUN: i32 = 12;
+        self.eff_kind == A_CONTROL
+            && (matches!(self.eff_p0, M_STUN | M_FEAR)
+                || matches!(
+                    self.eff_p1,
+                    AURA_MOD_POSSESS | AURA_MOD_CONFUSE | AURA_MOD_CHARM | AURA_MOD_STUN
+                ))
     }
 
     pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
