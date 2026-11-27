@@ -257,6 +257,8 @@ These are the rules each handler applies that its code does not make obvious at 
 when its owner is revived or after 3 days, and bones last 60 minutes. As in vmangos
 `Map::RemoveCorpses`, the change revokes every Grant of the body and grants the bones afresh under
 the same GUID, so each viewer in range gets a DESTROY, then a CREATE with corpse flags `0x05`.
+A resurrectable Corpse's CREATE carries its owner's guild, worn items and hidden helm and cloak as
+they stood at release; bones keep only the guild.
 Reclaim selects the Actor's own Corpse and checks distance, map, Instance, ghost state and the
 remaining delay. Resurrection offers and self-resurrection fields go only to the owner. The
 spirit-healer handler checks the selected NPC and interaction range. See the [Corpse

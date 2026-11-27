@@ -94,6 +94,9 @@ pub struct Character {
     pub rest_state: u8,
     #[default(0u16)]
     pub drunk_value: u16,
+    // PLAYER_FLAGS_HIDE_HELM and PLAYER_FLAGS_HIDE_CLOAK, as the Character last chose them.
+    #[default(0u32)]
+    pub hide_equipment_flags: u32,
 }
 
 // The 5875 client refuses a Character list longer than this limit.
@@ -297,6 +300,7 @@ pub(crate) fn insert_new_character(
         watched_faction_index: -1,
         rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
         drunk_value: 0,
+        hide_equipment_flags: 0,
     };
 
     if chars.try_insert(row).is_err() {
@@ -766,6 +770,8 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
 
         c.death_expire_micros = entity.death_expire_micros;
         c.drunk_value = crate::drunk::drunk_value(entity);
+        c.hide_equipment_flags =
+            entity.player_flags & lyracore_shared::constants::player_flags::HIDE_EQUIPMENT;
 
         c.pending_instance_id = entity.instance_id;
         c.pending_ghost = persisted_pending_ghost(entity.dead, entity.player_flags);

@@ -103,6 +103,7 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), crate::Ref
     let (new_expire, delay_micros) =
         crate::corpse::escalated_reclaim(player.death_expire_micros, now_micros);
 
+    let (guild_id, hide_equipment_flags, worn_items) = crate::corpse::corpse_dress(ctx, &player);
     let corpse_guid = crate::corpse::corpse_guid_for(player.guid);
     crate::Corpse::delete(ctx, corpse_guid);
     crate::Corpse {
@@ -121,6 +122,9 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), crate::Ref
         is_bones: false,
         instance_id: player.instance_id,
         cell: 0,
+        guild_id,
+        hide_equipment_flags,
+        worn_items,
     }
     .insert(ctx);
 

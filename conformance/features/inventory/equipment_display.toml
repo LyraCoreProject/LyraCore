@@ -9,7 +9,10 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "module/tests/equipment_display.rs", function = "toggling_the_helm_and_the_cloak_flips_their_flags_and_viewers_see_player_flags", rung = "durable_module" },
+    { path = "module/tests/equipment_display.rs", function = "a_hidden_helm_and_cloak_survive_logout_and_login", rung = "durable_module" },
+]
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -18,12 +21,6 @@ symbol = "WorldSession::HandleShowingHelmOpcode"
 
 [real_client]
 status = "unverified"
-
-[[known_gaps]]
-description = "The Module returns an unavailable response for CMSG_TOGGLE_HELM, CMSG_TOGGLE_CLOAK."
-path = "module/src/native/unavailable.rs"
-symbol = "responses"
-evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
 
 [[known_gaps]]
 description = "ModSkill now projects signed skill bonuses from all 206 equipment items into combat, existing skill requirements and PLAYER_SKILL_INFO. Eleven of those items modify Fishing (356). Their bonus fields are correct, but the existing fishing path selects loot without a skill-dependent success roll, so these bonuses cannot change fishing success yet. This change does not add that missing fishing mechanic."

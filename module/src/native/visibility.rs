@@ -201,7 +201,7 @@ pub(super) fn create(
                 .guid()
                 .find(grant.entity_guid)
                 .ok_or("AOI Grant refers to missing Corpse")?;
-            super::death::create(&corpse)
+            super::death::create(&corpse).map_err(|error| error.to_string())?
         }
         DYNAMIC_OBJECT => {
             let object = ctx

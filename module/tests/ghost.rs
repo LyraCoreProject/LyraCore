@@ -1,6 +1,6 @@
 mod support;
 
-use lyracore_package_delta::fixture_ids::{SCENARIO_VENDOR_ENTRY, TEST_WOLF_ENTRY};
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, SCENARIO_VENDOR_ENTRY, TEST_WOLF_ENTRY};
 use lyracore_shared::constants::{player_flags, unit_vis_flags};
 use lyracore_shared::spell::taxonomy::*;
 use lyracore_test_support::{NativeAudience, NativePacket};
@@ -418,6 +418,123 @@ fn a_viewer_sees_a_revived_characters_corpse_destroyed_then_created_as_bones() {
             flags: BONES_FLAGS
         }],
         "a viewer arriving later sees only the bones"
+    );
+}
+
+// Build 5875 CORPSE_FIELD_GUILD and CORPSE_FIELD_ITEM; the main hand is equipment slot 15.
+const CORPSE_FIELD_GUILD: &str = "field_34";
+const CORPSE_FIELD_ITEM_MAIN_HAND: &str = "field_28";
+// vmangos Corpse.h CORPSE_FLAG_UNK2, HIDE_HELM and HIDE_CLOAK.
+const RESURRECTABLE_HIDDEN_FLAGS: u64 = 0x04 | 0x08 | 0x10;
+const GUILD: u32 = 77;
+const BLADE_DISPLAY: u32 = 4321;
+
+/// The values of each corpse CREATE `connection` received, by field name.
+fn corpse_creates(
+    packets: &[NativePacket],
+    connection: u128,
+) -> Vec<std::collections::BTreeMap<String, u64>> {
+    let corpse: u64 = CORPSE.parse().unwrap();
+    packets
+        .iter()
+        .filter_map(|packet| {
+            let NativeAudience::Grant(recipient) = packet.audience else {
+                return None;
+            };
+            if recipient.connection != connection || recipient.entity_guid != corpse {
+                return None;
+            }
+            let decoded = decode::decode(packet.opcode?, &packet.body).unwrap();
+            let Some(Field::List(objects)) = decoded.fields.get("objects") else {
+                panic!("a corpse CREATE carries objects: {decoded:?}");
+            };
+            let [Field::Object(object)] = objects.as_slice() else {
+                panic!("a corpse CREATE carries one object: {decoded:?}");
+            };
+            let Some(Field::Object(values)) = object.get("values") else {
+                panic!("a corpse CREATE carries values: {object:?}");
+            };
+            Some(
+                values
+                    .iter()
+                    .filter_map(|(name, field)| match field {
+                        Field::Unsigned(value) | Field::Guid(value) => Some((name.clone(), *value)),
+                        _ => None,
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_corpse_looks_like_its_character_and_its_bones_keep_only_the_guild() {
+    let shard = fixture("ghost-corpse-look", 1);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET display_id = {BLADE_DISPLAY} WHERE entry = {FIXTURE_BLADE}"
+    ));
+    shard.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
+    let inventory_type: u32 = number(
+        &shard.query_rows(&format!(
+            "SELECT inventory_type FROM game_item_template WHERE entry = {FIXTURE_BLADE}"
+        ))[0],
+        "inventory_type",
+    );
+    shard.insert_row(
+        "game_guild_member",
+        &[
+            ("character_guid", &1),
+            ("guild_id", &GUILD),
+            ("name", &"Ghost"),
+        ],
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET player_flags = {} WHERE guid = 1",
+        player_flags::HIDE_HELM | player_flags::HIDE_CLOAK
+    ));
+    let (watcher, mut viewer) = enter_viewer(&shard, "Watcher");
+    let at = &shard.query_rows(&format!(
+        "SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {watcher}"
+    ))[0];
+    viewer
+        .call(
+            "debug_teleport",
+            json!([
+                1,
+                number::<u32>(at, "map_id"),
+                number::<f32>(at, "x"),
+                number::<f32>(at, "y"),
+                number::<f32>(at, "z"),
+                0.0
+            ]),
+        )
+        .unwrap();
+    shard.assert_call("debug_set_health", &["1", "0"]);
+
+    let released = viewer.call("debug_repop", json!([1])).unwrap();
+    let bodies = corpse_creates(released.packets(), viewer.connection_id());
+    let [body] = bodies.as_slice() else {
+        panic!("one corpse CREATE for the viewer, got {bodies:?}");
+    };
+    assert_eq!(body[CORPSE_FIELD_GUILD], u64::from(GUILD));
+    assert_eq!(body[CORPSE_FIELD_FLAGS], RESURRECTABLE_HIDDEN_FLAGS);
+    assert_eq!(
+        body[CORPSE_FIELD_ITEM_MAIN_HAND],
+        u64::from(BLADE_DISPLAY | (inventory_type << 24)),
+        "vmangos Player::CreateCorpse: display id, with the inventory type in the top byte"
+    );
+
+    let revived = viewer.call("debug_spirit_healer_res", json!([1])).unwrap();
+    let bodies = corpse_creates(revived.packets(), viewer.connection_id());
+    let [bones] = bodies.as_slice() else {
+        panic!("one bones CREATE for the viewer, got {bodies:?}");
+    };
+    assert_eq!(bones[CORPSE_FIELD_GUILD], u64::from(GUILD));
+    assert_eq!(bones[CORPSE_FIELD_FLAGS], BONES_FLAGS);
+    assert!(
+        !bones.contains_key(CORPSE_FIELD_ITEM_MAIN_HAND),
+        "vmangos Map::RemoveCorpses clears the bones' items"
     );
 }
 

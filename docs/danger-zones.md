@@ -511,6 +511,16 @@ than the selected one gets its own damage and heal log, so an instant area spell
 it deals every unit. A queued strike's GO lists its victim and every chain unit, and each chain
 unit gets its own hit roll, damage log, threat and procs.
 
+### Equipment display migration
+
+`game_character` gains the END-appended column `hide_equipment_flags` with default 0, and
+`game_corpse` gains `guild_id` (default 0), `hide_equipment_flags` (default 0) and `worn_items`
+(default none). Every Character starts with its helm and cloak shown. A Corpse made before the
+publish keeps no guild, no hidden gear and no worn items in its CREATE; a Character that releases
+after the publish gets them. A Character Transfer row from a Shard before the publish arrives with
+everything shown, and an older destination refuses the longer row, so update both Shards before you
+move a Character. No repair is needed. Package Deltas do not read these columns.
+
 ### Group join reset migration
 
 The private `game_group_join_reset` table is new and starts empty. It is a Character-owned table

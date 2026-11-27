@@ -824,6 +824,7 @@ fn insert_character(
         watched_faction_index: migration.watched_faction_index,
         rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
         drunk_value: 0,
+        hide_equipment_flags: 0,
     });
     Ok(guid)
 }

@@ -377,7 +377,10 @@ pub fn debug_native_project(
                             spacetimedb::sats::bsatn::to_vec(&corpse).map_err(|e| e.to_string())?;
                         let (body, extra) =
                             encoded(ctx, connection_id, guid, full, &source, || {
-                                Ok((native::death::create(&corpse), None))
+                                Ok((
+                                    native::death::create(&corpse).map_err(|e| e.to_string())?,
+                                    None,
+                                ))
                             })?;
                         (body, extra, 7, corpse.owner_guid)
                     }

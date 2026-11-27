@@ -711,7 +711,7 @@ pub fn set_create_sheet_stats(
     })
 }
 
-fn add_create_fields(
+pub(super) fn add_create_fields(
     create: &mut SMSG_UPDATE_OBJECT,
     add: impl FnOnce(&mut update_mask::UpdateMaskValues),
 ) -> Result<()> {

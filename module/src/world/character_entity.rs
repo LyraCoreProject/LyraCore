@@ -51,11 +51,12 @@ pub(crate) fn build_player_entity(
             ) == packing::REST_STATE_RESTED,
         ),
         player_bytes_3: crate::drunk::player_bytes_3(character.gender, character.drunk_value),
-        player_flags: if character.resting {
-            lyracore_shared::constants::player_flags::RESTING
-        } else {
-            0
-        },
+        player_flags: character.hide_equipment_flags
+            | if character.resting {
+                lyracore_shared::constants::player_flags::RESTING
+            } else {
+                0
+            },
         xp: character.xp,
         next_level_xp: character.next_level_xp,
         money: character.money,

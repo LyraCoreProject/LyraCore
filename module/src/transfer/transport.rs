@@ -479,8 +479,9 @@ pub(crate) fn decode_blob(transfer_id: u64, bytes: &[u8]) -> Result<ExportBlob, 
         .map_err(|e| format!("transfer {transfer_id}: corrupt export blob: {e}"))
 }
 
-// Defaults for older rows ending before `watched_faction_index`, `rest_state` or `drunk_value`.
-const CHARACTER_ROW_SUFFIX: [&[u8]; 3] = [&[0xFF, 0xFF, 0xFF, 0xFF], &[0], &[0, 0]];
+// Defaults for older rows ending before `watched_faction_index`, `rest_state`, `drunk_value` or
+// `hide_equipment_flags`.
+const CHARACTER_ROW_SUFFIX: [&[u8]; 4] = [&[0xFF, 0xFF, 0xFF, 0xFF], &[0], &[0, 0], &[0, 0, 0, 0]];
 
 pub(crate) fn decode_character_row(
     transfer_id: u64,
