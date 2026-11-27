@@ -78,6 +78,7 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
         "debug_prepare_weapon_strike_character",
         "debug_prepare_auto_shot_character",
         "debug_prepare_wand_shot_character",
+        "debug_prepare_throw_character",
         "debug_script_swing_draws",
     ] {
         assert!(!reducers

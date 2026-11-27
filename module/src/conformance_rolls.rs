@@ -262,13 +262,7 @@ mod fixture {
         effects.insert(effect);
         let learner = crate::helpers::live_entity(ctx, character_guid)?;
         crate::spell::learn_spell(ctx, character_guid, learner.owner_identity, 2948);
-        let table = ctx.db.game_conformance_spell_random();
-        table.character_guid().delete(character_guid);
-        table.insert(SpellRandom {
-            character_guid,
-            target_guid,
-            state: seed ^ stream.wrapping_mul(0xd1b54a32d192ed03),
-        });
+        seed_caster_stream(ctx, character_guid, target_guid, seed, stream);
         Ok(())
     }
 
@@ -315,13 +309,7 @@ mod fixture {
         prepare_white_melee(ctx, character_guid, target_guid, target_level, seed, stream)?;
         equip_fixture_axe(ctx, character_guid)?;
         arm_mortal_strike(ctx, character_guid)?;
-        let table = ctx.db.game_conformance_spell_random();
-        table.character_guid().delete(character_guid);
-        table.insert(SpellRandom {
-            character_guid,
-            target_guid,
-            state: seed ^ stream.wrapping_mul(0xd1b54a32d192ed03),
-        });
+        seed_caster_stream(ctx, character_guid, target_guid, seed, stream);
         Ok(())
     }
 
@@ -390,7 +378,8 @@ mod fixture {
         spell.equipped_item_class = 2;
         spell.equipped_item_subclass_mask = 262156;
         spell.damage_class = 3;
-        arm_ranged_swing(ctx, character_guid, spell, 46)
+        spell.cast_flags = lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
+        arm_ranged_spell(ctx, character_guid, spell, vec![], 46)
     }
 
     /// A priest with a wand's Shoot and the white melee inputs, against a passive target; ADR 0007.
@@ -453,7 +442,91 @@ mod fixture {
         spell.equipped_item_class = 2;
         spell.equipped_item_subclass_mask = 524288;
         spell.damage_class = 1;
-        arm_ranged_swing(ctx, character_guid, spell, 228)
+        spell.cast_flags = lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
+        arm_ranged_spell(ctx, character_guid, spell, vec![], 228)
+    }
+
+    /// White melee's warrior with Throw on the caster stream, against a passive target; ADR 0007.
+    #[reducer]
+    pub fn debug_prepare_throw_character(
+        ctx: &ReducerContext,
+        character_guid: u64,
+        target_guid: u64,
+        target_level: u32,
+        seed: u64,
+        stream: u64,
+    ) -> Result<(), String> {
+        use lyracore_shared::spell::taxonomy::{CAST_FLAG_REFUSES_SELF_CAST, P_RAW};
+
+        crate::helpers::require_operator(ctx)?;
+        prepare_white_melee(ctx, character_guid, target_guid, target_level, seed, stream)?;
+        hold_passive(ctx, target_guid);
+        // Item 2947 translates a pinned row; ADR 0007 explains the stack.
+        let mut knife = crate::ItemTemplate::blank(2947, "Fixture thrown weapon 2947");
+        knife.class = 2;
+        knife.subclass = 16;
+        knife.display_id = 16754;
+        knife.quality = 1;
+        knife.inventory_type = 25;
+        knife.item_level = 3;
+        knife.required_level = 1;
+        knife.max_stack = 10_000;
+        knife.damage_min = 1.0;
+        knife.damage_max = 3.0;
+        knife.delay_ms = 2000;
+        carry(
+            ctx,
+            character_guid,
+            knife,
+            crate::items::equip_slot::RANGED,
+            10_000,
+        )?;
+        // Spell 2764 translates a pinned row; ADR 0007 explains the dropped cast time.
+        let mut spell = crate::Spell::blank(2764, "Fixture spell 2764");
+        spell.gcd_ms = 0;
+        spell.gcd_category = 0;
+        spell.category = 76;
+        spell.range_yd = 30;
+        spell.school_mask = 1;
+        spell.attributes = 4259858;
+        spell.attributes_ex_3 = 32768;
+        spell.spell_level = 1;
+        spell.is_negative = true;
+        spell.cast_flags = CAST_FLAG_REFUSES_SELF_CAST;
+        spell.family_name = 8;
+        spell.family_flags = 1;
+        spell.proc_chance = 101;
+        spell.custom_flags = lyracore_shared::spell_custom::FACE_TARGET;
+        spell.equipped_item_class = 2;
+        spell.equipped_item_subclass_mask = 65536;
+        spell.damage_class = 3;
+        let mut strike = crate::SpellEffect::blank(2764, 0);
+        strike.kind = crate::spell::E_WEAPON_STRIKE;
+        strike.base_points = 0;
+        strike.die_sides = 1;
+        strike.target = crate::spell::T_TARGET_ENEMY;
+        strike.p0 = 100;
+        strike.p0_kind = P_RAW;
+        strike.bonus_coefficient = 1.0;
+        arm_ranged_spell(ctx, character_guid, spell, vec![strike], 176)?;
+        seed_caster_stream(ctx, character_guid, target_guid, seed, stream);
+        Ok(())
+    }
+
+    fn seed_caster_stream(
+        ctx: &ReducerContext,
+        character_guid: u64,
+        target_guid: u64,
+        seed: u64,
+        stream: u64,
+    ) {
+        let table = ctx.db.game_conformance_spell_random();
+        table.character_guid().delete(character_guid);
+        table.insert(SpellRandom {
+            character_guid,
+            target_guid,
+            state: seed ^ stream.wrapping_mul(0xd1b54a32d192ed03),
+        });
     }
 
     fn hold_passive(ctx: &ReducerContext, target_guid: u64) {
@@ -513,22 +586,25 @@ mod fixture {
         Ok(())
     }
 
-    // The auto-repeat path reads only the spell header, so the fixture stores no effect rows.
-    fn arm_ranged_swing(
+    // An auto-repeat swing reads only the spell header, so it passes no effect rows.
+    fn arm_ranged_spell(
         ctx: &ReducerContext,
         character_guid: u64,
-        mut spell: crate::Spell,
+        spell: crate::Spell,
+        spell_effects: Vec<crate::SpellEffect>,
         skill_line: u32,
     ) -> Result<(), String> {
         use crate::{game_spell, game_spell_effect};
 
         let spell_id = spell.spell_id;
-        spell.cast_flags = lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
         ctx.db.game_spell().spell_id().delete(spell_id);
         ctx.db.game_spell().insert(spell);
         let effects = ctx.db.game_spell_effect();
         for effect in effects.by_spell().filter(&spell_id).collect::<Vec<_>>() {
             effects.id().delete(effect.id);
+        }
+        for effect in spell_effects {
+            effects.insert(effect);
         }
         let learner = crate::helpers::live_entity(ctx, character_guid)?;
         crate::spell::learn_spell(ctx, character_guid, learner.owner_identity, spell_id);

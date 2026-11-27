@@ -51,7 +51,7 @@ symbol = "spell_go"
 evidence = "Source reading at d9173eca: Spell.cpp:4625-4653 Spell::WriteSpellGoTargets writes m_UniqueTargetInfo. LyraCore: spell_go builds GoTargets::GroundPoint through codec::build_spell_go_dest, which writes no hit or miss."
 
 [[known_gaps]]
-description = "Other white melee contexts retain the legacy Character dodge formula, Character parry and block eligibility, creature crushing chance, weapon-skill bonuses and offhand weapon-skill selection. Controlled units, ranged Weapon Strikes, thrown weapons, bows, crossbows and target-side hit/crit auras need separate conformance."
+description = "Other white melee contexts retain the legacy Character dodge formula, Character parry and block eligibility, creature crushing chance, weapon-skill bonuses and offhand weapon-skill selection. Controlled units and target-side hit/crit auras need separate conformance. Bows and crossbows share the gun's ranged table, so no roll context measures their weapon-skill selection."
 path = "module/src/combat/attack_table.rs"
 symbol = "attack_table_for"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp"

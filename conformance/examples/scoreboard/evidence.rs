@@ -45,12 +45,13 @@ fn roll_difference(scenario: &wire_client::scenario::Scenario, difference: &Diff
     if scenario.spell_rolls.is_some() {
         return spell_difference(scenario, difference);
     }
-    // The queued strike, Weapon Strike and ranged swings share white melee's Golden Trace.
+    // The queued strike, Weapon Strikes and ranged swings share white melee's Golden Trace.
     if scenario.id == "white_melee_outcomes"
         && (queued_strike_rolls::CONTEXT.accepts(difference)
             || weapon_strike_rolls::CONTEXT.accepts(difference)
             || ranged_swing_rolls::AUTO_SHOT.context.accepts(difference)
-            || ranged_swing_rolls::WAND_SHOT.context.accepts(difference))
+            || ranged_swing_rolls::WAND_SHOT.context.accepts(difference)
+            || ranged_swing_rolls::THROW.context.accepts(difference))
     {
         return true;
     }
