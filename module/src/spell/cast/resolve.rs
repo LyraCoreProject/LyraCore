@@ -1345,7 +1345,7 @@ fn arm_avoidance_reacts(
     }
 }
 
-fn cast_miss(roll: AttackOutcome, weapon_strike: bool, magic_hit: bool) -> u8 {
+pub(crate) fn cast_miss(roll: AttackOutcome, weapon_strike: bool, magic_hit: bool) -> u8 {
     match roll {
         AttackOutcome::Dodge => crate::spell::CAST_MISS_DODGE,
         AttackOutcome::Parry => crate::spell::CAST_MISS_PARRY,

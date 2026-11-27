@@ -173,6 +173,8 @@ pub(crate) struct Hit {
     pub crit: bool,
     pub blocked: bool,
     pub periodic: bool,
+    /// A unit after the first that one cast reached, vmangos `m_targetNum > 1`.
+    pub secondary_target: bool,
 }
 
 impl Hit {
@@ -183,6 +185,7 @@ impl Hit {
             crit,
             blocked: false,
             periodic: false,
+            secondary_target: false,
         }
     }
 
@@ -193,6 +196,7 @@ impl Hit {
             crit,
             blocked: false,
             periodic: false,
+            secondary_target: false,
         }
     }
 
@@ -208,6 +212,7 @@ impl Hit {
             crit: false,
             blocked: false,
             periodic: false,
+            secondary_target: false,
         }
     }
 
@@ -215,6 +220,13 @@ impl Hit {
         Self {
             periodic: true,
             ..Self::triggered()
+        }
+    }
+
+    pub(crate) fn as_secondary_target(self) -> Self {
+        Self {
+            secondary_target: true,
+            ..self
         }
     }
 

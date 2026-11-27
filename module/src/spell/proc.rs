@@ -199,6 +199,17 @@ pub(crate) fn hit_bits(hit: &Hit) -> (u32, u32) {
     }
 }
 
+/// vmangos `Spell::DoAllEffectOnTarget`: past the first unit, a melee ability hit gives its
+/// attacker a harmful spell hit instead; the victim keeps its bits.
+fn secondary_target_dealer_bits(hit: &Hit, dealer_bits: u32) -> u32 {
+    if hit.secondary_target && dealer_bits & PROC_FLAG_SUCCESSFUL_MELEE_SPELL_HIT != 0 {
+        (dealer_bits & !PROC_FLAG_SUCCESSFUL_MELEE_SPELL_HIT)
+            | PROC_FLAG_SUCCESSFUL_NEGATIVE_SPELL_HIT
+    } else {
+        dealer_bits
+    }
+}
+
 pub(crate) fn proc_chance_bp(profile: &ProcProfile, side: ProcSide, attack_time_ms: u32) -> u32 {
     if profile.ppm > 0.0 && side == ProcSide::Dealer {
         let pct = profile.ppm * attack_time_ms as f32 / PPM_DIVISOR_PCT;
@@ -421,6 +432,7 @@ fn fire_aura_procs(
     target_survived: bool,
 ) {
     let (dealer_bits, victim_bits) = hit_bits(hit);
+    let dealer_bits = secondary_target_dealer_bits(hit, dealer_bits);
     if dealer_bits == 0 && victim_bits == 0 {
         return;
     }
@@ -966,6 +978,23 @@ mod tests {
         assert_eq!(
             hit_bits(&Hit::spell(HitSource::Spell, 1234, false)),
             (0x1_0000, 0x2_0000)
+        );
+    }
+
+    #[test]
+    fn a_secondary_target_gives_its_attacker_a_harmful_spell_hit_for_a_melee_ability() {
+        let first = Hit::spell(HitSource::MeleeSpell, 845, false);
+        let secondary = first.as_secondary_target();
+        assert_eq!(secondary_target_dealer_bits(&first, 0x4 | 0x10), 0x4 | 0x10);
+        assert_eq!(
+            secondary_target_dealer_bits(&secondary, 0x4 | 0x10),
+            0x4 | 0x1_0000,
+            "vmangos keeps the main-hand swing bit and swaps 0x10 for 0x10000"
+        );
+        assert_eq!(
+            secondary_target_dealer_bits(&secondary, 0x40),
+            0x40,
+            "a hit without the melee ability bit keeps its bits"
         );
     }
 

@@ -35,7 +35,7 @@ pub(crate) use cast::{
     apply_direct_heal, apply_effect, apply_item_auras, apply_spell_auras, aura_apply, begin_cast,
     begin_loaded_cast, cast_aura_triggered, cast_triggered, charge_spell_cost,
     check_cast_start_gates, clear_dead_callback_cast_admission, complete_cast,
-    faction_target_violation, helps_units, place_ground_area, recipe_reagents,
+    faction_target_violation, helps_units, place_ground_area, queued_strike_chain, recipe_reagents,
     record_spell_cooldown, resolve_cast, revive_amount, select_targets, start_creature_spell,
     start_spell_cooldown, CastRequest, CreatureSpellCasterAdmission, CreatureSpellStart,
     CreatureSpellStartMode, CreatureSpellTarget, ItemGrantOutcome, LoadedSpell,

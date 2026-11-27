@@ -16,8 +16,9 @@ use crate::skilldata::game_skill_ability;
 
 use crate::script_binding::game_script;
 use crate::{
-    game_aura, game_ground_area, game_pending_spell_impact, game_spell, game_spell_reagent, Aura,
-    GroundArea, PendingSpellImpact, ResurrectRequest, Spell, SpellCastEvent, SpellEffect,
+    game_aura, game_ground_area, game_pending_spell_impact, game_spell, game_spell_effect,
+    game_spell_reagent, Aura, GroundArea, PendingSpellImpact, ResurrectRequest, Spell,
+    SpellCastEvent, SpellEffect,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -332,6 +333,33 @@ pub(crate) fn select_targets(
         }
         _ => vec![one],
     }
+}
+
+/// The units past `victim` that a firing queued strike's target 6 chain reaches, in jump order.
+pub(crate) fn queued_strike_chain(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    victim_guid: u64,
+    strike: &Spell,
+) -> Vec<u64> {
+    // The importer keeps a queued strike at T_TARGET_ENEMY; its row still carries the chain.
+    let Some(chain) = ctx
+        .db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&strike.spell_id)
+        .find(|e| e.kind == E_NEXT_SWING && e.chain_targets > 1)
+    else {
+        return Vec::new();
+    };
+    let chain = SpellEffect {
+        target: T_CHAIN_ENEMY,
+        ..chain
+    };
+    select_targets(ctx, attacker_guid, victim_guid, &chain, None, strike)
+        .into_iter()
+        .filter(|&unit| unit != victim_guid)
+        .collect()
 }
 
 /// The cast's selected unit, unless it rides a taxi.

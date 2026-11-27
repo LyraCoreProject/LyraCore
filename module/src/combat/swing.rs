@@ -600,6 +600,13 @@ fn fire_melee_swing(
     });
 
     let (mut rolled, hit_info, blocked) = roll_swing(ctx, attacker, target, strike);
+    let fired = swing_is_spell.then_some(FiredStrike {
+        spell_id: queued_spell,
+        header: queued_header.as_ref(),
+    });
+    let chained = strike.map_or_else(Vec::new, |strike| {
+        roll_chained_strikes(ctx, attacker, target_guid, queued_header.as_ref(), strike)
+    });
 
     if hit_info == AttackOutcome::Dodge {
         arm_react(ctx, attacker_guid, ReactKind::Overpower);
@@ -626,7 +633,7 @@ fn fire_melee_swing(
     if swing_is_spell {
         let cooldown_ms = queued_header.as_ref().map_or(0, |h| h.cooldown_ms);
         crate::spell::start_spell_cooldown(ctx, attacker_guid, queued_spell, cooldown_ms);
-        crate::SpellCastEvent::insert(
+        send_strike_go(
             ctx,
             SpellCastEvent {
                 target_guid,
@@ -646,6 +653,8 @@ fn fire_melee_swing(
                     as u8,
                 ..SpellCastEvent::signal_at(ctx, attacker, queued_spell, SpellCastEventKind::Go)
             },
+            hit_info,
+            &chained,
         );
     }
     CombatEvent::insert(
@@ -672,23 +681,197 @@ fn fire_melee_swing(
         );
     }
 
-    let dealt = damage.amount();
-    let hit = if swing_is_spell {
-        Hit::spell(
-            HitSource::MainHand,
-            queued_spell,
-            hit_info == AttackOutcome::Crit,
-        )
-    } else {
-        Hit::weapon(HitSource::MainHand, hit_info == AttackOutcome::Crit)
+    let combat_ended = land_main_hand(
+        ctx,
+        attacker_guid,
+        target_guid,
+        fired.map_or(MainHandHit::White, MainHandHit::Victim),
+        hit_info,
+        damage,
+        blocked,
+    );
+    if let Some(fired) = fired {
+        for unit in chained {
+            land_chained_strike(ctx, attacker, fired, unit);
+        }
     }
-    .with_block(blocked);
+    if combat_ended {
+        return;
+    }
+
+    // Re-read before stamping; the off-hand may have updated its clock on this row.
+    if let Some(mut fresh) = melee.attacker_guid().find(attacker_guid) {
+        fresh.last_swing_ms = now_ms;
+        fresh.swing_error = SWING_ERROR_NONE;
+        crate::MeleeAttack::update(ctx, fresh);
+    }
+
+    // Enter combat after entity writes so a stale snapshot cannot erase the flag.
+    enter_combat(ctx, attacker_guid);
+    enter_combat(ctx, target_guid);
+}
+
+/// A queued strike that fires with the swing; `header` is `None` when its Spell row is gone.
+#[derive(Clone, Copy)]
+struct FiredStrike<'a> {
+    spell_id: u32,
+    header: Option<&'a crate::Spell>,
+}
+
+impl FiredStrike<'_> {
+    fn weapon_procs(self) -> bool {
+        self.header
+            .is_some_and(|spell| spell.cast_flags & crate::spell::CAST_FLAG_WEAPON_PROCS != 0)
+    }
+}
+
+/// What one main-hand hit lands: a white swing, or a queued strike on its victim or a chained unit.
+#[derive(Clone, Copy)]
+enum MainHandHit<'a> {
+    White,
+    Victim(FiredStrike<'a>),
+    Chained(FiredStrike<'a>),
+}
+
+impl<'a> MainHandHit<'a> {
+    fn strike(self) -> Option<FiredStrike<'a>> {
+        match self {
+            Self::White => None,
+            Self::Victim(strike) | Self::Chained(strike) => Some(strike),
+        }
+    }
+
+    fn hit(self, crit: bool) -> Hit {
+        match self {
+            Self::White => Hit::weapon(HitSource::MainHand, crit),
+            Self::Victim(strike) => Hit::spell(HitSource::MainHand, strike.spell_id, crit),
+            Self::Chained(strike) => {
+                Hit::spell(HitSource::MainHand, strike.spell_id, crit).as_secondary_target()
+            }
+        }
+    }
+}
+
+/// A unit past the victim that a queued strike's chain reached, with its own swing roll.
+struct ChainedStrike {
+    target: WorldEntity,
+    rolled: u32,
+    hit_info: AttackOutcome,
+    blocked: u32,
+}
+
+// vmangos casts the queued Spell at the victim; each unit its chain reaches rolls its own hit.
+fn roll_chained_strikes(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    victim_guid: u64,
+    header: Option<&crate::Spell>,
+    strike: super::queued_strike::QueuedStrike,
+) -> Vec<ChainedStrike> {
+    let Some(header) = header else {
+        return Vec::new();
+    };
+    let entities = ctx.db.game_world_entity();
+    crate::spell::queued_strike_chain(ctx, attacker.guid, victim_guid, header)
+        .into_iter()
+        .filter_map(|guid| entities.guid().find(guid))
+        .map(|target| {
+            let (rolled, hit_info, blocked) = roll_swing(ctx, attacker, &target, Some(strike));
+            ChainedStrike {
+                target,
+                rolled,
+                hit_info,
+                blocked,
+            }
+        })
+        .collect()
+}
+
+/// Sends the queued strike's GO; a chain's GO lists the victim and every unit it reached.
+fn send_strike_go(
+    ctx: &ReducerContext,
+    row: SpellCastEvent,
+    hit_info: AttackOutcome,
+    chained: &[ChainedStrike],
+) {
+    if chained.is_empty() {
+        SpellCastEvent::insert(ctx, row);
+        return;
+    }
+    let units: Vec<(u64, u8)> = std::iter::once((row.target_guid, hit_info))
+        .chain(chained.iter().map(|unit| (unit.target.guid, unit.hit_info)))
+        .map(|(unit, outcome)| {
+            (
+                unit,
+                crate::spell::cast::resolve::cast_miss(outcome, true, false),
+            )
+        })
+        .collect();
+    crate::native::spell::cast_launch(ctx, &row, None, &units);
+    SpellCastEvent::insert_at(ctx, row, crate::native::spell::GoDelivery::Sent);
+}
+
+// vmangos Spell::DoAllEffectOnTarget: a unit other than the victim gets a damage log, no swing.
+fn land_chained_strike(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    strike: FiredStrike,
+    unit: ChainedStrike,
+) {
+    let target_guid = unit.target.guid;
+    crate::pvp::harmed(ctx, attacker, &unit.target);
+    if unit.hit_info == AttackOutcome::Dodge {
+        arm_react(ctx, attacker.guid, ReactKind::Overpower);
+    }
+    let damage = resolve_damage(ctx, attacker.guid, target_guid, unit.rolled);
+    SpellCastEvent::insert(
+        ctx,
+        SpellCastEvent {
+            target_guid,
+            damage: damage.amount(),
+            absorbed: damage.absorbed(),
+            blocked_amount: unit.blocked,
+            is_crit: unit.hit_info == AttackOutcome::Crit,
+            school: strike
+                .header
+                .map_or(0, |spell| crate::spell::school_index(spell.school_mask)),
+            is_proc_log: true,
+            ..SpellCastEvent::signal_at(ctx, attacker, strike.spell_id, SpellCastEventKind::ProcLog)
+        },
+    );
+    land_main_hand(
+        ctx,
+        attacker.guid,
+        target_guid,
+        MainHandHit::Chained(strike),
+        unit.hit_info,
+        damage,
+        unit.blocked,
+    );
+    enter_combat(ctx, target_guid);
+}
+
+/// Lands a resolved main-hand hit with its threat, procs and reflection; true when it ended combat.
+fn land_main_hand(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    target_guid: u64,
+    swing: MainHandHit,
+    hit_info: AttackOutcome,
+    damage: super::damage::ResolvedDamage,
+    blocked: u32,
+) -> bool {
+    let dealt = damage.amount();
+    let hit = swing
+        .hit(hit_info == AttackOutcome::Crit)
+        .with_block(blocked);
+    let strike = swing.strike();
     // vmangos adds a queued strike's table threat unless it was avoided or refused as immune.
-    if swing_is_spell && !hit_info.is_avoided() {
+    if let Some(strike) = strike.filter(|_| !hit_info.is_avoided()) {
         crate::threat::add_table_threat(
             ctx,
             attacker_guid,
-            queued_spell,
+            strike.spell_id,
             &[(target_guid, crate::threat::EVERY_EFFECT)],
         );
     }
@@ -703,23 +886,19 @@ fn fire_melee_swing(
         hit_info,
         (dealt, damage.absorbed()),
     );
-    let reflects = if swing_is_spell {
-        dealt > 0
-            && queued_header
-                .as_ref()
-                .is_some_and(|spell| spell.cast_flags & crate::spell::CAST_FLAG_WEAPON_PROCS != 0)
-    } else {
-        affects_victim(hit_info, dealt, blocked)
+    let reflects = match strike {
+        Some(strike) => dealt > 0 && strike.weapon_procs(),
+        None => affects_victim(hit_info, dealt, blocked),
     };
-    if swing_is_spell {
-        let school_mask = queued_header
-            .as_ref()
+    if let Some(strike) = strike {
+        let school_mask = strike
+            .header
             .map_or(1, |spell| u32::from(spell.school_mask));
         crate::creatures::eventai_on_spell_hit(
             ctx,
             attacker_guid,
             target_guid,
-            queued_spell,
+            strike.spell_id,
             school_mask,
         );
     }
@@ -727,15 +906,12 @@ fn fire_melee_swing(
         if reflects {
             super::damage_shield::reflect(ctx, attacker_guid, target_guid);
         }
-        return;
+        return true;
     }
     // vmangos: a weapon-proc strike rolls even when avoided; a white swing must affect the victim.
-    let rolls_weapon = if swing_is_spell {
-        queued_header
-            .as_ref()
-            .is_some_and(|strike| strike.cast_flags & crate::spell::CAST_FLAG_WEAPON_PROCS != 0)
-    } else {
-        affects_victim(hit_info, dealt, blocked)
+    let rolls_weapon = match strike {
+        Some(strike) => strike.weapon_procs(),
+        None => affects_victim(hit_info, dealt, blocked),
     };
     if rolls_weapon {
         crate::spell::chance_on_hit::roll_chance_on_hit(
@@ -748,22 +924,11 @@ fn fire_melee_swing(
     if reflects {
         super::damage_shield::reflect(ctx, attacker_guid, target_guid);
     }
-
     // Arm Revenge after damage so a stale defender snapshot cannot erase its deadline.
     if arms_revenge(hit_info, blocked) {
         arm_react(ctx, target_guid, ReactKind::Revenge);
     }
-
-    // Re-read before stamping; the off-hand may have updated its clock on this row.
-    if let Some(mut fresh) = melee.attacker_guid().find(attacker_guid) {
-        fresh.last_swing_ms = now_ms;
-        fresh.swing_error = SWING_ERROR_NONE;
-        crate::MeleeAttack::update(ctx, fresh);
-    }
-
-    // Enter combat after entity writes so a stale snapshot cannot erase the flag.
-    enter_combat(ctx, attacker_guid);
-    enter_combat(ctx, target_guid);
+    false
 }
 
 // vmangos HITINFO_AFFECTS_VICTIM: the swing connected and either dealt damage or was blocked.

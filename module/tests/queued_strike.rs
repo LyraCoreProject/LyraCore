@@ -36,6 +36,13 @@ const WATCH_CHARGES: u8 = 3;
 const WATCH_DURATION_MS: u32 = 600_000;
 // vmangos PROC_FLAG_TAKE_MELEE_ABILITY.
 const TAKEN_MELEE_SPELL_HIT: u32 = 0x20;
+// Spell.dbc Cleave 845: EffectChainTarget 2, no effect radius, the 5 yd melee range.
+const CLEAVE_CHAIN_TARGETS: u8 = 2;
+// vmangos SPELL_DAMAGE_CLASS_MELEE: a melee chain gathers within its radius alone.
+const DAMAGE_CLASS_MELEE: u8 = 2;
+// The victim at the usual 1 yd, a wolf 3 yd past it and one 6.5 yd past it, beyond Cleave's 5 yd.
+const CLEAVE_WOLF_OFFSETS: [&str; 3] = ["1.0", "4.0", "7.5"];
+const WOLF_HEALTH: u32 = 100_000;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -268,6 +275,117 @@ fn a_queued_strike_raises_the_victims_melee_ability_proc_and_a_white_swing_does_
         Some(WATCH_CHARGES - 1),
         "vmangos gives a queued strike's victim PROC_FLAG_TAKE_MELEE_ABILITY"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_queued_cleave_strikes_its_victim_and_the_enemy_in_reach_but_not_one_beyond() {
+    let mut standalone = Standalone::start("queued-cleave-chain");
+    standalone.publish_module();
+    stage_on_next_swing_spell(
+        &standalone,
+        QueuedStrike::rage(CLEAVE, "Cleave", CLEAVE_COST),
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell SET damage_class = {DAMAGE_CLASS_MELEE} WHERE spell_id = {CLEAVE}"
+    ));
+    set_cleave_chain(&standalone, CLEAVE_CHAIN_TARGETS);
+    standalone.assert_call("debug_spawn_player_entity", &["1"]);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET godmode = true WHERE guid = {PLAYER}"
+    ));
+    let [victim, near, far] =
+        CLEAVE_WOLF_OFFSETS.map(|offset| spawn_target_at(&standalone, offset));
+    engage(&standalone, victim);
+    assert_eq!(
+        attack_target(&standalone),
+        Some(victim),
+        "the Character must be attacking the victim"
+    );
+
+    for _ in 0..20 {
+        let casts = cleave_swing(&standalone, victim);
+        assert!(
+            chain_logged(&casts, near),
+            "every fired Cleave must reach the wolf 3 yd past its victim, got {casts:?}"
+        );
+        assert!(
+            !chain_logged(&casts, far),
+            "the wolf 6.5 yd past the victim is beyond Cleave's 5 yd, got {casts:?}"
+        );
+        if wolf_health(&standalone, near) < WOLF_HEALTH {
+            break;
+        }
+    }
+    assert_eq!(
+        [victim, near, far].map(|wolf| wolf_health(&standalone, wolf) < WOLF_HEALTH),
+        [true, true, false],
+        "vmangos casts the queued Cleave at the victim; its target 6 chain gathers melee units \
+         within 5 yd of it"
+    );
+
+    set_cleave_chain(&standalone, 3);
+    let casts = cleave_swing(&standalone, victim);
+    assert!(
+        chain_logged(&casts, near) && !chain_logged(&casts, far),
+        "a third jump could reach the far wolf 3.5 yd from the near one, but vmangos gathers a \
+         melee chain only within 5 yd of the victim, got {casts:?}"
+    );
+}
+
+fn set_cleave_chain(standalone: &Standalone, chain_targets: u8) {
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET chain_targets = {chain_targets} WHERE spell_id = {CLEAVE}"
+    ));
+}
+
+/// Queues Cleave at `victim`, swings once and returns the swing's cast events.
+fn cleave_swing(standalone: &Standalone, victim: u64) -> Vec<SqlRow> {
+    stage_power(standalone, CLEAVE_COST);
+    cast(standalone, CLEAVE, victim);
+    assert_eq!(
+        queued_spell(&player(standalone)),
+        CLEAVE.to_string(),
+        "the cast must queue Cleave on the next swing"
+    );
+    let (casts, landed) = swing(standalone);
+    assert_eq!(
+        landed["spell_swing"], "true",
+        "the swing must fire the queued Cleave, got {landed:?}"
+    );
+    assert!(
+        casts.iter().any(|row| fired(row, CLEAVE)),
+        "the fired Cleave must report its GO, got {casts:?}"
+    );
+    casts
+}
+
+// A chain unit's Cleave log row, written whether its own roll hit or missed.
+fn chain_logged(casts: &[SqlRow], unit: u64) -> bool {
+    casts.iter().any(|row| {
+        row["spell_id"] == CLEAVE.to_string()
+            && row["is_proc_log"] == "true"
+            && row["target_guid"] == unit.to_string()
+    })
+}
+
+fn attack_target(standalone: &Standalone) -> Option<u64> {
+    standalone
+        .query_rows(&format!(
+            "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {PLAYER}"
+        ))
+        .first()
+        .and_then(|row| row["target_guid"].parse().ok())
+}
+
+fn wolf_health(standalone: &Standalone, wolf: u64) -> u32 {
+    standalone
+        .query_rows(&format!(
+            "SELECT health FROM game_world_entity WHERE guid = {wolf}"
+        ))
+        .first()
+        .and_then(|row| row["health"].parse().ok())
+        .expect("the wolf must be live")
 }
 
 #[test]
@@ -795,9 +913,13 @@ fn watch_charges(standalone: &Standalone, wolf: u64) -> Option<u8> {
 }
 
 fn spawn_target(standalone: &Standalone) -> u64 {
+    spawn_target_at(standalone, "1.0")
+}
+
+fn spawn_target_at(standalone: &Standalone, offset: &str) -> u64 {
     standalone.assert_call(
         "debug_spawn_at_feet",
-        &["1", &TEST_WOLF_ENTRY.to_string(), "1.0"],
+        &["1", &TEST_WOLF_ENTRY.to_string(), offset],
     );
     let guid = standalone
         .query_rows(&format!(
