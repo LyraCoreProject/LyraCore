@@ -496,3 +496,23 @@ pub(super) fn realm_page(
         )),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_listing_vmangos_refuses_for_the_item_answers_the_inventory_pair() {
+        assert_eq!(
+            result_two(AuctionRefusal::ItemNotTradeable),
+            ResultTwo::ErrInventory {
+                inventory_result2: InventoryResult::ItemNotFound
+            }
+        );
+        assert_eq!(
+            result_two(AuctionRefusal::ItemNotFound),
+            ResultTwo::ErrItemNotFound,
+            "only a zero item guid answers the bare code"
+        );
+    }
+}

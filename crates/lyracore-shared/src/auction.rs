@@ -25,8 +25,11 @@ pub fn auction_cut(bid: u32, consignment_rate: u32) -> Option<u32> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuctionRefusal {
+    /// A zero item guid in a listing, or an Auction or a Character that is not there.
     ItemNotFound,
-    /// vmangos `Item::CanBeTraded` refuses, as for an opened item.
+    /// A listing the Character cannot make: vmangos `HandleAuctionSellItem` answers
+    /// `AUCTION_ERR_INVENTORY` with `EQUIP_ERR_ITEM_NOT_FOUND` for an item that is missing, not
+    /// carried, soulbound, opened or offered in a trade.
     ItemNotTradeable,
     NotEnoughMoney,
     InvalidTerms,

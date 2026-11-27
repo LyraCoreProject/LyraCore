@@ -892,6 +892,10 @@ fn prepare_from_source<S: ListingSource>(
     if request.operation_id == 0 || request.house.id == 0 {
         return Err(AuctionRefusal::InvalidTerms);
     }
+    // vmangos answers a zero item guid with a bare AUCTION_ERR_ITEM_NOT_FOUND.
+    if request.item_guid == 0 {
+        return Err(AuctionRefusal::ItemNotFound);
+    }
     let item = sink.item(request.item_guid);
     let seller_money = sink
         .seller_money(request.seller_guid)
@@ -1659,19 +1663,20 @@ fn prepare_listing(
     terms: ListingTerms,
     house: AuctionHousePolicy,
 ) -> Result<u32, AuctionRefusal> {
+    // vmangos answers every one of these with AUCTION_ERR_INVENTORY and EQUIP_ERR_ITEM_NOT_FOUND.
     let Some(item) = item else {
-        return Err(AuctionRefusal::ItemNotFound);
+        return Err(AuctionRefusal::ItemNotTradeable);
     };
     if item.owner_guid != seller_guid
         || !crate::items::is_unequipped_carried_slot(item.slot)
         || !item.mailable
         || item.snapshot.stack_count == 0
         || item.snapshot.soulbound
+        // A Listing cannot carry spent charges; see the item_use Feature Ledger deviation.
+        || item.offered
+        || item.has_generated_loot
+        || item.has_spent_charges
     {
-        return Err(AuctionRefusal::ItemNotFound);
-    }
-    // A Listing cannot carry spent charges; see the item_use Feature Ledger deviation.
-    if item.offered || item.has_generated_loot || item.has_spent_charges {
         return Err(AuctionRefusal::ItemNotTradeable);
     }
     if terms.start_bid == 0 || (terms.buyout != 0 && terms.buyout < terms.start_bid) {

@@ -2377,7 +2377,7 @@ def check_auctions(host):
     for args in [dict(start=0), dict(buyout=50), dict(duration=121)]:
         result(sell(item_guid, **args), 0, 0, 2)
     host.sql(f'UPDATE game_item_instance SET soulbound = true WHERE guid = {item_guid}')
-    result(sell(item_guid), 0, 0, 4)
+    result(sell(item_guid), 0, 0, 1, bytes([0x17]))
     host.sql(f'UPDATE game_item_instance SET soulbound = false WHERE guid = {item_guid}')
     host.call('debug_set_money', [seller_guid, 49])
     result(sell(item_guid), 0, 0, 3)
@@ -2388,7 +2388,7 @@ def check_auctions(host):
     assert host.rows(f'SELECT deposit, item_durability, item_enchant_id, random_property_id FROM game_auction WHERE id = {auction_id}') == [[50, 17, 7745, 1900]]
     result(sell(item_guid), auction_id, 0, 0)
     assert purse(seller_guid) == 9950
-    result(sell(item_guid, buyout=600), 0, 0, 4)
+    result(sell(item_guid, buyout=600), 0, 0, 1, bytes([0x17]))
     assert len(host.rows(f'SELECT auction_id FROM game_auction_operation_receipt WHERE actor_guid = {seller_guid}')) == 1
     entries, total = page(bidder, name='tEsT sWoRd', minimum=1, maximum=1, inventory=13, item_class=2, subclass=7, quality=2)
     assert total == 1 and entries[0][:8] == (auction_id, 5090620, 823, 1900, 0, 1, 0, seller_guid)
@@ -2587,8 +2587,8 @@ def check_mail(host):
     item = host.rows(f'SELECT guid FROM game_item_instance WHERE owner_guid = {first_guid} AND entry = 5090050')[0][0]
     host.sql(f'UPDATE game_item_instance SET enchant_id = 7745, durability = 11, random_property_id = 1900, soulbound = true WHERE guid = {item}')
     first.collect()
-    result(send(item=copy), 0, 0, 19)
-    result(send(item=item), 0, 0, 16)
+    result(send(item=copy), 0, 0, 6)
+    result(send(item=item), 0, 0, 6)
     host.sql(f'UPDATE game_item_instance SET soulbound = false WHERE guid = {item}')
     host.call('debug_set_money', [first_guid, 29])
     first.collect()

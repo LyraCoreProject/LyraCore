@@ -364,7 +364,7 @@ fn listing_accepts_only_one_owned_mailable_bag_stack_and_valid_terms() {
     for slot in [15, 19, 39, 63, 119, 192] {
         assert_eq!(
             prepare_listing(Some(&item(slot)), 7, 10, terms(), policy()),
-            Err(AuctionRefusal::ItemNotFound),
+            Err(AuctionRefusal::ItemNotTradeable),
             "slot {slot} must not be auctionable"
         );
     }
@@ -373,21 +373,21 @@ fn listing_accepts_only_one_owned_mailable_bag_stack_and_valid_terms() {
     foreign.owner_guid = 8;
     assert_eq!(
         prepare_listing(Some(&foreign), 7, 10, terms(), policy()),
-        Err(AuctionRefusal::ItemNotFound)
+        Err(AuctionRefusal::ItemNotTradeable)
     );
 
     let mut soulbound = item(23);
     soulbound.snapshot.soulbound = true;
     assert_eq!(
         prepare_listing(Some(&soulbound), 7, 10, terms(), policy()),
-        Err(AuctionRefusal::ItemNotFound)
+        Err(AuctionRefusal::ItemNotTradeable)
     );
 
     let mut not_mailable = item(120);
     not_mailable.mailable = false;
     assert_eq!(
         prepare_listing(Some(&not_mailable), 7, 10, terms(), policy()),
-        Err(AuctionRefusal::ItemNotFound)
+        Err(AuctionRefusal::ItemNotTradeable)
     );
 
     let mut opened = item(23);
@@ -414,7 +414,7 @@ fn listing_accepts_only_one_owned_mailable_bag_stack_and_valid_terms() {
 
     assert_eq!(
         prepare_listing(None, 7, 10, terms(), policy()),
-        Err(AuctionRefusal::ItemNotFound)
+        Err(AuctionRefusal::ItemNotTradeable)
     );
     assert_eq!(
         prepare_listing(Some(&item(23)), 7, 9, terms(), policy()),
@@ -550,6 +550,23 @@ fn local_listing_refusals_leave_item_purse_and_market_unchanged() {
         assert_eq!(store.next_auction_id, before.next_auction_id);
         assert!(store.committed.is_none());
     }
+}
+
+#[test]
+fn a_zero_item_guid_is_the_only_bare_item_not_found() {
+    let mut store = local();
+    let before = store.clone();
+    let zero = ListingRequest {
+        item_guid: 0,
+        ..request()
+    };
+
+    assert_eq!(
+        create_local_listing(&mut store, zero),
+        Err(AuctionRefusal::ItemNotFound)
+    );
+    assert_eq!(store.money, before.money);
+    assert!(store.committed.is_none());
 }
 
 #[test]

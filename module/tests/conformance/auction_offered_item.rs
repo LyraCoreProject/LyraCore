@@ -9,9 +9,8 @@ const SMSG_AUCTION_COMMAND_RESULT: u16 = 0x25b;
 const AUCTIONEER_AND_VENDOR: u32 = 4100;
 // Auction 0, action Started, result ErrInventory, then InventoryResult ItemNotFound as one byte.
 const NOT_TRADEABLE_REPLY: [u8; 13] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0x17];
-// Auction 0, action Started, then result ErrItemNotFound. #1333 changes a soulbound listing's
-// reply to the vmangos AUCTION_ERR_INVENTORY with EQUIP_ERR_ITEM_NOT_FOUND.
-const SOULBOUND_REPLY: [u8; 12] = [0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0];
+// Auction 0, action Started, then result ErrItemNotFound: vmangos answers a zero item guid so.
+const ZERO_GUID_REPLY: [u8; 12] = [0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0];
 const SELLER_MONEY: u32 = 50_000;
 
 /// A Character with `SELLER_MONEY` copper at an Auctioneer that has an Auction House.
@@ -209,7 +208,7 @@ fn a_soulbound_quest_bonded_item_cannot_be_listed() {
     );
 
     assert!(
-        refused.contains(&(SMSG_AUCTION_COMMAND_RESULT, SOULBOUND_REPLY.to_vec())),
+        refused.contains(&(SMSG_AUCTION_COMMAND_RESULT, NOT_TRADEABLE_REPLY.to_vec())),
         "{refused:?}"
     );
     assert!(shard.query_rows("SELECT * FROM game_auction").is_empty());
@@ -222,4 +221,33 @@ fn a_soulbound_quest_bonded_item_cannot_be_listed() {
         1,
         "the item stays with the seller"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_zero_item_guid_answers_the_bare_code_and_a_missing_item_the_inventory_pair() {
+    let (shard, guid, _account, auctioneer) = auction_fixture("auction-missing-item");
+    let mut connection = enter(&shard, guid);
+    connection.drain_packets();
+
+    let zero = request(
+        &mut connection,
+        CMSG_AUCTION_SELL_ITEM,
+        sell_item_body(auctioneer, 0),
+    );
+    assert!(
+        zero.contains(&(SMSG_AUCTION_COMMAND_RESULT, ZERO_GUID_REPLY.to_vec())),
+        "{zero:?}"
+    );
+
+    let missing = request(
+        &mut connection,
+        CMSG_AUCTION_SELL_ITEM,
+        sell_item_body(auctioneer, 4_000_000_000),
+    );
+    assert!(
+        missing.contains(&(SMSG_AUCTION_COMMAND_RESULT, NOT_TRADEABLE_REPLY.to_vec())),
+        "{missing:?}"
+    );
+    assert!(shard.query_rows("SELECT * FROM game_auction").is_empty());
 }
