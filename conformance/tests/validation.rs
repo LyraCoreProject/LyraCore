@@ -167,7 +167,32 @@ evidence = "Comparison record 1: missing_packet."
         assert!(load(&source.replace(old, new)).is_err());
     }
     assert!(load(&format!("{source}\nstatus = \"open\"\n")).is_err());
+    let twice = load(&format!("{source}{gap}")).unwrap_err();
+    assert!(
+        format!("{twice:#}").contains("duplicate known gap descriptions"),
+        "{twice:#}"
+    );
     assert!(load(&format!("known_gaps = [\"missing reply\"]\n{EXAMPLE}")).is_err());
+}
+
+#[test]
+fn a_known_gap_needs_a_real_client_only_when_marked_and_says_so_only_then() {
+    let gap = "\n[[known_gaps]]\ndescription = \"Stock-client use is unverified.\"\npath = \"module/src/native/mod.rs\"\nsymbol = \"receive\"\nevidence = \"vmangos Opcodes.cpp\"\n";
+    let unmarked = format!("{EXAMPLE}{gap}");
+    let marked = format!("{unmarked}needs_real_client = true\n");
+    let unmarked_ledger = load(&unmarked).unwrap();
+    let marked_ledger = load(&marked).unwrap();
+    let unmarked_gap = &unmarked_ledger.behaviors()[0].known_gaps[0];
+    let marked_gap = &marked_ledger.behaviors()[0].known_gaps[0];
+    assert!(!unmarked_gap.needs_real_client);
+    assert!(marked_gap.needs_real_client);
+    assert!(!toml::to_string(unmarked_gap)
+        .unwrap()
+        .contains("needs_real_client"));
+    assert!(toml::to_string(marked_gap)
+        .unwrap()
+        .contains("needs_real_client = true"));
+    assert!(load(&format!("{unmarked}needs_real_client = \"yes\"\n")).is_err());
 }
 
 #[test]

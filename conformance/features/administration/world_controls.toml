@@ -25,9 +25,11 @@ description = "Stock-client use of CMSG_DEBUG_CHANGECELLZONE, CMSG_WEATHER_SPEED
 path = "module/src/native/mod.rs"
 symbol = "receive"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+needs_real_client = true
 
 [[known_gaps]]
 description = "Stock-client use of CMSG_TELEPORT_TO_UNIT is unverified; vmangos dispatches it to a handler. Check whether the client sends it and what result to preserve."
 path = "module/src/native/mod.rs"
 symbol = "receive"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+needs_real_client = true

@@ -51,6 +51,8 @@ pub struct KnownGap {
     pub path: String,
     pub symbol: String,
     pub evidence: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_real_client: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -146,6 +148,8 @@ impl Behavior {
                 "deviation source must be an HTTPS URL"
             );
         }
+        let gap_descriptions: Vec<_> = self.known_gaps.iter().map(|gap| &gap.description).collect();
+        unique(&gap_descriptions, "known gap descriptions")?;
         for gap in &self.known_gaps {
             nonempty(&gap.description, "known gap description")?;
             relative_path(&gap.path)?;

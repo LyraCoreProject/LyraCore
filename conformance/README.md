@@ -36,10 +36,15 @@ All nested tables refuse unknown fields too. Paths are relative, without parent-
 | `required_rungs` | Evidence needed to count the Behavior as done |
 | `scenarios` | Plain string ids in the pinned harness catalogue; empty until authored |
 | `deliberate_deviations` | Intentional result differences, each with an `id`, `result`, `reason` and HTTPS `source` |
-| `known_gaps` | Optional list of defects or open stock-client questions with `description`, relative core `path`, `symbol` and `evidence`; work kind derived from path |
+| `known_gaps` | Optional list of defects or open stock-client questions with `description`, relative core `path`, `symbol` and `evidence`; work kind derived from path; descriptions are unique within a Behavior. An open stock-client question also sets `needs_real_client = true`; the field defaults to false |
 | `real_client` | A human-maintained check, described below |
 | `prerequisites` | Fixture or world-data requirements in plain words |
 | `tests` | Retained Rust evidence, each with a source `path`, test `function` and `rung` |
+
+A known gap's id is the Behavior id, a hyphen, and the first 8 lowercase hexadecimal digits of the
+SHA-256 of its UTF-8 `description`, such as `periodic_leech-3fa2c1d0`. A core gap without
+`needs_real_client` is a task an outside contributor can claim
+([`CONTRIBUTING.md`](../CONTRIBUTING.md#picking-a-task)); editing a description changes its id.
 
 Ids for Behaviors, systems and deviations start with a lowercase ASCII letter and contain only
 lowercase letters, digits and underscores. Scenario ids have no prescribed naming syntax. Empty

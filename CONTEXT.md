@@ -47,7 +47,7 @@ entry in both files.
 
 **S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Soulstone](#death-and-resurrection) · [Source Profile](#realm-topology) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Summon Offer](#summoning) · [Summoning Ritual](#summoning) · [Swing Error](#procs)
 
-**T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Temporary Enchantment](#random-properties) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#realm-topology) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Trigger Child Cast](#procs) · [Trigger Depth](#procs) · [Triggered Cast](#procs) · [Trust Review](#packages)
+**T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Task](#conformance) · [Temporary Enchantment](#random-properties) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#realm-topology) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Trigger Child Cast](#procs) · [Trigger Depth](#procs) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
 **U** [UI Transform](#client-content)
 
@@ -1419,6 +1419,12 @@ _Avoid_: compatibility audit
 A known gap in World Source translation or imported representation, identified by an `importer/`
 source path in the Feature Ledger. The scoreboard assigns it to `data_import` work and counts it
 separately from behavior gaps. This assignment does not classify wire differences or prove conformance.
+
+**Task**:
+A known gap an outside contributor can claim: not a Data Gap, and not marked `needs_real_client`.
+Its gap id is the Behavior id and 8 hex digits of its description's SHA-256. An open `gap` issue
+whose first line carries that id holds it. `CONTRIBUTING.md` "Picking a task" gives the claim.
+_Avoid_: ticket, bounty, issue (for an unclaimed gap)
 
 **Data-dependent field**:
 A packet field declared in a harness scenario with its opcode, field path and reason. The comparator

@@ -1,0 +1,27 @@
+id = "periodic_leech"
+system = "spells"
+scenarios = ["drain_life_tick"]
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Spells/SpellAuras.cpp"
+symbol = "Aura::PeriodicTick"
+
+[[known_gaps]]
+description = "Periodic leech heals the caster for the full damage."
+path = "module/src/spell/periodic.rs"
+symbol = "apply_periodic_leech"
+evidence = "vmangos SpellAuras.cpp Aura::PeriodicTick multiplies by the effect's multiple value."
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_GHOST is unverified."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "vmangos Opcodes.cpp marks it unhandled."
+needs_real_client = true
+
+[[known_gaps]]
+description = "Spell 7744 has no template row."
+path = "importer/src/spells.rs"
+symbol = "import_spells"
+evidence = "spell_template has no row 7744."
