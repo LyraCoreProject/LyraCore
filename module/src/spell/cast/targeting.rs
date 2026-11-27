@@ -1549,7 +1549,7 @@ fn apply_damage_effect(
             let (dmg, blocked) = if target_guid == caster_guid {
                 (dmg, 0)
             } else {
-                crate::combat::block_cast_strike(
+                crate::combat::block_cast_spell(
                     ctx,
                     &caster,
                     &target,

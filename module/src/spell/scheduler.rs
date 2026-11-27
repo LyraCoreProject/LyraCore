@@ -69,6 +69,19 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
     if !crate::time::scheduler_authorized(ctx) {
         return;
     }
+    let entities = ctx.db.game_world_entity();
+    let Some(target) = entities.guid().find(sched.target_guid) else {
+        return;
+    };
+    // vmangos Spell::DoSpellHitOnUnit lands spell damage only on a living unit.
+    if target.dead
+        || entities
+            .guid()
+            .find(sched.caster_guid)
+            .is_some_and(|caster| !crate::combat::may_harm(ctx, &caster, &target))
+    {
+        return;
+    }
     // vmangos Spell::CheckAtDelay tests evade again when the spell lands.
     if crate::creatures::eventai::movement::returning_home(ctx, sched.target_guid) {
         crate::native::combat::spell_log_miss(

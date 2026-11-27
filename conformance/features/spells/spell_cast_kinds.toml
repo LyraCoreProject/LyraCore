@@ -85,6 +85,12 @@ symbol = "fire_spell_impact"
 evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit rechecks IsImmuneToDamage and IsImmuneToSpell for a spell with speed and sends SPELL_MISS_IMMUNE; fire_spell_impact and ranged_impact land the damage frozen at launch."
 
 [[known_gaps]]
+description = "The partial block of a travelling melee or ranged damage-class Spell, such as Arcane Shot, is rolled when it launches. A target that turns away or gains a block while the spell travels keeps the launch result; vmangos rolls the block on impact."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "apply_damage_effect"
+evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit calls Unit::CalculateAbsorbResistBlock, which calls IsSpellPartiallyBlocked, when a delayed spell hits (Spell.cpp:1415); apply_damage_effect rolls the block through mitigate_spell at launch and stores it in PendingSpellImpact.blocked."
+
+[[known_gaps]]
 description = "Retaliation strikes back at an attacker immune to physical damage and deals its damage. vmangos casts the Retaliation strike as a spell, so the attacker's immunity refuses it and the strike reports immune."
 path = "module/src/combat/folds.rs"
 symbol = "retaliate_on_hit"

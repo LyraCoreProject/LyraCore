@@ -18,7 +18,7 @@ const PHYSICAL: u32 = 0x01;
 // vmangos SpellDamageClass.
 const DAMAGE_CLASS_MELEE: u8 = 2;
 const DAMAGE_CLASS_RANGED: u8 = 3;
-// Spell.dbc Attributes of an instant ability: ability, not while shapeshifted, no sheath.
+// Spell.dbc Attributes of an instant ability: ability, not while shapeshifted, tracks its target.
 const ABILITY_ATTRIBUTES: u32 = 0x0041_0010;
 const SPELL_ATTR_NO_ACTIVE_DEFENSE: u32 = 0x0020_0000;
 // No range check and no travel; a range lets the spell travel the 15 yards to the wolf.

@@ -918,7 +918,7 @@ fn rolls_spell_block(
 
 /// A cast Spell's partial block: its damage after the block and the amount blocked.
 /// The draw comes from the Caster stream, after the cast's hit roll and the effect's other draws.
-pub(crate) fn block_cast_strike(
+pub(crate) fn block_cast_spell(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     target: &WorldEntity,

@@ -896,7 +896,7 @@ pub(crate) fn launch_ranged_strike(
     spell: &crate::Spell,
     is_crit: bool,
 ) {
-    let (rolled, blocked) = super::block_cast_strike(
+    let (rolled, blocked) = super::block_cast_spell(
         ctx,
         attacker,
         target,

@@ -57,7 +57,7 @@ pub(crate) fn mitigate_spell(
     // vmangos rolls every spell's partial block with the main-hand weapon skill (BASE_ATTACK).
     let blocks = units.filter(|_| caster != target);
     let (before_resist, blocked) = blocks.map_or((before_block, 0), |(caster, target)| {
-        crate::combat::block_cast_strike(
+        crate::combat::block_cast_spell(
             ctx,
             &caster,
             &target,

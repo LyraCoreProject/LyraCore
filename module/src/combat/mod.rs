@@ -56,7 +56,7 @@ pub(crate) use engage::{
 #[cfg(feature = "debug_reducers")]
 pub(crate) use folds::defender_block_value;
 pub(crate) use folds::{
-    arm_react, attack_power_modifiers, attack_time, base_melee_attack_power, block_cast_strike,
+    arm_react, attack_power_modifiers, attack_time, base_melee_attack_power, block_cast_spell,
     deal_blocked_spell_damage, effective_crit_bp, effective_ranged_crit_bp, effective_swing_time,
     equipped_offhand_weapon_damage, equipped_ranged_weapon, find_ammo, melee_attack_power,
     melee_attack_power_multiplier, off_hand_attack_time, ranged_attack_power_multiplier,

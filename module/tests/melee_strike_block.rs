@@ -16,7 +16,7 @@ const STRIKE: u32 = 5_131_701;
 const PROC_WATCH: u32 = 5_131_702;
 const PHYSICAL: u32 = 0x01;
 const DAMAGE_CLASS_MELEE: u8 = 2;
-// Spell.dbc Attributes of an instant melee ability: ability, not while shapeshifted, no sheath.
+// Spell.dbc Attributes of a melee ability: ability, not while shapeshifted, tracks its target.
 const STRIKE_ATTRIBUTES: u32 = 0x0041_0010;
 const SPELL_ATTR_NO_ACTIVE_DEFENSE: u32 = 0x0020_0000;
 // A charge spends only after the watch Aura has aged past the tick that applied it.
