@@ -72,7 +72,8 @@ jobs:
               echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
               PATH="$(brew --prefix openssl@3)/bin:$PATH" openssl version
             fi
-            # The runner image ships rustup; remove it so the documented install is the one measured.
+            # The runner image ships rustup, on macOS as a Homebrew formula; remove it so the documented install is the one measured.
+            if [ "$RUNNER_OS" = macOS ]; then brew uninstall --ignore-dependencies rustup; fi
             rm -rf "${CARGO_HOME:-$HOME/.cargo}" "${RUSTUP_HOME:-$HOME/.rustup}"
             if command -v cargo; then exit 1; fi
             curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
