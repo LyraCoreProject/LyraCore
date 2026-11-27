@@ -266,7 +266,7 @@ failing at the merge-base with only the PR's test files applied and passing at t
 scenario, and prints one JSON evidence document; `--pr <number>` also writes it into the PR
 description. See the [evidence contract](../conformance/README.md#pull-request-evidence).
 The [clean machine workflow](../.github/workflows/clean-machine-conformance.yml) runs
-`./conformance/run bank_slot_purchase` weekly on a cold Linux and macOS runner, and its job summary
+`./conformance/run two_character_visibility` weekly on a cold Linux and macOS runner, and its job summary
 lists the seconds each phase took.
 For a local implementer check, run the changed scenario and `cargo fmt --all`. CI runs clippy,
 all tier 1 scenarios and the full suite. Run one test locally only to reproduce a CI failure or

@@ -19,7 +19,7 @@ permissions:
 
 env:
   SPACETIME_VERSION: 2.14.0
-  SCENARIO: bank_slot_purchase
+  SCENARIO: two_character_visibility
 
 # Follows docs/quickstart.md section 1 with no dependency cache, so the times are cold.
 jobs:
