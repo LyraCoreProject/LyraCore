@@ -67,8 +67,8 @@ needs their own hands or says to hand back.
 curl -fsSL https://workshop.lyracore.example/tasks.json
 ```
 
-Workshop lists the open tasks, each with its gap id, such as `periodic_leech-3fa2c1d0`. Take the
-first task with no claim. The id is the Behavior id, a hyphen and 8 hexadecimal digits; find the
+Workshop lists the open tasks in order, each with its gap `id`, such as `periodic_leech-3fa2c1d0`.
+Take the first task whose `claimed` is `false`. The id is the Behavior id, a hyphen and 8 hexadecimal digits; find the
 Behavior in `conformance/features/*/<behavior id>.toml` and read the gap's `[[known_gaps]]` entry
 and the code at its `path` and `symbol`. Pick the next task when the fix needs a maintainer-only
 path or a Deliberate Deviation (see step 9). When no task fits, tell the contributor that no task

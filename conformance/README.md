@@ -36,7 +36,7 @@ All nested tables refuse unknown fields too. Paths are relative, without parent-
 | `required_rungs` | Evidence needed to count the Behavior as done |
 | `scenarios` | Plain string ids in the pinned harness catalogue; empty until authored |
 | `deliberate_deviations` | Intentional result differences, each with an `id`, `result`, `reason` and HTTPS `source` |
-| `known_gaps` | Optional list of defects or open stock-client questions with `description`, relative core `path`, `symbol` and `evidence`; work kind derived from path; descriptions are unique within a Behavior. An open stock-client question also sets `needs_real_client = true`; the field defaults to false |
+| `known_gaps` | Optional list of defects or open stock-client questions with `description`, relative core `path`, `symbol` and `evidence`; work kind derived from path; two entries of a Behavior with the same description are one gap. An open stock-client question also sets `needs_real_client = true`; the field defaults to false |
 | `real_client` | A human-maintained check, described below |
 | `prerequisites` | Fixture or world-data requirements in plain words |
 | `tests` | Retained Rust evidence, each with a source `path`, test `function` and `rung` |

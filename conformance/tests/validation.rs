@@ -167,11 +167,6 @@ evidence = "Comparison record 1: missing_packet."
         assert!(load(&source.replace(old, new)).is_err());
     }
     assert!(load(&format!("{source}\nstatus = \"open\"\n")).is_err());
-    let twice = load(&format!("{source}{gap}")).unwrap_err();
-    assert!(
-        format!("{twice:#}").contains("duplicate known gap descriptions"),
-        "{twice:#}"
-    );
     assert!(load(&format!("known_gaps = [\"missing reply\"]\n{EXAMPLE}")).is_err());
 }
 
