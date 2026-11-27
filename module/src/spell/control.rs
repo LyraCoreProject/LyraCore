@@ -791,7 +791,7 @@ pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
 }
 
 /// Ends the caster's channel of one spell, leaving any cast in progress; returns whether it had one.
-fn end_channel(ctx: &ReducerContext, caster_guid: u64, spell_id: u32) -> bool {
+pub(crate) fn end_channel(ctx: &ReducerContext, caster_guid: u64, spell_id: u32) -> bool {
     let auras: Vec<Aura> = channel_auras(ctx, caster_guid)
         .filter(|aura| aura.spell_id == spell_id)
         .collect();

@@ -59,6 +59,33 @@ pub fn build_spell_non_melee_damage_log(
     }
 }
 
+/// A health leech tick's damage log: the periodic flag set, as vmangos sends it.
+#[allow(clippy::too_many_arguments)]
+pub fn build_periodic_spell_non_melee_damage_log(
+    target_guid: u64,
+    caster_guid: u64,
+    spell_id: u32,
+    damage: u32,
+    school_index: u8,
+    resisted: u32,
+    absorbed: u32,
+) -> SMSG_SPELLNONMELEEDAMAGELOG {
+    SMSG_SPELLNONMELEEDAMAGELOG {
+        periodic_log: true,
+        ..build_spell_non_melee_damage_log(
+            target_guid,
+            caster_guid,
+            spell_id,
+            damage,
+            school_index,
+            false,
+            resisted,
+            absorbed,
+            0,
+        )
+    }
+}
+
 /// START must precede GO, including instant casts, to release the client's cast state.
 pub fn build_spell_start(
     caster_guid: u64,

@@ -210,6 +210,20 @@ fn damage_log(row: &SpellCastEvent) -> Option<Packet> {
     })
 }
 
+fn leech_damage_log(row: &SpellCastEvent) -> Packet {
+    message(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(
+        codec::build_periodic_spell_non_melee_damage_log(
+            row.target_guid,
+            row.caster_guid,
+            row.spell_id,
+            row.damage,
+            row.school,
+            row.resisted,
+            row.absorbed,
+        ),
+    )))
+}
+
 fn heal_log(row: &SpellCastEvent) -> Option<Packet> {
     use wow_world_messages::vanilla::SMSG_SPELLHEALLOG;
     (row.healed > 0).then(|| {
@@ -259,6 +273,7 @@ fn cast_event_messages(
         4 => SpellCastEventKind::Pushback,
         5 => SpellCastEventKind::ProcLog,
         6 => SpellCastEventKind::PeriodicLog,
+        7 => SpellCastEventKind::LeechLog,
         _ => return out,
     };
     if kind == SpellCastEventKind::Interrupt {
@@ -299,6 +314,11 @@ fn cast_event_messages(
     }
     if kind == SpellCastEventKind::PeriodicLog {
         out.extend(periodic_log_outbound(row).map(|out| (EventAudience::Everyone, out)));
+        return out;
+    }
+    if kind == SpellCastEventKind::LeechLog {
+        out.push((EventAudience::Everyone, leech_damage_log(row)));
+        out.extend(heal_log(row).map(|packet| (EventAudience::Everyone, packet)));
         return out;
     }
     if kind == SpellCastEventKind::Start {

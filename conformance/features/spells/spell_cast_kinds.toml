@@ -264,12 +264,6 @@ symbol = "absorb_incoming"
 evidence = "Source reading, not measured. At d9173eca, Unit.cpp:1967 Unit::CalculateDamageAbsorbAndResist tests mod->m_miscvalue & schoolMask for each absorb; absorb_incoming drains every A_ABSORB Aura of the target in id order."
 
 [[known_gaps]]
-description = "A health leech tick, such as Drain Life, heals its caster nothing and reports in SMSG_PERIODICAURALOG. vmangos heals the caster for the damage dealt times the effect's multiple value and reports the tick in SMSG_SPELLNONMELEEDAMAGELOG."
-path = "importer/src/spell_kind.rs"
-symbol = "aura_mod_to_kind"
-evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp:5977 and 6012 Aura::PeriodicTick sends SendSpellNonMeleeDamageLog and calls DealHeal for SPELL_AURA_PERIODIC_LEECH; aura_mod_to_kind imports PeriodicLeech as A_PERIODIC_DAMAGE."
-
-[[known_gaps]]
 description = "A Triggered Cast refused for missing reagents sends its caster no cast-failed message. vmangos sends SPELL_FAILED_ITEM_NOT_READY."
 path = "module/src/spell/cast/resolve.rs"
 symbol = "take_triggered_reagents"
@@ -809,4 +803,39 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/ranged_impact.rs"
 function = "a_wand_shot_flies_at_the_speed_of_its_spell_row"
+rung = "durable_module"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "a_health_leech_aura_imports_as_periodic_damage_carrying_its_multiple_in_p1"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/leech.rs"
+function = "the_heal_truncates_a_fractional_result"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/periodic_leech.rs"
+function = "a_drain_life_tick_heals_its_caster_by_the_damage_dealt"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/periodic_leech.rs"
+function = "a_leech_tick_heals_the_damage_dealt_times_the_effects_multiple_value"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/periodic_leech.rs"
+function = "a_fully_absorbed_leech_tick_heals_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/periodic_leech.rs"
+function = "a_leech_tick_adds_half_the_amount_gained_as_heal_threat"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/periodic_leech.rs"
+function = "a_killing_leech_tick_heals_only_the_health_left_and_ends_the_channel"
 rung = "durable_module"

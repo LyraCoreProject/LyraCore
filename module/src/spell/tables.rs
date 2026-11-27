@@ -924,6 +924,7 @@ pub(crate) enum SpellCastEventKind {
     Pushback = 4,
     ProcLog = 5,
     PeriodicLog = 6,
+    LeechLog = 7,
 }
 
 #[table(
@@ -1102,6 +1103,25 @@ impl SpellCastEvent {
                 spell_id,
                 crate::helpers::entity_addr(target),
                 SpellCastEventKind::PeriodicLog,
+            )
+        }
+    }
+
+    /// A health leech tick: its damage log and, when `healed` is set, the caster's heal log.
+    pub(crate) fn leech_log(
+        ctx: &ReducerContext,
+        caster_guid: u64,
+        spell_id: u32,
+        target: &WorldEntity,
+    ) -> Self {
+        Self {
+            target_guid: target.guid,
+            ..Self::signal_addr(
+                ctx,
+                caster_guid,
+                spell_id,
+                crate::helpers::entity_addr(target),
+                SpellCastEventKind::LeechLog,
             )
         }
     }
