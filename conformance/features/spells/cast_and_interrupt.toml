@@ -663,6 +663,18 @@ symbol = "reconcile_passives"
 evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleShapeshiftBoosts finds the SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE Aura with SpellIconID 240 and misc 3 and casts HotWSpellId with CastCustomSpell at that Aura's amount."
 
 [[known_gaps]]
+description = "Arcane Resilience 28574 adds flat armor, where vmangos adds 50 percent of the unit's Intellect as armor."
+path = "importer/src/spell_kind.rs"
+symbol = "resistance_layer"
+evidence = "Source reading, not measured. SPELL_AURA_MOD_RESISTANCE_OF_STAT_PERCENT (182) imports as A_MOD_RESISTANCE layer 0, which module/src/modifiers/resistance.rs sums as a flat amount. At d9173eca, StatSystem.cpp Player::UpdateArmor adds Intellect times the Aura's amount, divided by 100, to the armor TOTAL_VALUE for each such Aura with the armor school."
+
+[[known_gaps]]
+description = "The 32 spells with an exclusive resistance Aura, such as Shadow Protection, Fire, Frost and Nature Resistance, the Resistance Auras and Aspect of the Wild, give no resistance: vmangos applies them as flat resistance per school, and only the strongest bonus and the strongest malus count."
+path = "importer/src/spell_kind.rs"
+symbol = "aura_mod_to_kind"
+evidence = "Source reading, not measured. SPELL_AURA_MOD_RESISTANCE_EXCLUSIVE (143) has no entry in aura_mod_to_kind, so it imports as A_INERT. At d9173eca, Aura::HandleAuraModResistanceExclusive replaces the school's TOTAL_VALUE bonus with the largest positive or negative amount among Auras of the type."
+
+[[known_gaps]]
 description = "Travel Form can be entered and kept in deep water, and Aquatic Form on land; vmangos refuses the cast and ends the Form when the unit enters or leaves water. Aquatic Form's water breathing (aura 82 of 5421) does not stop the breath timer."
 path = "importer/src/spell.rs"
 symbol = "aura_interrupt_bits"

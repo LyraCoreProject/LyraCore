@@ -1032,9 +1032,11 @@ hides its mark only at Hostile or below.
 ### Resistance aura layer migration
 
 Reimport `spell`, then call `debug_repair_after_publish` before play resumes. `A_MOD_RESISTANCE`
-effects gain a layer in `p1`: 0 for flat resistance as before, 1 for source aura 83 and 2 for
-source aura 142. Until the reimport every layer is 0 and Bear, Dire Bear and Moonkin Form, Thick
-Hide, Toughness and Lay on Hands add flat armor instead of multiplying the armor from items.
+effects gain a layer in `p1`: 0 for flat resistance as before, 1 for source aura 83, 2 for
+source aura 142 and 3 for source aura 101. Until the reimport every layer is 0: Bear, Dire Bear and
+Moonkin Form, Thick Hide, Toughness and Lay on Hands add flat armor instead of multiplying the armor
+from items, and Inspiration, Recklessness and Resurrection Sickness add or remove a flat amount
+instead of a percent.
 Repair copies the layer to stored Auras. No table schema changes.
 
 ### Global cooldown migration

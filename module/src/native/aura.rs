@@ -304,7 +304,12 @@ pub(super) fn armor(ctx: &ReducerContext, guid: u64, current: &[Aura]) -> Option
             guid,
             resistances,
             crate::modifiers::positive_armor(
-                current.iter().map(crate::modifiers::AuraAmount::from),
+                ctx,
+                &entity,
+                &current
+                    .iter()
+                    .map(crate::modifiers::AuraAmount::from)
+                    .collect::<Vec<_>>(),
             ),
         ),
     ))))

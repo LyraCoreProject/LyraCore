@@ -178,6 +178,7 @@ pub fn resistance_layer(aura: AuraMod) -> i32 {
     match aura {
         AuraMod::ModBaseResistance => RESISTANCE_BASE_VALUE,
         AuraMod::ModBaseResistancePct => RESISTANCE_BASE_PCT,
+        AuraMod::ModResistancePct => RESISTANCE_TOTAL_PCT,
         _ => RESISTANCE_TOTAL_VALUE,
     }
 }

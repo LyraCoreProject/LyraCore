@@ -1382,6 +1382,7 @@ fn bear_and_dire_bear_forms_multiply_the_armor_from_items_and_nothing_else() {
 
     enter(&shard, BEAR_FORM);
     assert_eq!(druid_armor(&shard), 40 + 100 * 28 / 10 + 30);
+    leave(&shard, BEAR_FORM);
     enter(&shard, DIRE_BEAR_FORM);
     assert_eq!(druid_armor(&shard), 40 + 100 * 46 / 10 + 30);
     leave(&shard, DIRE_BEAR_FORM);
