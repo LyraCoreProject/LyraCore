@@ -79,13 +79,15 @@ vmangos imports replace the level rows with selected source class-level stats.
 import; until then every unit uses the default reach ([migration](danger-zones.md#melee-reach-migration)).
 `game_creature_equipment` holds a template's weighted virtual equipment choices, as main hand, off
 hand and ranged item entries, from vmangos `creature_equip_template` through
-`creature_template.equipment_id`. The creatures import leaves out a choice of weight 0 and an item
-the World Source lacks or no hand holds. `game_encounter_equip` holds what each creature in the
-world shows: the three item displays and the item entries they came from. A creature takes a
-choice by weight as it enters the world, or none, unless its event data gives it equipment
-(vmangos `Creature::LoadDefaultEquipment`); it chooses again when it takes another template in
-place, when its event equipment comes off and when a relay's `set-equipment` resets it. A script,
-Package or Operator `equip_swap` replaces what it shows. The CREATE of a creature carries the
+`creature_template.equipment_id`. The creatures import makes an item the World Source lacks or no
+hand holds no item, and keeps a choice of weight 0, which is never chosen. `game_encounter_equip`
+holds what each creature in the world shows: the three item displays and the item entries they
+came from. A creature takes a choice by weight as it enters the world, or none, unless its event
+data gives it equipment (vmangos `Creature::LoadDefaultEquipment`); it chooses again when it takes
+another template in place, when its event equipment comes off and when a relay's `set-equipment`
+resets it. A template whose choices all weigh 0 then keeps what the creature shows, as vmangos
+`Creature::LoadEquipment` does. A script, Package or Operator `equip_swap` replaces what it shows,
+until one of those choices replaces it again. The CREATE of a creature carries the
 virtual items, each item's display with its class, subclass, inventory type and sheath; a change
 is sent to its viewers as a values update
 ([migration](danger-zones.md#creature-template-equipment-migration)).
@@ -1032,8 +1034,10 @@ template and equipment of the first row, in source guid then event order, that n
 start spell of each. A changed template is taken in place, as vmangos `Creature::UpdateEntry` takes
 it, with a newly chosen model and the same share of its health and its new template's equipment.
 The equipment shows through `game_encounter_equip`; when no running row names one, the stopped
-event's equipment comes off for the creature's template equipment, and equipment something else
-gave the creature stays. As the event starts its row's start spell is cast
+event's equipment comes off for the creature's template equipment. Equipment something else gave
+the creature stays, unless the event also changes its template: a template change takes the new
+template's equipment, as vmangos `Creature::UpdateEntry` does, so it replaces script or Package
+equipment too. As the event starts its row's start spell is cast
 on the creature, triggered; as it stops that spell's auras come off and the end spell is cast. A
 corpse waits for its respawn. `insert_creature_entity` gives every creature that enters the world
 the data its spawn wears, the template and equipment before it is inserted and the start spells

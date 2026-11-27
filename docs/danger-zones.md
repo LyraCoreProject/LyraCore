@@ -411,7 +411,7 @@ item class, subclass, inventory type or sheath. No reducer argument changes. Pac
 table. A publish alone changes nothing a player sees: with no equipment rows every creature shows
 what it showed before.
 
-Reimport the `creatures` family to fill the table: 5,137 choices for 5,126 templates in the full
+Reimport the `creatures` family to fill the table: 5,182 choices for 5,140 templates in the full
 world of the pinned World Source. The Source Profile now also approves `creature_equip_template` and
 `game_event_creature_data`, which the `events` family already read. A creature takes its template
 equipment as it enters the world; the reimport despawns every creature and the respawn pass brings

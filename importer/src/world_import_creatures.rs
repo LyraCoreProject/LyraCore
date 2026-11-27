@@ -203,12 +203,11 @@ fn equipment_choices(dump: &impl TableRows) -> Result<BTreeMap<u32, Vec<(u32, [u
     Ok(choices)
 }
 
-/// A template's `game_creature_equipment` rows: each choice vmangos
-/// `EquipmentTemplate::ChooseEquipmentEntry` can pick, which leaves out a zero probability.
+/// A template's `game_creature_equipment` rows, one for each choice. A choice of probability 0
+/// stays, so a template whose choices all weigh 0 keeps a creature's current slots.
 fn equipment_rows(entry: u64, choices: &[(u32, [u32; 3])]) -> Result<Vec<String>> {
     choices
         .iter()
-        .filter(|(probability, _)| *probability > 0)
         .zip(0u64..)
         .map(|(&(probability, [main_hand, off_hand, ranged]), index)| {
             anyhow::ensure!(
@@ -939,7 +938,7 @@ mod tests {
     }
 
     #[test]
-    fn template_equipment_keeps_each_choice_vmangos_can_pick_with_hand_items_only() {
+    fn template_equipment_keeps_every_source_choice_with_hand_items_only() {
         let source = template_source();
         source
             .fixture_connection()
@@ -965,8 +964,9 @@ mod tests {
         assert!(
             statements.iter().any(|sql| sql
                 == &format!(
-                    "INSERT INTO game_creature_equipment (id,entry,weight,main_hand,off_hand,ranged) VALUES ({first},5090042,3,2488,2129,0),({},5090042,1,0,0,0)",
-                    first + 1
+                    "INSERT INTO game_creature_equipment (id,entry,weight,main_hand,off_hand,ranged) VALUES ({first},5090042,3,2488,2129,0),({},5090042,0,2488,0,0),({},5090042,1,0,0,0)",
+                    first + 1,
+                    first + 2
                 )),
             "{statements:?}"
         );

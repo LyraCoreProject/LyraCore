@@ -13549,6 +13549,12 @@ symbol = "resolve_offhand_swing"
 evidence = "vmangos d9173eca3ea08dd985c52dabbcc826898d1d0b77 Unit::HaveOffhandWeapon, Creature::CanBeDisarmed, Creature::HasWeapon, Spell::WriteAmmoToPacket and Creature::UpdateEntry (SetMeleeDamageSchool)."
 
 [[known_gaps]]
+description = "A transform Aura that names a creature template (SPELL_AURA_TRANSFORM) changes only the model; the Reference Server also shows the transform template's equipment while the Aura lasts and the creature's own again when it comes off."
+path = "module/src/spell/presentation.rs"
+symbol = "recompute_display"
+evidence = "vmangos d9173eca3ea08dd985c52dabbcc826898d1d0b77 SpellAuras.cpp Aura::HandleAuraTransform, about lines 2723 and 2746."
+
+[[known_gaps]]
 description = "A virtual item's material byte in UNIT_VIRTUAL_ITEM_INFO is sent as 0, because the Module's item template keeps no material."
 path = "module/src/native/creature.rs"
 symbol = "shown_items"
@@ -13566,7 +13572,7 @@ rung = "unit"
 
 [[tests]]
 path = "importer/src/world_import_creatures.rs"
-function = "template_equipment_keeps_each_choice_vmangos_can_pick_with_hand_items_only"
+function = "template_equipment_keeps_every_source_choice_with_hand_items_only"
 rung = "unit"
 
 [[tests]]
@@ -13581,5 +13587,10 @@ rung = "codec"
 
 [[tests]]
 path = "module/tests/game_events.rs"
-function = "a_creature_shows_its_template_equipment_and_takes_it_back_when_its_event_equipment_comes_off"
+function = "a_creature_shows_its_template_equipment_and_takes_it_again_when_its_event_template_ends"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/game_events.rs"
+function = "a_creature_takes_its_template_equipment_back_when_its_event_equipment_comes_off"
 rung = "durable_module"

@@ -47,7 +47,8 @@ tests = [
     { path = "importer/src/world_import_game_events.rs", function = "a_creature_data_model_and_an_equipment_with_several_choices_are_counted", rung = "unit" },
     { path = "module/tests/game_events.rs", function = "a_live_creature_takes_its_event_data_as_the_event_starts_and_its_own_as_it_stops", rung = "durable_module" },
     { path = "module/tests/game_events.rs", function = "a_creature_that_spawns_while_its_event_runs_comes_in_its_event_data", rung = "durable_module" },
-    { path = "module/tests/game_events.rs", function = "a_creature_shows_its_template_equipment_and_takes_it_back_when_its_event_equipment_comes_off", rung = "durable_module" },
+    { path = "module/tests/game_events.rs", function = "a_creature_shows_its_template_equipment_and_takes_it_again_when_its_event_template_ends", rung = "durable_module" },
+    { path = "module/tests/game_events.rs", function = "a_creature_takes_its_template_equipment_back_when_its_event_equipment_comes_off", rung = "durable_module" },
     { path = "module/src/game_events/mail.rs", function = "an_event_mails_when_it_starts_and_again_only_after_it_stopped", rung = "unit" },
     { path = "module/src/game_events/mail.rs", function = "an_unscheduled_event_stops_once_started_and_never_starts", rung = "unit" },
     { path = "module/src/game_events/mail.rs", function = "a_mail_goes_to_the_races_of_its_mask_who_were_rewarded_its_quest", rung = "unit" },
@@ -94,6 +95,12 @@ id = "creature_data_of_several_events"
 result = "A creature spawn with creature data rows for several running events takes the template and equipment of the first row, in source guid then event order, that names one, and the start spell of every row. The Reference Server applies the row of the event that started last, and the first row when the creature respawns, so a Stormwind City Patroller loses its Night lantern when Love is in the Air starts at night. Here a stop of either event leaves the creature in the other's data; the Reference Server's stop returns it to its own template and equipment (UpdateEntry with its original entry) while the other event still runs. 9 creatures in the pinned World Source have rows for two events."
 reason = "The Reference Server result depends on the order its events start and stop; a rule over the current states gives one answer for one calendar, as for spawns of several events."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/GameEventMgr.cpp"
+
+[[deliberate_deviations]]
+id = "creature_data_keeps_the_equipment_choice"
+result = "A creature whose template has several equipment choices keeps the one it shows when its event starts or stops, unless the event changes its template or takes its event equipment off. The Reference Server's UpdateEntry at each start and stop calls LoadDefaultEquipment, which chooses again, so such a creature can change weapons at an event boundary that changes nothing else about it. 10 creature spawns with creature data in the pinned World Source have a template with several choices."
+reason = "The weapon a player saw does not depend on an event that leaves the creature's template and equipment as they are; choosing again only where the creature takes other equipment gives the same choices without that change."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Creature.cpp"
 
 [[deliberate_deviations]]
 id = "creature_data_at_respawn"

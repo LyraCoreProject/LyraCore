@@ -52,7 +52,6 @@ pub(crate) fn wear_at_spawn(
     worn
 }
 
-/// Casts the start spells of `worn` on a creature that just entered the world.
 pub(crate) fn cast_at_spawn(
     ctx: &ReducerContext,
     creature_guid: u64,

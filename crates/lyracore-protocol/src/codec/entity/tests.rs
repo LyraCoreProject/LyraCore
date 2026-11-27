@@ -291,7 +291,7 @@ fn creature_create_carries_its_virtual_items() {
         subclass: 2,
         material: 2,
         inventory_type: 15,
-        sheath: 0,
+        sheath: 2,
     };
     let guard = EntityView {
         guid: lyracore_shared::guid::creature(68, 1),
@@ -333,8 +333,8 @@ fn creature_create_carries_its_virtual_items() {
         Some(u32::from_le_bytes([2, 2, 2, 15])),
         "ranged item info"
     );
-    assert_eq!(field(45), Some(0), "ranged sheath");
-    assert_eq!(field(37), Some(0), "the empty main hand is written as zero");
+    assert_eq!(field(45), Some(2), "ranged sheath");
+    assert_eq!(field(37), None, "the empty main hand is left out");
 }
 
 #[test]

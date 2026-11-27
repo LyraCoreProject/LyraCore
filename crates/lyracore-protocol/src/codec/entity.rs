@@ -1,7 +1,7 @@
 use super::item::{build_set_proficiency_msgs, ItemInstanceView};
 use super::update_mask;
 use super::values::{
-    build_sheet_stats_values, write_virtual_items, SheetStatsValues, VirtualItemView,
+    build_sheet_stats_values, virtual_item_fields, SheetStatsValues, VirtualItemView,
 };
 use anyhow::{anyhow, Result};
 use lyracore_shared::constants::speeds;
@@ -628,16 +628,23 @@ pub fn build_create_object(
     } else {
         Some(entity.base_attack_time_ms)
     };
-    let virtual_items = (!is_player && entity.virtual_items != [VirtualItemView::default(); 3])
-        .then_some(&entity.virtual_items);
-    if offhand_attack_time_ms.is_some() || !entity.auras.is_empty() || virtual_items.is_some() {
+    // vmangos `Object::_SetCreateBits` writes only the non-zero fields into a CREATE.
+    let virtual_items: Vec<_> = if is_player {
+        Vec::new()
+    } else {
+        virtual_item_fields(&entity.virtual_items)
+            .into_iter()
+            .filter(|&(_, value)| value != 0)
+            .collect()
+    };
+    if offhand_attack_time_ms.is_some() || !entity.auras.is_empty() || !virtual_items.is_empty() {
         add_create_fields(&mut message, |mask| {
             if let Some(delay) = offhand_attack_time_ms {
                 mask.set_u32(127, delay);
             }
             update_mask::write_auras(mask, &entity.auras);
-            if let Some(items) = virtual_items {
-                write_virtual_items(mask, items);
+            for (index, value) in virtual_items {
+                mask.set_u32(index, value);
             }
         })?;
     }

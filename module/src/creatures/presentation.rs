@@ -42,17 +42,24 @@ pub(crate) fn equip_swap(
 }
 
 /// vmangos `Creature::LoadDefaultEquipment`: `creature` shows `event` equipment when given, else a
-/// choice of its template's equipment, else none. An item the Realm lacks leaves its slot empty.
+/// choice of its template's equipment, else none; a template whose choices weigh 0 keeps the
+/// current slots. An item the Realm lacks leaves its slot empty.
 pub(crate) fn wear_default_equipment(
     ctx: &ReducerContext,
     creature: &crate::WorldEntity,
     event: Option<[u32; 3]>,
 ) {
-    let Some(items) =
-        event.or_else(|| super::catalogue::equipment(ctx, creature.entry, ctx.random()))
-    else {
-        crate::EncounterEquip::delete(ctx, creature.guid);
-        return;
+    use super::catalogue::TemplateEquipment;
+    let items = match event.map_or_else(
+        || super::catalogue::equipment(ctx, creature.entry),
+        TemplateEquipment::Items,
+    ) {
+        TemplateEquipment::Items(items) => items,
+        TemplateEquipment::Unpicked => return,
+        TemplateEquipment::None => {
+            crate::EncounterEquip::delete(ctx, creature.guid);
+            return;
+        }
     };
     let displays = items.map(|entry| {
         item_display(ctx, entry).unwrap_or_else(|reason| {

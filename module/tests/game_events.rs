@@ -661,7 +661,6 @@ fn a_creature_that_respawns_while_its_event_runs_comes_back_in_its_event_data() 
     );
 }
 
-/// Gives the Test Wolf's template one equipment choice, a fixture axe in the main hand.
 fn arm_wolves(shard: &Standalone) {
     shard.insert_row(
         "game_item_template",
@@ -687,27 +686,82 @@ fn arm_wolves(shard: &Standalone) {
     );
 }
 
+fn armed_wear() -> Wear {
+    Wear {
+        main_hand_display: WOLF_AXE_DISPLAY,
+        ..own_wear()
+    }
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_creature_shows_its_template_equipment_and_takes_it_back_when_its_event_equipment_comes_off() {
-    let (shard, at) = realm("creature-template-equipment");
+fn a_creature_shows_its_template_equipment_and_takes_it_again_when_its_event_template_ends() {
+    let (shard, at) = realm("creature-template-equipment-entry");
     arm_wolves(&shard);
     festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
     let wolf = wolf_guid(DRESSED_WOLF);
     dress_for_festival(&shard, wolf);
     import_wolves(&shard, &at, &[DRESSED_WOLF]);
     settle(&shard);
-    let armed = Wear {
-        main_hand_display: WOLF_AXE_DISPLAY,
-        ..own_wear()
-    };
-    assert_eq!(wear(&shard, wolf), armed, "the spawned wolf shows its axe");
+    assert_eq!(
+        wear(&shard, wolf),
+        armed_wear(),
+        "the spawned wolf shows its axe"
+    );
 
     shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
     assert_eq!(wear(&shard, wolf), festival_wear(&shard));
 
     shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
-    assert_eq!(wear(&shard, wolf), armed, "the wolf takes its axe back");
+    assert_eq!(
+        wear(&shard, wolf),
+        armed_wear(),
+        "its own template comes back with its axe"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_takes_its_template_equipment_back_when_its_event_equipment_comes_off() {
+    let (shard, at) = realm("creature-template-equipment-take-off");
+    arm_wolves(&shard);
+    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
+    let wolf = wolf_guid(DRESSED_WOLF);
+    shard.insert_row(
+        "game_event_creature_data",
+        &[
+            ("data_id", &1u64),
+            ("spawn_guid", &wolf),
+            ("event_entry", &FESTIVAL),
+            ("creature_entry", &0u32),
+            ("main_hand", &FIXTURE_BLADE),
+            ("off_hand", &0u32),
+            ("ranged", &0u32),
+            ("start_spell", &0u32),
+            ("end_spell", &0u32),
+        ],
+    );
+    import_wolves(&shard, &at, &[DRESSED_WOLF]);
+    settle(&shard);
+    assert_eq!(wear(&shard, wolf), armed_wear());
+
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    let blade = festival_wear(&shard).main_hand_display;
+    assert_eq!(
+        wear(&shard, wolf),
+        Wear {
+            main_hand_display: blade,
+            ..own_wear()
+        },
+        "the same wolf holds the event's blade"
+    );
+
+    shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
+    assert_eq!(
+        wear(&shard, wolf),
+        armed_wear(),
+        "the blade comes off for its axe"
+    );
 }
 
 /// An offline Character of `race` on the seeded Character's Account.

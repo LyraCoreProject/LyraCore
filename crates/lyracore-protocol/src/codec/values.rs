@@ -242,21 +242,24 @@ impl VirtualItemView {
     }
 }
 
-/// Writes the main hand, off hand and ranged virtual items into their unit fields.
-pub fn write_virtual_items(mask: &mut update_mask::UpdateMaskValues, items: &[VirtualItemView; 3]) {
+pub fn virtual_item_fields(items: &[VirtualItemView; 3]) -> [(u16, u32); 9] {
     let display = update_mask::idx::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY;
     let info = update_mask::idx::UNIT_VIRTUAL_ITEM_INFO;
+    let mut fields = [(0, 0); 9];
     for (slot, item) in (0u16..).zip(items) {
-        mask.set_u32(display + slot, item.display_id);
         let [first, second] = item.info();
-        mask.set_u32(info + slot * 2, first);
-        mask.set_u32(info + slot * 2 + 1, second);
+        fields[usize::from(slot)] = (display + slot, item.display_id);
+        fields[usize::from(3 + slot * 2)] = (info + slot * 2, first);
+        fields[usize::from(4 + slot * 2)] = (info + slot * 2 + 1, second);
     }
+    fields
 }
 
 pub fn build_virtual_item_values(guid: u64, items: &[VirtualItemView; 3]) -> (u16, Vec<u8>) {
     let mut mask = update_mask::UpdateMaskValues::new();
-    write_virtual_items(&mut mask, items);
+    for (index, value) in virtual_item_fields(items) {
+        mask.set_u32(index, value);
+    }
     build_values_update_raw(guid, &mask)
 }
 

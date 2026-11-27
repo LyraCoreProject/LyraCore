@@ -37,7 +37,8 @@ pub struct CreatureDisplay {
     pub bounding_radius: f32,
 }
 
-/// One of a template's virtual equipment choices, by item entry; one is chosen by weight at spawn.
+/// One of a template's virtual equipment choices, by item entry; one is chosen by weight at spawn,
+/// and a choice of weight 0 never is.
 #[table(accessor = game_creature_equipment, public, index(accessor = by_entry, btree(columns = [entry])))]
 pub struct CreatureEquipment {
     #[primary_key]
@@ -135,28 +136,40 @@ fn select_display(displays: &[CreatureDisplay], roll: u32) -> Option<&CreatureDi
     None
 }
 
-/// vmangos `EquipmentTemplate::ChooseEquipmentEntry`: the main hand, off hand and ranged item
-/// entries of the template's choice that `roll` lands on; none without a weighted choice.
-pub(crate) fn equipment(ctx: &ReducerContext, entry: u32, roll: u32) -> Option<[u32; 3]> {
+/// What a template's equipment gives a creature, as vmangos `Creature::LoadEquipment` reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TemplateEquipment {
+    None,
+    /// The template has choices but their weights total 0, so the current slots stay.
+    Unpicked,
+    Items([u32; 3]),
+}
+
+/// vmangos `EquipmentTemplate::ChooseEquipmentEntry`: a choice of template `entry`'s equipment,
+/// by weight.
+pub(crate) fn equipment(ctx: &ReducerContext, entry: u32) -> TemplateEquipment {
     let mut choices: Vec<_> = ctx
         .db
         .game_creature_equipment()
         .by_entry()
         .filter(entry)
         .collect();
+    if choices.is_empty() {
+        return TemplateEquipment::None;
+    }
     choices.sort_by_key(|choice| choice.id);
     let total: u64 = choices.iter().map(|choice| u64::from(choice.weight)).sum();
     if total == 0 {
-        return None;
+        return TemplateEquipment::Unpicked;
     }
-    let mut roll = u64::from(roll) % total;
+    let mut roll = u64::from(ctx.random::<u32>()) % total;
     for choice in choices {
         if roll < u64::from(choice.weight) {
-            return Some([choice.main_hand, choice.off_hand, choice.ranged]);
+            return TemplateEquipment::Items([choice.main_hand, choice.off_hand, choice.ranged]);
         }
         roll -= u64::from(choice.weight);
     }
-    None
+    TemplateEquipment::Unpicked
 }
 
 pub(crate) fn display(ctx: &ReducerContext, template: &CreatureTemplate, roll: u32) -> (u32, f32) {
