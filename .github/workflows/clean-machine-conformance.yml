@@ -22,7 +22,6 @@ env:
   SCENARIO: bank_slot_purchase
 
 # Follows docs/quickstart.md section 1 with no dependency cache, so the times are cold.
-# The scenario runs against the committed conformance/tier1-baseline.json.
 jobs:
   clean-machine:
     name: ${{ matrix.os }}
@@ -72,7 +71,7 @@ jobs:
               echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
               PATH="$(brew --prefix openssl@3)/bin:$PATH" openssl version
             fi
-            # The runner image ships rustup, on macOS as a Homebrew formula; remove it so the documented install is the one measured.
+            # The runner image ships rustup (a Homebrew formula on macOS); remove it to measure the documented install.
             if [ "$RUNNER_OS" = macOS ]; then brew uninstall --ignore-dependencies rustup; fi
             rm -rf "${CARGO_HOME:-$HOME/.cargo}" "${RUSTUP_HOME:-$HOME/.rustup}"
             if command -v cargo; then exit 1; fi
