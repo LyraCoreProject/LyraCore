@@ -1,6 +1,7 @@
 mod support;
 
-use support::{group_op, Standalone};
+use spacetimedb::Identity;
+use support::{actor, group_op, Standalone};
 
 const LEADER: u64 = 1;
 const DEADMINES: u32 = 36;
@@ -10,6 +11,10 @@ const INVITE: &str = "0";
 const ACCEPT: &str = "1";
 const LEAVE: &str = "3";
 const SET_LEADER: &str = "7";
+
+const GROUP: u64 = 5_272_100;
+const ROSTER_REVISION: u64 = 1_000;
+const TRANSFER: u64 = 5_272_200;
 
 fn realm(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
@@ -281,4 +286,366 @@ fn a_member_who_joins_a_group_leaves_its_solo_run_behind() {
     assert_ne!(run, solo, "the Group does not take the joiner's solo run");
     assert_eq!(owner_of(&shard, &run), group);
     assert_eq!(enter(&shard, LEADER), run);
+}
+
+// Mirrors the wire layouts in native/realm_party.rs and native/instance_shard.rs.
+#[derive(spacetimedb::SpacetimeType)]
+struct Member {
+    guid: u64,
+    raid_slot: u8,
+}
+
+#[derive(spacetimedb::SpacetimeType)]
+struct Roster {
+    group_id: u64,
+    leader: u64,
+    loot_method: u8,
+    loot_threshold: u8,
+    master: u64,
+    kind: u8,
+    members: Vec<Member>,
+    icons: Vec<u8>,
+    disband: Option<u8>,
+}
+
+#[derive(spacetimedb::SpacetimeType)]
+struct PartyUpdate {
+    revision: u64,
+    characters: Vec<u8>,
+    rosters: Vec<Roster>,
+    events: Vec<u8>,
+    absent: Vec<u64>,
+    events_expire_micros: i64,
+}
+
+#[derive(spacetimedb::SpacetimeType)]
+struct PartyCharacter {
+    guid: u64,
+    account_id: u64,
+    connection: u128,
+    world: Identity,
+    name: String,
+    race: u8,
+    class: u8,
+    chat_tag: u8,
+    identity: Identity,
+    online: bool,
+    stats: Option<u8>,
+    revision: u64,
+}
+
+#[derive(spacetimedb::SpacetimeType)]
+struct EntryRequest {
+    id: u64,
+    actor: PartyCharacter,
+    map: u32,
+    binding: u64,
+    trigger: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    o: f32,
+    expires: i64,
+}
+
+#[derive(spacetimedb::SpacetimeType)]
+struct Admission {
+    request: EntryRequest,
+    binding_world: Option<Identity>,
+    queued_group: Option<u64>,
+}
+
+#[derive(spacetimedb::SpacetimeType)]
+struct AdmissionParty {
+    group: u64,
+    snapshot: Vec<u8>,
+}
+
+fn bsatn<T: spacetimedb::sats::Serialize>(value: &T) -> String {
+    serde_json::to_string(&spacetimedb::sats::bsatn::to_vec(value).unwrap()).unwrap()
+}
+
+/// Makes the test's Operator the Realm Shard of `shard`, so the test sends its Group projections.
+fn serve_the_operator_realm(shard: &Standalone) -> String {
+    let operator = shard.query_rows("SELECT identity FROM game_operator")[0]["identity"].clone();
+    let realm = format!(r#"{{"__identity__":"{operator}"}}"#);
+    shard.assert_call("operator_add_peer_shard", &[&realm, "\"realm\""]);
+    shard.assert_call(
+        "operator_set_shard_role",
+        &[&format!(r#"{{"some":{{"world":{realm}}}}}"#)],
+    );
+    realm
+}
+
+fn database_identity(shard: &Standalone) -> String {
+    let decimal =
+        &shard.query_rows("SELECT database_identity FROM st_module")[0]["database_identity"];
+    let mut limbs = [0u64; 4];
+    for digit in decimal.bytes() {
+        let mut carry = u128::from(digit - b'0');
+        for limb in limbs.iter_mut().rev() {
+            let wide = u128::from(*limb) * 10 + carry;
+            *limb = wide as u64;
+            carry = wide >> 64;
+        }
+    }
+    let hex: String = limbs.iter().map(|limb| format!("{limb:016x}")).collect();
+    format!(r#"{{"__identity__":"0x{hex}"}}"#)
+}
+
+fn roster_naming(joiner: u64) -> PartyUpdate {
+    PartyUpdate {
+        revision: ROSTER_REVISION,
+        characters: Vec::new(),
+        rosters: vec![Roster {
+            group_id: GROUP,
+            leader: LEADER,
+            loot_method: 0,
+            loot_threshold: 2,
+            master: 0,
+            kind: 0,
+            members: [LEADER, joiner]
+                .map(|guid| Member { guid, raid_slot: 0 })
+                .into(),
+            icons: Vec::new(),
+            disband: None,
+        }],
+        events: Vec::new(),
+        absent: Vec::new(),
+        events_expire_micros: 0,
+    }
+}
+
+fn project_join(shard: &Standalone, joiner: u64) {
+    shard.assert_call("idc_world_party_update", &[&bsatn(&roster_naming(joiner))]);
+}
+
+fn world_shard(name: &str) -> Standalone {
+    let mut shard = Standalone::start(name);
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    serve_the_operator_realm(&shard);
+    shard
+}
+
+fn export(source: &Standalone, guid: u64) -> String {
+    source.assert_call(
+        "begin_transfer",
+        &[
+            &TRANSFER.to_string(),
+            &actor(guid),
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "true",
+        ],
+    );
+    let out = source.query_rows(&format!(
+        "SELECT blob FROM game_transfer_out WHERE transfer_id = {TRANSFER}"
+    ));
+    serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap()
+}
+
+fn import(destination: &Standalone, blob: &str) {
+    destination.assert_call(
+        "import_character_blob",
+        &[&TRANSFER.to_string(), blob, &actor("0")],
+    );
+}
+
+fn runs_bound(shard: &Standalone, guid: u64) -> Vec<String> {
+    shard
+        .query_rows(&format!(
+            "SELECT instance_id FROM game_instance_binding WHERE character_guid = {guid} AND map_id = {DEADMINES}"
+        ))
+        .into_iter()
+        .map(|row| row["instance_id"].clone())
+        .collect()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_member_who_joins_while_between_shards_arrives_without_its_solo_run() {
+    let source = realm("dungeon-run-join-in-transit-source");
+    let joiner = create_character(&source, "Joiner");
+    let solo = enter(&source, joiner);
+    walk_out(&source, joiner);
+    assert_eq!(
+        runs_bound(&source, joiner),
+        [solo],
+        "the Transfer carries the solo run"
+    );
+    let blob = export(&source, joiner);
+
+    let destination = world_shard("dungeon-run-join-in-transit-destination");
+    project_join(&destination, joiner);
+    import(&destination, &blob);
+
+    assert!(
+        runs_bound(&destination, joiner).is_empty(),
+        "the join the destination projected before the import resets the solo run"
+    );
+    assert!(destination
+        .query_rows(&format!(
+            "SELECT character_guid FROM game_group_join_reset WHERE character_guid = {joiner}"
+        ))
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_member_who_joins_before_its_transfer_is_released_arrives_without_its_solo_run() {
+    let source = realm("dungeon-run-join-before-release-source");
+    let joiner = create_character(&source, "Joiner");
+    let solo = enter(&source, joiner);
+    walk_out(&source, joiner);
+    assert_eq!(
+        runs_bound(&source, joiner),
+        [solo],
+        "the Transfer carries the solo run"
+    );
+    let blob = export(&source, joiner);
+
+    let destination = world_shard("dungeon-run-join-before-release-destination");
+    import(&destination, &blob);
+    project_join(&destination, joiner);
+    let system = actor("0");
+    source.assert_call("confirm_import", &[&TRANSFER.to_string(), &system]);
+    source.assert_call("finish_transfer", &[&TRANSFER.to_string(), &system]);
+    destination.assert_call("release_transfer", &[&TRANSFER.to_string(), &system]);
+
+    assert!(
+        runs_bound(&destination, joiner).is_empty(),
+        "the destination holds the arrived rows, so the join resets the solo run"
+    );
+    assert!(destination
+        .query_rows(&format!(
+            "SELECT character_guid FROM game_group_join_reset WHERE character_guid = {joiner}"
+        ))
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_member_who_joined_before_its_transfer_keeps_its_groups_run() {
+    let source = realm("dungeon-run-join-before-transfer-source");
+    let joiner = create_character(&source, "Joiner");
+    let solo = enter(&source, joiner);
+    walk_out(&source, joiner);
+    serve_the_operator_realm(&source);
+    project_join(&source, joiner);
+    let run = enter(&source, joiner);
+    assert_ne!(
+        run, solo,
+        "the source reset the solo run when it applied the join"
+    );
+    walk_out(&source, joiner);
+    let blob = export(&source, joiner);
+
+    let destination = world_shard("dungeon-run-join-before-transfer-destination");
+    project_join(&destination, joiner);
+    import(&destination, &blob);
+
+    assert_eq!(
+        runs_bound(&destination, joiner),
+        [run],
+        "the source applied the join, so the destination keeps the Group's run"
+    );
+}
+
+fn admit(shard: &Standalone, realm: &str, joiner: u64, solo: &str, queued_group: u64) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros() as i64;
+    let request = Admission {
+        request: EntryRequest {
+            id: 1,
+            actor: PartyCharacter {
+                guid: joiner,
+                account_id: 1,
+                connection: 7,
+                world: Identity::ZERO,
+                name: "Joiner".into(),
+                race: 1,
+                class: 1,
+                chat_tag: 0,
+                identity: Identity::ZERO,
+                online: true,
+                stats: None,
+                revision: 1,
+            },
+            map: DEADMINES,
+            binding: solo.parse().unwrap(),
+            trigger: TO_DEADMINES,
+            x: 10.0,
+            y: 20.0,
+            z: 30.0,
+            o: 0.0,
+            expires: now + 60_000_000,
+        },
+        binding_world: None,
+        queued_group: Some(queued_group),
+    };
+    let party = AdmissionParty {
+        group: GROUP,
+        snapshot: spacetimedb::sats::bsatn::to_vec(&roster_naming(joiner)).unwrap(),
+    };
+    shard.assert_call(
+        "idc_world_instance_entry",
+        &[realm, &bsatn(&request), &bsatn(&party)],
+    );
+}
+
+fn admitted_run(shard: &Standalone, joiner: u64) -> String {
+    shard.query_rows(&format!(
+        "SELECT instance_id FROM game_instance_entry_lease WHERE guid = {joiner}"
+    ))[0]["instance_id"]
+        .clone()
+}
+
+/// An Instance Shard holding a solo run whose binding a joiner from another Shard carries.
+fn instance_shard(name: &str) -> (Standalone, String, String) {
+    let shard = realm(name);
+    let other = create_character(&shard, "Other");
+    let solo = enter(&shard, other);
+    walk_out(&shard, other);
+    let realm = serve_the_operator_realm(&shard);
+    shard.assert_call(
+        "operator_set_map_owner",
+        &[&DEADMINES.to_string(), &database_identity(&shard)],
+    );
+    (shard, realm, solo)
+}
+
+const ARRIVING_JOINER: u64 = 5_272_300;
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_member_who_joins_during_its_dungeon_admission_does_not_bring_its_solo_run() {
+    let (shard, realm, solo) = instance_shard("dungeon-run-join-during-admission");
+
+    admit(&shard, &realm, ARRIVING_JOINER, &solo, 0);
+
+    assert_ne!(admitted_run(&shard, ARRIVING_JOINER), solo);
+    assert_eq!(
+        owner_of(&shard, &solo),
+        "0",
+        "the Group does not take the solo run"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_member_already_in_its_group_when_it_queued_brings_its_solo_run() {
+    let (shard, realm, solo) = instance_shard("dungeon-run-member-admission");
+
+    admit(&shard, &realm, ARRIVING_JOINER, &solo, GROUP);
+
+    assert_eq!(admitted_run(&shard, ARRIVING_JOINER), solo);
+    assert_eq!(owner_of(&shard, &solo), GROUP.to_string());
 }

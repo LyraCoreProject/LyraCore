@@ -46,6 +46,16 @@ first names it a member. Teardown deletes the bindings on the Shard that hosts t
 split Realm the Character's copy on its World Shard stays until its next entry to that map deletes
 it.
 
+A Shard that projects the join while it has no Character row of the joiner records the projection's
+membership revision in `game_group_join_reset`. A Shard that keeps the rows behind a Transfer fence
+resets them at once. The marker survives the Transfer cascade. The Transfer blob carries the
+membership revision the source had applied to the Character, and the import resets the arriving
+bindings only when the marker is newer: a source that had applied the join reset the runs itself,
+and the bindings it sent are newer than the join. Leaving the Group or the Realm
+clears the marker. A dungeon admission carries the source's Group at queue time. When the snapshot
+the Instance Shard applies names another Group that the Character does not lead, the Instance Shard
+drops the carried binding before it routes, so the Character enters that Group's run.
+
 The known gaps in `conformance/features/world/map_and_trigger_rules.toml` record where dungeon run
 ownership differs from vmangos.
 

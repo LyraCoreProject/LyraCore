@@ -82,6 +82,9 @@ pub(crate) use member_stats::{
 pub(crate) use motion_permit::{
     sweep_delete_game_native_motion_permit, sweep_transfer_game_native_motion_permit,
 };
+pub(crate) use realm_party::{
+    sweep_delete_game_group_join_reset, sweep_transfer_game_group_join_reset,
+};
 pub(crate) use teleport::expire_near_teleports_pass;
 pub(crate) use transfer::{
     arriving_from as transfer_arriving_from, pending_toward as transfer_pending_toward,

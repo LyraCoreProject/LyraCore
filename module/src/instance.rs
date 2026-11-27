@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::{
-    game_creature_move_schedule, game_creature_spawn, game_creature_template,
+    game_character, game_creature_move_schedule, game_creature_spawn, game_creature_template,
     game_creature_waypoint, game_encounter_spawn, game_gameobject, game_gameobject_template,
     game_group, game_group_member, game_map, game_world_entity,
 };
@@ -700,10 +700,17 @@ fn adopt_instance_for_party(ctx: &ReducerContext, instance_id: u64, party_id: u6
     true
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JoinReset {
+    Done,
+    /// This Shard has no Character row of the joining member; its import owes the reset.
+    AwaitsArrival,
+}
+
 /// vmangos `Group::AddMember` resets a joining member's own runs, except on the map it stands on.
-pub(crate) fn unbind_joining_member(ctx: &ReducerContext, character_guid: u64) {
+pub(crate) fn unbind_joining_member(ctx: &ReducerContext, character_guid: u64) -> JoinReset {
     let Some(member) = crate::group::group_of(ctx, character_guid) else {
-        return;
+        return JoinReset::Done;
     };
     if ctx
         .db
@@ -712,21 +719,34 @@ pub(crate) fn unbind_joining_member(ctx: &ReducerContext, character_guid: u64) {
         .find(member.group_id)
         .is_none_or(|group| group.leader_guid == character_guid)
     {
-        return;
+        return JoinReset::Done;
     }
-    let Some(character) = crate::helpers::character_by_guid(ctx, character_guid) else {
-        return;
+    // A Transfer fence hides the Character from gameplay reads while its rows stay on this Shard.
+    let Some(character) = ctx.db.game_character().guid().find(character_guid) else {
+        return JoinReset::AwaitsArrival;
     };
+    unbind_outside_standing_map(ctx, &character);
+    JoinReset::Done
+}
+
+/// The reset `unbind_joining_member` owed a joining member that has since arrived on this Shard.
+pub(crate) fn unbind_arrived_joiner(ctx: &ReducerContext, character_guid: u64) {
+    if let Some(character) = ctx.db.game_character().guid().find(character_guid) {
+        unbind_outside_standing_map(ctx, &character);
+    }
+}
+
+fn unbind_outside_standing_map(ctx: &ReducerContext, character: &crate::character::Character) {
     let standing_map = ctx
         .db
         .game_world_entity()
         .guid()
-        .find(character_guid)
+        .find(character.guid)
         .map(|entity| entity.map_id);
     let bindings = ctx.db.game_instance_binding();
     for binding in bindings
         .by_character()
-        .filter(&character_guid)
+        .filter(&character.guid)
         .collect::<Vec<_>>()
     {
         if binding.map_id != character.map_id && Some(binding.map_id) != standing_map {

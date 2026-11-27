@@ -4,13 +4,14 @@ mod mail_text;
 mod transport;
 #[cfg(test)]
 pub(crate) use transport::{
-    admit_command_issuer_import, decode_rows, encode_rows, export_rows_via, import_rows_via,
-    manifest, CommandIssuerImportRefusal, ManifestEntry, TransportArm, HOT_TABLES,
-    MANIFEST_EXCLUDE, TRANSFER_TABLES_OLD_BLOBS_MAY_LACK,
+    admit_command_issuer_import, encode_rows, export_rows_via, import_rows_via, manifest,
+    CommandIssuerImportRefusal, ManifestEntry, TransportArm, HOT_TABLES, MANIFEST_EXCLUDE,
+    TRANSFER_TABLES_OLD_BLOBS_MAY_LACK,
 };
 pub(crate) use transport::{
-    build_export_blob, check_manifest, decode_blob, decode_character_row, export_rows, import_rows,
-    move_rows, not_transported, payload_for_this_build, Destination, ExportBlob, RowIo, TableRows,
+    build_export_blob, check_manifest, decode_blob, decode_character_row, decode_rows, export_rows,
+    import_rows, move_rows, not_transported, payload_for_this_build, Destination, ExportBlob,
+    RowIo, TableRows,
 };
 
 #[cfg(test)]
@@ -757,7 +758,8 @@ impl ImportSink for CtxShard<'_> {
         self.ctx.db.game_character().insert(c);
     }
     fn import_rows(&mut self, guid: u64, payload: &[TableRows]) -> Result<(), String> {
-        import_rows(self.ctx, guid, payload)
+        import_rows(self.ctx, guid, payload)?;
+        crate::native::realm_party::settle_join_reset(self.ctx, guid, payload)
     }
     fn ensure_shadow_account(&mut self, account_id: u64) {
         crate::auth::ensure_shadow_account(self.ctx, account_id);
@@ -1493,10 +1495,15 @@ fn cascade_for_transfer(ctx: &ReducerContext, guid: u64, listing_holds: ListingH
             .filter(&guid)
             .collect(),
     };
+    // A Group join marker is Shard projection state; the arriving payload settles it.
+    let join_reset = crate::native::realm_party::join_reset_of(ctx, guid);
     mail_text::release(ctx, guid, matches!(listing_holds, ListingHolds::Delete));
     crate::character::cascade_delete_character(ctx, guid);
     for contact in incoming_contacts {
         ctx.db.game_character_contact().insert(contact);
+    }
+    if let Some(marker) = join_reset {
+        crate::native::realm_party::store_join_reset(ctx, marker);
     }
     for hold in kept {
         ctx.db.game_auction_hold().insert(hold);

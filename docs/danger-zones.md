@@ -414,6 +414,16 @@ than the selected one gets its own damage and heal log, so an instant area spell
 it deals every unit. A queued strike's GO lists its victim and every chain unit, and each chain
 unit gets its own hit roll, damage log, threat and procs.
 
+### Group join reset migration
+
+The private `game_group_join_reset` table is new and starts empty. It is a Character-owned table
+whose Transfer arm carries one row: the membership revision the source applied to the Character. A
+blob from an older source lacks the table; the destination keeps any marker it holds and resets
+nothing on that import. An older destination refuses a blob that names the table, so update every
+World Shard before moving active World Sessions. A dungeon admission request gains the source's
+Group at queue time. An older Instance Shard ignores it, and a request from an older source decodes
+without it and keeps the carried binding. No repair or `debug_repair_after_publish` step is needed.
+
 ### Hunter pet presence migration
 
 `game_hunter_pet` gains the END-appended columns `presence`, `display_id`, `saved_health` and
