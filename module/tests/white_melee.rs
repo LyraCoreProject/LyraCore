@@ -112,7 +112,7 @@ fn white_melee_chances_follow_catalogue_skills_and_defender_eligibility() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_creature_crits_a_sitting_character_with_every_swing_but_not_a_sitting_creature() {
+fn a_creatures_table_against_a_sitting_character_is_all_crit_but_not_against_a_sitting_creature() {
     let mut shard = Standalone::start("white-melee-sitting");
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
@@ -121,6 +121,8 @@ fn a_creature_crits_a_sitting_character_with_every_swing_but_not_a_sitting_creat
     shard.assert_sql("UPDATE game_character SET class = 1, level = 60 WHERE guid = 1");
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_sql("UPDATE game_world_entity SET simulation_indexed = false, level = 60, x = 0, y = 0, orientation = 0 WHERE guid = 1");
+    shard.assert_call("debug_set_skill", &["1", "162", "300"]);
+    shard.assert_call("debug_set_skill", &["1", "95", "300"]);
     shard.assert_call(
         "debug_spawn_at_feet",
         &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
