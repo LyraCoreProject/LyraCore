@@ -50,21 +50,22 @@ use lyracore_shared::spell::taxonomy::{
     A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER,
     A_SEAL, A_SELF_RESURRECT, A_SHAPESHIFT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM,
     CAST_FLAG_AREA_AURA, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER, CAST_FLAG_ITEM_TARGET,
-    CAST_FLAG_LOCKS_FORM, CAST_FLAG_NO_AURA_CANCEL, CAST_FLAG_RANGED_AUTO_REPEAT,
-    CAST_FLAG_REFUSES_SELF_CAST, CAST_FLAG_RIGHTEOUSNESS, CAST_FLAG_WEAPON_PROCS,
-    COMBAT_ATTACK_POWER, COMBAT_ATTACK_POWER_PCT, COMBAT_CRIT, COMBAT_DODGE, COMBAT_HIT,
-    COMBAT_RANGED_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER_PCT, COMBAT_SPELL_CRIT, COMBAT_THREAT,
-    E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM,
-    E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET,
-    E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INEBRIATE, E_INTERRUPT, E_JUDGEMENT,
-    E_LEARN_SPELL, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN,
-    E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_REVIVE_PET, E_SCRIPTED, E_SELF_RESURRECT,
-    E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_OBJECT, E_SUMMON_PET,
-    E_SUMMON_PLAYER, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT,
-    M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG,
-    P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW,
-    P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
-    SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
+    CAST_FLAG_LEVEL_SKILL, CAST_FLAG_LOCKS_FORM, CAST_FLAG_NO_AURA_CANCEL,
+    CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST, CAST_FLAG_RIGHTEOUSNESS,
+    CAST_FLAG_WEAPON_PROCS, COMBAT_ATTACK_POWER, COMBAT_ATTACK_POWER_PCT, COMBAT_CRIT,
+    COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER_PCT,
+    COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE,
+    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL,
+    E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
+    E_HEAL_MAX_HEALTH, E_INEBRIATE, E_INTERRUPT, E_JUDGEMENT, E_LEARN_SPELL, E_NEXT_SWING,
+    E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT,
+    E_RESURRECT, E_REVIVE_PET, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS,
+    E_SUMMON_HOSTILE, E_SUMMON_OBJECT, E_SUMMON_PET, E_SUMMON_PLAYER, E_TAME_CREATURE, E_TAUNT,
+    E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT,
+    P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY,
+    P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SKILL_LINE,
+    P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
     T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CASTER_PET, T_CHAIN_ALLY, T_CHAIN_ENEMY, T_PARTY_AREA,
     T_RAID_AREA, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
@@ -96,6 +97,13 @@ const SPELL_RANGE_IDX_COMBAT: u32 = 2;
 fn triggers_weapon_procs(s: &Spell) -> bool {
     (s.equipment[0] == ITEM_CLASS_WEAPON && s.range == SPELL_RANGE_IDX_COMBAT)
         || s.custom_flags & lyracore_shared::spell_custom::TRIGGER_WEAPON_PROCS != 0
+}
+
+// vmangos RollMeleeOutcomeAgainst rolls the weapon skill only for combat range or a weapon spell.
+fn rolls_with_level_skill(s: &Spell) -> bool {
+    matches!(s.damage_class, 2 | 3)
+        && s.equipment[0] != ITEM_CLASS_WEAPON
+        && s.range != SPELL_RANGE_IDX_COMBAT
 }
 
 fn roll_cast_flags(spell: &Spell) -> u32 {
@@ -853,6 +861,9 @@ fn push_spell_header_row(
     }
     if triggers_weapon_procs(s) {
         cast_flags |= CAST_FLAG_WEAPON_PROCS;
+    }
+    if rolls_with_level_skill(s) {
+        cast_flags |= CAST_FLAG_LEVEL_SKILL;
     }
     cast_flags |= roll_cast_flags(s);
     if s.family_name == 10 && s.family_flags & 0x0800_0000 != 0 && s.icon_id == 25 {
@@ -3503,6 +3514,47 @@ mod tests {
         assert!(!procs(75), "a ranged weapon spell does not");
         assert!(procs(23881), "the source flag grants weapon procs");
         assert!(!procs(133));
+    }
+
+    #[test]
+    fn a_melee_or_ranged_spell_without_combat_range_or_a_weapon_rolls_the_level_skill() {
+        let spell = |id, name: &str, item_class, range, damage_class| Spell {
+            id,
+            name: name.into(),
+            equipment: [item_class, 0, 0],
+            range,
+            damage_class,
+            effect: [2, 0, 0],
+            implicit_target_a: [6, 0, 0],
+            duration: 1,
+            ..Default::default()
+        };
+        let mut dbc = fixture_tables();
+        // u32::MAX is equippedItemClass -1, and range index 2 is combat range.
+        dbc.spells = vec![
+            spell(24239, "Hammer of Wrath", u32::MAX, 5, 3),
+            spell(23881, "Bloodthirst", u32::MAX, 2, 2),
+            spell(3044, "Arcane Shot", 2, 114, 3),
+            spell(133, "Fireball", u32::MAX, 4, 1),
+        ];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let level_skill = |id| {
+            rows.headers
+                .iter()
+                .find(|h| h.spell_id == id)
+                .unwrap()
+                .cast_flags
+                & CAST_FLAG_LEVEL_SKILL
+                != 0
+        };
+        assert!(level_skill(24239), "Hammer of Wrath is no weapon spell");
+        assert!(
+            !level_skill(23881),
+            "a combat range ability rolls its weapon skill"
+        );
+        assert!(!level_skill(3044), "a weapon spell rolls its weapon skill");
+        assert!(!level_skill(133), "a magic spell rolls no Attack Table");
     }
 
     #[test]

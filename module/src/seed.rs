@@ -783,7 +783,12 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     effect(772, 0, 0x90, 7, 3000, 1, 0, 0);
     spell(2050, "Lesser Heal", 0, 30, 1500, 40, 0, 2, 0, false, 0);
     effect(2050, 0, 0x02, 50, 0, 2, 0, 0);
-    spell(133, "Fireball", 0, 0, 0, 30, 0, 4, 0, false, 0);
+    ctx.db.game_spell().insert(Spell {
+        range_yd: 30,
+        school_mask: 4,
+        damage_class: 1,
+        ..Spell::blank(133, "Fireball")
+    });
     effect(133, 0, 0x01, 20, 0, 1, 0, 0);
     spell(
         11196,

@@ -11,6 +11,7 @@ pub(crate) const SPELL_ATTR_NOT_IN_COMBAT_ONLY_PEACEFUL: u32 = 0x1000_0000;
 const SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x80000;
 pub(crate) const SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT: u32 = 0x4;
 pub(crate) const SPELL_ATTR_EX3_ONLY_ON_PLAYER: u32 = 0x100;
+pub(crate) const SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS: u32 = 0x2000_0000;
 // SPELLCATEGORY_GLOBAL: the StartRecoveryCategory of most spells with a global cooldown.
 const GCD_CATEGORY_GLOBAL: u32 = 133;
 // vmangos SpellDefines.h SpellInterruptFlags, AuraInterruptFlags and SpellPreventionType.

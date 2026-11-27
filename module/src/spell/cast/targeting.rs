@@ -9,7 +9,10 @@ use crate::game_item_instance;
 use crate::{game_character, game_creature_template, game_world_entity, WorldEntity};
 
 use crate::geometry::{distance_3d, projectile_travel_ms};
-use crate::spell::tables::{SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT, SPELL_ATTR_EX3_ONLY_ON_PLAYER};
+use crate::spell::tables::{
+    SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT, SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS,
+    SPELL_ATTR_EX3_ONLY_ON_PLAYER,
+};
 use crate::spell::*;
 
 use crate::skilldata::game_skill_ability;
@@ -1142,7 +1145,7 @@ pub(crate) fn apply_effect(
     points: i32,
     dest: Option<(f32, f32, f32)>,
     triggered: bool,
-    strike_crit: bool,
+    weapon_crit: Option<bool>,
     item_target: Option<u64>,
 ) -> EffectHit {
     use lyracore_shared::spell::taxonomy::EffectKind;
@@ -1211,7 +1214,7 @@ pub(crate) fn apply_effect(
             target_guid,
             points,
             triggered,
-            strike_crit,
+            weapon_crit,
         ),
         EffectKind::Heal
         | EffectKind::HealMaxHealth
@@ -1408,9 +1411,6 @@ fn direct_spell_crit_chance(
             ) else {
                 return 0.0;
             };
-            if !caster.is_player() && (caster.owner_guid == 0 || caster.owner_guid >> 48 != 0) {
-                return 0.0;
-            }
             let attack_type = if hdr.damage_class == 3 {
                 crate::combat::AttackType::Ranged
             } else {
@@ -1438,6 +1438,26 @@ fn direct_spell_crit_chance(
     }
 }
 
+/// A landed hit's crit: its weapon roll's, else its own Caster draw, as vmangos `AddUnitTarget`.
+fn landed_crit(
+    ctx: &ReducerContext,
+    hdr: &Spell,
+    caster_guid: u64,
+    target_guid: u64,
+    weapon_crit: Option<bool>,
+) -> bool {
+    let crit = weapon_crit.unwrap_or_else(|| {
+        let draw = crate::conformance_rolls::draw(
+            ctx,
+            crate::conformance_rolls::RollStream::Caster(caster_guid),
+        );
+        let chance = direct_spell_crit_chance(ctx, hdr, caster_guid, target_guid);
+        hdr.cast_flags & CAST_FLAG_CANNOT_CRIT == 0
+            && crate::spell::rolls::chance_succeeds(chance, draw)
+    });
+    crit && hdr.attributes_ex_3 & SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS == 0
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_damage_effect(
     ctx: &ReducerContext,
@@ -1447,24 +1467,13 @@ fn apply_damage_effect(
     target_guid: u64,
     points: i32,
     triggered: bool,
-    strike_crit: bool,
+    weapon_crit: Option<bool>,
 ) -> EffectHit {
     match e.kind {
         E_DAMAGE | E_FINISHER_DAMAGE => {
             let scaled =
                 bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, points as f32, false);
-            let is_crit = if e.kind == E_FINISHER_DAMAGE {
-                strike_crit
-            } else {
-                let draw = crate::conformance_rolls::draw(
-                    ctx,
-                    crate::conformance_rolls::RollStream::Caster(caster_guid),
-                );
-                let chance = direct_spell_crit_chance(ctx, hdr, caster_guid, target_guid);
-                hdr.cast_flags & CAST_FLAG_CANNOT_CRIT == 0
-                    && hdr.attributes_ex_3 & 0x2000_0000 == 0
-                    && crate::spell::rolls::chance_succeeds(chance, draw)
-            };
+            let is_crit = landed_crit(ctx, hdr, caster_guid, target_guid, weapon_crit);
             let scaled =
                 bonuses::spell_damage_taken(ctx, hdr, e, caster_guid, target_guid, scaled, 1);
             let crit_scaled = if is_crit {
@@ -1561,6 +1570,7 @@ fn apply_damage_effect(
                 normalized: e.p1 != 0,
                 ranged: hdr.attributes & SPELL_ATTR_USES_RANGED_SLOT != 0,
             };
+            let strike_crit = landed_crit(ctx, hdr, caster_guid, target_guid, weapon_crit);
             let dmg = crate::combat::weapon_strike_spell_damage(
                 ctx,
                 &caster,
@@ -1997,8 +2007,8 @@ fn apply_heal(
     target_guid: u64,
     points: i32,
 ) -> EffectHit {
-    let fixed =
-        hdr.custom_flags & custom::FIXED_DAMAGE != 0 || hdr.attributes_ex_3 & 0x2000_0000 != 0;
+    let fixed = hdr.custom_flags & custom::FIXED_DAMAGE != 0
+        || hdr.attributes_ex_3 & SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS != 0;
     let power = if fixed {
         0
     } else {

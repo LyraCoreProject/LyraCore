@@ -800,12 +800,7 @@ fn send_strike_go(
     }
     let units: Vec<(u64, u8)> = std::iter::once((row.target_guid, hit_info))
         .chain(chained.iter().map(|unit| (unit.target.guid, unit.hit_info)))
-        .map(|(unit, outcome)| {
-            (
-                unit,
-                crate::spell::cast::resolve::cast_miss(outcome, true, false),
-            )
-        })
+        .map(|(unit, outcome)| (unit, crate::spell::cast::resolve::cast_miss(outcome, true)))
         .collect();
     crate::native::spell::cast_launch(ctx, &row, None, &units);
     SpellCastEvent::insert_at(ctx, row, crate::native::spell::GoDelivery::Sent);

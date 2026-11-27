@@ -245,6 +245,7 @@ mod fixture {
         spell.family_name = 3;
         spell.family_flags = 1073741840;
         spell.proc_chance = 101;
+        spell.damage_class = 1;
         ctx.db.game_spell().spell_id().delete(2948);
         ctx.db.game_spell().insert(spell);
         let effects = ctx.db.game_spell_effect();

@@ -68,9 +68,7 @@ pub(crate) fn school_crit(ctx: &ReducerContext, guid: u64, school: u8) -> f32 {
         .game_world_entity()
         .guid()
         .find(guid)
-        .is_none_or(|unit| {
-            !unit.is_player() && (unit.owner_guid == 0 || unit.owner_guid >> 48 != 0)
-        })
+        .is_none_or(|unit| !unit.crits_with_spells())
     {
         return 0.0;
     }

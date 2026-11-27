@@ -29,9 +29,10 @@ const FLIGHT_TICKS: &str = "20";
 const GO_EVENTS: &str =
     "SELECT * FROM game_spell_cast_event_live WHERE caster_guid = 1 AND kind = 2";
 const IMPACT_EVENTS: &str = "SELECT * FROM game_spell_impact_event_live WHERE caster_guid = 1";
-// The hit roll, effect points, crit and block draw the one seeded state in that order. Splitmix
-// state 12934727 draws 8467, 126, 3, 67 and 49 basis points, so its block draw of 67 falls under
-// the wolf's 500 basis point block chance; state 4 draws 8682, 7776, 9487, 3102 and 2425.
+// The weapon hit roll (which also decides the crit), the effect points and the block draw the one
+// seeded state in that order. Splitmix state 12934727 draws 8467, 126 and 3 basis points, so its
+// block draw of 3 falls under the wolf's 500 basis point block chance; state 4 draws 8682, 7776 and
+// 9487.
 const BLOCKING_CASTER_STATE: u64 = 12_934_727;
 const CLEAR_CASTER_STATE: u64 = 4;
 

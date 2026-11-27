@@ -384,6 +384,12 @@ impl WorldEntity {
         self.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0
     }
 
+    /// vmangos `GetSpellCritChance`: a creature crits with spells only when a player owns it.
+    pub(crate) fn crits_with_spells(&self) -> bool {
+        self.is_player()
+            || (self.owner_guid != 0 && lyracore_shared::guid::high(self.owner_guid) == 0)
+    }
+
     pub(crate) fn race(&self) -> u8 {
         (self.unit_bytes_0 & 0xFF) as u8
     }

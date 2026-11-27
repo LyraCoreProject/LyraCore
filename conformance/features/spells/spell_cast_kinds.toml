@@ -91,6 +91,30 @@ symbol = "apply_damage_effect"
 evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit calls Unit::CalculateAbsorbResistBlock, which calls IsSpellPartiallyBlocked, when a delayed spell hits (Spell.cpp:1415); apply_damage_effect rolls the block through mitigate_spell at launch and stores it in PendingSpellImpact.blocked."
 
 [[known_gaps]]
+description = "A Spell with SPELL_ATTR_EX3_COMPLETELY_BLOCKED, such as Hamstring, Wing Clip, Shield Bash or Kick, rolls the Attack Table but is never fully blocked. vmangos opens the block band for such a Spell, and a block refuses all its effects; 35 imported Spells carry the attribute."
+path = "module/src/combat/attack_table.rs"
+symbol = "attack_table"
+evidence = "Source reading, not measured. At d9173eca, SpellCaster::RollMeleeOutcomeAgainst (SpellCaster.cpp:546-547) sets canBlock only for a Spell with SPELL_ATTR_EX3_COMPLETELY_BLOCKED and returns MELEE_HIT_BLOCK at line 676; attack_table closes the block band for every Spell."
+
+[[known_gaps]]
+description = "A Spell with SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS keeps its whole cost when it is avoided. vmangos gives back 82% of an energy cost on a miss, dodge, parry or immune result, and 82% of a rage cost on a dodge or parry."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "run_spell_effects"
+evidence = "Source reading, not measured. At d9173eca, Spell::DoAllEffectOnTarget (Spell.cpp:1266-1286) calls ModifyPower with lroundf(m_powerCost * 0.82f); the Module has no refund."
+
+[[known_gaps]]
+description = "A melee or ranged damage-class Spell is never resisted by the target's mechanic resistance. vmangos rolls MELEE_HIT_RESIST right after the miss band from SPELL_AURA_MOD_MECHANIC_RESISTANCE for the Spell's mechanic."
+path = "module/src/combat/attack_table.rs"
+symbol = "attack_table"
+evidence = "Source reading, not measured. At d9173eca, SpellCaster::RollMeleeOutcomeAgainst (SpellCaster.cpp:483-497) adds the mechanic resistance band after the miss chance."
+
+[[known_gaps]]
+description = "A direct-damage Spell of damage class 0 with a magic school, such as an item's fire proc, can crit with the caster's spell crit chance. vmangos gives damage class 0 no crit chance."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "direct_spell_crit_chance"
+evidence = "Source reading, not measured. At d9173eca, Unit::GetSpellCritChance (Unit.cpp:5242-5243) returns 0 for SPELL_DAMAGE_CLASS_NONE."
+
+[[known_gaps]]
 description = "Retaliation strikes back at an attacker immune to physical damage and deals its damage. vmangos casts the Retaliation strike as a spell, so the attacker's immunity refuses it and the strike reports immune."
 path = "module/src/combat/folds.rs"
 symbol = "retaliate_on_hit"
@@ -627,3 +651,43 @@ rung = "durable_module"
 path = "module/tests/aura_charges.rs"
 function = "a_proc_refused_for_a_missing_reagent_still_spends_a_charge_and_starts_its_cooldown"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_hit_table.rs"
+function = "a_melee_damage_spell_is_dodged_or_parried_and_arms_the_reacts"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_hit_table.rs"
+function = "a_ranged_damage_spell_is_neither_dodged_nor_parried"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_hit_table.rs"
+function = "a_magic_damage_spell_is_neither_dodged_nor_parried"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/spell/cast/resolve.rs"
+function = "a_damage_spell_rolls_the_table_of_its_damage_class"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/attack_table.rs"
+function = "a_spell_with_no_active_defense_is_never_dodged_or_parried"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/attack_table.rs"
+function = "a_spell_that_is_no_weapon_spell_rolls_the_maximum_skill_for_its_level"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/attack_table.rs"
+function = "a_creature_crits_with_a_spell_only_when_a_player_owns_it"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "a_melee_or_ranged_spell_without_combat_range_or_a_weapon_rolls_the_level_skill"
+rung = "unit"

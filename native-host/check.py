@@ -4882,7 +4882,7 @@ def check_combo_points(host):
     observer = host.enter_world('Observer', at=(0, 10, 0, 0))
     guid = rogue.guid
     host.call('debug_learn_spell', [guid, 133])
-    host.restore('game_spell', 'spell_id = 133', 'gcd_ms', 'cast_flags', 'cost')
+    host.restore('game_spell', 'spell_id = 133', 'gcd_ms', 'cast_flags', 'cost', 'damage_class')
     host.restore('game_spell_effect', 'spell_id = 133', 'kind')
     host.sql('UPDATE game_spell SET gcd_ms = 0, cost = 0 WHERE spell_id = 133')
     first = spawn(host, guid, 51000, 5)
@@ -4895,6 +4895,9 @@ def check_combo_points(host):
         host.sql(f'UPDATE game_spell_effect SET kind = {kind} WHERE spell_id = 133')
         finisher = 0x08 if kind == 0x0d else 0  # CAST_FLAG_COMBO_FINISHER.
         host.sql(f'UPDATE game_spell SET cast_flags = {finisher} WHERE spell_id = 133')
+        if kind == 0x0d:
+            # SPELL_DAMAGE_CLASS_MELEE: the finisher rolls the Attack Table, which never resists.
+            host.sql('UPDATE game_spell SET damage_class = 2 WHERE spell_id = 133')
 
     def shown(packets=()):
         seen = list(packets)

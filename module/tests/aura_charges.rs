@@ -7,10 +7,10 @@ use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
     A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE, A_PROC_TRIGGER, A_SPELLMOD_FLAT,
-    CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT, COMBAT_ATTACK_POWER,
-    COMBAT_CRIT, COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, E_TRIGGER, M_FEAR, M_POLY, M_STUN,
-    P_COMBAT_FIELD, P_MECHANIC, P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR,
-    SPEED_CAST, SPEED_MOVE, SPEED_SWING, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES, COMBAT_ATTACK_POWER, COMBAT_CRIT,
+    COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, E_TRIGGER, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD,
+    P_MECHANIC, P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST,
+    SPEED_MOVE, SPEED_SWING, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
@@ -22,6 +22,9 @@ const DURATION_MS: u32 = 600_000;
 const PHYSICAL: u8 = 0x01;
 const FIRE: u8 = 0x04;
 const NATURE: u8 = 0x08;
+// vmangos SpellDamageClass; class 0 rolls no hit.
+const DAMAGE_CLASS_NONE: u8 = 0;
+const DAMAGE_CLASS_MAGIC: u8 = 1;
 
 // vmangos SpellDefines.h ProcFlags and ProcFlagsEx.
 const DEAL_MELEE_SWING: u32 = 0x4;
@@ -504,7 +507,7 @@ fn fear_ward_refuses_a_fear_that_deals_no_damage_and_is_used_up_by_it() {
     set_spell(
         &standalone,
         PSYCHIC_SCREAM,
-        &format!("cast_flags = {CAST_FLAG_MAGIC_HIT}"),
+        &format!("damage_class = {DAMAGE_CLASS_MAGIC}"),
     );
     set_level(&standalone, PLAYER, OUT_OF_REACH_LEVEL);
     standalone.assert_call("debug_force_cast", &["1", &FEAR_WARD.to_string()]);
@@ -533,7 +536,11 @@ fn fear_ward_refuses_a_fear_that_deals_no_damage_and_is_used_up_by_it() {
         None,
         "the refused fear uses Fear Ward up, though it deals no damage"
     );
-    set_spell(&standalone, PSYCHIC_SCREAM, "cast_flags = 0");
+    set_spell(
+        &standalone,
+        PSYCHIC_SCREAM,
+        &format!("damage_class = {DAMAGE_CLASS_NONE}"),
+    );
     cast_by(&standalone, wolf, PSYCHIC_SCREAM, PLAYER);
     assert!(
         stacks(&standalone, PSYCHIC_SCREAM).is_some(),
@@ -924,7 +931,7 @@ fn a_snare_whose_only_effect_is_dropped_reports_immune2_when_its_hit_roll_misses
     set_spell(
         &standalone,
         SNARE_FIXTURE,
-        &format!("cast_flags = {CAST_FLAG_MAGIC_HIT}"),
+        &format!("damage_class = {DAMAGE_CLASS_MAGIC}"),
     );
     set_level(&standalone, wolf, OUT_OF_REACH_LEVEL);
     standalone.insert_row(

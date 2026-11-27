@@ -16,9 +16,7 @@ pub(crate) fn spell_crit_chance(ctx: &ReducerContext, caster_guid: u64) -> f32 {
     let Some(caster) = ctx.db.game_world_entity().guid().find(caster_guid) else {
         return 0.0;
     };
-    if !caster.is_player()
-        && (caster.owner_guid == 0 || lyracore_shared::guid::high(caster.owner_guid) != 0)
-    {
+    if !caster.crits_with_spells() {
         return 0.0;
     }
     let base = super::rolls::intellect_crit_chance(

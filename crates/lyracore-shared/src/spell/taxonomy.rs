@@ -248,6 +248,8 @@ pub const CAST_FLAG_REFUSES_SELF_CAST: u32 = 0x0008_0000;
 pub const CAST_FLAG_NO_AURA_CANCEL: u32 = 0x0010_0000;
 // While a unit holds this spell's Aura, it cannot cast a shapeshift (vmangos Spell::CheckCast).
 pub const CAST_FLAG_LOCKS_FORM: u32 = 0x0020_0000;
+// Neither combat range nor a weapon spell: its Attack Table uses the level's maximum skill.
+pub const CAST_FLAG_LEVEL_SKILL: u32 = 0x0040_0000;
 
 #[cfg(test)]
 mod tests {

@@ -406,6 +406,8 @@ pub(crate) fn run_immune_proc_pass(
     );
 }
 
+pub(crate) const DAMAGE_CLASS_MAGIC: u8 = 1;
+
 pub(crate) const DAMAGE_CLASS_MELEE: u8 = 2;
 
 pub(crate) const DAMAGE_CLASS_RANGED: u8 = 3;
