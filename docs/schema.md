@@ -1176,8 +1176,10 @@ A spell with a speed reaches each target other than its caster after
 3D, from caster to target at launch. These paths travel:
 
 - Each unit the spell reaches after a flight gets one `game_pending_spell_impact` row. Its
-  `E_DAMAGE` effects roll their crit, resist and block at launch, as vmangos
-  `HandleDelayedSpellLaunch` does, and the row carries the damage; the cast's GO carries none.
+  `E_DAMAGE` effects roll their damage and crit at launch, as vmangos `HandleDelayedSpellLaunch`
+  does, and the row carries the damage; the cast's GO carries none. They also roll their resist
+  and block at launch, which vmangos rolls at impact. This Deliberate Deviation keeps Roll
+  Conformance stable.
   Every other effect except a Weapon Strike, Judgement or finisher strike also waits for the
   impact: `effect_mask` sets bit `1 << effect_index` for each, and `effect_N_points` holds the
   points it drew at launch. An effect with an index above 2 lands in the cast.
@@ -1193,11 +1195,16 @@ column.
 
 An impact lands as vmangos `CheckAtDelay` and `DoAllEffectOnTarget` land a delayed spell:
 
-- A unit that is dead, gone, or on another map or Instance than its caster takes nothing, so a
-  target that dies in flight gets no Aura.
+- A unit that is gone, or on another map or Instance than its caster, takes nothing.
+- A dead unit takes every effect except its Auras, healing and damage, as vmangos refuses those on
+  a dead unit. A target that dies in flight gets no Aura, and a travelling Resurrect still lands.
 - A creature returning home, and a unit a harmful spell may no longer harm, evade: the caster gets
-  `SMSG_SPELLLOGMISS` with `SPELL_MISS_EVADE` and nothing lands.
-- A unit that became immune to the whole spell in flight takes nothing, and no log is sent. An
+  `SMSG_SPELLLOGMISS` with `SPELL_MISS_EVADE` and nothing lands. vmangos sends that log for the
+  unit it may no longer harm; for a creature returning home it sends the damage log and deals no
+  damage.
+- A unit that became immune to the whole spell in flight takes no effect. An impact that carries
+  damage logs it as absorbed, all but the block, and a harmful spell runs the immune proc pass and
+  draws the unit into combat, as vmangos `DoAllEffectOnTarget` does for `SPELL_MISS_IMMUNE`. An
   effect whose mechanic it became immune to is dropped.
 - Otherwise the effects apply first, then the damage, as vmangos `DoSpellHitOnUnit` runs before the
   damage. The unit's creature AI then sees the hit, and the healing the effects did is logged as for

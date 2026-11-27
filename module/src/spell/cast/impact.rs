@@ -1,9 +1,12 @@
 use spacetimedb::{ReducerContext, Table, TimeDuration};
 
-use super::resolve::{CastRequest, LoadedSpell, UnitLogs};
+use super::resolve::{engage_refusing_unit, CastRequest, LoadedSpell, UnitLogs};
 use super::targeting::{apply_effect, roll_spell_damage, SpellDamageRoll};
 use crate::geometry::{distance_3d, projectile_travel_ms};
-use crate::spell::{CAST_MISS_EVADE, E_DAMAGE, E_FINISHER_DAMAGE, E_JUDGEMENT, E_WEAPON_STRIKE};
+use crate::spell::{
+    CAST_MISS_EVADE, E_DAMAGE, E_FINISHER_DAMAGE, E_HEAL, E_HEAL_MAX_HEALTH, E_JUDGEMENT,
+    E_WEAPON_STRIKE, KIND_AURA_BIT,
+};
 use crate::{
     game_pending_spell_impact, game_world_entity, PendingSpellImpact, Spell, SpellEffect,
     SpellImpactEvent, WorldEntity,
@@ -62,14 +65,12 @@ impl<'a> SpellFlights<'a> {
         true
     }
 
-    /// Schedules each impact that carries anything, and returns the units they fly to.
+    /// Schedules each impact, and returns the units they fly to.
     pub(super) fn launch(self, ctx: &ReducerContext) -> Vec<u64> {
         let mut in_flight = Vec::new();
         for impact in self.flights.into_iter().filter_map(|(_, impact)| impact) {
-            if carries_anything(&impact) {
-                in_flight.push(impact.target_guid);
-                ctx.db.game_pending_spell_impact().insert(impact);
-            }
+            in_flight.push(impact.target_guid);
+            ctx.db.game_pending_spell_impact().insert(impact);
         }
         in_flight
     }
@@ -135,10 +136,6 @@ fn lands_at_impact(kind: u8) -> bool {
     !matches!(kind, E_WEAPON_STRIKE | E_JUDGEMENT | E_FINISHER_DAMAGE)
 }
 
-fn carries_anything(impact: &PendingSpellImpact) -> bool {
-    impact.carries_damage || impact.effect_mask != 0
-}
-
 impl PendingSpellImpact {
     fn points_mut(&mut self, effect_index: u8) -> &mut i32 {
         match effect_index {
@@ -176,10 +173,6 @@ pub(crate) fn land_spell_impact(ctx: &ReducerContext, impact: &PendingSpellImpac
     let Some(target) = entities.guid().find(impact.target_guid) else {
         return;
     };
-    // vmangos lands nothing on a dead unit: it takes no damage, and its Aura holders are refused.
-    if target.dead {
-        return;
-    }
     let caster = entities.guid().find(impact.caster_guid);
     // vmangos finds the unit only on its caster's map.
     if caster.as_ref().is_some_and(|caster| {
@@ -188,7 +181,18 @@ pub(crate) fn land_spell_impact(ctx: &ReducerContext, impact: &PendingSpellImpac
         return;
     }
     let spell = LoadedSpell::load(ctx, impact.spell_id).ok();
-    match impact_refusal(ctx, impact, &target, caster.as_ref(), spell.as_ref()) {
+    let harmful = impact.carries_damage
+        || spell
+            .as_ref()
+            .is_some_and(|spell| crate::spell::spell_is_harmful(&spell.header, &spell.effects));
+    match impact_refusal(
+        ctx,
+        impact,
+        &target,
+        caster.as_ref(),
+        spell.as_ref(),
+        harmful,
+    ) {
         Some(ImpactRefusal::Evade) => {
             crate::native::combat::spell_log_miss(
                 ctx,
@@ -199,7 +203,10 @@ pub(crate) fn land_spell_impact(ctx: &ReducerContext, impact: &PendingSpellImpac
             );
             return;
         }
-        Some(ImpactRefusal::Immune) => return,
+        Some(ImpactRefusal::Immune) => {
+            answer_immune_impact(ctx, impact, &target, harmful);
+            return;
+        }
         None => {}
     }
     let mut landed = impact.carries_damage;
@@ -208,7 +215,9 @@ pub(crate) fn land_spell_impact(ctx: &ReducerContext, impact: &PendingSpellImpac
     if let Some(LoadedSpell { header, effects }) = &spell {
         for e in effects.iter().filter(|e| impact.lands(e)) {
             let (caster_guid, target_guid) = (impact.caster_guid, impact.target_guid);
-            if crate::spell::is_immune_to_effect(ctx, caster_guid, target_guid, header, e) {
+            if (target.dead && refused_by_dead_unit(e.kind))
+                || crate::spell::is_immune_to_effect(ctx, caster_guid, target_guid, header, e)
+            {
                 continue;
             }
             let points = impact.points(e.effect_index);
@@ -230,7 +239,7 @@ pub(crate) fn land_spell_impact(ctx: &ReducerContext, impact: &PendingSpellImpac
             landed = true;
         }
     }
-    if impact.carries_damage {
+    if impact.carries_damage && !target.dead {
         deal_impact_damage(ctx, impact);
     }
     if let Some(spell) = spell.as_ref().filter(|_| landed) {
@@ -251,29 +260,62 @@ enum ImpactRefusal {
     Immune,
 }
 
+// vmangos runs every effect on a dead unit, but refuses its Auras, healing and damage.
+fn refused_by_dead_unit(kind: u8) -> bool {
+    kind & KIND_AURA_BIT != 0 || matches!(kind, E_HEAL | E_HEAL_MAX_HEALTH)
+}
+
 fn impact_refusal(
     ctx: &ReducerContext,
     impact: &PendingSpellImpact,
     target: &WorldEntity,
     caster: Option<&WorldEntity>,
     spell: Option<&LoadedSpell>,
+    harmful: bool,
 ) -> Option<ImpactRefusal> {
     // vmangos Spell::CheckAtDelay tests evade again when the spell lands.
     if crate::creatures::eventai::movement::returning_home(ctx, target.guid) {
         return Some(ImpactRefusal::Evade);
     }
-    let harmful = impact.carries_damage
-        || spell.is_some_and(|spell| crate::spell::spell_is_harmful(&spell.header, &spell.effects));
     // vmangos DoSpellHitOnUnit: a harmful travelling spell that reaches a friendly unit evades.
     if harmful && caster.is_some_and(|caster| !crate::combat::may_harm(ctx, caster, target)) {
         return Some(ImpactRefusal::Evade);
     }
     let LoadedSpell { header, effects } = spell?;
     let caster_guid = impact.caster_guid;
-    // vmangos CheckAtDelay marks a unit that became immune in flight; nothing lands and no log goes.
+    // vmangos CheckAtDelay marks a unit that became immune in flight as SPELL_MISS_IMMUNE.
     (crate::spell::is_immune_to_spell(ctx, caster_guid, target.guid, header, effects)
         || crate::spell::school_refuses_spell(ctx, caster_guid, target, header, harmful))
     .then_some(ImpactRefusal::Immune)
+}
+
+/// vmangos `DoAllEffectOnTarget` for an immune unit: no effect lands, the unit absorbs the damage
+/// left after its block, and a harmful spell still procs and draws the unit in.
+fn answer_immune_impact(
+    ctx: &ReducerContext,
+    impact: &PendingSpellImpact,
+    target: &WorldEntity,
+    harmful: bool,
+) {
+    if impact.carries_damage && !target.dead {
+        let unblocked = u32::try_from(impact.after_resist).unwrap_or(0);
+        log_impact_damage(ctx, impact, 0, unblocked.saturating_add(impact.resisted), 0);
+    }
+    if !harmful {
+        return;
+    }
+    // A triggered impact may be a proc missile, which raises no further procs.
+    if !impact.triggered {
+        crate::spell::proc::run_immune_proc_pass(
+            ctx,
+            impact.caster_guid,
+            impact.target_guid,
+            impact.spell_id,
+        );
+    }
+    if impact.caster_guid != impact.target_guid {
+        engage_refusing_unit(ctx, impact.caster_guid, impact.target_guid);
+    }
 }
 
 fn deal_impact_damage(ctx: &ReducerContext, impact: &PendingSpellImpact) {
@@ -298,6 +340,16 @@ fn deal_impact_damage(ctx: &ReducerContext, impact: &PendingSpellImpact) {
     } else {
         (0, 0)
     };
+    log_impact_damage(ctx, impact, dealt, absorbed, roll.resisted);
+}
+
+fn log_impact_damage(
+    ctx: &ReducerContext,
+    impact: &PendingSpellImpact,
+    dealt: u32,
+    absorbed: u32,
+    resisted: u32,
+) {
     let (map_id, instance_id, grid_x, grid_y) = crate::helpers::grid_of(ctx, impact.caster_guid);
     SpellImpactEvent::insert(
         ctx,
@@ -309,14 +361,14 @@ fn deal_impact_damage(ctx: &ReducerContext, impact: &PendingSpellImpact) {
             created_at: crate::time::now(ctx),
             damage: dealt,
             school: impact.school_index,
-            is_crit: roll.is_crit,
-            resisted: roll.resisted,
+            is_crit: impact.is_crit,
+            resisted,
             absorbed,
             map_id,
             instance_id,
             grid_x,
             grid_y,
-            blocked: roll.blocked,
+            blocked: impact.blocked,
         },
     );
 }

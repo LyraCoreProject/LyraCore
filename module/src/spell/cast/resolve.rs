@@ -632,7 +632,7 @@ fn answer_whole_refusals(
     }
 }
 
-fn engage_refusing_unit(ctx: &ReducerContext, caster_guid: u64, unit_guid: u64) {
+pub(super) fn engage_refusing_unit(ctx: &ReducerContext, caster_guid: u64, unit_guid: u64) {
     let entities = ctx.db.game_world_entity();
     let (Some(caster), Some(unit)) = (
         entities.guid().find(caster_guid),

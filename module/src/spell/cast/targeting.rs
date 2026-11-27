@@ -1456,8 +1456,8 @@ fn landed_crit(
     crit && hdr.attributes_ex_3 & SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS == 0
 }
 
-/// A spell damage effect's crit, resist and block, rolled at launch as vmangos
-/// `HandleDelayedSpellLaunch` does; the absorb waits for the hit.
+/// A spell damage effect's crit, resist and block. A travelling spell rolls all three at launch;
+/// read `resist_and_block_at_launch` in `conformance/features/spells/spell_cast_kinds.toml`.
 #[derive(Clone, Copy, Default)]
 pub(super) struct SpellDamageRoll {
     pub is_crit: bool,

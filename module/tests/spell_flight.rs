@@ -6,7 +6,7 @@ use lyracore_shared::spell::taxonomy::{
     A_MOD_SPEED, CAST_FLAG_ALWAYS_HIT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES,
     E_DAMAGE, P_SPEED_KIND, SPEED_MOVE, T_TARGET_ENEMY,
 };
-use support::Standalone;
+use support::{fence_subscription, subscribe_with_fence, Standalone};
 
 const PLAYER: u64 = 1;
 const WOLF_HEALTH: u32 = 100_000;
@@ -54,6 +54,12 @@ fn a_travelling_spells_slow_lands_with_its_damage_not_at_launch() {
 fn a_target_that_dies_while_the_spell_travels_gets_no_aura() {
     let mut standalone = Standalone::start("spell-flight-dead-target");
     let wolf = stage(&mut standalone);
+    let auras = subscribe_with_fence(
+        &standalone,
+        &[&format!(
+            "SELECT * FROM game_aura WHERE target_guid = {wolf}"
+        )],
+    );
 
     cast(&standalone, wolf);
     standalone.assert_call(
@@ -72,10 +78,10 @@ fn a_target_that_dies_while_the_spell_travels_gets_no_aura() {
     );
 
     standalone.assert_call("debug_advance_roll_batch", &[FLIGHT_TICKS]);
-    assert_eq!(
-        slow_stacks(&standalone, wolf),
-        None,
-        "vmangos Unit::AddSpellAuraHolder refuses an Aura on a dead unit"
+    fence_subscription(&standalone, &auras);
+    assert!(
+        auras.inserts("game_aura").is_empty(),
+        "vmangos Unit::AddSpellAuraHolder refuses an Aura on a dead unit, so none is ever placed"
     );
     assert!(standalone
         .query_rows(&format!(
