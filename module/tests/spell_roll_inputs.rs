@@ -269,7 +269,9 @@ fn a_partial_resist_that_removes_a_small_area_tick_still_reports_its_log() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn aura_cast_hit_testing_uses_damage_class_and_hostility() {
-    use lyracore_shared::spell::taxonomy::{A_MOD_SPEED, CAST_FLAG_MAGIC_HIT};
+    use lyracore_shared::spell::taxonomy::A_MOD_SPEED;
+    const NONE: u8 = 0;
+    const MAGIC: u8 = 1;
     let (shard, target) = stage("aura-damage-class");
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60 WHERE guid = {target}"
@@ -285,16 +287,16 @@ fn aura_cast_hit_testing_uses_damage_class_and_hostility() {
         ],
     );
     let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
-    for (index, (flags, school, negative, miss)) in [
-        (0, 4, true, "0"),
-        (CAST_FLAG_MAGIC_HIT, 4, true, "2"),
-        (CAST_FLAG_MAGIC_HIT, 4, false, "0"),
-        (CAST_FLAG_MAGIC_HIT, 1, true, "2"),
+    for (index, (damage_class, school, negative, miss)) in [
+        (NONE, 4, true, "0"),
+        (MAGIC, 4, true, "2"),
+        (MAGIC, 4, false, "0"),
+        (MAGIC, 1, true, "2"),
     ]
     .into_iter()
     .enumerate()
     {
-        shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {flags}, school_mask = {school}, is_negative = {negative} WHERE spell_id = 133"));
+        shard.assert_sql(&format!("UPDATE game_spell SET damage_class = {damage_class}, school_mask = {school}, is_negative = {negative} WHERE spell_id = 133"));
         shard.assert_sql(
             "UPDATE game_conformance_spell_random SET state = 17846 WHERE character_guid = 1",
         );
@@ -307,7 +309,7 @@ fn aura_cast_hit_testing_uses_damage_class_and_hostility() {
         assert_eq!(casts.len(), index + 1);
         assert_eq!(
             casts[index]["miss_info"], miss,
-            "flags {flags}, negative {negative}, integer roll 399"
+            "damage class {damage_class}, negative {negative}, integer roll 399"
         );
         assert_eq!(
             shard

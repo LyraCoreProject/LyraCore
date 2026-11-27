@@ -16,9 +16,13 @@ const RANGED_SLOT: u8 = 17;
 const THROW: u32 = 2764;
 const SINISTER_STRIKE: u32 = 1752;
 // Spell.dbc Attributes for Throw and Sinister Strike; 0x02 marks the ranged slot.
+const RANGED_SLOT_ATTRIBUTE: u32 = 0x02;
 const THROW_ATTRIBUTES: u32 = 0x0041_0012;
 const SINISTER_STRIKE_ATTRIBUTES: u32 = 0x0005_0010;
 const THROWN: u8 = 16;
+// vmangos SpellDamageClass.
+const DAMAGE_CLASS_MELEE: u8 = 2;
+const DAMAGE_CLASS_RANGED: u8 = 3;
 const INVTYPE_THROWN: u8 = 25;
 const WEAPON_DAMAGE: u32 = 40;
 const THROWN_STACK: u32 = 20;
@@ -159,6 +163,11 @@ fn stage_strike(
     range_yd: u32,
     bonus: i32,
 ) {
+    let damage_class = if attributes & RANGED_SLOT_ATTRIBUTE != 0 {
+        DAMAGE_CLASS_RANGED
+    } else {
+        DAMAGE_CLASS_MELEE
+    };
     standalone.insert_row(
         "game_spell",
         &[
@@ -167,6 +176,7 @@ fn stage_strike(
             ("range_yd", &range_yd),
             ("school_mask", &1),
             ("attributes", &attributes),
+            ("damage_class", &damage_class),
             ("is_negative", &true),
         ],
     );

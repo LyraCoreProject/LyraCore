@@ -16,16 +16,16 @@ use crate::spell::{
     effect_amount, faction_target_violation, is_action_blocked, is_stealthed, level_gate_blocks,
     place_ground_area, recipe_reagents, select_targets, CastGateRefusal, CastHandle,
     CastRefusalKind, CastRefusalReason, CastStart, FormRefusal, ItemGrantOutcome,
-    SpellCastEventKind, A_FLAG, A_MOUNTED, CAST_FLAG_BINARY, CAST_FLAG_CHANNELED,
-    CAST_FLAG_COMBO_FINISHER, CAST_FLAG_INCAP_OPENER, CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND,
-    CAST_FLAG_REQ_DAGGER, CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH,
-    CAST_FLAG_STEALTH_SAFE, CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT,
-    E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING,
-    E_PERSISTENT_AREA, E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE,
-    E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME,
-    SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_AREA_NOT_HOSTILE,
-    T_CHAIN_ALLY, T_CHAIN_ENEMY, T_PARTY_AREA, T_RAID_AREA, T_TARGET_ALLY, T_TARGET_ANY,
-    T_TARGET_ENEMY, T_TARGET_GROUP_CLASS, T_TARGET_SUBGROUP,
+    SpellCastEventKind, A_FLAG, A_MOUNTED, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER,
+    CAST_FLAG_INCAP_OPENER, CAST_FLAG_REQ_BEHIND, CAST_FLAG_REQ_DAGGER, CAST_FLAG_REQ_OVERPOWER,
+    CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH, CAST_FLAG_STEALTH_SAFE, CAST_FLAG_WEAPON_PROCS,
+    E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY,
+    E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING, E_PERSISTENT_AREA, E_SCRIPTED,
+    E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE, E_WEAPON_STRIKE, HUMANOID_TYPE,
+    KIND_AURA_BIT, SPELLMOD_OP_CASTING_TIME, SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT,
+    T_AREA_ALLY, T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CHAIN_ALLY, T_CHAIN_ENEMY, T_PARTY_AREA,
+    T_RAID_AREA, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY, T_TARGET_GROUP_CLASS,
+    T_TARGET_SUBGROUP,
 };
 use crate::{
     game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
@@ -657,8 +657,7 @@ struct CastTargets<'a> {
     caster_guid: u64,
     level: u8,
     origin: CastOrigin,
-    table: HitTable,
-    rolls_hit: bool,
+    table: Option<HitTable>,
     // vmangos rolls the main hand per target, landed or avoided; LyraCore skips Chance on Hit.
     rolls_weapon: bool,
     // One hit roll per target for the whole spell (CONTEXT.md "Cast Miss"); never the caster.
@@ -684,27 +683,13 @@ impl<'a> CastTargets<'a> {
         origin: CastOrigin,
     ) -> Self {
         let (hdr, effects) = (&spell.header, spell.effects.as_slice());
-        let table = if effects
-            .iter()
-            .any(|e| matches!(e.kind, E_WEAPON_STRIKE | E_FINISHER_DAMAGE))
-        {
-            HitTable::Weapon {
-                ranged: hdr.attributes & SPELL_ATTR_USES_RANGED_SLOT != 0,
-            }
-        } else {
-            HitTable::Spell
-        };
-        let rolls_hit = matches!(table, HitTable::Weapon { .. })
-            || effects.iter().any(|e| e.kind == E_DAMAGE)
-            || (hdr.negative() && hdr.cast_flags & (CAST_FLAG_BINARY | CAST_FLAG_MAGIC_HIT) != 0);
         Self {
             ctx,
             spell,
             caster_guid: request.caster_guid,
             level: request.level,
             origin,
-            table,
-            rolls_hit,
+            table: HitTable::of(hdr, effects),
             rolls_weapon: hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0
                 && !matches!(origin, CastOrigin::ChanceOnHit),
             rolls: std::collections::HashMap::new(),
@@ -784,14 +769,15 @@ impl<'a> CastTargets<'a> {
             {
                 None
             } else {
-                let roll = if self.rolls_hit && t != caster_guid {
-                    let (level, table) = (self.level, self.table);
-                    *self.rolls.entry(t).or_insert_with(|| {
-                        self.rolled.push(t);
-                        hit_roll(ctx, caster_guid, level, t, table, hdr)
-                    })
-                } else {
-                    AttackOutcome::Normal
+                let roll = match self.table {
+                    Some(table) if t != caster_guid => {
+                        let level = self.level;
+                        *self.rolls.entry(t).or_insert_with(|| {
+                            self.rolled.push(t);
+                            hit_roll(ctx, caster_guid, level, t, table, hdr)
+                        })
+                    }
+                    _ => AttackOutcome::Normal,
                 };
                 let immune = crate::spell::is_immune_to_effect(ctx, caster_guid, t, hdr, e);
                 self.immunity.record(t, immune);
@@ -811,7 +797,7 @@ impl<'a> CastTargets<'a> {
 
     /// Runs the target's weapon-roll reacts and procs once, after the GO and the cost.
     fn answer(&mut self, t: u64) {
-        let HitTable::Weapon { ranged } = self.table else {
+        let Some(HitTable::Weapon { ranged }) = self.table else {
             return;
         };
         let Some(&roll) = self.rolls.get(&t) else {
@@ -835,14 +821,19 @@ impl<'a> CastTargets<'a> {
         self.rolls.get(&t).copied().unwrap_or(AttackOutcome::Normal)
     }
 
+    /// The crit a weapon roll decided for the target, or `None` when its hit rolls its own crit.
+    fn weapon_crit(&self, t: u64) -> Option<bool> {
+        let weapon = matches!(self.table, Some(HitTable::Weapon { .. }));
+        let roll = self.rolls.get(&t).filter(|_| weapon)?;
+        Some(*roll == AttackOutcome::Crit)
+    }
+
     /// The `CAST_MISS_*` code the GO reports for the target.
     fn miss_info(&self, t: u64) -> u8 {
-        let hdr = &self.spell.header;
         self.immunity.miss(t).unwrap_or_else(|| {
             cast_miss(
                 self.roll(t),
-                matches!(self.table, HitTable::Weapon { .. }),
-                hdr.cast_flags & CAST_FLAG_MAGIC_HIT != 0 || hdr.school_mask & !RESIST_ARMOR != 0,
+                matches!(self.table, Some(HitTable::Weapon { .. })),
             )
         })
     }
@@ -971,7 +962,7 @@ fn run_spell_effects(
                     points,
                     dest,
                     triggered,
-                    roll == AttackOutcome::Crit,
+                    targets.weapon_crit(t),
                     request.item_target,
                 )
             };
@@ -1244,10 +1235,30 @@ fn finish_weapon_hits(
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HitTable {
     Spell,
     Weapon { ranged: bool },
+}
+
+impl HitTable {
+    /// The table vmangos `SpellCaster::SpellHitResult` picks by damage class; `None` rolls no hit.
+    /// A queued strike rolls when its swing fires.
+    fn of(hdr: &Spell, effects: &[SpellEffect]) -> Option<Self> {
+        let harmful = hdr.negative()
+            || effects
+                .iter()
+                .any(|e| matches!(e.kind, E_DAMAGE | E_WEAPON_STRIKE | E_FINISHER_DAMAGE));
+        if !harmful || queues_next_swing(effects) {
+            return None;
+        }
+        match hdr.damage_class {
+            crate::spell::proc::DAMAGE_CLASS_MAGIC => Some(Self::Spell),
+            crate::spell::proc::DAMAGE_CLASS_MELEE => Some(Self::Weapon { ranged: false }),
+            crate::spell::proc::DAMAGE_CLASS_RANGED => Some(Self::Weapon { ranged: true }),
+            _ => None,
+        }
+    }
 }
 
 fn hit_roll(
@@ -1345,11 +1356,12 @@ fn arm_avoidance_reacts(
     }
 }
 
-pub(crate) fn cast_miss(roll: AttackOutcome, weapon_strike: bool, magic_hit: bool) -> u8 {
+/// A magic roll's miss is a resist, as vmangos `MagicSpellHitResult` returns it.
+pub(crate) fn cast_miss(roll: AttackOutcome, weapon: bool) -> u8 {
     match roll {
         AttackOutcome::Dodge => crate::spell::CAST_MISS_DODGE,
         AttackOutcome::Parry => crate::spell::CAST_MISS_PARRY,
-        AttackOutcome::Miss if weapon_strike || !magic_hit => crate::spell::CAST_MISS_MISS,
+        AttackOutcome::Miss if weapon => crate::spell::CAST_MISS_MISS,
         AttackOutcome::Miss => crate::spell::CAST_MISS_RESIST,
         AttackOutcome::Immune => crate::spell::CAST_MISS_IMMUNE,
         AttackOutcome::Evade => crate::spell::CAST_MISS_EVADE,
@@ -3373,38 +3385,90 @@ mod cast_miss_tests {
     use super::*;
 
     #[test]
-    fn a_failed_hit_roll_misses_a_physical_spell_and_resists_a_magic_one() {
+    fn a_failed_magic_roll_is_a_resist_and_a_failed_weapon_roll_a_miss() {
         assert_eq!(
-            cast_miss(AttackOutcome::Normal, false, true),
+            cast_miss(AttackOutcome::Normal, false),
             crate::spell::CAST_MISS_NONE
         );
         assert_eq!(
-            cast_miss(AttackOutcome::Crit, true, false),
+            cast_miss(AttackOutcome::Crit, true),
             crate::spell::CAST_MISS_NONE
         );
         assert_eq!(
-            cast_miss(AttackOutcome::Miss, false, false),
-            crate::spell::CAST_MISS_MISS
-        );
-        assert_eq!(
-            cast_miss(AttackOutcome::Miss, false, true),
+            cast_miss(AttackOutcome::Miss, false),
             crate::spell::CAST_MISS_RESIST
+        );
+        assert_eq!(
+            cast_miss(AttackOutcome::Miss, true),
+            crate::spell::CAST_MISS_MISS
         );
     }
 
     #[test]
-    fn a_weapon_spell_reports_its_physical_avoidance_whatever_its_school() {
+    fn a_weapon_spell_reports_its_physical_avoidance() {
         assert_eq!(
-            cast_miss(AttackOutcome::Miss, true, true),
-            crate::spell::CAST_MISS_MISS
-        );
-        assert_eq!(
-            cast_miss(AttackOutcome::Dodge, true, false),
+            cast_miss(AttackOutcome::Dodge, true),
             crate::spell::CAST_MISS_DODGE
         );
         assert_eq!(
-            cast_miss(AttackOutcome::Parry, true, false),
+            cast_miss(AttackOutcome::Parry, true),
             crate::spell::CAST_MISS_PARRY
+        );
+    }
+}
+
+#[cfg(test)]
+mod hit_table_tests {
+    use super::*;
+
+    fn table(damage_class: u8, is_negative: bool, kind: u8) -> Option<HitTable> {
+        let hdr = Spell {
+            damage_class,
+            is_negative,
+            ..Spell::blank(1, "hit table")
+        };
+        let effect = SpellEffect {
+            kind,
+            ..SpellEffect::blank(1, 0)
+        };
+        HitTable::of(&hdr, &[effect])
+    }
+
+    #[test]
+    fn a_damage_spell_rolls_the_table_of_its_damage_class() {
+        assert_eq!(table(1, true, E_DAMAGE), Some(HitTable::Spell));
+        assert_eq!(
+            table(2, true, E_DAMAGE),
+            Some(HitTable::Weapon { ranged: false })
+        );
+        assert_eq!(
+            table(3, true, E_DAMAGE),
+            Some(HitTable::Weapon { ranged: true })
+        );
+        assert_eq!(table(0, true, E_DAMAGE), None);
+    }
+
+    #[test]
+    fn a_weapon_strike_follows_its_damage_class_too() {
+        assert_eq!(
+            table(2, true, E_WEAPON_STRIKE),
+            Some(HitTable::Weapon { ranged: false })
+        );
+        assert_eq!(table(1, true, E_WEAPON_STRIKE), Some(HitTable::Spell));
+        assert_eq!(table(0, true, E_FINISHER_DAMAGE), None);
+    }
+
+    #[test]
+    fn a_helpful_spell_and_a_queued_strike_roll_no_hit_at_cast() {
+        assert_eq!(table(1, false, crate::spell::E_HEAL), None);
+        assert_eq!(table(2, true, E_NEXT_SWING), None);
+    }
+
+    #[test]
+    fn a_harmful_melee_spell_without_damage_rolls_the_weapon_table() {
+        assert_eq!(
+            table(2, true, crate::spell::A_MOD_SPEED),
+            Some(HitTable::Weapon { ranged: false })
         );
     }
 }

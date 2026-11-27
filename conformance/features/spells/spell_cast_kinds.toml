@@ -91,6 +91,24 @@ symbol = "apply_damage_effect"
 evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit calls Unit::CalculateAbsorbResistBlock, which calls IsSpellPartiallyBlocked, when a delayed spell hits (Spell.cpp:1415); apply_damage_effect rolls the block through mitigate_spell at launch and stores it in PendingSpellImpact.blocked."
 
 [[known_gaps]]
+description = "A melee or ranged damage-class Spell rolls its miss with the caster's weapon skill even when it is neither melee range nor a weapon spell, such as Hammer of Wrath. vmangos uses the weapon skill only for a Spell with the combat range index or a required weapon class, and the maximum skill for the caster's level otherwise."
+path = "module/src/combat/attack_table.rs"
+symbol = "attack_table_for"
+evidence = "Source reading, not measured. At d9173eca, SpellCaster::RollMeleeOutcomeAgainst (SpellCaster.cpp:449-452) picks GetWeaponSkillValue only for rangeIndex SPELL_RANGE_IDX_COMBAT or EquippedItemClass ITEM_CLASS_WEAPON; the Module stores range_yd but no range index."
+
+[[known_gaps]]
+description = "A melee or ranged damage-class Spell is never resisted by the target's mechanic resistance. vmangos rolls MELEE_HIT_RESIST right after the miss band from SPELL_AURA_MOD_MECHANIC_RESISTANCE for the Spell's mechanic."
+path = "module/src/combat/attack_table.rs"
+symbol = "attack_table"
+evidence = "Source reading, not measured. At d9173eca, SpellCaster::RollMeleeOutcomeAgainst (SpellCaster.cpp:483-497) adds the mechanic resistance band after the miss chance."
+
+[[known_gaps]]
+description = "A direct-damage Spell of damage class 0 with a magic school, such as an item's fire proc, can crit with the caster's spell crit chance. vmangos gives damage class 0 no crit chance."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "direct_spell_crit_chance"
+evidence = "Source reading, not measured. At d9173eca, Unit::GetSpellCritChance (Unit.cpp:5242-5243) returns 0 for SPELL_DAMAGE_CLASS_NONE."
+
+[[known_gaps]]
 description = "Retaliation strikes back at an attacker immune to physical damage and deals its damage. vmangos casts the Retaliation strike as a spell, so the attacker's immunity refuses it and the strike reports immune."
 path = "module/src/combat/folds.rs"
 symbol = "retaliate_on_hit"
@@ -627,3 +645,28 @@ rung = "durable_module"
 path = "module/tests/aura_charges.rs"
 function = "a_proc_refused_for_a_missing_reagent_still_spends_a_charge_and_starts_its_cooldown"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_hit_table.rs"
+function = "a_melee_damage_spell_is_dodged_or_parried_and_arms_the_reacts"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_hit_table.rs"
+function = "a_ranged_damage_spell_is_neither_dodged_nor_parried"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_hit_table.rs"
+function = "a_magic_damage_spell_is_neither_dodged_nor_parried"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/spell/cast/resolve.rs"
+function = "a_damage_spell_rolls_the_table_of_its_damage_class"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/attack_table.rs"
+function = "a_spell_with_no_active_defense_is_never_dodged_or_parried"
+rung = "unit"

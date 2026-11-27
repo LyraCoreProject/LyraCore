@@ -22,6 +22,8 @@ const WOLF_HEALTH: u32 = 100_000;
 const SINISTER_STRIKE: u32 = 1752;
 const THUNDERFURY_PROC: u32 = 21992;
 const CHANCE_ON_HIT: u8 = 2;
+// vmangos SpellDamageClass.
+const DAMAGE_CLASS_MELEE: u8 = 2;
 const HOLY_STRENGTH: u32 = 20007;
 const CRUSADER: u32 = 1900;
 const FURY_OF_FORGEWRIGHT: u32 = 15494;
@@ -42,14 +44,7 @@ const SWING_EVENTS: &str = "SELECT * FROM game_combat_event_live WHERE attacker_
 fn an_avoided_weapon_ability_still_casts_the_main_hand_chance_on_hit_spell() {
     let mut standalone = Standalone::start("chance-on-hit-strike");
     let wolf = stage(&mut standalone);
-    stage_spell(
-        &standalone,
-        SINISTER_STRIKE,
-        "Sinister Strike",
-        CAST_FLAG_WEAPON_PROCS,
-        (E_WEAPON_STRIKE, T_TARGET_ENEMY),
-        (100, P_RAW),
-    );
+    stage_sinister_strike(&standalone);
     set_level(&standalone, wolf, OUT_OF_REACH_LEVEL);
     face_player(&standalone, wolf);
     let events = standalone.subscribe(&[CAST_EVENTS]);
@@ -313,14 +308,7 @@ fn a_chance_on_hit_spell_that_triggers_its_weapon_ability_stops_at_the_trigger_d
     standalone.clear_schedule("game_event_reaper_schedule");
     set_level(&standalone, wolf, 1);
     face_player(&standalone, wolf);
-    stage_spell(
-        &standalone,
-        SINISTER_STRIKE,
-        "Sinister Strike",
-        CAST_FLAG_WEAPON_PROCS,
-        (E_WEAPON_STRIKE, T_TARGET_ENEMY),
-        (100, P_RAW),
-    );
+    stage_sinister_strike(&standalone);
     standalone.assert_sql(&format!(
         "UPDATE game_spell SET cast_flags = {CAST_FLAG_ALWAYS_HIT} \
          WHERE spell_id = {THUNDERFURY_PROC}"
@@ -408,6 +396,20 @@ fn face_player(standalone: &Standalone, wolf: u64) {
 fn set_level(standalone: &Standalone, guid: u64, level: u32) {
     standalone.assert_sql(&format!(
         "UPDATE game_world_entity SET level = {level} WHERE guid = {guid}"
+    ));
+}
+
+fn stage_sinister_strike(standalone: &Standalone) {
+    stage_spell(
+        standalone,
+        SINISTER_STRIKE,
+        "Sinister Strike",
+        CAST_FLAG_WEAPON_PROCS,
+        (E_WEAPON_STRIKE, T_TARGET_ENEMY),
+        (100, P_RAW),
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell SET damage_class = {DAMAGE_CLASS_MELEE} WHERE spell_id = {SINISTER_STRIKE}"
     ));
 }
 

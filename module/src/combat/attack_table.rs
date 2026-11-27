@@ -3,7 +3,9 @@ use spacetimedb::ReducerContext;
 use crate::conformance_rolls::{draw, RollStream};
 use crate::{game_creature_template, game_world_entity, Spell, WorldEntity};
 
-use super::folds::{defender_block_value, effective_crit_bp, effective_ranged_crit_bp};
+use super::folds::{
+    defender_block_value, effective_crit_bp, effective_ranged_crit_bp, SPELL_ATTR_NO_ACTIVE_DEFENSE,
+};
 use super::tables::{crushing_chance_bp, dodge_chance_bp, BLOCK_BP, PARRY_BP};
 
 const BASE_MISS_BP: u32 = 500;
@@ -62,6 +64,7 @@ pub(crate) struct DeliveredSpell {
     pub(crate) next_melee_swing: bool,
     pub(crate) always_hit: bool,
     pub(crate) cannot_crit: bool,
+    pub(crate) no_active_defense: bool,
     pub(crate) school_mask: u8,
 }
 
@@ -80,6 +83,8 @@ impl DeliveredSpell {
             next_melee_swing,
             always_hit: flags & crate::spell::CAST_FLAG_ALWAYS_HIT != 0,
             cannot_crit: flags & crate::spell::CAST_FLAG_CANNOT_CRIT != 0,
+            no_active_defense: spell
+                .is_some_and(|spell| spell.attributes & SPELL_ATTR_NO_ACTIVE_DEFENSE != 0),
             school_mask: spell.map_or(0, |spell| spell.school_mask),
         }
     }
@@ -222,13 +227,17 @@ pub(crate) fn attack_table(facts: &AttackFacts) -> AttackTable {
     let crit = (base.crit as i32 + crit_bonus).max(0) as u32;
 
     let band = |open: bool, chance: u32| if open { chance } else { 0 };
+    let defends = !facts.spell.is_some_and(|spell| spell.no_active_defense);
     AttackTable {
         miss: band(
             facts.target_standing && !facts.spell.is_some_and(|spell| spell.always_hit),
             miss,
         ),
-        dodge: band(melee && (faced || !skills.target_is_character), dodge),
-        parry: band(melee && faced && !facts.no_parry, parry),
+        dodge: band(
+            melee && defends && (faced || !skills.target_is_character),
+            dodge,
+        ),
+        parry: band(melee && defends && faced && !facts.no_parry, parry),
         glancing: band(melee && swing && facts.attacker_can_glance, glancing),
         block: band(can_block && facts.spell.is_none(), block),
         crit: band(!facts.spell.is_some_and(|spell| spell.cannot_crit), crit),
@@ -278,9 +287,13 @@ pub(crate) fn attack_table_for(
         (None, AttackType::Ranged) => 1 << super::folds::ranged_school(ctx, attacker.guid),
         (None, AttackType::Melee) => 0,
     };
-    let crit = crit.saturating_add_signed(
-        (crate::spell::bonuses::school_crit(ctx, attacker.guid, school_mask) * 100.0) as i32,
-    );
+    let crit = if spell.is_some() && !crits_with_spells(attacker) {
+        0
+    } else {
+        crit.saturating_add_signed(
+            (crate::spell::bonuses::school_crit(ctx, attacker.guid, school_mask) * 100.0) as i32,
+        )
+    };
     let flags = (!target_is_character)
         .then(|| ctx.db.game_creature_defense().entry().find(target.entry))
         .flatten();
@@ -348,6 +361,11 @@ pub(crate) fn attack_table_for(
         no_parry: flags.as_ref().is_some_and(|flags| flags.no_parry),
         no_block: flags.as_ref().is_some_and(|flags| flags.no_block),
     })
+}
+
+/// vmangos `GetSpellCritChance`: a creature crits with spells only when a player owns it.
+pub(crate) fn crits_with_spells(unit: &WorldEntity) -> bool {
+    unit.is_player() || (unit.owner_guid != 0 && unit.owner_guid >> 48 == 0)
 }
 
 fn character_controls(ctx: &ReducerContext, unit: &WorldEntity) -> bool {
@@ -448,12 +466,14 @@ mod tests {
         next_melee_swing: true,
         always_hit: false,
         cannot_crit: false,
+        no_active_defense: false,
         school_mask: 1,
     };
     const CAST: DeliveredSpell = DeliveredSpell {
         next_melee_swing: false,
         always_hit: false,
         cannot_crit: false,
+        no_active_defense: false,
         school_mask: 1,
     };
 
@@ -607,6 +627,17 @@ mod tests {
         });
         let table = attack_table(&cast);
         assert_eq!([table.miss, table.dodge], [0, 650]);
+    }
+
+    #[test]
+    fn a_spell_with_no_active_defense_is_never_dodged_or_parried() {
+        let mut cast = level_63();
+        cast.spell = Some(DeliveredSpell {
+            no_active_defense: true,
+            ..CAST
+        });
+        let table = attack_table(&cast);
+        assert_eq!([table.miss, table.dodge, table.parry], [800, 0, 0]);
     }
 
     #[test]

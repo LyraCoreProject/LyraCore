@@ -14,6 +14,8 @@ const STUN_IMMUNITY: u32 = 509_0111;
 // vmangos SharedDefines.h MECHANIC_STUN, and SpellMissInfo Immune.
 const MECHANIC_STUN: u8 = 12;
 const MISS_IMMUNE: u32 = 7;
+// vmangos SpellDamageClass.
+const DAMAGE_CLASS_MELEE: u8 = 2;
 
 fn stage_finisher(name: &str) -> (Standalone, u64) {
     let mut standalone = Standalone::start(name);
@@ -44,6 +46,7 @@ fn stage_finisher(name: &str) -> (Standalone, u64) {
             ("name", &"Fixture Finisher"),
             ("range_yd", &5),
             ("school_mask", &1),
+            ("damage_class", &DAMAGE_CLASS_MELEE),
             ("is_negative", &true),
             ("cast_flags", &CAST_FLAG_COMBO_FINISHER),
         ],

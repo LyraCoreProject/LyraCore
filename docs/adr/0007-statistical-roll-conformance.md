@@ -363,8 +363,8 @@ No script changed during capture. No third recording was taken.
 ### Core spell measurement
 
 The core fixture translates Scorch's additional pinned numeric inputs from `mangos.sql:5879`:
-cost 50, range 30, spell/max level 22/26, family 3 and flags 1073741840, proc flags/charges zero
-and proc chance 101. Its one damage effect uses source base points 52 plus the offset of one,
+cost 50, range 30, spell/max level 22/26, damage class 1, family 3 and flags 1073741840, proc
+flags/charges zero and proc chance 101. Its one damage effect uses source base points 52 plus the offset of one,
 die sides 13, per-level points 0.9 and coefficient 0.429. Equipment, talents and auras remain
 absent; target reaction is explicitly passive and checked before collection.
 

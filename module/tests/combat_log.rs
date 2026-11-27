@@ -201,6 +201,8 @@ fn a_direct_energize_records_the_power_given_on_the_go() {
 const FIRE_WITH_DOT: u32 = 509_0102;
 /// `CAST_MISS_RESIST`.
 const CAST_MISS_RESIST: u32 = 2;
+// vmangos SpellDamageClass.
+const DAMAGE_CLASS_MAGIC: u8 = 1;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -238,6 +240,7 @@ fn a_resisted_spell_lands_none_of_its_effects_and_reports_the_resist() {
             ("range_yd", &30),
             ("duration_ms", &12000),
             ("school_mask", &4),
+            ("damage_class", &DAMAGE_CLASS_MAGIC),
             ("is_negative", &true),
         ],
     );
