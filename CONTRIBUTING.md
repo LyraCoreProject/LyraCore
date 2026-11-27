@@ -93,10 +93,11 @@ targets core `main`.
 
 ## After you open it
 
-Anyone can open a pull request. Only maintainers merge. A maintainer reads it, checks it against
-1.12.1 and runs it. The maintainer may finish it on your branch with a rebase, a fix or a test, so
-leave "Allow edits by maintainers" ticked. An automated reviewer also comments on each pull request.
-Fix what it finds, or reply with the reason you disagree.
+Anyone can open a pull request. Contributions are accepted under the same MIT OR Apache-2.0 terms
+as the project, without additional terms. Only maintainers merge. A maintainer reads it, checks it
+against 1.12.1 and runs it. The maintainer may finish it on your branch with a rebase, a fix or a
+test, so leave "Allow edits by maintainers" ticked. An automated reviewer also comments on each pull
+request. Fix what it finds, or reply with the reason you disagree.
 
 When most of what would land is ours, we land our own version with you as a co-author and close
 yours with a note. When `main` already has the fix, we close yours and say where. A pull request
@@ -138,3 +139,22 @@ issue. [`SUPPORT.md`](SUPPORT.md) says what is in scope.
 
 Working with an AI agent is expected. The agent reads [`AGENTS.md`](AGENTS.md), and the same rules
 bind it. Say in the pull request which model and harness made the change.
+
+## Lending your agent
+
+To lend your agent to the `ready-for-agent` issues, start it on
+[`.claude/skills/contribute-fix/SKILL.md`](.claude/skills/contribute-fix/SKILL.md). Claude Code and
+Codex find it as the `contribute-fix` skill; another harness reads the file. For example: "Follow
+`.claude/skills/contribute-fix/SKILL.md` and fix one `ready-for-agent` issue." It claims an issue,
+works from a fork, and puts an evidence document in the pull request description.
+
+The Contribution check reads that document. When the document is valid, the check names a review
+lane:
+
+- **Fast lane.** A test shows the fix and nothing needs a maintainer's judgment. The pull request
+  waits for a maintainer's review.
+- **Slow lane.** The check lists what a maintainer must judge, such as a changed test, a schema
+  change or a fix that no scenario measures. The pull request waits for a maintainer's review of
+  those reasons too. [`conformance/README.md`](conformance/README.md#contribution-check) lists them.
+
+Nothing merges automatically, in either lane. Only maintainers merge.

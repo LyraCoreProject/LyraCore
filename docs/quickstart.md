@@ -41,7 +41,7 @@ without it: [§2](#2-clone-and-check) has the plain `git clone` form.
 | **SpacetimeDB CLI** | **exactly 2.14.0** | `module/Cargo.toml` pins `spacetimedb = "=2.14.0"`. `./lyracore preflight` and CI require an exact match. `./lyracore doctor` only checks for 2.7.1 or newer, so another CLI can pass `doctor` and then fail `preflight`. Install 2.14.0. |
 | **git**, **curl**, a C toolchain | any current | Cloning, the SpacetimeDB installer, and linking the Native Host. |
 | **Native Host Rust toolchain** | **1.97.1** | `native-host/rust-toolchain.toml` pins it. Native startup builds the Host with `cargo +1.97.1`, which needs rustup. If the toolchain is missing, `dev up` installs it through rustup. |
-| **python3** | any current | Native startup runs `native-host/prepare-host.py` to prepare and build the Host. |
+| **python3** | **3.11 or newer** | Native startup runs `native-host/prepare-host.py` to prepare and build the Host. The `conformance/` scripts import `tomllib`, which Python 3.11 added. The `python3` of the macOS Command Line Tools is older; see [macOS](#macos). |
 | **openssl** command | OpenSSL 3 or newer | Native startup creates and checks its persistent signing keys with this command. LibreSSL is not supported. |
 | **wasm-opt** (`install.sh` offers a user-local install; otherwise Ubuntu/Debian package `binaryen`, macOS `brew install binaryen`) | any current, *optional* | `spacetime publish` runs it to optimise the module WASM. It is **not required**, and publish still succeeds without it, but the module is the server's authoritative game logic, running every reducer in the Shard, so skipping it means shipping that logic unoptimised, silently, on every future publish too. Without it you'll see `Could not find wasm-opt to optimise the module` mid-publish; `lyracore doctor` reports it as an optional `⚠` rather than a blocking `✗`. |
 
@@ -81,6 +81,16 @@ openssl version
 Keep that PATH entry in your shell configuration. `openssl version` must report OpenSSL 3 or newer.
 The CLI refuses LibreSSL before writing key files.
 The installer and `./lyracore doctor` also check this requirement before Native Host startup.
+
+The Command Line Tools `python3` is older than 3.11. Install a current Python with Homebrew:
+
+```bash
+brew install python
+python3 -c 'import tomllib'          # no output means 3.11 or newer
+```
+
+If that command still fails, `/usr/bin/python3` comes first on `PATH`: put Homebrew's `bin`
+directory before it, as `brew shellenv` does.
 
 ### SpacetimeDB 2.14.0 (both platforms)
 
