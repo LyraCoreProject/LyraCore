@@ -1650,7 +1650,7 @@ fn divine_favor_makes_the_next_holy_light_or_flash_of_light_crit_and_ends_with_i
         (FLASH_OF_LIGHT, FLASH_OF_LIGHT_FAMILY_FLAGS),
         (HOLY_LIGHT, HOLY_LIGHT_FAMILY_FLAGS),
     ] {
-        mage_spell(
+        effect_spell(
             &standalone,
             heal,
             (E_HEAL, T_SELF, 0, P_NONE),
@@ -2456,6 +2456,24 @@ fn mage_bolt(standalone: &Standalone, spell_id: u32, family_flag: i32, assignmen
 fn mage_spell(
     standalone: &Standalone,
     spell_id: u32,
+    effect: (u8, u8, i32, u8),
+    assignments: &str,
+) {
+    effect_spell(
+        standalone,
+        spell_id,
+        effect,
+        &format!(
+            "family_name = {SPELL_FAMILY_MAGE}, family_flags = {MAGE_BOLT_FAMILY_FLAG}, \
+             {assignments}"
+        ),
+    );
+}
+
+// Sets no family, as a SpacetimeDB UPDATE that assigns a column twice keeps the first value.
+fn effect_spell(
+    standalone: &Standalone,
+    spell_id: u32,
     (kind, target, p0, p0_kind): (u8, u8, i32, u8),
     assignments: &str,
 ) {
@@ -2481,14 +2499,7 @@ fn mage_spell(
             ("p_0_kind", &p0_kind),
         ],
     );
-    set_spell(
-        standalone,
-        spell_id,
-        &format!(
-            "family_name = {SPELL_FAMILY_MAGE}, family_flags = {MAGE_BOLT_FAMILY_FLAG}, \
-             {assignments}"
-        ),
-    );
+    set_spell(standalone, spell_id, assignments);
 }
 
 fn use_mana(standalone: &Standalone) {
