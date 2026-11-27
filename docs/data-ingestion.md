@@ -602,6 +602,13 @@ ranks of a spell, id-keyed rules to one spell. The binding corrections there map
 focus to the binding creature. They emit `E_SUMMON_HOSTILE`, retain the focus requirement and use a
 360000 ms despawn delay. A changed spell shape does not receive this correction.
 
+A name-keyed rule can give a spell's script effect the effect of the spell that the vmangos script
+casts in its place, such as Flash of Light's heal 19993. The rule then adds that child spell's family
+flags to the spell, so a spell modifier aimed at the child, such as Divine Favor or Improved Flash of
+Light, changes the effect. Holy Light needs no child: the vmangos `spell_effect_mod` table makes its
+script effect a heal, and `SpellModMgr::LoadSpellMods` sets Divine Favor's mask to `0x80202000`, so
+the importer sets that mask too. The importer reads neither `spell_mod` nor `spell_effect_mod`.
+
 Every World Import Profile loads the same full Spell catalogue. Publishing the Module alone does not
 correct stored Spell rows; that needs the Spell reimport and the curated class-spell pass.
 

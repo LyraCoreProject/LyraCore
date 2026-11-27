@@ -264,6 +264,14 @@ fn aura_interrupt_bits(raw: u32) -> u16 {
     u16::from(raw & 0x2 != 0) | (u16::from(raw & 0x8 != 0) << 1)
 }
 
+// A modifier aimed at the collapsed child must match the effect the parent now carries.
+fn collapsed_child_family_flags(overrides: Option<&NamedSpell>, spells: &[Spell]) -> u64 {
+    overrides
+        .and_then(|spell| spell.collapsed_child)
+        .and_then(|child| spells.iter().find(|spell| spell.id == child))
+        .map_or(0, |child| child.family_flags)
+}
+
 fn is_channeled(attributes_ex1: u32, overrides: Option<&NamedSpell>) -> bool {
     attributes_ex1 & ATTR_EX1_CHANNELED_MASK != 0 || overrides.is_some_and(|spell| spell.channeled)
 }
@@ -921,7 +929,7 @@ fn push_spell_header_row(
         lyracore_shared::spell_custom::is_negative(s.custom_flags, spell_is_negative(s));
 
     let family_name = s.family_name as u8;
-    let family_flags = s.family_flags;
+    let family_flags = s.family_flags | collapsed_child_family_flags(overrides, &dbc.spells);
     let (proc_flags, proc_chance, proc_charges) =
         proc_header_fields(s.proc_flags, s.proc_chance, s.proc_charges);
     spell_rows.push(SpellHeaderRow {
@@ -1177,7 +1185,7 @@ fn push_spell_effect_rows(
             leech_multiple_hundredths(s.effect_multiple_values[i])
         } else if kind == A_SPELLMOD_FLAT || kind == A_SPELLMOD_PCT {
             // The Module's p1 mask holds 32 bits; wider source masks have a manifest finding.
-            s.effect_item_type[i] as i32
+            spell_overrides::modifier_mask(spell_id, i).unwrap_or(s.effect_item_type[i]) as i32
         } else if let Some(row) = strike_row {
             i32::from(row.normalized)
         } else {
@@ -3606,6 +3614,48 @@ mod tests {
         );
         assert!(!level_skill(3044), "a weapon spell rolls its weapon skill");
         assert!(!level_skill(133), "a magic spell rolls no Attack Table");
+    }
+
+    #[test]
+    fn divine_favor_and_improved_flash_of_light_cover_the_paladin_heals_vmangos_casts() {
+        let paladin = |id, name: &str, family_flags, effect, effect_aura, misc, mask| Spell {
+            id,
+            name: name.into(),
+            family_name: 10,
+            family_flags,
+            effect: [effect, 0, 0],
+            effect_aura: [effect_aura, 0, 0],
+            effect_misc_value: [misc, 0, 0],
+            effect_item_type: [mask, 0, 0],
+            implicit_target_a: [1, 0, 0],
+            ..Default::default()
+        };
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![
+            paladin(635, "Holy Light", 0x8000_0000, 77, 0, 0, 0),
+            paladin(19750, "Flash of Light", 0x4000_0000, 77, 0, 0, 0),
+            paladin(19993, "Flash of Light", 0x2000, 10, 0, 0, 0),
+            paladin(20216, "Divine Favor", 0, 6, 107, 7, 0x20_6000),
+            paladin(20249, "Improved Flash of Light", 0, 6, 107, 7, 0x2000),
+        ];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let family_flags = |id| {
+            rows.headers
+                .iter()
+                .find(|h| h.spell_id == id)
+                .unwrap()
+                .family_flags
+        };
+        let mask = |id| rows.effects.iter().find(|e| e.spell_id == id).unwrap().p1 as u32;
+        assert_eq!(family_flags(635), 0x8000_0000);
+        assert_eq!(family_flags(19750), 0x4000_2000);
+        assert_eq!(mask(20216), 0x8020_2000);
+        assert_eq!(mask(20249), 0x2000);
+        for (modifier, heal) in [(20216, 635), (20216, 19750), (20249, 19750)] {
+            assert_ne!(u64::from(mask(modifier)) & family_flags(heal), 0);
+        }
+        assert_eq!(u64::from(mask(20249)) & family_flags(635), 0);
     }
 
     #[test]

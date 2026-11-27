@@ -105,7 +105,8 @@ pub(crate) fn spell_cost(ctx: &ReducerContext, caster_guid: u64, hdr: &Spell) ->
 /// vmangos Player::ApplySpellMod on a crit `chance` in percent; percent modifiers skip a 0 chance.
 pub(crate) fn crit_chance_under(chance: f32, (flat, pct): (i32, i32)) -> f32 {
     let pct = if chance == 0.0 { 0 } else { pct };
-    ((chance + flat as f32) * (100 + pct) as f32 / 100.0).max(0.0)
+    let diff = (chance + flat as f32) * pct as f32 / 100.0 + flat as f32;
+    (chance + diff).max(0.0)
 }
 
 /// A spell or heal crit `chance` in percent under the caster's crit chance modifiers on `hdr`.

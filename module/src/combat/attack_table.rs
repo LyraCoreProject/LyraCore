@@ -283,8 +283,14 @@ pub(crate) fn attack_table(facts: &AttackFacts) -> AttackTable {
     {
         0
     } else {
-        let crit = (base.crit as i32 + crit_bonus).max(0) as f32 / 100.0;
-        (crate::spell::crit_chance_under(crit, facts.crit_modifier) * 100.0).round() as u32
+        let crit = (base.crit as i32 + crit_bonus).max(0) as u32;
+        if facts.crit_modifier == (0, 0) {
+            crit
+        } else {
+            // vmangos RollMeleeOutcomeAgainst truncates int32(GetSpellCritChance * 100).
+            let percent = crate::spell::crit_chance_under(crit as f32 / 100.0, facts.crit_modifier);
+            (percent * 100.0) as u32
+        }
     };
     let can_crit = !facts.spell.is_some_and(|spell| spell.cannot_crit);
 
@@ -750,6 +756,15 @@ mod tests {
         percent.spell = Some(CAST);
         percent.crit_modifier = (0, 50);
         assert_eq!(attack_table(&percent).crit, 300);
+        let mut truncated = level_60();
+        truncated.spell = Some(CAST);
+        truncated.base.crit = 525;
+        truncated.crit_modifier = (0, 10);
+        assert_eq!(
+            attack_table(&truncated).crit,
+            577,
+            "5.775% truncates to 577 bp"
+        );
     }
 
     #[test]

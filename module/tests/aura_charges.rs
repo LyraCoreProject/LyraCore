@@ -22,6 +22,7 @@ const WOLF_HEALTH: u32 = 100_000;
 const OUT_OF_REACH_LEVEL: u32 = 60;
 const DURATION_MS: u32 = 600_000;
 const PHYSICAL: u8 = 0x01;
+const HOLY: u8 = 0x02;
 const FIRE: u8 = 0x04;
 const NATURE: u8 = 0x08;
 // vmangos SpellDamageClass; class 0 rolls no hit.
@@ -133,6 +134,15 @@ const MAGE_HEAL: u32 = 5_091_150;
 const MAGE_STRIKE: u32 = 5_091_151;
 // Cold Blood 14177 and Divine Favor 20216: a flat +100% crit chance modifier with one charge.
 const CERTAIN_CRIT_PERCENT: i32 = 100;
+const DIVINE_FAVOR: u32 = 20216;
+const HOLY_LIGHT: u32 = 635;
+const FLASH_OF_LIGHT: u32 = 19750;
+const SPELL_FAMILY_PALADIN: u8 = 10;
+// The imported values: Divine Favor's mask as vmangos SpellModMgr sets it, and Flash of Light's
+// family flags with those of its vmangos heal 19993.
+const DIVINE_FAVOR_MASK: u32 = 0x8020_2000;
+const HOLY_LIGHT_FAMILY_FLAGS: u64 = 0x8000_0000;
+const FLASH_OF_LIGHT_FAMILY_FLAGS: u64 = 0x4000_2000;
 const SPELL_FAMILY_MAGE: u8 = 3;
 const MAGE_BOLT_FAMILY_FLAG: i32 = 0x1;
 const UNMASKED_FAMILY_FLAG: i32 = 0x2;
@@ -1604,6 +1614,68 @@ fn a_crit_chance_modifier_makes_the_next_masked_weapon_strike_crit() {
         "vmangos RollMeleeOutcomeAgainst takes the crit band from GetSpellCritChance"
     );
     assert_eq!(charges(&standalone, PLAYER, COLD_BLOOD_FIXTURE), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn divine_favor_makes_the_next_holy_light_or_flash_of_light_crit_and_ends_with_it() {
+    let mut standalone = Standalone::start("aura-charges-divine-favor");
+    stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: DIVINE_FAVOR,
+            school_mask: HOLY,
+            target: T_SELF,
+            proc_flags: 0,
+            charges: 1,
+        },
+        &[(
+            A_SPELLMOD_FLAT,
+            CERTAIN_CRIT_PERCENT,
+            SPELLMOD_OP_CRITICAL_CHANCE,
+            P_SPELLMOD_OP,
+        )],
+    );
+    set_spell(
+        &standalone,
+        DIVINE_FAVOR,
+        &format!("family_name = {SPELL_FAMILY_PALADIN}"),
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET p_1 = {} WHERE spell_id = {DIVINE_FAVOR}",
+        DIVINE_FAVOR_MASK as i32
+    ));
+    for (heal, family_flags) in [
+        (FLASH_OF_LIGHT, FLASH_OF_LIGHT_FAMILY_FLAGS),
+        (HOLY_LIGHT, HOLY_LIGHT_FAMILY_FLAGS),
+    ] {
+        mage_spell(
+            &standalone,
+            heal,
+            (E_HEAL, T_SELF, 0, P_NONE),
+            &format!(
+                "family_name = {SPELL_FAMILY_PALADIN}, family_flags = {family_flags}, \
+                 school_mask = {HOLY}, damage_class = {DAMAGE_CLASS_MAGIC}"
+            ),
+        );
+    }
+
+    for heal in [FLASH_OF_LIGHT, HOLY_LIGHT] {
+        standalone.assert_call("debug_force_cast", &["1", &DIVINE_FAVOR.to_string()]);
+        advance(&standalone);
+        standalone.assert_sql(&format!(
+            "UPDATE game_world_entity SET health = 1 WHERE guid = {PLAYER}"
+        ));
+        let go = go_event(&standalone, PLAYER, heal, PLAYER);
+        assert_eq!(go["is_crit"], "true", "spell {heal}");
+        assert_eq!(
+            charges(&standalone, PLAYER, DIVINE_FAVOR),
+            None,
+            "spell {heal}"
+        );
+        advance(&standalone);
+    }
 }
 
 #[test]

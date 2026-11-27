@@ -1251,8 +1251,8 @@ shares a bit of that mask, unless the spell has `SPELL_ATTR_EX3_IGNORE_CASTER_MO
 A crit chance modifier (`SPELLMOD_CRITICAL_CHANCE`) changes the crit chance of a spell damage, heal
 or weapon roll in percent, as the last step of vmangos `Unit::GetSpellCritChance`: the chance plus
 the flat modifiers, scaled by the percent modifiers, and never below 0. A weapon roll applies it to
-the crit band after the weapon skill bonus. A Spell that cannot crit, or that has no damage class
-and is no potion, reads no crit chance modifier.
+the crit band after the weapon skill bonus and truncates the result to basis points. A Spell that
+cannot crit, or that has no damage class and is no potion, reads no crit chance modifier.
 
 The base value decides whether a modifier changes it, as vmangos `Player::ApplySpellMod` and
 `SpellEntry::GetCastTime` do:
