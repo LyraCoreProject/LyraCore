@@ -1594,6 +1594,37 @@ def check_duels(host):
     completion(second.collect(), flag)
     completion(first.collect(), flag)
     assert not duel_packets(watcher.collect())
+    host.call('debug_enter_instance', [second_guid, 0])
+    second.collect()
+    first.collect()
+    watcher.collect()
+
+    fled = (0x16b, b'\x01Duelone\0Dueltwo\0')
+    flag = request()
+    activate(flag)
+    host.call('debug_create_fixture_instance', [second_guid])
+    completion(second.collect(), flag, 1, 'Duelone', 'Dueltwo')
+    completion(first.collect(), flag, 1, 'Duelone', 'Dueltwo')
+    assert duel_packets(watcher.collect()) == [fled]
+    host.call('debug_enter_instance', [second_guid, 0])
+    second.collect()
+    first.collect()
+    watcher.collect()
+
+    flag = request()
+    activate(flag)
+    host.call('debug_teleport', [second_guid, 1, 1001, 1000, 0, 0])
+    departing = second.collect(auto_ack=False)
+    completion(departing, flag, 1, 'Duelone', 'Dueltwo')
+    completion(first.collect(), flag, 1, 'Duelone', 'Dueltwo')
+    assert departing.index((0x16a, b'\x01')) < next(i for i, (opcode, _) in enumerate(departing) if opcode == 0x3e)
+    assert duel_packets(watcher.collect()) == [fled]
+    second.send(0xdc)
+    second.collect()
+    host.call('debug_teleport', [second_guid, 0, 1001, 1000, 0, 0])
+    second.collect()
+    first.collect()
+    watcher.collect()
 
 
 def check_world_objects(host):

@@ -431,6 +431,15 @@ before moving active World Sessions. `game_drunk_sobering` is a Character-owned 
 transported. A blob from an older source lacks it and imports with no rows; login on the
 destination starts a new timer.
 
+### Duel end migration
+
+`game_duel.countdown_deadline_micros` now keeps the countdown's end once the Duel is active, as the
+Duel's start; it used to reset to 0. No schema change, repair or reimport is needed. A Duel active
+at the publish still holds 0, so it counts every negative Aura the opponent cast on a duelist as cast
+after the start, and ending it removes them all. A Duel that ends before it starts removes none. A
+duelist who teleports to another map or Instance after accepting now loses the Duel instead of
+interrupting it.
+
 ### Dungeon run holder migration
 
 `game_instance` gains the END-appended column `holder_guid` with default 0. 0 means that no

@@ -1,7 +1,7 @@
 use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::spell::{CastGateRefusal, CastRefusalReason};
-use crate::{game_character_contact, game_world_entity};
+use crate::{game_character_contact, game_spell, game_world_entity};
 
 // DBCEnums.h AREA_FLAG_DUEL.
 const AREA_FLAG_DUEL: u32 = 0x0000_0040;
@@ -54,6 +54,7 @@ pub struct Duel {
     pub flag_z: f32,
     pub flag_orientation: f32,
     pub state: u8,
+    // Unix microseconds; the countdown's end, which is the Duel's start once it is active.
     pub countdown_deadline_micros: i64,
     pub initiator_out_of_bounds_deadline_micros: i64,
     pub challenged_out_of_bounds_deadline_micros: i64,
@@ -631,6 +632,7 @@ fn complete_duel(
     };
     duels.id().delete(duel_id);
     crate::combat::stop_duel_combat(ctx, duel.initiator_guid, duel.challenged_guid);
+    remove_duel_auras(ctx, &duel);
     crate::combo::forget_side(ctx, duel.initiator_guid, duel.challenged_guid);
     crate::combo::forget_side(ctx, duel.challenged_guid, duel.initiator_guid);
     push_event(
@@ -651,6 +653,52 @@ fn complete_duel(
         winner_guid,
         loser_guid,
     );
+}
+
+/// vmangos `DuelComplete`: removes the negative Auras each duelist cast on the other since the start.
+fn remove_duel_auras(ctx: &ReducerContext, duel: &Duel) {
+    let Some(started_at_micros) = started_at_micros(duel) else {
+        return;
+    };
+    let spells = ctx.db.game_spell();
+    let negative_from = |caster_guid: u64, target_guid: u64| -> Vec<crate::Aura> {
+        crate::spell::auras_on(ctx, target_guid)
+            .filter(|aura| {
+                aura.caster_guid == caster_guid
+                    && aura.applied_at.to_micros_since_unix_epoch() >= started_at_micros
+                    && spells
+                        .spell_id()
+                        .find(aura.spell_id)
+                        .is_some_and(|spell| spell.negative())
+            })
+            .collect()
+    };
+    let mut doomed = negative_from(duel.initiator_guid, duel.challenged_guid);
+    doomed.extend(negative_from(duel.challenged_guid, duel.initiator_guid));
+    crate::spell::shed_auras(ctx, doomed);
+}
+
+fn started_at_micros(duel: &Duel) -> Option<i64> {
+    (duel.state == state::ACTIVE).then_some(duel.countdown_deadline_micros)
+}
+
+/// vmangos `Player::TeleportTo`: leaving the Duel's map or Instance after the accept loses it.
+pub(crate) fn flee_by_teleport(ctx: &ReducerContext, character_guid: u64) {
+    let Some(duel) = duel_involving(ctx, character_guid) else {
+        return;
+    };
+    if duel.state == state::REQUESTED {
+        complete_duel(ctx, duel.id, completion_kind::INTERRUPTED, 0, 0);
+    } else {
+        let winner_guid = opponent_in(&duel, character_guid);
+        complete_duel(
+            ctx,
+            duel.id,
+            completion_kind::FLED,
+            winner_guid,
+            character_guid,
+        );
+    }
 }
 
 pub(crate) fn interrupt_duel_for(ctx: &ReducerContext, character_guid: u64) {
@@ -710,7 +758,6 @@ pub fn tick_duels(ctx: &ReducerContext, _schedule: DuelSchedule) {
 
         if countdown_due(duel.state, duel.countdown_deadline_micros, now) {
             duel.state = state::ACTIVE;
-            duel.countdown_deadline_micros = 0;
             duel = ctx.db.game_duel().id().update(duel);
             push_both(ctx, &duel, event_kind::ACTIVE);
         }
@@ -908,6 +955,18 @@ mod tests {
                 duel.initiator_guid
             )
         );
+    }
+
+    #[test]
+    fn only_an_active_duel_has_a_start_time() {
+        let mut duel = duel();
+        duel.countdown_deadline_micros = 5_000;
+        for pending in [state::REQUESTED, state::COUNTDOWN] {
+            duel.state = pending;
+            assert_eq!(started_at_micros(&duel), None);
+        }
+        duel.state = state::ACTIVE;
+        assert_eq!(started_at_micros(&duel), Some(5_000));
     }
 
     #[test]

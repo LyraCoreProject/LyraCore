@@ -1,11 +1,15 @@
 mod support;
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::constants::unit_flags::IN_COMBAT;
+use lyracore_shared::spell::taxonomy::{
+    A_MOD_SPEED, A_PERIODIC_DAMAGE, CAST_FLAG_IGNORE_RESISTANCES, T_TARGET_ANY, T_TARGET_ENEMY,
+};
 use serde_json::json;
 use std::time::{Duration, Instant};
 use support::{
-    event_rows, fence_subscription, number, poll_until, subscribe_with_fence, NativePacket,
+    event_rows, fence_subscription, number, poll_until, subscribe_with_fence, Field, NativePacket,
     ReducerConnection, Standalone, POLL_TIMEOUT,
 };
 
@@ -15,10 +19,22 @@ const DUEL: u64 = 509_0001;
 const COUNTDOWN: u8 = 1;
 const ACTIVE: u8 = 2;
 const SMSG_CANCEL_COMBAT: u16 = 0x14e;
+const SMSG_DUEL_COMPLETE: u16 = 0x16a;
 const SMSG_DUEL_WINNER: u16 = 0x16b;
-/// `DuelWinnerReason::Won`; 1 is `Fled`.
+/// `DuelWinnerReason::Won` and `DuelWinnerReason::Fled`.
 const WON: u8 = 0;
+const FLED: u8 = 1;
 const PACKET_WAIT: Duration = Duration::from_secs(10);
+const CLOCK_START: i64 = 1_800_000_000_000_000;
+const DUEL_START: i64 = CLOCK_START + 100_000;
+// 50 ms scheduler ticks that pass `DUEL_START`.
+const PAST_DUEL_START_TICKS: &str = "4";
+const PERIOD_MS: u32 = 30_000;
+const CAST_ATTEMPTS: usize = 20;
+const SPELL_BEFORE_START: u32 = 5_136_601;
+const SPELL_AFTER_START: u32 = 5_136_602;
+const SPELL_BUFF: u32 = 5_136_603;
+const NATURE: u32 = 0x08;
 
 struct StagedDuel {
     standalone: Standalone,
@@ -145,10 +161,10 @@ fn wait_for_packet(
     packets
 }
 
-/// `PLAYER` receives one SMSG_DUEL_WINNER that names it the winner and `Rival` the loser.
-fn assert_player_beat_rival(staged: &mut StagedDuel) {
+/// `PLAYER` receives one SMSG_DUEL_WINNER of `reason` that names it the winner and `Rival` the loser.
+fn assert_player_beat_rival(staged: &mut StagedDuel, reason: u8) {
     let expected = duel_winner_body(
-        WON,
+        reason,
         &character_name(&staged.standalone, PLAYER),
         &character_name(&staged.standalone, staged.rival),
     );
@@ -163,7 +179,7 @@ fn assert_player_beat_rival(staged: &mut StagedDuel) {
     assert_eq!(
         winners,
         [expected.as_slice()],
-        "the duelist left at 1 health loses to its opponent"
+        "the duelist that lost to its opponent is named in one SMSG_DUEL_WINNER"
     );
 }
 
@@ -233,7 +249,7 @@ fn a_duel_ending_swing_is_no_killing_blow_and_wins_the_duel() {
         damaging[0]["killing_blow"], "false",
         "a Duel-ending swing is no killing blow: {swings:?}"
     );
-    assert_player_beat_rival(&mut staged);
+    assert_player_beat_rival(&mut staged, WON);
 }
 
 #[test]
@@ -253,7 +269,7 @@ fn a_creature_hit_that_leaves_a_duelist_at_one_health_ends_the_duel_for_its_oppo
     );
 
     assert_rival_lives_at_one_health(&staged);
-    assert_player_beat_rival(&mut staged);
+    assert_player_beat_rival(&mut staged, WON);
 }
 
 #[test]
@@ -272,7 +288,7 @@ fn a_creature_hit_during_the_countdown_ends_the_duel_for_the_other_duelist() {
     );
 
     assert_rival_lives_at_one_health(&staged);
-    assert_player_beat_rival(&mut staged);
+    assert_player_beat_rival(&mut staged, WON);
 }
 
 #[test]
@@ -330,5 +346,222 @@ fn a_creature_fighting_the_winner_stops_its_attack_when_the_duel_ends() {
             .iter()
             .any(|packet| packet.opcode == Some(SMSG_CANCEL_COMBAT)),
         "the winner's client is told to cancel its attack"
+    );
+}
+
+/// An ACTIVE Duel that started at `DUEL_START`, 100 ms after the virtual clock's first instant.
+fn stage_started_duel(name: &str) -> StagedDuel {
+    let staged = stage_duel(name, ACTIVE);
+    let standalone = &staged.standalone;
+    standalone.assert_call("debug_start_virtual_clock", &[&CLOCK_START.to_string()]);
+    standalone.assert_sql(&format!(
+        "UPDATE game_duel SET countdown_deadline_micros = {DUEL_START} WHERE id = {DUEL}"
+    ));
+    for spell_id in [SPELL_BEFORE_START, SPELL_AFTER_START] {
+        insert_spell(
+            standalone,
+            spell_id,
+            true,
+            &[
+                ("kind", &A_PERIODIC_DAMAGE),
+                ("base_points", &1),
+                ("period_ms", &PERIOD_MS),
+            ],
+        );
+    }
+    insert_spell(
+        standalone,
+        SPELL_BUFF,
+        false,
+        &[("kind", &A_MOD_SPEED), ("base_points", &50)],
+    );
+    staged
+}
+
+fn insert_spell(standalone: &Standalone, spell_id: u32, negative: bool, effect: &[Field]) {
+    let name = format!("Duel aura fixture {spell_id}");
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &name),
+            ("school_mask", &NATURE),
+            ("range_yd", &0),
+            ("is_negative", &negative),
+            ("gcd_ms", &0),
+            ("cooldown_ms", &0),
+            ("duration_ms", &60_000),
+            ("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES),
+        ],
+    );
+    let effect_id = packed_spell_effect_id(spell_id, 0);
+    let target = if negative {
+        T_TARGET_ENEMY
+    } else {
+        T_TARGET_ANY
+    };
+    let mut row: Vec<Field> = vec![
+        ("id", &effect_id),
+        ("spell_id", &spell_id),
+        ("target", &target),
+    ];
+    row.extend_from_slice(effect);
+    standalone.insert_row("game_spell_effect", &row);
+}
+
+fn auras_from(standalone: &Standalone, caster: u64, target: u64) -> Vec<u32> {
+    let mut spells: Vec<u32> = standalone
+        .query_rows(&format!(
+            "SELECT spell_id FROM game_aura WHERE target_guid = {target} AND caster_guid = {caster}"
+        ))
+        .iter()
+        .map(|row| number(row, "spell_id"))
+        .collect();
+    spells.sort_unstable();
+    spells
+}
+
+fn cast_until_applied(standalone: &Standalone, caster: u64, spell_id: u32, target: u64) {
+    for _ in 0..CAST_ATTEMPTS {
+        standalone.assert_call(
+            "debug_force_cast_at",
+            &[
+                &caster.to_string(),
+                &spell_id.to_string(),
+                &target.to_string(),
+            ],
+        );
+        if auras_from(standalone, caster, target).contains(&spell_id) {
+            return;
+        }
+    }
+    panic!("spell {spell_id} from {caster} did not land on {target} in {CAST_ATTEMPTS} casts");
+}
+
+fn duel_exists(standalone: &Standalone) -> bool {
+    !standalone
+        .query_rows(&format!("SELECT id FROM game_duel WHERE id = {DUEL}"))
+        .is_empty()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_duel_ending_removes_the_negative_auras_each_duelist_cast_on_the_other_after_the_countdown() {
+    let staged = stage_started_duel("duel-end-removes-auras");
+    let (rival, standalone) = (staged.rival, &staged.standalone);
+    cast_until_applied(standalone, rival, SPELL_BEFORE_START, PLAYER);
+    standalone.assert_call("debug_advance_roll_batch", &[PAST_DUEL_START_TICKS]);
+    cast_until_applied(standalone, rival, SPELL_AFTER_START, PLAYER);
+    cast_until_applied(standalone, rival, SPELL_BUFF, PLAYER);
+    cast_until_applied(standalone, PLAYER, SPELL_AFTER_START, rival);
+    assert!(duel_exists(standalone), "the Duel must still run");
+
+    standalone.assert_call(
+        "debug_apply_damage",
+        &[&rival.to_string(), "1000", &PLAYER.to_string()],
+    );
+
+    assert!(!duel_exists(standalone), "the hit must end the Duel");
+    assert_eq!(
+        auras_from(standalone, rival, PLAYER),
+        [SPELL_BEFORE_START, SPELL_BUFF],
+        "only the negative Aura cast after the start is removed"
+    );
+    assert!(
+        auras_from(standalone, PLAYER, rival).is_empty(),
+        "the winner's negative Aura leaves the loser too"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_duel_ending_before_its_start_removes_no_aura() {
+    let staged = stage_started_duel("duel-end-before-start-keeps-auras");
+    let (rival, standalone) = (staged.rival, &staged.standalone);
+    standalone.assert_sql(&format!(
+        "UPDATE game_duel SET countdown_deadline_micros = 0 WHERE id = {DUEL}"
+    ));
+    cast_until_applied(standalone, PLAYER, SPELL_AFTER_START, rival);
+    standalone.assert_sql(&format!(
+        "UPDATE game_duel SET state = {COUNTDOWN} WHERE id = {DUEL}"
+    ));
+
+    standalone.assert_call(
+        "debug_apply_damage",
+        &[&rival.to_string(), "1000", &PLAYER.to_string()],
+    );
+
+    assert!(!duel_exists(standalone), "the hit must end the Duel");
+    assert_eq!(
+        auras_from(standalone, PLAYER, rival),
+        [SPELL_AFTER_START],
+        "a Duel that never started removes nothing"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_duelist_teleporting_to_another_map_flees_and_the_opponent_wins() {
+    let mut staged = stage_duel("duel-teleport-flees", ACTIVE);
+    let rival = staged.rival.to_string();
+
+    staged.standalone.assert_call(
+        "debug_teleport",
+        &[&rival, "1", "300.0", "300.0", "30.0", "0.0"],
+    );
+
+    assert!(
+        !duel_exists(&staged.standalone),
+        "the teleport must end the Duel"
+    );
+    assert_player_beat_rival(&mut staged, FLED);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_duelist_entering_another_instance_flees_and_the_opponent_wins() {
+    let mut staged = stage_duel("duel-instance-move-flees", ACTIVE);
+
+    staged.standalone.assert_call(
+        "debug_create_fixture_instance",
+        &[&staged.rival.to_string()],
+    );
+
+    assert!(
+        !duel_exists(&staged.standalone),
+        "the instance move must end the Duel"
+    );
+    assert_player_beat_rival(&mut staged, FLED);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_challenged_character_teleporting_away_interrupts_the_pending_challenge_without_a_winner() {
+    let mut staged = stage_duel("duel-teleport-pending", 0);
+    let rival = staged.rival.to_string();
+
+    staged.standalone.assert_call(
+        "debug_teleport",
+        &[&rival, "1", "300.0", "300.0", "30.0", "0.0"],
+    );
+
+    let packets = wait_for_packet(&mut staged.wire, |packet| {
+        packet.opcode == Some(SMSG_DUEL_COMPLETE)
+    });
+    let completions: Vec<&[u8]> = packets
+        .iter()
+        .filter(|packet| packet.opcode == Some(SMSG_DUEL_COMPLETE))
+        .map(|packet| packet.body.as_slice())
+        .collect();
+    assert_eq!(
+        completions,
+        [[0u8].as_slice()],
+        "the challenge is interrupted, not completed"
+    );
+    assert!(
+        !packets
+            .iter()
+            .any(|packet| packet.opcode == Some(SMSG_DUEL_WINNER)),
+        "a challenge nobody accepted has no winner"
     );
 }
