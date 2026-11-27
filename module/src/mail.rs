@@ -461,6 +461,21 @@ pub fn debug_seed_mail(
     );
     Ok(())
 }
+/// vmangos HandleSendMailCallback refuses a sender who cannot pay the postage and the sent money
+/// before it looks at the mailbox cap, the recipient's team, the trade or the attachment. This
+/// debits nothing; `send` pays once the attachment is detached.
+pub(crate) fn check_postage(
+    ctx: &ReducerContext,
+    sender_guid: u64,
+    money: u32,
+) -> Result<(), MailRefusal> {
+    let sender = crate::helpers::acting_entity_by_guid(ctx, sender_guid)
+        .ok_or_else(|| lyracore_shared::mail::NOT_IN_WORLD.to_string())?;
+    if sender.money < lyracore_shared::mail::total_cost(money) {
+        return Err(MailRefusal::NotEnoughMoney);
+    }
+    Ok(())
+}
 pub(crate) fn debit_purse(
     ctx: &ReducerContext,
     payer_guid: u64,
@@ -517,6 +532,7 @@ fn send(
     mail: OutgoingMail,
     same_account: bool,
 ) -> Result<(), MailRefusal> {
+    check_postage(ctx, sender_guid, mail.money)?;
     // vmangos HandleSendMail refuses any send while the sender has a trade, even a proposed one.
     if crate::trade::session_involving(ctx, sender_guid).is_some() {
         return Err(lyracore_shared::mail::SENDER_IS_TRADING.to_string().into());

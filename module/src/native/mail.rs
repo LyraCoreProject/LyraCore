@@ -218,6 +218,9 @@ fn send_letter(
     {
         return Err(MailResult::ErrCannotSendToSelf);
     }
+    // vmangos answers a poor sender before it compares teams.
+    let attached_money = request.money.as_int();
+    core::check_postage(ctx, sender_guid, attached_money).map_err(send_refusal_result)?;
     let mut reachable = candidates
         .iter()
         .filter(|character| same_team(sender.race, character.1));
@@ -232,7 +235,7 @@ fn send_letter(
             recipient_guid: recipient.0,
             subject: request.subject,
             body: request.body,
-            money: request.money.as_int(),
+            money: attached_money,
             cod: rules::cod_at_send(request.cash_on_delivery_amount, request.item.guid() != 0),
             item_guid: request.item.guid(),
         },

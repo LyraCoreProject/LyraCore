@@ -2,7 +2,9 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, FIXTURE_REINS};
 use lyracore_shared::constants::unit_flags::IN_COMBAT;
-use lyracore_shared::mail::{ITEM_CANNOT_BE_UNEQUIPPED, ITEM_IN_BANK_OR_BAG_SLOT};
+use lyracore_shared::mail::{
+    ITEM_CANNOT_BE_UNEQUIPPED, ITEM_IN_BANK_OR_BAG_SLOT, ITEM_IS_SOULBOUND, NOT_ENOUGH_MONEY,
+};
 use support::{refused, Standalone};
 
 const ACTOR: &str = r#"{"guid":1,"ownership":null}"#;
@@ -197,4 +199,25 @@ fn a_bank_item_and_a_bank_bag_cannot_be_mailed() {
 
     f.move_to(&reins, BACKPACK_SLOT);
     f.assert_mailed(&reins, FIXTURE_REINS);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_sender_short_of_postage_is_refused_for_money_before_its_attachment_is_checked() {
+    let f = fixture("mail-postage-first");
+    let jerky = f.grant_at(FIXTURE_JERKY, BACKPACK_SLOT);
+    f.shard.assert_sql(&format!(
+        "UPDATE game_item_instance SET soulbound = true WHERE guid = {jerky}"
+    ));
+    f.shard.assert_call("debug_set_money", &["1", "29"]);
+    f.assert_refused_in_place(&jerky, BACKPACK_SLOT, NOT_ENOUGH_MONEY);
+    refused(
+        &f.shard,
+        "realm_mail_send",
+        &f.mail_args("999999"),
+        NOT_ENOUGH_MONEY,
+    );
+
+    f.shard.assert_call("debug_set_money", &["1", "30"]);
+    f.assert_refused_in_place(&jerky, BACKPACK_SLOT, ITEM_IS_SOULBOUND);
 }
