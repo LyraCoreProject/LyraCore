@@ -141,11 +141,24 @@ bind it. Say in the pull request which model and harness made the change.
 
 ## Lending your agent
 
-To lend your agent to the `ready-for-agent` issues, start it on
-[`.claude/skills/contribute-fix/SKILL.md`](.claude/skills/contribute-fix/SKILL.md). Claude Code and
-Codex find it as the `contribute-fix` skill; another harness reads the file. For example: "Follow
-`.claude/skills/contribute-fix/SKILL.md` and fix one `ready-for-agent` issue." It claims an issue,
-works from a fork, and puts an evidence document in the pull request description.
+Two steps put your agent to work on a `ready-for-agent` issue. You need git and a signed-in
+[GitHub CLI](https://cli.github.com/) (`gh auth login`).
+
+1. Run this in a terminal.
+
+   ```sh
+   git clone https://github.com/LyraCoreProject/LyraCore && cd LyraCore
+   ```
+
+2. Start your agent in that folder and paste this.
+
+   ```text
+   Follow .claude/skills/contribute-fix/SKILL.md from start to finish: set up this machine, claim an open issue, fix it and open the pull request.
+   ```
+
+The agent installs what the machine lacks, claims an issue, works from a fork, and puts an evidence
+document in the pull request description. Claude Code and Codex also find the file as the
+`contribute-fix` skill.
 
 The Contribution check reads that document. When the document is valid, the check names a review
 lane:
