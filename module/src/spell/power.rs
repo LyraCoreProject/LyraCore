@@ -1,11 +1,8 @@
-use lyracore_shared::spell::taxonomy::{
-    A_MOD_HEALING, A_SEAL, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, COMBAT_SPELL_POWER, STAT_INT,
-};
+use lyracore_shared::spell::taxonomy::{A_MOD_HEALING, A_SEAL, COMBAT_SPELL_POWER, STAT_INT};
 use spacetimedb::ReducerContext;
 
 use super::auras_on;
-use crate::{game_spell, game_world_entity};
-use crate::{Aura, Spell};
+use crate::game_world_entity;
 
 #[cfg(feature = "debug_reducers")]
 pub(crate) fn spell_crit_bp(ctx: &ReducerContext, caster_guid: u64) -> u32 {
@@ -60,32 +57,6 @@ pub(crate) fn healing_power(ctx: &ReducerContext, caster_guid: u64, school_mask:
             crate::items::EquipStat::HealingPower,
             school_mask,
         ))
-}
-
-pub(crate) fn spell_mod(
-    ctx: &ReducerContext,
-    caster_guid: u64,
-    op: i32,
-    hdr: &Spell,
-) -> (i32, i32) {
-    if hdr.family_name == 0 || hdr.family_flags == 0 {
-        return (0, 0);
-    }
-    let spells = ctx.db.game_spell();
-    let family_ok = |a: &Aura| {
-        a.eff_p0 == op
-            && spells.spell_id().find(a.spell_id).is_some_and(|src| {
-                src.family_name == hdr.family_name
-                    && hdr.family_flags & (a.eff_p1 as u32 as u64) != 0
-            })
-    };
-    let flat = crate::modifiers::aura_total(ctx, caster_guid, |a| {
-        a.eff_kind == A_SPELLMOD_FLAT && family_ok(a)
-    });
-    let pct = crate::modifiers::aura_total(ctx, caster_guid, |a| {
-        a.eff_kind == A_SPELLMOD_PCT && family_ok(a)
-    });
-    (flat, pct)
 }
 
 pub(crate) fn seal_amount(ctx: &ReducerContext, unit_guid: u64) -> i32 {

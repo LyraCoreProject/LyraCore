@@ -21,6 +21,7 @@ pub(crate) mod scheduler;
 mod school_immunity;
 mod self_resurrect;
 pub(crate) mod source_behavior;
+mod spell_modifier;
 pub(crate) mod spellbook;
 pub(crate) mod stacking;
 pub(crate) mod tables;
@@ -67,7 +68,7 @@ pub(crate) use formulas::{
 #[cfg(feature = "debug_reducers")]
 pub(crate) use power::spell_crit_bp;
 pub(crate) use power::{
-    healing_power, seal_amount, seal_amount_and_spell, spell_crit_chance, spell_mod, spell_power,
+    healing_power, seal_amount, seal_amount_and_spell, spell_crit_chance, spell_power,
 };
 pub(crate) use resist::{apply_resistance, resist_magic_damage};
 #[cfg(feature = "debug_reducers")]
@@ -86,6 +87,9 @@ pub(crate) use school_immunity::{
 };
 pub(crate) use self_resurrect::{
     clear_resurrect_request_and_option, do_self_resurrect, record_self_resurrect_option,
+};
+pub(crate) use spell_modifier::{
+    spell_cost, spell_mod, spell_modified_value, ModifiedCast, ModifierCharges,
 };
 pub(crate) use spellbook::{
     apply_starting_passives, first_rank, forget_spell, knows_spell, learn_from_effect, learn_spell,

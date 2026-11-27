@@ -652,7 +652,10 @@ The Aura rows that one caster's spell, or one equipped item's spell, puts on one
 each effect. The proc pass rolls a holder once and spends at most one charge for all its rows. A
 charged holder with no Proc row, such as Inner Fire or Flurry, spends a charge on an event its
 spell's proc flags admit, unless the hit result its `procEx` names is absent or an aura-type
-handler keeps the charge, as Flurry keeps its last one on a crit.
+handler keeps the charge, as Flurry keeps its last one on a crit. A charged holder with a spell
+modifier row, such as Clearcasting or Presence of Mind, takes no part in the proc pass: each cast
+whose values it changes spends one charge when the cast resolves, and a refused or interrupted cast
+spends none.
 _Avoid_: buff, aura group
 
 **Carrier**:

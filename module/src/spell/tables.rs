@@ -1324,6 +1324,9 @@ pub struct PendingCast {
     // The full cast time that caps a pushback; zero for a cast in flight when the column was added.
     #[default(0u32)]
     pub cast_time_ms: u32,
+    // Unix microseconds the cast began; zero for a cast in flight when the column was added.
+    #[default(0i64)]
+    pub began_at_micros: i64,
 }
 
 impl PendingCast {
@@ -1331,6 +1334,7 @@ impl PendingCast {
         request: &CastRequest,
         scheduled_at: ScheduleAt,
         cast_time_ms: u32,
+        began_at: Timestamp,
     ) -> Self {
         let (has_dest, (dest_x, dest_y, dest_z)) = match request.dest {
             Some(point) => (true, point),
@@ -1352,7 +1356,12 @@ impl PendingCast {
             cooldown_category: request.cooldown_category,
             cast_item_guid: request.cast_item.unwrap_or(0),
             cast_time_ms,
+            began_at_micros: began_at.to_micros_since_unix_epoch(),
         }
+    }
+
+    pub(crate) fn began_at(&self) -> Timestamp {
+        Timestamp::from_micros_since_unix_epoch(self.began_at_micros)
     }
 
     /// The stored request. The row keeps no client initiation, so a completion reports none.
@@ -1492,8 +1501,8 @@ mod pending_cast_tests {
     use super::*;
 
     fn round_trip(request: CastRequest) -> CastRequest {
-        let at = ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(1_000_000));
-        PendingCast::scheduled(&request, at, 1500).request()
+        let began_at = Timestamp::from_micros_since_unix_epoch(1_000_000);
+        PendingCast::scheduled(&request, ScheduleAt::Time(began_at), 1500, began_at).request()
     }
 
     #[test]

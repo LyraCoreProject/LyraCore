@@ -1146,6 +1146,8 @@ behaviour, so none becomes uninterruptible. Packages claim all three columns.
 A cast's resist chance against a pushback or a channel delay is its `SPELLMOD_NOT_LOSE_CASTING_TIME`
 modifiers plus the amounts of its `SPELL_AURA_RESIST_PUSHBACK` Auras, such as Concentration Aura.
 `game_pending_cast.cast_time_ms` holds the full cast time that caps a pushback.
+`game_pending_cast.began_at_micros` holds when the cast began, so its completion spends only the
+charged cast-time modifiers that were on the caster when its cast time was fixed.
 
 `game_channel_delay` holds one private row per caster: the channel's spell, its end after the last
 delay, and the number of delays. Breaking or ending the channel deletes the row. A row left by a
