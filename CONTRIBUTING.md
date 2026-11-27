@@ -93,11 +93,10 @@ targets core `main`.
 
 ## After you open it
 
-Anyone can open a pull request. Contributions are accepted under the same MIT OR Apache-2.0 terms
-as the project, without additional terms. Only maintainers merge. A maintainer reads it, checks it
-against 1.12.1 and runs it. The maintainer may finish it on your branch with a rebase, a fix or a
-test, so leave "Allow edits by maintainers" ticked. An automated reviewer also comments on each pull
-request. Fix what it finds, or reply with the reason you disagree.
+Anyone can open a pull request. Only maintainers merge. A maintainer reads it, checks it against
+1.12.1 and runs it. The maintainer may finish it on your branch with a rebase, a fix or a test, so
+leave "Allow edits by maintainers" ticked. An automated reviewer also comments on each pull request.
+Fix what it finds, or reply with the reason you disagree.
 
 When most of what would land is ours, we land our own version with you as a co-author and close
 yours with a note. When `main` already has the fix, we close yours and say where. A pull request
