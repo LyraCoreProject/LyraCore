@@ -8,7 +8,6 @@ use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
 use crate::game_item_instance;
 use crate::{game_character, game_creature_template, game_world_entity, WorldEntity};
 
-use crate::geometry::{distance_3d, projectile_travel_ms};
 use crate::spell::tables::{
     SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT, SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS,
     SPELL_ATTR_EX3_ONLY_ON_PLAYER,
@@ -19,9 +18,8 @@ use crate::skilldata::game_skill_ability;
 
 use crate::script_binding::game_script;
 use crate::{
-    game_aura, game_ground_area, game_pending_spell_impact, game_spell, game_spell_effect,
-    game_spell_reagent, Aura, GroundArea, PendingSpellImpact, ResurrectRequest, Spell,
-    SpellCastEvent, SpellEffect,
+    game_aura, game_ground_area, game_spell, game_spell_effect, game_spell_reagent, Aura,
+    GroundArea, ResurrectRequest, Spell, SpellCastEvent, SpellEffect,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -1458,6 +1456,57 @@ fn landed_crit(
     crit && hdr.attributes_ex_3 & SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS == 0
 }
 
+/// A spell damage effect's crit, resist and block, rolled at launch as vmangos
+/// `HandleDelayedSpellLaunch` does; the absorb waits for the hit.
+#[derive(Clone, Copy, Default)]
+pub(super) struct SpellDamageRoll {
+    pub is_crit: bool,
+    pub after_resist: i32,
+    pub resisted: u32,
+    pub blocked: u32,
+}
+
+impl SpellDamageRoll {
+    /// vmangos deals spell damage only when it is non-zero before block, absorb and resist.
+    pub(super) fn deals_damage(&self) -> bool {
+        self.after_resist > 0 || self.resisted > 0 || self.blocked > 0
+    }
+}
+
+pub(super) fn roll_spell_damage(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    hdr: &Spell,
+    caster_guid: u64,
+    target_guid: u64,
+    points: i32,
+    weapon_crit: Option<bool>,
+) -> SpellDamageRoll {
+    let scaled = bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, points as f32, false);
+    let is_crit = landed_crit(ctx, hdr, caster_guid, target_guid, weapon_crit);
+    let scaled = bonuses::spell_damage_taken(ctx, hdr, e, caster_guid, target_guid, scaled, 1);
+    let crit_scaled = if is_crit {
+        if matches!(hdr.damage_class, 2 | 3) {
+            ((scaled as i32) * 2) as f32
+        } else {
+            apply_spell_crit(scaled as i32, true) as f32
+        }
+    } else {
+        scaled
+    };
+    let source_behavior::SpellMitigation {
+        after_resist,
+        resisted,
+        blocked,
+    } = source_behavior::mitigate_spell(ctx, hdr, caster_guid, target_guid, crit_scaled);
+    SpellDamageRoll {
+        is_crit,
+        after_resist,
+        resisted,
+        blocked,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_damage_effect(
     ctx: &ReducerContext,
@@ -1471,68 +1520,15 @@ fn apply_damage_effect(
 ) -> EffectHit {
     match e.kind {
         E_DAMAGE | E_FINISHER_DAMAGE => {
-            let scaled =
-                bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, points as f32, false);
-            let is_crit = landed_crit(ctx, hdr, caster_guid, target_guid, weapon_crit);
-            let scaled =
-                bonuses::spell_damage_taken(ctx, hdr, e, caster_guid, target_guid, scaled, 1);
-            let crit_scaled = if is_crit {
-                if matches!(hdr.damage_class, 2 | 3) {
-                    ((scaled as i32) * 2) as f32
-                } else {
-                    apply_spell_crit(scaled as i32, true) as f32
-                }
-            } else {
-                scaled
-            };
-            let source_behavior::SpellMitigation {
-                after_resist,
-                resisted,
-                blocked,
-            } = source_behavior::mitigate_spell(ctx, hdr, caster_guid, target_guid, crit_scaled);
-
-            if e.kind == E_DAMAGE && hdr.speed_yps > 0.0 && target_guid != caster_guid {
-                if let (Some(caster), Some(target)) = (
-                    ctx.db.game_world_entity().guid().find(caster_guid),
-                    ctx.db.game_world_entity().guid().find(target_guid),
-                ) {
-                    if caster.map_id == target.map_id && caster.instance_id == target.instance_id {
-                        let dist =
-                            distance_3d(caster.x, caster.y, caster.z, target.x, target.y, target.z);
-                        let travel_ms = projectile_travel_ms(dist, hdr.speed_yps);
-                        if travel_ms > 0 {
-                            let fire_at = crate::time::now(ctx)
-                                .checked_add(TimeDuration::from_micros((travel_ms as i64) * 1000))
-                                .unwrap_or(crate::time::now(ctx));
-                            ctx.db
-                                .game_pending_spell_impact()
-                                .insert(PendingSpellImpact {
-                                    scheduled_id: 0,
-                                    scheduled_at: crate::time::schedule_time(ctx, fire_at),
-                                    caster_guid,
-                                    target_guid,
-                                    spell_id: hdr.spell_id,
-                                    school_index: crate::spell::school_index(hdr.school_mask),
-                                    is_crit,
-                                    resisted,
-                                    after_resist,
-                                    triggered,
-                                    blocked,
-                                });
-                            // Impact emits the damage log; this GO must carry no damage.
-                            return EffectHit::none();
-                        }
-                    }
-                }
-            }
-            // vmangos deals spell damage only when it is non-zero before block, absorb and resist.
-            let (dealt, absorbed) = if after_resist > 0 || resisted > 0 || blocked > 0 {
+            let roll =
+                roll_spell_damage(ctx, e, hdr, caster_guid, target_guid, points, weapon_crit);
+            let (dealt, absorbed) = if roll.deals_damage() {
                 crate::combat::deal_blocked_spell_damage(
                     ctx,
                     caster_guid,
                     target_guid,
-                    after_resist,
-                    blocked,
+                    roll.after_resist,
+                    roll.blocked,
                     hit_of(
                         hdr,
                         triggered,
@@ -1541,7 +1537,7 @@ fn apply_damage_effect(
                         } else {
                             crate::combat::HitSource::Spell
                         },
-                        is_crit,
+                        roll.is_crit,
                     ),
                 )
             } else {
@@ -1549,10 +1545,10 @@ fn apply_damage_effect(
             };
             EffectHit {
                 dealt,
-                resisted,
+                resisted: roll.resisted,
                 absorbed,
-                blocked,
-                crit: is_crit,
+                blocked: roll.blocked,
+                crit: roll.is_crit,
                 ..EffectHit::default()
             }
         }

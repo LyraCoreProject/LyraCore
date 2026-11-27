@@ -79,16 +79,28 @@ symbol = "is_immune_to_mechanic"
 evidence = "Not measured and not read. Berserker Rage 18499 and Will of the Forsaken 7744 are aura 77 and covered by tests; no trinket spell was checked against the vmangos spell dump."
 
 [[known_gaps]]
-description = "School immunity is decided when a spell or ranged shot launches. A unit that becomes immune while the spell or shot travels still takes it; vmangos checks a spell with travel time again on impact and reports immune."
-path = "module/src/spell/scheduler.rs"
-symbol = "fire_spell_impact"
-evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit rechecks IsImmuneToDamage and IsImmuneToSpell for a spell with speed and sends SPELL_MISS_IMMUNE; fire_spell_impact and ranged_impact land the damage frozen at launch."
+description = "School immunity of a ranged shot is decided when it launches. A unit that becomes immune while an Auto Shot, wand Shoot or cast ranged Weapon Strike travels still takes its damage; vmangos checks a spell with travel time again on impact."
+path = "module/src/combat/swing.rs"
+symbol = "ranged_impact"
+evidence = "Source reading, not measured. At d9173eca, Spell::CheckAtDelay (Spell.cpp:983-1007) marks a unit immune to a delayed spell before DoAllEffectOnTarget; ranged_impact lands the damage frozen at launch. land_spell_impact rechecks a travelling spell's immunity."
 
 [[known_gaps]]
-description = "The partial block of a travelling melee or ranged damage-class Spell, such as Arcane Shot, is rolled when it launches. A target that turns away or gains a block while the spell travels keeps the launch result; vmangos rolls the block on impact."
+description = "A travelling spell lands on a unit that stealthed or turned invisible in flight. vmangos lets a delayed spell evade its explicit target when the caster can no longer see it."
+path = "module/src/spell/cast/impact.rs"
+symbol = "land_spell_impact"
+evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit (Spell.cpp:1636-1645) sends SPELL_MISS_EVADE when m_delayed and the explicit target is not IsVisibleForOrDetect; land_spell_impact has no visibility check."
+
+[[known_gaps]]
+description = "A travelling spell adds its table threat and runs its weapon-roll reacts at launch. vmangos adds the threat when the spell first reaches a unit and runs the reacts and procs of an avoided hit at impact."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "run_spell_effects"
+evidence = "Source reading, not measured. At d9173eca, Spell::handle_delayed calls _handle_immediate_phase, which calls HandleThreatSpells, on its first run, and DoAllEffectOnTarget raises the avoided hit's procs; run_spell_effects calls add_table_threat and CastTargets::answer in the cast."
+
+[[known_gaps]]
+description = "The partial block of a travelling melee or ranged damage-class Spell, such as Arcane Shot, and the partial resist of any travelling Spell are rolled when it launches. A target that turns away, gains a block or gains a resistance while the spell travels keeps the launch result; vmangos rolls both on impact."
 path = "module/src/spell/cast/targeting.rs"
-symbol = "apply_damage_effect"
-evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit calls Unit::CalculateAbsorbResistBlock, which calls IsSpellPartiallyBlocked, when a delayed spell hits (Spell.cpp:1415); apply_damage_effect rolls the block through mitigate_spell at launch and stores it in PendingSpellImpact.blocked."
+symbol = "roll_spell_damage"
+evidence = "Source reading, not measured. At d9173eca, Spell::DoAllEffectOnTarget calls Unit::CalculateAbsorbResistBlock, which calls IsSpellPartiallyBlocked, when a delayed spell hits (Spell.cpp:1415); roll_spell_damage rolls the block and resist through mitigate_spell at launch and stores them in PendingSpellImpact.blocked and resisted."
 
 [[known_gaps]]
 description = "A Spell with SPELL_ATTR_EX3_COMPLETELY_BLOCKED, such as Hamstring, Wing Clip, Shield Bash or Kick, rolls the Attack Table but is never fully blocked. vmangos opens the block band for such a Spell, and a block refuses all its effects; 35 imported Spells carry the attribute."
@@ -251,6 +263,16 @@ description = "Furor's form-entry spell and Combustion's crit buff are Triggered
 path = "module/src/spell/proc.rs"
 symbol = "dummy_proc"
 evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp:2552 and :2558 cast 17099 and 17057 with the Furor Aura as triggeredByAura, and src/scripts/spells/spell_mage.cpp:167 casts the Combustion crit buff with triggeredByAura; form::cast_entry_chance_spell and dummy_proc use cast_triggered."
+
+[[tests]]
+path = "module/tests/spell_flight.rs"
+function = "a_travelling_spells_slow_lands_with_its_damage_not_at_launch"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_flight.rs"
+function = "a_target_that_dies_while_the_spell_travels_gets_no_aura"
+rung = "durable_module"
 
 [[tests]]
 path = "module/tests/aura_charges.rs"

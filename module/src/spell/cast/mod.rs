@@ -1,7 +1,9 @@
 mod depth;
+mod impact;
 pub(crate) mod resolve;
 mod targeting;
 
+pub(crate) use impact::land_spell_impact;
 pub(crate) use resolve::{
     apply_item_auras, apply_spell_auras, begin_cast, begin_loaded_cast, cast_aura_triggered,
     cast_triggered, charge_spell_cost, check_cast_start_gates, clear_dead_callback_cast_admission,

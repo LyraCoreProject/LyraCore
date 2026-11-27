@@ -3,6 +3,7 @@ use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
 use super::depth::TriggerLink;
+use super::impact::SpellFlights;
 use super::targeting::{affected_target_cap, helps_units, CappedPicks, EffectHit};
 use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
@@ -898,6 +899,7 @@ fn run_spell_effects(
     let mut item_refused = false;
     let mut shield_targets = std::collections::BTreeSet::new();
     let mut slain = std::collections::BTreeSet::new();
+    let mut flights = SpellFlights::new(hdr, request, triggered);
     for e in effects {
         let draw = crate::conformance_rolls::draw(
             ctx,
@@ -951,20 +953,24 @@ fn run_spell_effects(
                 grant_crafted_item(ctx, &mut craft.plan, e, hdr, points)
             } else {
                 let points = crate::combo::effect_points(ctx, hdr, e, caster_guid, t, points);
-                apply_effect(
-                    ctx,
-                    e,
-                    hdr,
-                    caster_guid,
-                    t,
-                    target_guid,
-                    level,
-                    points,
-                    dest,
-                    triggered,
-                    targets.weapon_crit(t),
-                    request.item_target,
-                )
+                if flights.defer(ctx, e, t, points, targets.weapon_crit(t)) {
+                    EffectHit::default()
+                } else {
+                    apply_effect(
+                        ctx,
+                        e,
+                        hdr,
+                        caster_guid,
+                        t,
+                        target_guid,
+                        level,
+                        points,
+                        dest,
+                        triggered,
+                        targets.weapon_crit(t),
+                        request.item_target,
+                    )
+                }
             };
             if alive && !is_alive(ctx, t) {
                 slain.insert(t);
@@ -981,6 +987,7 @@ fn run_spell_effects(
             unit_logs.add(t, &hit);
         }
     }
+    let in_flight = flights.launch(ctx);
     targets.answer_rest();
     answer_whole_refusals(ctx, &targets.immunity, caster_guid, origin, spell);
     // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
@@ -1006,7 +1013,8 @@ fn run_spell_effects(
         return;
     }
     crate::threat::add_table_threat(ctx, caster_guid, hdr.spell_id, &landed);
-    for &(target, _) in &landed {
+    // A unit the spell is still flying to sees the hit when the impact lands.
+    for &(target, _) in landed.iter().filter(|(unit, _)| !in_flight.contains(unit)) {
         crate::creatures::eventai_on_spell_hit(
             ctx,
             caster_guid,
@@ -1053,10 +1061,10 @@ struct UnitLog {
 
 /// Each unit a cast's effects reached, in first-landing order.
 #[derive(Default)]
-struct UnitLogs(Vec<(u64, UnitLog)>);
+pub(super) struct UnitLogs(Vec<(u64, UnitLog)>);
 
 impl UnitLogs {
-    fn add(&mut self, unit: u64, hit: &EffectHit) {
+    pub(super) fn add(&mut self, unit: u64, hit: &EffectHit) {
         let at = match self.0.iter().position(|&(logged, _)| logged == unit) {
             Some(at) => at,
             None => {
@@ -1086,7 +1094,7 @@ impl UnitLogs {
     }
 
     /// vmangos logs the damage and healing of every unit a spell hits, not only its target's.
-    fn log_each(self, ctx: &ReducerContext, caster_guid: u64, hdr: &Spell) {
+    pub(super) fn log_each(self, ctx: &ReducerContext, caster_guid: u64, hdr: &Spell) {
         for (unit, log) in self.0 {
             let logs_damage =
                 log.damage > 0 || log.absorbed > 0 || log.resisted > 0 || log.blocked > 0;

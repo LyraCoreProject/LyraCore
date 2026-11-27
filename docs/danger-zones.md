@@ -555,6 +555,19 @@ so no repair or reimport is needed. Only a Spell row whose `damage_class` is 2 (
 layouts do not change. An SDK client that subscribes to `game_spell_impact_event_live` needs
 regenerated bindings to decode the new column.
 
+### Spell impact effects migration
+
+`game_pending_spell_impact` gains `carries_damage` (default true), `effect_mask`, `level`,
+`cast_target_guid` and `effect_0_points` to `effect_2_points` (default 0), END-appended. A travelling
+spell launched before the update lands its damage alone, as before; its other effects already
+applied in its cast. The table is private and transient, so no repair or reimport is needed, and the
+Native Host's delivery layouts do not change. Publish through a planned update; development reload
+requires an unchanged schema.
+
+From this revision every effect of a travelling spell other than a Weapon Strike, Judgement or
+finisher strike lands at impact ([spell travel](schema.md#spell-travel)), so Frostbolt's slow
+arrives with its damage.
+
 ### Spell travel migration
 
 `game_spell.speed_yps` holds the source `speed`. It is END-appended with default 0, which means no
