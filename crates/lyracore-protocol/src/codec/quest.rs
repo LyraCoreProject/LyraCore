@@ -76,6 +76,7 @@ pub fn eval_status(e: &GiverQuestEval) -> QuestGiverStatus {
         StartSighting::Upcoming => QuestGiverStatus::Unavailable,
         StartSighting::Trivial => QuestGiverStatus::Chat,
         StartSighting::Offered => QuestGiverStatus::Available,
+        StartSighting::RewardedRepeatable => QuestGiverStatus::RewardRep,
     }
 }
 
@@ -464,6 +465,10 @@ mod tests {
         assert_eq!(
             eval_status(&sighted(StartSighting::Offered)),
             QuestGiverStatus::Available
+        );
+        assert_eq!(
+            eval_status(&sighted(StartSighting::RewardedRepeatable)),
+            QuestGiverStatus::RewardRep
         );
     }
 

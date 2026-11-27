@@ -126,7 +126,11 @@ pub(crate) fn turn_in_payout(
     )
 }
 
-#[table(accessor = game_quest_template, public)]
+#[table(
+    accessor = game_quest_template,
+    public,
+    index(accessor = by_next_quest, btree(columns = [next_quest_id]))
+)]
 pub struct QuestTemplate {
     #[primary_key]
     pub entry: u32,
@@ -936,6 +940,23 @@ impl AcceptanceInputs<'_> {
     }
 }
 
+fn prev_chain(ctx: &ReducerContext, quest_entry: u32) -> Vec<u32> {
+    ctx.db
+        .game_quest_template()
+        .by_next_quest()
+        .filter(quest_entry)
+        .map(|earlier| earlier.entry)
+        .collect()
+}
+
+pub(crate) fn quest_flags(ctx: &ReducerContext, quest_entry: u32) -> u32 {
+    ctx.db
+        .game_quest_flags()
+        .quest_entry()
+        .find(quest_entry)
+        .map_or(0, |row| row.flags)
+}
+
 fn acceptance_inputs<'a>(
     ctx: &'a ReducerContext,
     player: &crate::WorldEntity,
@@ -981,6 +1002,8 @@ fn acceptance_inputs<'a>(
             repeatable: tmpl.repeatable,
             exclusive_group: availability.as_ref().map_or(0, |row| row.exclusive_group),
             next_in_chain: tmpl.next_quest_id,
+            prev_chain: prev_chain(ctx, tmpl.entry),
+            quest_flags: quest_flags(ctx, tmpl.entry),
             prerequisites,
             required_skill: (tmpl.required_skill != 0).then_some(SkillRequirement {
                 skill_line: tmpl.required_skill,

@@ -21,6 +21,9 @@ pub mod share_result {
 /// vmangos `QUEST_FLAGS_SHARABLE`.
 pub const QUEST_FLAG_SHARABLE: u32 = 0x8;
 
+/// vmangos `QUEST_FLAGS_UNK2`: a rewarded repeatable quest with it shows no blue mark.
+pub const QUEST_FLAG_DELIVER_MORE: u32 = 0x100;
+
 pub fn shareable(quest_flags: u32) -> bool {
     quest_flags & QUEST_FLAG_SHARABLE != 0
 }
@@ -233,6 +236,10 @@ pub struct AcceptanceRequirements {
     /// Positive: only one quest of the group. Negative: a successor needs every quest of the group.
     pub exclusive_group: i32,
     pub next_in_chain: u32,
+    /// Quests whose `NextQuestInChain` names this quest; one taken and neither failed nor rewarded
+    /// closes it.
+    pub prev_chain: Vec<u32>,
+    pub quest_flags: u32,
     /// The first one met decides; vmangos's order is unspecified.
     pub prerequisites: Vec<Prerequisite>,
     pub required_skill: Option<SkillRequirement>,
@@ -350,7 +357,7 @@ pub fn acceptance(
     if !reputation_met(requirements, history) {
         return Err(AcceptanceRefusal::Reputation);
     }
-    if !prerequisites_met(requirements, history) || !next_in_chain_open(requirements, history) {
+    if !prerequisites_met(requirements, history) || !chain_open(requirements, history) {
         return Err(AcceptanceRefusal::Prerequisite);
     }
     Ok(())
@@ -368,6 +375,8 @@ pub enum StartSighting {
     Offered,
     /// More than `LOW_LEVEL_HIDE_DIFF` levels below the Character.
     Trivial,
+    /// A repeatable quest the Character was rewarded for and can take again.
+    RewardedRepeatable,
 }
 
 /// vmangos `CanSeeStartQuest` and the giver half of `GetDialogStatus`; no maximum level check.
@@ -392,7 +401,7 @@ pub fn start_sighting(
         && exclusive_group_open(requirements, history)
         && reputation_met(requirements, history)
         && prerequisites_met(requirements, history)
-        && next_in_chain_open(requirements, history);
+        && chain_open(requirements, history);
     let quest_level = match requirements.quest_level {
         0 => applicant.level,
         level => level,
@@ -401,11 +410,19 @@ pub fn start_sighting(
         StartSighting::Hidden
     } else if applicant.level < requirements.min_level {
         StartSighting::Upcoming
+    } else if rewarded_repeatable(requirements, existing) {
+        StartSighting::RewardedRepeatable
     } else if applicant.level > quest_level.saturating_add(LOW_LEVEL_HIDE_DIFF) {
         StartSighting::Trivial
     } else {
         StartSighting::Offered
     }
+}
+
+fn rewarded_repeatable(requirements: &AcceptanceRequirements, existing: Option<Attempt>) -> bool {
+    requirements.repeatable
+        && requirements.quest_flags & QUEST_FLAG_DELIVER_MORE == 0
+        && existing.is_some_and(|attempt| attempt.rewarded)
 }
 
 fn untaken(requirements: &AcceptanceRequirements, existing: Option<Attempt>) -> bool {
@@ -467,8 +484,14 @@ fn reputation_met(requirements: &AcceptanceRequirements, history: &impl QuestHis
             .is_none_or(|max| history.reputation(max.faction_id) < max.value)
 }
 
-fn next_in_chain_open(requirements: &AcceptanceRequirements, history: &impl QuestHistory) -> bool {
-    requirements.next_in_chain == 0 || !history.standing(requirements.next_in_chain).taken_or_done()
+/// vmangos `SatisfyQuestNextChain` and `SatisfyQuestPrevChain`.
+fn chain_open(requirements: &AcceptanceRequirements, history: &impl QuestHistory) -> bool {
+    (requirements.next_in_chain == 0
+        || !history.standing(requirements.next_in_chain).taken_or_done())
+        && !requirements
+            .prev_chain
+            .iter()
+            .any(|&earlier| history.standing(earlier).active)
 }
 
 impl AcceptanceRefusal {
@@ -921,6 +944,80 @@ mod rule_tests {
         assert_eq!(
             accept(&quest, &History::default().with(2, REWARDED)),
             Err(AcceptanceRefusal::Prerequisite)
+        );
+    }
+
+    #[test]
+    fn an_earlier_quest_of_the_chain_in_the_log_closes_the_quest() {
+        let quest = AcceptanceRequirements {
+            prev_chain: vec![2, 3],
+            ..requirements(false)
+        };
+        let failed = QuestStanding {
+            active: false,
+            ..ACTIVE
+        };
+        assert_eq!(accept(&quest, &History::default()), Ok(()));
+        assert_eq!(
+            accept(&quest, &History::default().with(2, REWARDED)),
+            Ok(())
+        );
+        assert_eq!(accept(&quest, &History::default().with(3, failed)), Ok(()));
+        for earlier in [2, 3] {
+            let history = History::default().with(earlier, ACTIVE);
+            assert_eq!(
+                accept(&quest, &history),
+                Err(AcceptanceRefusal::Prerequisite)
+            );
+            assert_eq!(
+                start_sighting(&quest, eligible(), None, &history),
+                StartSighting::Hidden
+            );
+        }
+    }
+
+    fn rewarded_attempt() -> Option<Attempt> {
+        Some(Attempt {
+            failed: false,
+            rewarded: true,
+        })
+    }
+
+    #[test]
+    fn a_rewarded_repeatable_quest_shows_the_repeat_sighting_from_its_minimum_level() {
+        let quest = requirements(true);
+        let sighted = |level| {
+            start_sighting(
+                &quest,
+                applicant(level, 1, 2),
+                rewarded_attempt(),
+                &History::default(),
+            )
+        };
+        assert_eq!(sighted(2), StartSighting::Hidden);
+        assert_eq!(sighted(9), StartSighting::Upcoming);
+        assert_eq!(sighted(10), StartSighting::RewardedRepeatable);
+        assert_eq!(sighted(60), StartSighting::RewardedRepeatable);
+    }
+
+    #[test]
+    fn a_repeatable_quest_without_a_reward_or_with_the_deliver_more_flag_shows_no_repeat_sighting()
+    {
+        let sighted = |quest: &AcceptanceRequirements, existing| {
+            start_sighting(quest, eligible(), existing, &History::default())
+        };
+        assert_eq!(sighted(&requirements(true), None), StartSighting::Offered);
+        let deliver_more = AcceptanceRequirements {
+            quest_flags: QUEST_FLAG_DELIVER_MORE,
+            ..requirements(true)
+        };
+        assert_eq!(
+            sighted(&deliver_more, rewarded_attempt()),
+            StartSighting::Offered
+        );
+        assert_eq!(
+            sighted(&requirements(false), rewarded_attempt()),
+            StartSighting::Hidden
         );
     }
 

@@ -1312,6 +1312,14 @@ The next-quest-in-chain check needs no reimport: it reads `next_quest_id`, which
 already hold. From the publish on, a Character who has taken or finished a quest's next quest in
 its chain can no longer take that quest, and its giver no longer marks it.
 
+### Quest chain index migration
+
+`game_quest_template` gains a `by_next_quest` index on `next_quest_id`. SpacetimeDB builds it in the
+publish; no reimport or repair is needed. From the publish on, a Character on a quest, not failed
+or rewarded, whose `next_quest_id` names another quest can no longer take that other quest, and its
+giver no longer marks it. A giver also shows the blue repeat mark over a repeatable quest the
+Character was rewarded for, unless the quest has flag 0x100.
+
 ### Quest item bonding migration
 
 An item whose template has quest bonding (`bonding` 4, `BIND_QUEST_ITEM`) is now soulbound from the

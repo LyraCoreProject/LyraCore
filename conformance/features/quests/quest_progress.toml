@@ -75,6 +75,16 @@ rung = "unit"
 
 [[tests]]
 path = "crates/lyracore-shared/src/quest.rs"
+function = "an_earlier_quest_of_the_chain_in_the_log_closes_the_quest"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/conformance/quest_availability.rs"
+function = "a_quest_of_the_chain_in_the_log_closes_the_quests_after_it"
+rung = "durable_module"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
 function = "a_minimum_reputation_admits_its_value_and_above"
 rung = "unit"
 
@@ -92,12 +102,6 @@ rung = "unit"
 path = "importer/src/world_import_quests_tests.rs"
 function = "prerequisites_follow_vmangos_prev_quests_from_prev_and_next_quest_ids"
 rung = "unit"
-
-[[known_gaps]]
-description = "The accept Gate does not refuse a quest while a quest whose NextQuestInChain names it is in the log (vmangos SatisfyQuestPrevChain)."
-path = "crates/lyracore-shared/src/quest.rs"
-symbol = "acceptance"
-evidence = "vmangos d9173eca Player.cpp Player::SatisfyQuestPrevChain."
 
 [[known_gaps]]
 description = "quests.breadcrumb full-world 23, alliance-single 9: Breadcrumb prerequisites are not represented."

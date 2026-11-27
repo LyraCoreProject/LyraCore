@@ -21,6 +21,7 @@ const DONT_HAVE_REQ: u32 = 0;
 const STATUS_NONE: u8 = 0;
 const STATUS_UNAVAILABLE: u8 = 1;
 const STATUS_CHAT: u8 = 2;
+const STATUS_REWARD_REP: u8 = 4;
 const STATUS_AVAILABLE: u8 = 5;
 
 struct Stage {
@@ -310,6 +311,38 @@ fn a_maximum_level_closes_the_quest_one_level_above_it() {
     refused(&mut stage, FIRST, vec![(SMSG_GOSSIP_COMPLETE, Vec::new())]);
     set_level(&stage, 5);
     accepted(&mut stage, FIRST);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_quest_of_the_chain_in_the_log_closes_the_quests_after_it() {
+    let mut stage = stage("quest-availability-previous-chain");
+    offer(&stage, FIRST, 1, 1);
+    offer(&stage, SECOND, 1, 1);
+    stage.shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET next_quest_id = {SECOND} WHERE entry = {FIRST}"
+    ));
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
+
+    accepted(&mut stage, FIRST);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
+    refused(&mut stage, SECOND, dont_have_req());
+
+    request(&mut stage.connection, CMSG_QUESTLOG_REMOVE_QUEST, vec![0]);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
+    accepted(&mut stage, SECOND);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_rewarded_repeatable_quest_shows_the_blue_mark() {
+    let mut stage = stage("quest-availability-repeatable-mark");
+    offer_repeatable(&stage, FIRST, 1, 1, true);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
+
+    accepted(&mut stage, FIRST);
+    turn_in(&stage, FIRST);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_REWARD_REP));
 }
 
 #[test]
