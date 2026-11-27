@@ -443,6 +443,9 @@ pub(super) fn receive(
         })
         .or_else(|unhandled| unhandled.offer(|message| super::duel::receive(ctx, guid, message)))
         .or_else(|unhandled| unhandled.offer(|message| super::pvp::receive(ctx, guid, message)))
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::equipment_display::receive(ctx, guid, message))
+        })
         .or_else(|unhandled| unhandled.offer(|message| super::trade::receive(ctx, guid, message)))
         .or_else(|unhandled| {
             unhandled.offer(|message| super::petition::receive(ctx, &connection, guid, message))

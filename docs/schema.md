@@ -624,6 +624,14 @@ world machinery. `owner_identity` is `Identity::ZERO` until `establish_session` 
 `rest_state` records the client rest-state byte. Login seeds it from normal and rested XP.
 WorldPort keeps the existing state, so hysteresis lasts through map changes in one World Session.
 
+`game_character.hide_equipment_flags` keeps `PLAYER_FLAGS_HIDE_HELM` and `PLAYER_FLAGS_HIDE_CLOAK`
+across logout, WorldPort and Transfer. `CMSG_TOGGLE_HELM` and `CMSG_TOGGLE_CLOAK` flip the live bit on
+`game_world_entity.player_flags`, as vmangos `HandleShowingHelmOpcode` does, and every viewer gets the
+new `PLAYER_FLAGS` in a VALUES update. At release, `game_corpse` copies the owner's guild, the two
+flags and `CORPSE_FIELD_ITEM` (display id, with the inventory type in the top byte, for each of the 19
+equipment slots) into the CREATE, as vmangos `Player::CreateCorpse` does. Bones keep the guild and
+drop the flags and items, as `Map::RemoveCorpses` does.
+
 #### Drunk value
 
 A Character's live Drunk Value is bits 1 to 15 of `player_bytes_3` on its `game_world_entity` row;

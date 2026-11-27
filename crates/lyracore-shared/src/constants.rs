@@ -36,6 +36,9 @@ pub mod player_flags {
     pub const GHOST: u32 = 0x0010;
     pub const RESTING: u32 = 0x0020;
     pub const PVP_DESIRED: u32 = 0x0200;
+    pub const HIDE_HELM: u32 = 0x0400;
+    pub const HIDE_CLOAK: u32 = 0x0800;
+    pub const HIDE_EQUIPMENT: u32 = HIDE_HELM | HIDE_CLOAK;
 }
 
 pub mod npc_flags {

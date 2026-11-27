@@ -20,6 +20,7 @@ pub(crate) mod directory;
 pub(crate) mod duel;
 pub(crate) mod economy;
 pub(crate) mod environment;
+mod equipment_display;
 mod gossip;
 pub(crate) mod guild;
 mod handoff;

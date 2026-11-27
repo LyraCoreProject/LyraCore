@@ -19,6 +19,7 @@ tests = [
     { path = "module/tests/ghost.rs", function = "a_ghost_that_logs_in_after_its_corpse_turned_to_bones_is_revived_at_half_health", rung = "durable_module" },
     { path = "module/tests/ghost.rs", function = "bones_of_a_revived_character_disappear_after_an_hour", rung = "durable_module" },
     { path = "module/tests/ghost.rs", function = "a_viewer_sees_a_revived_characters_corpse_destroyed_then_created_as_bones", rung = "durable_module" },
+    { path = "module/tests/ghost.rs", function = "a_corpse_looks_like_its_character_and_its_bones_keep_only_the_guild", rung = "durable_module" },
 ]
 
 [vmangos]
@@ -46,10 +47,4 @@ evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52
 description = "On a Realm with an Instance Shard, a ghost whose corpse is in a dungeon or raid is not revived at its entrance. The corpse row lives on the Instance Shard, so the World Shard finds no corpse on the destination map."
 path = "module/src/corpse.rs"
 symbol = "revive_ghost_bound_for_corpse_map"
-evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"
-
-[[known_gaps]]
-description = "A corpse CREATE carries no CORPSE_FIELD_GUILD, and a resurrectable Corpse carries no CORPSE_FIELD_ITEM display entries and no CORPSE_FLAG_HIDE_HELM or CORPSE_FLAG_HIDE_CLOAK. vmangos Player::CreateCorpse sets all of them, and Map::RemoveCorpses keeps the guild on bones but clears their items."
-path = "module/src/native/death.rs"
-symbol = "create"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"

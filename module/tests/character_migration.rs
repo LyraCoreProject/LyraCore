@@ -223,6 +223,7 @@ fn migration(catalogue: &Catalogue, source_guid: u64, name: &str) -> Value {
         "explored_zones": [0, 1u32 << (AREA_BIT - 32)],
         "taxi_nodes": [TAXI_CLIENT_NODE],
         "hunter_pet": {"none": []},
+        "hide_equipment_flags": 0x400,
     })
 }
 
@@ -263,6 +264,10 @@ fn a_migrated_character_arrives_with_its_source_state() {
     assert_eq!(character["x"].parse::<f32>().unwrap(), 10.0);
     assert_eq!(character["home_x"], "50");
     assert_eq!(character["first_login"], "false");
+    assert_eq!(
+        character["hide_equipment_flags"], "1024",
+        "the source Character kept its helm hidden and its cloak shown"
+    );
     let guid = &character["guid"];
 
     let items = shard.query_rows(&format!(

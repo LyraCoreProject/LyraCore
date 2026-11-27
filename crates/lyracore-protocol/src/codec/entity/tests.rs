@@ -112,7 +112,10 @@ fn visibility_create_examples() -> Vec<(&'static str, SMSG_UPDATE_OBJECT)> {
                 ..Default::default()
             }),
         ),
-        ("corpse", build_corpse_create_object(&CorpseView::default())),
+        (
+            "corpse",
+            build_corpse_create_object(&CorpseView::default()).unwrap(),
+        ),
         (
             "dynamic object",
             build_dynamicobject_create_object(1, 2, 3, 0.0, 0.0, 0.0, 1.0),

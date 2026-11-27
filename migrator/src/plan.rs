@@ -204,6 +204,9 @@ pub(crate) struct CharacterMigration {
     pub(crate) explored_zones: Vec<u32>,
     pub(crate) taxi_nodes: Vec<u32>,
     pub(crate) hunter_pet: SatsOption<MigratedHunterPet>,
+    // Absent from a plan written before this field: nothing is hidden.
+    #[serde(default)]
+    pub(crate) hide_equipment_flags: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -724,6 +727,7 @@ fn migrated_character(
             set_bits(&known, 1)
         },
         hunter_pet: hunter_pet(catalogue, character, subject, report).into(),
+        hide_equipment_flags: character.hide_equipment_flags,
     };
     fits_one_call(&migration)?;
     Ok(migration)
@@ -1306,6 +1310,7 @@ mod tests {
             logout_secs: 1_700_000_000,
             logout_resting: false,
             locked_for_transfer: false,
+            hide_equipment_flags: 0,
             rest_bonus: 12.7,
             bank_bag_slots: 1,
             watched_faction: -1,
@@ -1546,6 +1551,27 @@ mod tests {
         assert!(plan.characters.is_empty());
         assert_eq!(plan.findings[0].outcome, Outcome::Refused);
         assert!(plan.findings[0].detail.contains("character transfer"));
+    }
+
+    #[test]
+    fn a_character_keeps_its_hidden_helm_and_cloak_in_the_plan() {
+        let mut source = character();
+        source.hide_equipment_flags = 0xC00;
+        let plan = plan_one(source);
+        assert_eq!(plan.characters[0].hide_equipment_flags, 0xC00);
+    }
+
+    #[test]
+    fn a_plan_written_before_hidden_equipment_still_reads_with_everything_shown() {
+        let plan = plan_one(character());
+        let mut written = serde_json::to_value(&plan.characters[0]).unwrap();
+        assert!(written
+            .as_object_mut()
+            .unwrap()
+            .remove("hide_equipment_flags")
+            .is_some());
+        let read: CharacterMigration = serde_json::from_value(written).unwrap();
+        assert_eq!(read.hide_equipment_flags, 0);
     }
 
     #[test]

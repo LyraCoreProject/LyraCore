@@ -199,6 +199,7 @@ pub struct CharacterMigration {
     // TaxiNodes.dbc ids.
     pub taxi_nodes: Vec<u32>,
     pub hunter_pet: Option<MigratedHunterPet>,
+    pub hide_equipment_flags: u32,
 }
 
 const SOURCE_LABEL_MAX_LEN: usize = 64;
@@ -824,6 +825,8 @@ fn insert_character(
         watched_faction_index: migration.watched_faction_index,
         rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
         drunk_value: 0,
+        hide_equipment_flags: migration.hide_equipment_flags
+            & lyracore_shared::constants::player_flags::HIDE_EQUIPMENT,
     });
     Ok(guid)
 }

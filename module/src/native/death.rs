@@ -5,6 +5,7 @@ use lyracore_protocol::{
         SMSG_SPIRIT_HEALER_CONFIRM, SMSG_UPDATE_OBJECT,
     },
 };
+use lyracore_shared::constants::player_flags::{HIDE_CLOAK, HIDE_HELM};
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::Unhandled;
@@ -85,7 +86,7 @@ pub(super) fn confirm_spirit_healer(
     )
 }
 
-pub(super) fn create(corpse: &Corpse) -> SMSG_UPDATE_OBJECT {
+pub(super) fn create(corpse: &Corpse) -> anyhow::Result<SMSG_UPDATE_OBJECT> {
     codec::build_corpse_create_object(&codec::CorpseView {
         guid: corpse.guid,
         owner_guid: corpse.owner_guid,
@@ -97,6 +98,10 @@ pub(super) fn create(corpse: &Corpse) -> SMSG_UPDATE_OBJECT {
         bytes_1: corpse.bytes_1,
         bytes_2: corpse.bytes_2,
         is_bones: corpse.is_bones,
+        guild_id: corpse.guild_id,
+        hide_helm: corpse.hide_equipment_flags & HIDE_HELM != 0,
+        hide_cloak: corpse.hide_equipment_flags & HIDE_CLOAK != 0,
+        worn_items: corpse.worn_items.clone().unwrap_or_default(),
     })
 }
 

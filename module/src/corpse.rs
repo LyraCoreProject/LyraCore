@@ -4,11 +4,54 @@ use lyracore_shared::constants::player_flags;
 use lyracore_shared::guid;
 use lyracore_shared::packing::unpack4;
 
-use crate::game_world_entity;
+use crate::guild::game_guild_member;
 use crate::world::power_pool::resurrected_power;
+use crate::{game_item_instance, game_item_template, game_world_entity};
 
 pub(crate) fn corpse_guid_for(owner_guid: u64) -> u64 {
     guid::compose(guid::CORPSE, guid::low(owner_guid))
+}
+
+const EQUIPMENT_SLOTS: u8 = 19;
+
+// vmangos Player::CreateCorpse: the item's display id, with its inventory type in the top byte.
+pub(crate) fn worn_item_field(display_id: u32, inventory_type: u8) -> u32 {
+    display_id | (u32::from(inventory_type) << 24)
+}
+
+fn worn_items(ctx: &ReducerContext, owner_guid: u64) -> Vec<u32> {
+    let mut worn = vec![0; usize::from(EQUIPMENT_SLOTS)];
+    for item in ctx
+        .db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(owner_guid)
+        .filter(|item| item.slot < EQUIPMENT_SLOTS)
+    {
+        if let Some(template) = ctx.db.game_item_template().entry().find(item.entry) {
+            worn[usize::from(item.slot)] =
+                worn_item_field(template.display_id, template.inventory_type);
+        }
+    }
+    worn
+}
+
+/// The guild, hidden gear flags and worn items vmangos `Player::CreateCorpse` copies from the owner.
+pub(crate) fn corpse_dress(
+    ctx: &ReducerContext,
+    owner: &crate::WorldEntity,
+) -> (u32, u32, Option<Vec<u32>>) {
+    let guild_id = ctx
+        .db
+        .game_guild_member()
+        .character_guid()
+        .find(owner.guid)
+        .map_or(0, |member| member.guild_id);
+    (
+        guild_id,
+        owner.player_flags & player_flags::HIDE_EQUIPMENT,
+        Some(worn_items(ctx, owner.guid)),
+    )
 }
 
 const RECLAIM_RADIUS_SQ: f32 = 1521.0;
@@ -93,6 +136,15 @@ pub struct Corpse {
     pub instance_id: u64,
     #[default(0i64)]
     pub cell: i64,
+
+    #[default(0u32)]
+    pub guild_id: u32,
+    // PLAYER_FLAGS_HIDE_HELM and PLAYER_FLAGS_HIDE_CLOAK of the owner at death; bones carry none.
+    #[default(0u32)]
+    pub hide_equipment_flags: u32,
+    // CORPSE_FIELD_ITEM values by equipment slot; None for bones and for a Corpse made before this column.
+    #[default(None::<Vec<u32>>)]
+    pub worn_items: Option<Vec<u32>>,
 }
 
 impl Corpse {
@@ -240,6 +292,8 @@ pub(crate) fn convert_to_bones(ctx: &ReducerContext, corpse_guid: u64) {
         return;
     }
     corpse.is_bones = true;
+    corpse.hide_equipment_flags = 0;
+    corpse.worn_items = None;
     corpse.created_at = crate::time::now(ctx);
     corpse.update(ctx);
 }

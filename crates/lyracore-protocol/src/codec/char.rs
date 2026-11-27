@@ -34,6 +34,8 @@ pub struct CharacterView {
     /// Unix-epoch microseconds; zero means offline.
     pub session_start_micros: u64,
     pub guild_id: u32,
+    /// CHARACTER_FLAG_HIDE_HELM and CHARACTER_FLAG_HIDE_CLOAK, the same bits as PLAYER_FLAGS.
+    pub hide_equipment_flags: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -105,7 +107,9 @@ pub fn build_char_enum(chars: &[CharacterView]) -> Result<SMSG_CHAR_ENUM> {
                 z: c.z,
             },
             guild_id: c.guild_id,
-            flags: CharacterFlags::empty(),
+            flags: CharacterFlags::new(
+                c.hide_equipment_flags & (CharacterFlags::HIDE_HELM | CharacterFlags::HIDE_CLOAK),
+            ),
             first_login: c.first_login,
             pet_display_id: 0,
             pet_level: Level::new(0),
@@ -585,6 +589,32 @@ mod tests {
         assert_eq!(msg.characters.len(), 1);
         assert_eq!(msg.characters[0].name, "Tester");
         assert_eq!(msg.characters[0].guid.guid(), 1);
+    }
+
+    #[test]
+    fn char_enum_sends_a_hidden_helm_and_cloak_in_the_character_flags() {
+        let view = |hide_equipment_flags| CharacterView {
+            guid: 1,
+            name: "Tester".into(),
+            race: 1,
+            class: 1,
+            level: 1,
+            hide_equipment_flags,
+            ..Default::default()
+        };
+        let flags = |hide_equipment_flags| {
+            build_char_enum(&[view(hide_equipment_flags)])
+                .unwrap()
+                .characters[0]
+                .flags
+        };
+        assert!(flags(0).is_empty());
+        assert!(flags(0x400).is_hide_helm() && !flags(0x400).is_hide_cloak());
+        assert!(flags(0x800).is_hide_cloak() && !flags(0x800).is_hide_helm());
+        assert!(
+            flags(0xFFFF_FFFF) == CharacterFlags::new(0xC00),
+            "no other PLAYER_FLAGS bit reaches the Character list"
+        );
     }
 
     #[test]
