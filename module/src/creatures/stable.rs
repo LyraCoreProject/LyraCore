@@ -10,7 +10,7 @@ use crate::{game_hunter_pet, game_hunter_pet_protocol, HunterPet, WorldEntity};
 // StableSlotPrices.dbc in copper, indexed by the slot bought less one; vmangos MAX_PET_STABLES = 2.
 const STABLE_SLOT_PRICES: [u32; 2] = [500, 50_000];
 
-/// The Stable slots a Character has bought; no row means none.
+/// The stable slots a Character has bought; no row means none.
 #[table(accessor = game_character_stable)]
 pub struct CharacterStable {
     #[primary_key]
@@ -48,14 +48,14 @@ impl std::fmt::Display for StableRefusal {
         match self {
             Self::StableMaster(refusal) => refusal.fmt(f),
             Self::NotHunter => f.write_str("only a Hunter can use the stable"),
-            Self::NoCurrentPet => f.write_str("the Hunter has no current pet"),
+            Self::NoCurrentPet => f.write_str("the Hunter has no Current Pet"),
             Self::PetOut => f.write_str("the Hunter has a pet out"),
             Self::NotHunterPet => f.write_str("the live pet is not a Hunter pet"),
             Self::NoSuchPet => f.write_str("the Hunter has no such stabled pet"),
             Self::NotTameable => f.write_str("the pet's creature is not tameable"),
-            Self::NoFreeSlot => f.write_str("every bought Stable slot holds a pet"),
-            Self::AllSlotsBought => f.write_str("every Stable slot is bought"),
-            Self::CannotAfford { price } => write!(f, "a Stable slot costs {price} copper"),
+            Self::NoFreeSlot => f.write_str("every bought stable slot holds a pet"),
+            Self::AllSlotsBought => f.write_str("every stable slot is bought"),
+            Self::CannotAfford { price } => write!(f, "a stable slot costs {price} copper"),
         }
     }
 }
@@ -66,7 +66,7 @@ impl From<NpcRefusal> for StableRefusal {
     }
 }
 
-/// One MSG_LIST_STABLED_PETS entry; `client_slot` 1 is the current pet, 2 and 3 the Stable slots.
+/// One MSG_LIST_STABLED_PETS entry; `client_slot` 1 is the Current Pet, 2 and 3 the stable slots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ListedPet {
     pub(crate) pet_number: u32,
@@ -82,10 +82,11 @@ pub(crate) struct StableListing {
     pub(crate) pets: Vec<ListedPet>,
 }
 
-/// A pet a Stable request brought out; the owner is sent its name before the result.
-pub(crate) struct BroughtOut {
-    pub(crate) live_pet_guid: u64,
-    pub(crate) pet_number: u32,
+/// What unstabling or swapping did once the slots moved; vmangos answers `NotBuilt` with an error.
+pub(crate) enum BroughtOut {
+    Dead,
+    Built { live_pet_guid: u64, pet_number: u32 },
+    NotBuilt,
 }
 
 fn stable_master(
@@ -122,7 +123,7 @@ fn purchased_slots(ctx: &ReducerContext, owner_guid: u64) -> u8 {
         .map_or(0, |row| row.purchased_slots)
 }
 
-/// MSG_LIST_STABLED_PETS: the current pet, then the stabled pets in slot order.
+/// MSG_LIST_STABLED_PETS: the Current Pet, then the stabled pets in slot order.
 pub(crate) fn list_stabled_pets(
     ctx: &ReducerContext,
     owner_guid: u64,
@@ -178,7 +179,7 @@ fn live_hunter_pet(
     }
 }
 
-/// CMSG_STABLE_PET: the current pet, out or not, moves to the first free bought slot.
+/// CMSG_STABLE_PET: the Current Pet, out or not, moves to the first free bought slot.
 pub(crate) fn stable_pet(
     ctx: &ReducerContext,
     owner_guid: u64,
@@ -203,14 +204,13 @@ pub(crate) fn stable_pet(
     Ok(())
 }
 
-/// CMSG_UNSTABLE_PET: with no pet out, a stabled pet becomes current and the current one takes
-/// its slot. A dead pet stays dismissed; a living one is built beside its owner.
+/// CMSG_UNSTABLE_PET: with no pet out, a stabled pet becomes the Current Pet, as `bring_out` does.
 pub(crate) fn unstable_pet(
     ctx: &ReducerContext,
     owner_guid: u64,
     npc_guid: u64,
     requested: u32,
-) -> Result<Option<BroughtOut>, StableRefusal> {
+) -> Result<BroughtOut, StableRefusal> {
     let owner = stable_master(ctx, owner_guid, npc_guid)?;
     if super::pet_of(ctx, owner_guid).is_some() {
         return Err(StableRefusal::PetOut);
@@ -225,14 +225,13 @@ pub(crate) fn unstable_pet(
     Ok(bring_out(ctx, &owner, pet.pet_id))
 }
 
-/// CMSG_STABLE_SWAP_PET: the current pet, out or not, takes the slot of the requested pet, which
-/// becomes current. vmangos looks the requested pet up by number in any slot.
+/// CMSG_STABLE_SWAP_PET: as `unstable_pet`, but a pet may be out and any slot may hold the pet.
 pub(crate) fn swap_pet(
     ctx: &ReducerContext,
     owner_guid: u64,
     npc_guid: u64,
     requested: u32,
-) -> Result<Option<BroughtOut>, StableRefusal> {
+) -> Result<BroughtOut, StableRefusal> {
     let owner = stable_master(ctx, owner_guid, npc_guid)?;
     let live = live_hunter_pet(ctx, owner_guid)?;
     if live.is_none() {
@@ -254,10 +253,12 @@ pub(crate) fn swap_pet(
     Ok(bring_out(ctx, &owner, pet.pet_id))
 }
 
-/// Makes `pet_id` the current pet; the previous current pet takes its slot.
-fn bring_out(ctx: &ReducerContext, owner: &WorldEntity, pet_id: u64) -> Option<BroughtOut> {
+/// Makes `pet_id` the Current Pet, which the previous one swaps slots with; a living pet is built.
+fn bring_out(ctx: &ReducerContext, owner: &WorldEntity, pet_id: u64) -> BroughtOut {
     let pets = ctx.db.game_hunter_pet();
-    let mut pet = pets.pet_id().find(pet_id)?;
+    let Some(mut pet) = pets.pet_id().find(pet_id) else {
+        return BroughtOut::NotBuilt;
+    };
     if let Some(current) = hunter_pet_for_owner(ctx, owner.guid).filter(|row| row.pet_id != pet_id)
     {
         put_in_slot(ctx, current, pet.stable_slot);
@@ -265,12 +266,12 @@ fn bring_out(ctx: &ReducerContext, owner: &WorldEntity, pet_id: u64) -> Option<B
     pet.stable_slot = CURRENT_PET;
     if PetPresence::of(pet.presence) == PetPresence::Dead {
         pets.pet_id().update(pet);
-        return None;
+        return BroughtOut::Dead;
     }
     let pet = pets.pet_id().update(pet);
     let number = pet_number(&pet);
     materialize_beside(ctx, owner, pet, None);
-    super::pet_of(ctx, owner.guid).map(|live| BroughtOut {
+    super::pet_of(ctx, owner.guid).map_or(BroughtOut::NotBuilt, |live| BroughtOut::Built {
         live_pet_guid: live.guid,
         pet_number: number,
     })

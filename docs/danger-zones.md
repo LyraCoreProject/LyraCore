@@ -553,22 +553,23 @@ family straight after the publish. Until then Revive Pet stays a scripted no-op,
 a dead pet instead of being refused; it is refused again once the reimport writes `E_REVIVE_PET`
 for spell 982.
 
-`game_hunter_pet` crosses in the Transfer blob under the `game_hunter_pet@presence-1` tag. An
-untagged row from an older source arrives dismissed with no saved model or vitals. An older
-destination refuses the tag before it applies any row, so update both Shards before moving Hunters.
+`game_hunter_pet` crossed in the Transfer blob under the `game_hunter_pet@presence-1` tag until
+the [Hunter pet stable migration](#hunter-pet-stable-migration). An untagged row from an older
+source arrives dismissed with no saved model or vitals. An older destination refuses the tag before
+it applies any row, so update both Shards before moving Hunters.
 
 ### Hunter pet stable migration
 
 `game_hunter_pet` gains the END-appended column `stable_slot`, default 0. Every existing row is a
-current pet, which is what 0 means, so no repair is needed. The private Character-owned
-`game_character_stable` table is new and starts empty, so no Character has bought a Stable slot.
+Current Pet, which is what 0 means, so no repair is needed. The private Character-owned
+`game_character_stable` table is new and starts empty, so no Character has bought a stable slot.
 Publish through a planned update.
 
 A new tame now takes its `pet_id` from the GUID Range instead of the owner's guid, so a stabled pet
 and the next tame never share a number. Existing pets keep the owner's guid.
 
 `game_hunter_pet` now crosses in the Transfer blob under the `game_hunter_pet@stable-slot-1` tag. A
-`game_hunter_pet@presence-1` or untagged row from an older source arrives as the current pet, and a
+`game_hunter_pet@presence-1` or untagged row from an older source arrives as the Current Pet, and a
 blob without `game_character_stable` arrives with no bought slots. An older destination refuses the
 new tag and manifest before it applies any row, so update both Shards before moving Hunters.
 

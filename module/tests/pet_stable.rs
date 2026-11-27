@@ -16,6 +16,8 @@ const CMSG_BUY_STABLE_SLOT: u32 = 0x0272;
 const CMSG_STABLE_SWAP_PET: u32 = 0x0275;
 const CMSG_LOGOUT_REQUEST: u32 = 0x004B;
 const CMSG_PLAYER_LOGIN: u32 = 0x003D;
+const SMSG_LOGOUT_COMPLETE: u16 = 0x004D;
+const SMSG_LOGIN_VERIFY_WORLD: u16 = 0x0236;
 const SMSG_STABLE_RESULT: u16 = 0x0273;
 const SMSG_PET_NAME_QUERY_RESPONSE: u16 = 0x0053;
 // vmangos `StableResultCode`.
@@ -31,7 +33,7 @@ const DEAD: u8 = 2;
 /// One MSG_LIST_STABLED_PETS entry: pet number, entry, level, name, loyalty level, client slot.
 type Listed = (u32, u32, u32, String, u32, u8);
 
-/// One `game_hunter_pet` row: pet number, Stable slot and presence.
+/// One `game_hunter_pet` row: pet number, stable slot and presence.
 type Pet = (u32, u8, u8);
 
 struct Stable {
@@ -48,7 +50,9 @@ fn send(wire: &mut ReducerConnection, opcode: u32, body: Vec<u8>) -> Vec<(u16, V
             serde_json::from_str(reason.strip_prefix("native_reply:").expect(&reason)).unwrap();
         wire.call("native_world_reply", json!([replies])).unwrap();
     }
-    wire.drain_packets()
+    let mut packets = wire.drain_packets();
+    packets.sort_by_key(|packet| packet.id);
+    packets
         .into_iter()
         .filter_map(|packet| packet.opcode.map(|opcode| (opcode, packet.body)))
         .collect()
@@ -182,7 +186,7 @@ impl Stable {
         self.current().0
     }
 
-    /// The owner's pets in Stable slot order; the current pet comes first.
+    /// The owner's pets in stable slot order; the Current Pet comes first.
     fn pets(&self) -> Vec<Pet> {
         let mut pets: Vec<Pet> = self
             .shard
@@ -205,7 +209,7 @@ impl Stable {
 
     fn current(&self) -> Pet {
         let pets = self.pets();
-        assert_eq!(pets[0].1, 0, "the Hunter has a current pet: {pets:?}");
+        assert_eq!(pets[0].1, 0, "the Hunter has a Current Pet: {pets:?}");
         pets[0]
     }
 
@@ -253,7 +257,7 @@ fn a_hunter_buys_a_slot_stables_its_pet_and_swaps_it_for_a_second_tame() {
     assert_eq!(
         stable.results(CMSG_STABLE_PET, None),
         [ERR_STABLE],
-        "no Stable slot is bought"
+        "no stable slot is bought"
     );
 
     stable.set_money(600);
@@ -290,7 +294,7 @@ fn a_hunter_buys_a_slot_stables_its_pet_and_swaps_it_for_a_second_tame() {
     assert_eq!(
         stable.results(CMSG_STABLE_PET, None),
         [ERR_STABLE],
-        "the Hunter has no current pet"
+        "the Hunter has no Current Pet"
     );
 
     let second = stable.tame();
@@ -334,11 +338,28 @@ fn a_stabled_pet_stays_stabled_through_logout_and_a_dead_one_unstables_without_a
     );
     assert_eq!(stable.results(CMSG_STABLE_PET, None), [SUCCESS_STABLE]);
 
-    send(&mut stable.wire, CMSG_LOGOUT_REQUEST, Vec::new());
-    send(
+    // A Character in combat cannot log out, and the tamed creature may have engaged the Hunter.
+    stable.shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET combat_until_ms = 0 WHERE guid = {}",
+        stable.hunter
+    ));
+    let logout = send(&mut stable.wire, CMSG_LOGOUT_REQUEST, Vec::new());
+    assert!(
+        logout
+            .iter()
+            .any(|(opcode, _)| *opcode == SMSG_LOGOUT_COMPLETE),
+        "the logout completes: {logout:x?}"
+    );
+    let login = send(
         &mut stable.wire,
         CMSG_PLAYER_LOGIN,
         stable.hunter.to_le_bytes().to_vec(),
+    );
+    assert!(
+        login
+            .iter()
+            .any(|(opcode, _)| *opcode == SMSG_LOGIN_VERIFY_WORLD),
+        "the login enters the world: {login:x?}"
     );
     assert_eq!(
         stable.live_pet_level(),
@@ -370,7 +391,7 @@ fn a_stabled_pet_stays_stabled_through_logout_and_a_dead_one_unstables_without_a
     assert_eq!(
         stable.results(CMSG_UNSTABLE_PET, Some(first)),
         [ERR_STABLE],
-        "the current pet is not stabled"
+        "the Current Pet is not stabled"
     );
 
     assert_eq!(

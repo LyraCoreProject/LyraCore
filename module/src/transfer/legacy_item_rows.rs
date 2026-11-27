@@ -454,7 +454,7 @@ struct PresenceHunterPet {
     saved_power: u32,
 }
 
-// A source without Stables had only a current pet.
+// A source without stables had only a Current Pet.
 impl From<PresenceHunterPet> for HunterPet {
     fn from(row: PresenceHunterPet) -> Self {
         Self {

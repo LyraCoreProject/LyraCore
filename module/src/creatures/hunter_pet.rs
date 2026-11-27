@@ -64,15 +64,15 @@ pub struct HunterPet {
     /// Power saved with `saved_health`; read only when `saved_health` is not zero.
     #[default(0u32)]
     pub saved_power: u32,
-    /// `CURRENT_PET` for the owner's one current pet, otherwise the Stable slot that holds it.
+    /// `CURRENT_PET` for the owner's Current Pet, otherwise the stable slot that holds it.
     #[default(0u8)]
     pub stable_slot: u8,
 }
 
-/// vmangos `PET_SAVE_AS_CURRENT`; Stable slots are 1 and 2.
+/// vmangos `PET_SAVE_AS_CURRENT`; stable slots are 1 and 2.
 pub(crate) const CURRENT_PET: u8 = 0;
 
-/// vmangos: an out pet holds the current slot, a dismissed one no slot, a dead one zero health.
+/// Current Pet state; vmangos keeps an out pet in the current slot and a dead one at 0 health.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PetPresence {
     Dismissed,
@@ -174,7 +174,7 @@ fn classify_pet_kind(hunter_pet_id: Option<u64>) -> PetKind {
     }
 }
 
-/// The owner's current Hunter pet: out, dismissed or dead, but not in a Stable slot.
+/// The owner's Current Pet: out, dismissed or dead, but not in a stable slot.
 pub(crate) fn hunter_pet_for_owner(ctx: &ReducerContext, owner_guid: u64) -> Option<HunterPet> {
     ctx.db
         .game_hunter_pet()
@@ -359,7 +359,7 @@ fn creature_family(
         .flatten()
 }
 
-/// vmangos `CreatureInfo::IsTameable`: the entry has a template whose family a Hunter can tame.
+/// Whether the entry's family is tameable (`pet_talent_type >= 0`), as the tame Gate decides.
 pub(crate) fn is_tameable(ctx: &ReducerContext, creature_entry: u32) -> bool {
     ctx.db
         .game_creature_template()
@@ -383,7 +383,7 @@ fn revive_pet_imported(ctx: &ReducerContext) -> bool {
         .is_some_and(|effect| effect.kind == E_REVIVE_PET)
 }
 
-/// Deletes the owner's Hunter pet identity and every row keyed to it; the live pet must be gone.
+/// Deletes the owner's Current Pet and every row keyed to it; the live pet must be gone.
 fn forget_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     if let Some(pet) = hunter_pet_for_owner(ctx, owner_guid) {
         ctx.db.game_hunter_pet().pet_id().delete(pet.pet_id);

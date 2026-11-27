@@ -45,7 +45,7 @@ entry in both files.
 
 **R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Shard](#realm-topology) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Reference Server](#conformance) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Reserve Pool](#forms) · [Returned Mail](#mail) · [Review lane](CORE_TERMS.md#review-lane) · [Reward Letter](#mail) · [Ritual Participant](#summoning) · [Roll Conformance](#conformance) · [Rollback](#requests-and-delivery) · [Roster Revision](#groups) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
 
-**S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Soulstone](#death-and-resurrection) · [Source Profile](#realm-topology) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Stable](#pets) · [Stable Master](#pets) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Summon Offer](#summoning) · [Summoning Ritual](#summoning) · [Swing Error](#procs)
+**S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Soulstone](#death-and-resurrection) · [Source Profile](#realm-topology) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Summon Offer](#summoning) · [Summoning Ritual](#summoning) · [Swing Error](#procs)
 
 **T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Task](#conformance) · [Temporary Enchantment](#random-properties) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#realm-topology) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Trigger Child Cast](#procs) · [Trigger Depth](#procs) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
@@ -577,16 +577,8 @@ Projection. Idempotent, and a no-op for a rider who is not mounted.
 ### Pets
 
 **Current Pet**:
-The one Hunter pet a Character keeps out of the Stable, whether out, dismissed or dead. Call Pet,
-Revive Pet, a tame's Gate and world entry consider only it.
-
-**Stable**:
-The Hunter pets a Character leaves with a Stable Master, one in each Stable slot it has bought, at
-most two. A stabled pet keeps its identity and progress, and nothing builds it until it is the
-Current Pet again.
-
-**Stable Master**:
-An NPC with the stable master flag (`0x2000`). Only a Hunter can use one.
+The one Hunter pet a Character keeps out of its stable slots, whether out, dismissed or dead. Call
+Pet, Revive Pet, a tame's Gate and world entry consider only it; a stabled pet waits unchanged.
 
 ### Forms
 

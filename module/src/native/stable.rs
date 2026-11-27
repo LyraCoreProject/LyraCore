@@ -43,23 +43,26 @@ fn listing(npc: u64, listing: StableListing) -> ServerOpcodeMessage {
     }))
 }
 
-/// vmangos `SendPetNameQuery` precedes the result for a pet a Stable request brought out.
+/// vmangos `SendPetNameQuery` precedes the result for a pet a stable request built.
 fn brought_out(
     ctx: &ReducerContext,
     connection: ConnectionId,
-    pet: Option<BroughtOut>,
+    pet: BroughtOut,
 ) -> Result<(), Rollback> {
-    if let Some(name) =
-        pet.and_then(|pet| super::query::pet_name(ctx, pet.live_pet_guid, pet.pet_number))
-    {
-        super::send(ctx, connection, name, false)?;
-    }
-    Ok(super::send(
-        ctx,
-        connection,
-        result(StableResult::SuccessUnstable),
-        false,
-    )?)
+    let code = match pet {
+        BroughtOut::Built {
+            live_pet_guid,
+            pet_number,
+        } => {
+            if let Some(name) = super::query::pet_name(ctx, live_pet_guid, pet_number) {
+                super::send(ctx, connection, name, false)?;
+            }
+            StableResult::SuccessUnstable
+        }
+        BroughtOut::Dead => StableResult::SuccessUnstable,
+        BroughtOut::NotBuilt => StableResult::ErrStable,
+    };
+    Ok(super::send(ctx, connection, result(code), false)?)
 }
 
 pub(super) fn receive(

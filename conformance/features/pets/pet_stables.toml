@@ -24,12 +24,6 @@ path = "module/src/creatures/stable.rs"
 symbol = "stable_master"
 evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/NPCHandler.cpp#L508-L520"
 
-[[known_gaps]]
-description = "Unstabling or swapping in a living pet while mounted builds it at once. vmangos Pet::LoadPetFromDB refuses a pet that must stay temporarily unsummoned, and the handler then answers STABLE_ERR_STABLE after it has moved the slots."
-path = "module/src/creatures/stable.rs"
-symbol = "bring_out"
-evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Pet.cpp"
-
 [[tests]]
 path = "module/tests/pet_stable.rs"
 function = "a_hunter_buys_a_slot_stables_its_pet_and_swaps_it_for_a_second_tame"

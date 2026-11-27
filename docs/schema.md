@@ -523,8 +523,8 @@ left the world; 0 health means none are saved, and each build clears them. A Tra
 four columns; see the
 [Hunter pet presence migration](danger-zones.md#hunter-pet-presence-migration).
 
-`game_hunter_pet` also end-appends `stable_slot`: 0 for the owner's one current pet, otherwise the
-Stable slot, 1 or 2, that holds it. A stabled pet keeps its row, so its level, XP, name, loyalty and
+`game_hunter_pet` also end-appends `stable_slot`: 0 for the owner's Current Pet, otherwise the
+stable slot, 1 or 2, that holds it. A stabled pet keeps its row, so its level, XP, name, loyalty and
 happiness wait unchanged; care stops while it is not out, and world entry never builds it. A new
 tame takes its `pet_id` from the GUID Range; the client sees the low 32 bits as the pet number.
 `game_character_stable` (`module/src/creatures/stable.rs`) holds the slots one Character has
