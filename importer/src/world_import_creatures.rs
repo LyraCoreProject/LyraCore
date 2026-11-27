@@ -176,9 +176,17 @@ fn display_reaches(
 // shields, held off-hand items, ranged and thrown weapons and relics.
 const HAND_INVENTORY_TYPES: [u32; 10] = [13, 14, 15, 17, 21, 22, 23, 25, 26, 28];
 
-/// `creature_equip_template` choices as `(probability, main hand, off hand, ranged)` by equipment
-/// entry, in source order. An item the World Source lacks or no hand holds becomes no item.
-fn equipment_choices(dump: &impl TableRows) -> Result<BTreeMap<u32, Vec<(u32, [u32; 3])>>> {
+/// One `creature_equip_template` row: its probability and main hand, off hand and ranged items.
+struct EquipmentChoice {
+    probability: u32,
+    items: [u32; 3],
+}
+
+/// `creature_equip_template` choices by equipment entry, in source order.
+type EquipmentChoices = BTreeMap<u32, Vec<EquipmentChoice>>;
+
+/// An item the World Source lacks or no hand holds becomes no item.
+fn equipment_choices(dump: &impl TableRows) -> Result<EquipmentChoices> {
     let mut hand_items = HashSet::new();
     for row in dump
         .columns("item_template", &["entry", "inventory_type"])?
@@ -189,34 +197,39 @@ fn equipment_choices(dump: &impl TableRows) -> Result<BTreeMap<u32, Vec<(u32, [u
         }
     }
     let held = |item: u32| if hand_items.contains(&item) { item } else { 0 };
-    let mut choices: BTreeMap<u32, Vec<(u32, [u32; 3])>> = BTreeMap::new();
+    let mut choices = EquipmentChoices::new();
     for row in dump.rows("creature_equip_template")?.iter() {
-        choices.entry(row.number("entry")?).or_default().push((
-            row.number("probability")?,
-            [
-                held(row.number("item1")?),
-                held(row.number("item2")?),
-                held(row.number("item3")?),
-            ],
-        ));
+        choices
+            .entry(row.number("entry")?)
+            .or_default()
+            .push(EquipmentChoice {
+                probability: row.number("probability")?,
+                items: [
+                    held(row.number("item1")?),
+                    held(row.number("item2")?),
+                    held(row.number("item3")?),
+                ],
+            });
     }
     Ok(choices)
 }
 
 /// A template's `game_creature_equipment` rows, one for each choice. A choice of probability 0
 /// stays, so a template whose choices all weigh 0 keeps a creature's current slots.
-fn equipment_rows(entry: u64, choices: &[(u32, [u32; 3])]) -> Result<Vec<String>> {
+fn equipment_rows(entry: u64, choices: &[EquipmentChoice]) -> Result<Vec<String>> {
     choices
         .iter()
         .zip(0u64..)
-        .map(|(&(probability, [main_hand, off_hand, ranged]), index)| {
+        .map(|(choice, index)| {
             anyhow::ensure!(
                 index < 256,
                 "creature {entry}: more than 256 equipment choices"
             );
+            let [main_hand, off_hand, ranged] = choice.items;
             Ok(format!(
-                "({},{entry},{probability},{main_hand},{off_hand},{ranged})",
-                (entry << 8) | index
+                "({},{entry},{},{main_hand},{off_hand},{ranged})",
+                (entry << 8) | index,
+                choice.probability
             ))
         })
         .collect()

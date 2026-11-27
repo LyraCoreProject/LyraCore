@@ -56,7 +56,7 @@ pub(crate) fn wear_default_equipment(
     ) {
         TemplateEquipment::Items(items) => items,
         TemplateEquipment::Unpicked => return,
-        TemplateEquipment::None => {
+        TemplateEquipment::NoEquipment => {
             crate::EncounterEquip::delete(ctx, creature.guid);
             return;
         }

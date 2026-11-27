@@ -169,9 +169,11 @@ fn equipment_is_current(ctx: &ReducerContext, row: &crate::EncounterEquip) -> bo
 
 fn shown_items(ctx: &ReducerContext, row: &crate::EncounterEquip) -> [codec::VirtualItemView; 3] {
     let item = |display_id: u32, entry: u32| {
-        let template = (entry != 0)
-            .then(|| ctx.db.game_item_template().entry().find(entry))
-            .flatten();
+        let template = if entry == 0 {
+            None
+        } else {
+            ctx.db.game_item_template().entry().find(entry)
+        };
         template.map_or(
             codec::VirtualItemView {
                 display_id,

@@ -139,7 +139,7 @@ fn select_display(displays: &[CreatureDisplay], roll: u32) -> Option<&CreatureDi
 /// What a template's equipment gives a creature, as vmangos `Creature::LoadEquipment` reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TemplateEquipment {
-    None,
+    NoEquipment,
     /// The template has choices but their weights total 0, so the current slots stay.
     Unpicked,
     Items([u32; 3]),
@@ -155,7 +155,7 @@ pub(crate) fn equipment(ctx: &ReducerContext, entry: u32) -> TemplateEquipment {
         .filter(entry)
         .collect();
     if choices.is_empty() {
-        return TemplateEquipment::None;
+        return TemplateEquipment::NoEquipment;
     }
     choices.sort_by_key(|choice| choice.id);
     let total: u64 = choices.iter().map(|choice| u64::from(choice.weight)).sum();
