@@ -55,7 +55,7 @@ fn binary_periodic_damage_and_slow_share_one_resist_roll_at_cast() {
 
     let (shard, target) = stage("binary-aura-hit");
     shard.assert_sql(&format!("UPDATE game_world_entity SET level = 60, health = 10000, max_health = 10000 WHERE guid = {target}"));
-    shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {CAST_FLAG_BINARY}, duration_ms = 10000, gcd_ms = 0, cooldown_ms = 0, is_negative = true WHERE spell_id = 133"));
+    shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {CAST_FLAG_BINARY}, duration_ms = 10000, speed_yps = 0.0, gcd_ms = 0, cooldown_ms = 0, is_negative = true WHERE spell_id = 133"));
     shard.assert_sql(&format!("UPDATE game_spell_effect SET kind = {A_PERIODIC_DAMAGE}, base_points = 10, die_sides = 0, per_level = 0.0, period_ms = 1000 WHERE spell_id = 133"));
     shard.insert_row(
         "game_spell_effect",
@@ -276,7 +276,7 @@ fn aura_cast_hit_testing_uses_damage_class_and_hostility() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60 WHERE guid = {target}"
     ));
-    shard.assert_sql("UPDATE game_spell SET duration_ms = 10000, gcd_ms = 0, cooldown_ms = 0 WHERE spell_id = 133");
+    shard.assert_sql("UPDATE game_spell SET duration_ms = 10000, speed_yps = 0.0, gcd_ms = 0, cooldown_ms = 0 WHERE spell_id = 133");
     shard.assert_sql(&format!("UPDATE game_spell_effect SET kind = {A_MOD_SPEED}, base_points = -50, die_sides = 0, per_level = 0.0 WHERE spell_id = 133"));
     shard.insert_row(
         "game_conformance_spell_random",
