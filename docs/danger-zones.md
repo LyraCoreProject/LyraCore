@@ -584,9 +584,12 @@ Module keeps no honor, so every Character holds rank 0 and an item with a requir
 0 is refused until one does. The Operator Content API and Package Deltas do not carry the columns,
 so a created item needs neither and an update keeps them.
 
-An item's client charges now come from the template: the item query carries each spell slot's
-`spellcharges`, and an item's create is followed by `ITEM_FIELD_SPELL_CHARGES` with the charges it
-has left. An older client session sees the new words after its next login.
+An item's client charges now come from the template: the item query carries the `spellcharges` of
+each slot that has a spell, and an item's create carries the first `ITEM_FIELD_SPELL_CHARGES` word
+with the charges it has left. A later word follows in a VALUES update only when it is not zero, and
+spending a charge updates the words it changes. An older client session sees the new words after
+its next login. The importer sets a `required_spell` that names no imported spell to 0, as vmangos
+does.
 
 ### Party area Aura migration
 

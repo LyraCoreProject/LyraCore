@@ -146,8 +146,9 @@ pub(crate) fn take_cast_item(ctx: &ReducerContext, item_guid: u64, item_use: Cas
         CastItemUse::Keep => {}
         CastItemUse::SpendCharge => {
             if let Some(item) = ctx.db.game_item_instance().guid().find(item_guid) {
-                let spent = spent_charges(ctx, item_guid) + 1;
-                record_spent(ctx, item_guid, item.owner_guid, spent);
+                let before_spent = spent_charges(ctx, item_guid);
+                record_spent(ctx, item_guid, item.owner_guid, before_spent + 1);
+                show_spent_charges(ctx, item_guid, before_spent);
             }
         }
         CastItemUse::UseUp => super::use_up_one(ctx, item_guid),
@@ -169,9 +170,21 @@ pub(crate) fn record_spent(ctx: &ReducerContext, item_guid: u64, owner_guid: u64
     } else {
         rows.insert(row);
     }
-    if let Some(item) = ctx.db.game_item_instance().guid().find(item_guid) {
-        crate::native::inventory::spell_charges_changed(ctx, &item);
-    }
+}
+
+/// Sends the owner the charge words that changed when the item went from `before_spent` to its
+/// spent count; an unchanged item sends nothing.
+pub(crate) fn show_spent_charges(ctx: &ReducerContext, item_guid: u64, before_spent: u32) {
+    let Some(item) = ctx.db.game_item_instance().guid().find(item_guid) else {
+        return;
+    };
+    let Some(template) = ctx.db.game_item_template().entry().find(item.entry) else {
+        return;
+    };
+    let before = displayed_charges(&template, before_spent);
+    let after = displayed_charges(&template, spent_charges(ctx, item_guid));
+    let changed = std::array::from_fn(|slot| (before[slot] != after[slot]).then_some(after[slot]));
+    crate::native::inventory::spell_charges_changed(ctx, &item, changed);
 }
 
 pub(crate) fn forget_item(ctx: &ReducerContext, item_guid: u64) {

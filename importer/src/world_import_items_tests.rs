@@ -546,3 +546,31 @@ fn vendor_stock_import_omits_inconsistent_stock_limits() {
         assert!(vendors.ends_with(expected), "{change}: {vendors}");
     }
 }
+
+#[test]
+fn an_imported_item_drops_a_required_spell_that_was_not_imported() {
+    let source = item_source();
+    edit_source(
+        &source,
+        "UPDATE item_template SET required_spell = 7 WHERE entry = 1001",
+    );
+    let water_with = |spells: &[u64]| {
+        let ItemRows {
+            templates: items, ..
+        } = build_items_and_loot_with_spells(
+            &source,
+            &HashMap::from([(100, 3)]),
+            &HashSet::from([100]),
+            &HashSet::new(),
+            &HashSet::new(),
+            Some(&spells.iter().copied().collect()),
+        )
+        .unwrap();
+        items
+            .into_iter()
+            .find(|row| row.contains("'Ordinary Water'"))
+            .unwrap()
+    };
+    assert!(water_with(&[7]).ends_with(",0,0,0,0,0,7,0)"));
+    assert!(water_with(&[8]).ends_with(",0,0,0,0,0,0,0)"));
+}

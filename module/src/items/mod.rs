@@ -60,8 +60,8 @@ pub(crate) use properties::{
 };
 pub(crate) use spell_charges::{
     cast_item_use_of, displayed_charges, has_spent_charges, item_charges_remain, record_spent,
-    spent_charges, sweep_delete_game_item_spell_charges, sweep_transfer_game_item_spell_charges,
-    take_cast_item, CastItemUse,
+    show_spent_charges, spent_charges, sweep_delete_game_item_spell_charges,
+    sweep_transfer_game_item_spell_charges, take_cast_item, CastItemUse,
 };
 pub(crate) use tables::ItemPush;
 

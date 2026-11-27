@@ -996,13 +996,33 @@ fn forbidden_items(dump: &(impl TableRows + ?Sized)) -> Result<std::collections:
         .collect()
 }
 
-#[allow(clippy::too_many_lines)]
+#[cfg(test)]
 fn build_items_and_loot(
     dump: &(impl crate::dump::TableRows + ?Sized),
     creature_loot_ids: &std::collections::HashMap<u64, u64>,
     vendor_entries: &std::collections::HashSet<u64>,
     extra_item_entries: &std::collections::HashSet<u64>,
     mail_loot_item_entries: &std::collections::HashSet<u64>,
+) -> Result<ItemRows> {
+    build_items_and_loot_with_spells(
+        dump,
+        creature_loot_ids,
+        vendor_entries,
+        extra_item_entries,
+        mail_loot_item_entries,
+        None,
+    )
+}
+
+/// `known_spells` is the imported spell ids; vmangos zeroes a required spell outside it.
+#[allow(clippy::too_many_lines)]
+fn build_items_and_loot_with_spells(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    creature_loot_ids: &std::collections::HashMap<u64, u64>,
+    vendor_entries: &std::collections::HashSet<u64>,
+    extra_item_entries: &std::collections::HashSet<u64>,
+    mail_loot_item_entries: &std::collections::HashSet<u64>,
+    known_spells: Option<&std::collections::HashSet<u64>>,
 ) -> Result<ItemRows> {
     use std::collections::HashSet;
 
@@ -1156,6 +1176,12 @@ fn build_items_and_loot(
         let req_skill: u32 = row.number(it::REQUIRED_SKILL)?;
         let req_skill_rank: u32 = row.number(it::REQUIRED_SKILL_RANK)?;
         let req_spell: u32 = row.number(it::REQUIRED_SPELL)?;
+        let req_spell =
+            if known_spells.is_some_and(|spells| !spells.contains(&u64::from(req_spell))) {
+                0
+            } else {
+                req_spell
+            };
         let req_honor_rank: u32 = row.number(it::REQUIRED_HONOR_RANK)?;
         let req_rep_faction: u32 = row.number(it::REQUIRED_REPUTATION_FACTION)?;
         let req_rep_rank: u32 = row.number(it::REQUIRED_REPUTATION_RANK)?;
@@ -2299,12 +2325,18 @@ fn vmangos_items_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
             loot_ids.insert(entry, loot);
         }
     }
-    let items = build_items_and_loot(
+    let spells = dump
+        .columns("spell_template", &["entry"])?
+        .iter()
+        .map(|row| row.number::<u64>("entry"))
+        .collect::<Result<std::collections::HashSet<_>>>()?;
+    let items = build_items_and_loot_with_spells(
         dump,
         &loot_ids,
         &entries,
         &Default::default(),
         &Default::default(),
+        Some(&spells),
     )?;
     let (mut stmts, properties) = item_property::dump_sql(dump, args.dbc.as_deref())?;
     push_item_statements(&mut stmts, &items.templates, &items.loot, &items.vendors);

@@ -231,33 +231,46 @@ fn charged_item(spell_charges: [i32; 5]) -> ItemInstanceView {
     }
 }
 
-/// ITEM_FIELD_SPELL_CHARGES holds five signed words from word 16.
 #[test]
-fn a_charged_item_follows_its_create_with_all_five_charge_words() {
+fn a_charged_item_create_carries_its_first_charges_word() {
+    let item = charged_item([-3, 0, 0, 0, 0]);
+    assert_eq!(item_mask(&item).item_spell_charges(), Some(-3));
+    assert_eq!(build_item_followup_values(&item), None);
+}
+
+#[test]
+fn an_uncharged_item_create_leaves_the_charges_word_unwritten() {
+    assert_eq!(item_mask(&charged_item([0; 5])).item_spell_charges(), None);
+}
+
+/// ITEM_FIELD_SPELL_CHARGES holds five signed words from word 16; the typed CREATE reaches word 16.
+#[test]
+fn a_later_spell_slot_charge_follows_the_create_in_values() {
     assert_eq!(
         enchantment_slot_fields(&charged_item([-3, 0, 2, 0, 0])),
-        vec![(16, -3i32 as u32), (17, 0), (18, 2), (19, 0), (20, 0)]
+        vec![(18, 2)]
     );
 }
 
 #[test]
-fn a_spent_last_charge_writes_its_zero_word() {
-    let (opcode, body) = build_spell_charge_values(0x4000_0000_0000_0102, [0; 5]);
+fn a_spent_charge_marks_only_its_word() {
+    let guid = 0x4000_0000_0000_0102;
+    let (opcode, body) =
+        build_spell_charge_values(guid, [Some(0), None, Some(1), None, None]).unwrap();
     assert_eq!(opcode, 0x00A9);
     let updates = crate::codec::values_mask::parse_values_updates(&body);
     assert_eq!(updates.len(), 1);
-    assert_eq!(
-        updates[0].fields,
-        vec![(16, 0), (17, 0), (18, 0), (19, 0), (20, 0)]
-    );
+    assert_eq!(updates[0].fields, vec![(16, 0), (18, 1)]);
+    assert_eq!(build_spell_charge_values(guid, [None; 5]), None);
 }
 
 #[test]
-fn an_item_query_carries_the_charges_of_each_spell_slot() {
+fn an_item_query_sends_charges_for_a_slot_with_a_spell_and_empty_slots_as_vmangos() {
     let template = ItemTemplateView {
         entry: 5232,
         spellid_1: 8690,
-        spell_charges: [-1, 0, 0, 0, 5],
+        spellid_5: 8691,
+        spell_charges: [-1, 7, 0, 0, 5],
         ..Default::default()
     };
     let message = ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(Box::new(
@@ -270,14 +283,13 @@ fn an_item_query_carries_the_charges_of_each_spell_slot() {
     else {
         panic!("expected item query response");
     };
-    let charges: Vec<i32> = reply
-        .found
-        .unwrap()
-        .spells
-        .iter()
-        .map(|spell| spell.spell_charges)
-        .collect();
+    let spells = reply.found.unwrap().spells;
+    let charges: Vec<i32> = spells.iter().map(|spell| spell.spell_charges).collect();
     assert_eq!(charges, [-1, 0, 0, 0, 5]);
+    assert_eq!(
+        (spells[1].spell_cooldown, spells[1].spell_category_cooldown),
+        (-1, -1)
+    );
 }
 
 const INSTANT_POISON: TemporaryEnchantmentView = TemporaryEnchantmentView {

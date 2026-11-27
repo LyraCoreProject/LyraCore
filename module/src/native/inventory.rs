@@ -376,13 +376,17 @@ fn cast_result_refusal(ctx: &ReducerContext, refusal: ItemRefusal) -> Option<(u3
     }
 }
 
-pub(crate) fn spell_charges_changed(ctx: &ReducerContext, item: &ItemInstance) {
+pub(crate) fn spell_charges_changed(
+    ctx: &ReducerContext,
+    item: &ItemInstance,
+    changed: [Option<i32>; 5],
+) {
     if !super::has_world_session(ctx, item.owner_guid) {
         return;
     }
-    let charges = super::view::item(ctx, item).spell_charges;
-    let (opcode, body) = codec::build_spell_charge_values(item.guid, charges);
-    super::send_raw_to_character(ctx, item.owner_guid, opcode, body);
+    if let Some((opcode, body)) = codec::build_spell_charge_values(item.guid, changed) {
+        super::send_raw_to_character(ctx, item.owner_guid, opcode, body);
+    }
 }
 
 pub(crate) fn temporary_enchantment_changed(ctx: &ReducerContext, item: &ItemInstance) {
