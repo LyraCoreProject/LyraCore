@@ -1134,17 +1134,6 @@ fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
     );
 }
 
-#[test]
-fn a_join_reset_arrives_after_the_bindings_it_resets() {
-    let exported_at = |table: &str| {
-        crate::CHARACTER_OWNED_TRANSFER_NAMES
-            .iter()
-            .position(|exported| *exported == table)
-            .unwrap_or_else(|| panic!("{table} has no transport arm"))
-    };
-    assert!(exported_at("game_instance_binding") < exported_at("game_group_join_reset"));
-}
-
 const OLD_BLOBS_MAY_LACK: [&str; 18] = [
     "game_auction_bid_hold",
     "game_auction_hold",

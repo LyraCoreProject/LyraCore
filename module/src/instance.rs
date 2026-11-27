@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::{
-    game_creature_move_schedule, game_creature_spawn, game_creature_template,
+    game_character, game_creature_move_schedule, game_creature_spawn, game_creature_template,
     game_creature_waypoint, game_encounter_spawn, game_gameobject, game_gameobject_template,
     game_group, game_group_member, game_map, game_world_entity,
 };
@@ -703,7 +703,7 @@ fn adopt_instance_for_party(ctx: &ReducerContext, instance_id: u64, party_id: u6
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum JoinReset {
     Done,
-    /// The joining member is on another Shard; its import owes the reset.
+    /// This Shard has no Character row of the joining member; its import owes the reset.
     AwaitsArrival,
 }
 
@@ -721,7 +721,8 @@ pub(crate) fn unbind_joining_member(ctx: &ReducerContext, character_guid: u64) -
     {
         return JoinReset::Done;
     }
-    let Some(character) = crate::helpers::character_by_guid(ctx, character_guid) else {
+    // A Transfer fence hides the Character from gameplay reads while its rows stay on this Shard.
+    let Some(character) = ctx.db.game_character().guid().find(character_guid) else {
         return JoinReset::AwaitsArrival;
     };
     unbind_outside_standing_map(ctx, &character);
@@ -730,7 +731,7 @@ pub(crate) fn unbind_joining_member(ctx: &ReducerContext, character_guid: u64) -
 
 /// The reset `unbind_joining_member` owed a joining member that has since arrived on this Shard.
 pub(crate) fn unbind_arrived_joiner(ctx: &ReducerContext, character_guid: u64) {
-    if let Some(character) = crate::helpers::character_by_guid(ctx, character_guid) {
+    if let Some(character) = ctx.db.game_character().guid().find(character_guid) {
         unbind_outside_standing_map(ctx, &character);
     }
 }

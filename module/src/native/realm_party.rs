@@ -78,7 +78,8 @@ pub struct GroupJoinReset {
 crate::character_owned!(delete, fn sweep_delete_game_group_join_reset(ctx, character_guid) {
     ctx.db.game_group_join_reset().character_guid().delete(character_guid);
 });
-// The blob row carries the roster revision the source applied, not the source's marker.
+// The blob row carries the membership revision the source applied, not the source's marker;
+// `settle_join_reset` reads it once every table has arrived.
 crate::character_owned!(transfer, fn sweep_transfer_game_group_join_reset(ctx, character_guid, io) {
     crate::transfer::move_rows(
         ctx,
@@ -94,23 +95,39 @@ crate::character_owned!(transfer, fn sweep_transfer_game_group_join_reset(ctx, c
                     .map_or(0, |membership| membership.revision),
             }]
         },
-        |ctx: &ReducerContext, applied| arrived(ctx, &applied),
+        |_: &ReducerContext, _: GroupJoinReset| {},
     );
 });
 
-/// Settles the marker when its Character arrives: a join the source had not applied resets it.
-fn arrived(ctx: &ReducerContext, applied: &GroupJoinReset) {
-    let markers = ctx.db.game_group_join_reset();
-    let Some(marker) = markers.character_guid().find(applied.character_guid) else {
-        return;
+/// Resets an arriving joiner whose source had not applied its join; older blobs keep the marker.
+pub(crate) fn settle_join_reset(
+    ctx: &ReducerContext,
+    guid: u64,
+    payload: &[crate::transfer::TableRows],
+) -> Result<(), String> {
+    let Some(entry) = payload
+        .iter()
+        .find(|entry| entry.table == "game_group_join_reset")
+    else {
+        return Ok(());
     };
-    markers.character_guid().delete(marker.character_guid);
+    let mut outcome = Ok(());
+    let carried = crate::transfer::decode_rows::<GroupJoinReset>(&entry.rows, &mut outcome);
+    outcome?;
+    let Some(applied) = carried.iter().find(|row| row.character_guid == guid) else {
+        return Ok(());
+    };
+    let markers = ctx.db.game_group_join_reset();
+    let Some(marker) = markers.character_guid().find(guid) else {
+        return Ok(());
+    };
+    markers.character_guid().delete(guid);
     if marker.revision > applied.revision {
-        crate::instance::unbind_arrived_joiner(ctx, marker.character_guid);
+        crate::instance::unbind_arrived_joiner(ctx, guid);
     }
+    Ok(())
 }
 
-/// The Transfer cascade keeps the marker for the arriving payload to settle.
 pub(crate) fn join_reset_of(ctx: &ReducerContext, guid: u64) -> Option<GroupJoinReset> {
     ctx.db.game_group_join_reset().character_guid().find(guid)
 }

@@ -498,6 +498,39 @@ fn a_member_who_joins_while_between_shards_arrives_without_its_solo_run() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_member_who_joins_before_its_transfer_is_released_arrives_without_its_solo_run() {
+    let source = realm("dungeon-run-join-before-release-source");
+    let joiner = create_character(&source, "Joiner");
+    let solo = enter(&source, joiner);
+    walk_out(&source, joiner);
+    assert_eq!(
+        runs_bound(&source, joiner),
+        [solo],
+        "the Transfer carries the solo run"
+    );
+    let blob = export(&source, joiner);
+
+    let destination = world_shard("dungeon-run-join-before-release-destination");
+    import(&destination, &blob);
+    project_join(&destination, joiner);
+    let system = actor("0");
+    source.assert_call("confirm_import", &[&TRANSFER.to_string(), &system]);
+    source.assert_call("finish_transfer", &[&TRANSFER.to_string(), &system]);
+    destination.assert_call("release_transfer", &[&TRANSFER.to_string(), &system]);
+
+    assert!(
+        runs_bound(&destination, joiner).is_empty(),
+        "the destination holds the arrived rows, so the join resets the solo run"
+    );
+    assert!(destination
+        .query_rows(&format!(
+            "SELECT character_guid FROM game_group_join_reset WHERE character_guid = {joiner}"
+        ))
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_member_who_joined_before_its_transfer_keeps_its_groups_run() {
     let source = realm("dungeon-run-join-before-transfer-source");
     let joiner = create_character(&source, "Joiner");
