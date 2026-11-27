@@ -1,0 +1,37 @@
+name: Contribution check
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request to judge as an outside one; writes only the job summary
+        required: true
+        type: number
+
+concurrency:
+  group: contribution-check-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+# Write access exists only to create or update the check's one PR comment.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Only trusted base code runs; PR commits are fetched as Git objects and read as data.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Judge evidence and review lane
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+        run: python3 -B conformance/check_contribution.py
