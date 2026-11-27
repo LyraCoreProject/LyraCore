@@ -119,6 +119,9 @@ pub struct Spell {
     // Spell.dbc MaxAffectedTargets; 0 means no cap (docs/schema.md#area-target-cap).
     #[default(0u32)]
     pub max_affected_targets: u32,
+    // Spell.dbc Speed in yd/s; 0 means no travel (docs/schema.md#spell-travel).
+    #[default(0.0f32)]
+    pub speed_yps: f32,
 }
 
 impl Spell {
@@ -171,6 +174,7 @@ impl Spell {
             channel_interrupt_flags: CHANNEL_INTERRUPT_ACTION_CANCELS,
             prevention_type: PREVENTION_TYPE_SILENCE,
             max_affected_targets: 0,
+            speed_yps: 0.0,
         }
     }
 

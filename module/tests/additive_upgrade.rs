@@ -95,6 +95,7 @@ fn populated_old_module_upgrades_without_clearing() {
         "channel_interrupt_flags",
         "prevention_type",
         "max_affected_targets",
+        "speed_yps",
     ] {
         assert!(
             !spell_before[0].contains_key(column),
@@ -151,6 +152,7 @@ fn populated_old_module_upgrades_without_clearing() {
         "damage_class",
         "gcd_category",
         "max_affected_targets",
+        "speed_yps",
     ] {
         assert_eq!(
             spell_after[0].remove(column).as_deref(),

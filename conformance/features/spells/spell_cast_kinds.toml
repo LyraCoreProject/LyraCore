@@ -691,3 +691,33 @@ rung = "unit"
 path = "importer/src/spell.rs"
 function = "a_melee_or_ranged_spell_without_combat_range_or_a_weapon_rolls_the_level_skill"
 rung = "unit"
+
+[[tests]]
+path = "module/src/geometry.rs"
+function = "projectile_travel_ms_floors_and_never_covers_less_than_5_yards"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/vmangos_spell.rs"
+function = "a_spells_speed_reaches_the_source_spell"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/ranged_impact.rs"
+function = "a_cast_ranged_strike_lands_when_its_own_speed_carries_it_to_the_target"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_damage_block.rs"
+function = "a_melee_damage_spell_with_a_range_and_no_speed_lands_in_its_cast"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/ranged_impact.rs"
+function = "an_auto_shot_flies_at_the_speed_of_its_spell_row"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/ranged_impact.rs"
+function = "a_wand_shot_flies_at_the_speed_of_its_spell_row"
+rung = "durable_module"

@@ -788,7 +788,7 @@ cast is cast-time index 1's zero plus 500 ms for a ranged-slot spell that does n
 Tier 1 drops it, as the cast Weapon Strike context drops its cooldowns, and gives the knife a
 10,000 stack. The roll formulas read neither; the Reference Server keeps both. A Character casts
 again once its last Throw is counted. Each batch advances 550 ms, longer than the 500 ms flight
-over ten yards at speed 20 and LyraCore's 250 ms one. A Throw that draws no `SMSG_SPELL_GO` in its
+over ten yards at speed 20. A Throw that draws no `SMSG_SPELL_GO` in its
 batch blocks the sample as refused. An unretained readiness check requires two counted Throws per
 Character. This context reserves its own family: 1e-6 over four checks, two levels and three
 seeds, 24 tests at `1e-6/24`. Each submission's false-failure bound across the seven contexts is

@@ -33,6 +33,7 @@ pub(crate) struct Spell {
     pub(crate) channel_interrupt_flags: u32,
     pub(crate) prevention_type: u32,
     pub(crate) max_affected_targets: u32,
+    pub(crate) speed: f32,
     pub(crate) proc_flags: u32,
     pub(crate) proc_chance: u32,
     pub(crate) proc_charges: u32,
@@ -148,6 +149,7 @@ pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
                 channel_interrupt_flags: column(23),
                 prevention_type: column(165),
                 max_affected_targets: column(163),
+                speed: f32::from_bits(column(37)),
                 proc_flags: column(24),
                 proc_chance: column(25),
                 proc_charges: column(26),
@@ -183,6 +185,9 @@ pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
                 family_name: column(160),
                 family_flags: u64::from(column(161)) | (u64::from(column(162)) << 32),
             };
+            if !spell.speed.is_finite() {
+                bail!("Spell.dbc row {id} has a non-finite speed");
+            }
             if spell
                 .effect_dice_per_level
                 .iter()

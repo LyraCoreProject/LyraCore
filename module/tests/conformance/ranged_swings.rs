@@ -67,7 +67,7 @@ const WAND_SHOT: Shooter = Shooter {
     ticks_per_shot: 8,
 };
 
-// A 550 ms batch outlasts Throw's 10 yd flight at vmangos's 20 yd/s and LyraCore's 40.
+// A 550 ms batch outlasts Throw's 500 ms flight over 10 yd at 20 yd/s.
 const THROW: Shooter = Shooter {
     swing: &spec::THROW,
     firing: Firing::EachShot,

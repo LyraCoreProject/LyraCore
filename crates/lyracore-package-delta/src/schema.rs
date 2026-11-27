@@ -354,6 +354,7 @@ impl Table {
                     | "channel_interrupt_flags"
                     | "prevention_type"
                     | "max_affected_targets"
+                    | "speed_yps"
             ) | (Self::SpellEffect, "bonus_coefficient" | "equip_supported")
                 | (
                     Self::Form,
@@ -467,6 +468,7 @@ const SPELL_COLUMNS: &[Column] = &[
     column("channel_interrupt_flags", FieldType::U32),
     column("prevention_type", FieldType::U8),
     column("max_affected_targets", FieldType::U32),
+    column("speed_yps", FieldType::F32),
 ];
 
 const SPELL_EFFECT_COLUMNS: &[Column] = &[

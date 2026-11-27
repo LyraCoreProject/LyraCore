@@ -411,7 +411,7 @@ fn spawn_wolf(shard: &Standalone, offset: f32) -> u64 {
     wolf
 }
 
-// A zero range skips the range check and the flight; CAST_FLAG_IGNORE_RESISTANCES never misses.
+// No range check and no speed, so no flight; CAST_FLAG_IGNORE_RESISTANCES never misses.
 fn insert_burst(shard: &Standalone, spell_id: u32, extra: &[Field]) {
     let name = format!("Instant area fixture {spell_id}");
     let mut spell_row: Vec<Field> = vec![

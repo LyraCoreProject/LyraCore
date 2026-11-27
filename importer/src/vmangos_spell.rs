@@ -79,6 +79,7 @@ fn source_spell(row: &Row, script_name: &str) -> Result<Spell> {
         channel_interrupt_flags: row.number("channelInterruptFlags")?,
         prevention_type: row.number("preventionType")?,
         max_affected_targets: row.number("maxAffectedTargets")?,
+        speed: row.number("speed")?,
         proc_flags: row.number("procFlags")?,
         proc_chance: row.number("procChance")?,
         proc_charges: row.number("procCharges")?,
@@ -128,6 +129,11 @@ fn source_spell(row: &Row, script_name: &str) -> Result<Spell> {
             .chain(spell.bonus_coefficient.iter().flatten())
             .all(|v| v.is_finite()),
         "spell {}: non-finite effect magnitude",
+        spell.id
+    );
+    ensure!(
+        spell.speed.is_finite(),
+        "spell {}: non-finite speed",
         spell.id
     );
     for (index, value) in spell.effect_item_type.iter().enumerate() {
@@ -302,6 +308,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
         "requiresSpellFocus",
         "school",
         "script_name",
+        "speed",
         "spellFamilyFlags",
         "spellFamilyName",
         "spellLevel",
@@ -352,7 +359,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
 #[cfg(test)]
 pub(crate) fn fixture() -> crate::world_source::WorldSource {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
-    let mut columns = "customFlags minTargetLevel spellIconId activeIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 attributesEx3 attributesEx4 dmgClass stances stancesNot category targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime startRecoveryCategory startRecoveryTime interruptFlags auraInterruptFlags channelInterruptFlags maxAffectedTargets procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    let mut columns = "customFlags minTargetLevel spellIconId activeIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 attributesEx3 attributesEx4 dmgClass stances stancesNot category targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime startRecoveryCategory startRecoveryTime interruptFlags auraInterruptFlags channelInterruptFlags maxAffectedTargets speed procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
     for prefix in [
         "effectBonusCoefficient",
         "effect",
@@ -581,6 +588,17 @@ mod tests {
             .unwrap();
         let (spells, _) = read(&source).unwrap();
         assert_eq!(spells[0].max_affected_targets, 3);
+    }
+
+    #[test]
+    fn a_spells_speed_reaches_the_source_spell() {
+        let source = fixture();
+        source
+            .fixture_connection()
+            .execute_batch("UPDATE spell_template SET speed=20.0 WHERE build=5875")
+            .unwrap();
+        let (spells, _) = read(&source).unwrap();
+        assert_eq!(spells[0].speed, 20.0);
     }
 
     #[test]

@@ -1001,12 +1001,13 @@ fn fire_ranged_shot(
 
     let damage = FrozenDamage::launch(ctx, attacker_guid, target_guid, roll.damage);
 
-    let speed = if subclass == ws::WAND {
-        WAND_PROJECTILE_SPEED
-    } else {
-        AUTO_SHOT_PROJECTILE_SPEED
-    };
-    let travel_ms = crate::geometry::projectile_travel_ms(dist_sq.sqrt(), speed);
+    let speed_yps = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(ranged_spell_id)
+        .map_or(0.0, |spell| spell.speed_yps);
+    let travel_ms = crate::geometry::projectile_travel_ms(dist_sq.sqrt(), speed_yps);
     CombatEvent::insert(
         ctx,
         CombatEvent {
@@ -1072,7 +1073,7 @@ pub(crate) fn launch_ranged_strike(
     );
     let travel_ms = crate::geometry::projectile_travel_ms(
         (dx * dx + dy * dy + dz * dz).sqrt(),
-        AUTO_SHOT_PROJECTILE_SPEED,
+        spell.speed_yps,
     );
     schedule_ranged_impact(
         ctx,

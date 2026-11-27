@@ -1491,7 +1491,7 @@ fn apply_damage_effect(
                 blocked,
             } = source_behavior::mitigate_spell(ctx, hdr, caster_guid, target_guid, crit_scaled);
 
-            if e.kind == E_DAMAGE && hdr.range_yd > 0 && target_guid != caster_guid {
+            if e.kind == E_DAMAGE && hdr.speed_yps > 0.0 && target_guid != caster_guid {
                 if let (Some(caster), Some(target)) = (
                     ctx.db.game_world_entity().guid().find(caster_guid),
                     ctx.db.game_world_entity().guid().find(target_guid),
@@ -1499,7 +1499,7 @@ fn apply_damage_effect(
                     if caster.map_id == target.map_id && caster.instance_id == target.instance_id {
                         let dist =
                             distance_3d(caster.x, caster.y, caster.z, target.x, target.y, target.z);
-                        let travel_ms = projectile_travel_ms(dist, PROJECTILE_SPEED_YPS);
+                        let travel_ms = projectile_travel_ms(dist, hdr.speed_yps);
                         if travel_ms > 0 {
                             let fire_at = crate::time::now(ctx)
                                 .checked_add(TimeDuration::from_micros((travel_ms as i64) * 1000))

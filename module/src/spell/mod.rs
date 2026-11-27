@@ -130,7 +130,7 @@ pub(crate) use tables::{
     backfill_dbc_form_sets, delete_form_set, shed_auras_before_projection, write_dbc_form_set,
 };
 pub(crate) use tables::{SpellCastEventKind, StrikeSwingReport};
-pub(crate) use taxonomy::{DISARM_SWING_RETAINED_PCT, PROJECTILE_SPEED_YPS};
+pub(crate) use taxonomy::DISARM_SWING_RETAINED_PCT;
 
 pub(crate) use tables::{
     sweep_delete_game_aura, sweep_delete_game_spell_cd, sweep_transfer_game_aura,

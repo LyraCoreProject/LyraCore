@@ -21,10 +21,16 @@ const DAMAGE_CLASS_RANGED: u8 = 3;
 // Spell.dbc Attributes of an instant ability: ability, not while shapeshifted, tracks its target.
 const ABILITY_ATTRIBUTES: u32 = 0x0041_0010;
 const SPELL_ATTR_NO_ACTIVE_DEFENSE: u32 = 0x0020_0000;
-// No range check and no travel; a range lets the spell travel the 15 yards to the wolf.
+// No range check; a melee ability such as Bloodthirst has a 5 yd range and no speed.
 const MELEE_RANGE_YD: u32 = 0;
+const MELEE_ABILITY_RANGE_YD: u32 = 5;
 const RANGED_RANGE_YD: u32 = 30;
-// 20 ticks of 50 ms pass the 714 ms flight over 15 yards.
+const NO_SPEED: f32 = 0.0;
+// Arcane Shot's Spell.dbc Speed.
+const RANGED_SPEED_YPS: f32 = 40.0;
+const APART_YD: f32 = 15.0;
+const MELEE_APART_YD: f32 = 3.0;
+// 20 ticks of 50 ms pass the 375 ms flight over 15 yards at 40 yd/s.
 const FLIGHT_TICKS: &str = "20";
 const GO_EVENTS: &str =
     "SELECT * FROM game_spell_cast_event_live WHERE caster_guid = 1 AND kind = 2";
@@ -45,10 +51,10 @@ fn a_melee_damage_spell_is_partly_blocked_by_a_facing_creature_and_reports_it() 
         &standalone,
         MELEE_SPELL,
         DAMAGE_CLASS_MELEE,
-        MELEE_RANGE_YD,
+        (MELEE_RANGE_YD, NO_SPEED),
         ABILITY_ATTRIBUTES,
     );
-    face_each_other(&standalone, wolf);
+    face_each_other(&standalone, wolf, APART_YD);
     seed_caster(&standalone, wolf, BLOCKING_CASTER_STATE);
     let events = subscribe_with_fence(&standalone, &[GO_EVENTS]);
 
@@ -76,10 +82,10 @@ fn a_travelling_ranged_damage_spell_reports_its_block_when_it_lands() {
         &standalone,
         RANGED_SPELL,
         DAMAGE_CLASS_RANGED,
-        RANGED_RANGE_YD,
+        (RANGED_RANGE_YD, RANGED_SPEED_YPS),
         ABILITY_ATTRIBUTES,
     );
-    face_each_other(&standalone, wolf);
+    face_each_other(&standalone, wolf, APART_YD);
     seed_caster(&standalone, wolf, BLOCKING_CASTER_STATE);
     let events = subscribe_with_fence(&standalone, &[IMPACT_EVENTS]);
 
@@ -110,10 +116,10 @@ fn a_melee_damage_spell_with_no_active_defense_is_never_blocked() {
         &standalone,
         MELEE_SPELL,
         DAMAGE_CLASS_MELEE,
-        MELEE_RANGE_YD,
+        (MELEE_RANGE_YD, NO_SPEED),
         ABILITY_ATTRIBUTES | SPELL_ATTR_NO_ACTIVE_DEFENSE,
     );
-    face_each_other(&standalone, wolf);
+    face_each_other(&standalone, wolf, APART_YD);
     seed_caster(&standalone, wolf, BLOCKING_CASTER_STATE);
     let events = subscribe_with_fence(&standalone, &[GO_EVENTS]);
 
@@ -125,6 +131,39 @@ fn a_melee_damage_spell_with_no_active_defense_is_never_blocked() {
     assert_eq!(logs[0]["blocked_amount"], "0");
     assert!(number(&logs[0], "damage") > 0, "{logs:?}");
     assert_eq!(revenge_until_ms(&standalone, wolf), 0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_melee_damage_spell_with_a_range_and_no_speed_lands_in_its_cast() {
+    let mut standalone = Standalone::start("spell-damage-melee-no-speed");
+    let wolf = stage(&mut standalone);
+    stage_spell(
+        &standalone,
+        MELEE_SPELL,
+        DAMAGE_CLASS_MELEE,
+        (MELEE_ABILITY_RANGE_YD, NO_SPEED),
+        ABILITY_ATTRIBUTES,
+    );
+    face_each_other(&standalone, wolf, MELEE_APART_YD);
+    seed_caster(&standalone, wolf, CLEAR_CASTER_STATE);
+    let events = subscribe_with_fence(&standalone, &[GO_EVENTS]);
+
+    cast(&standalone, MELEE_SPELL, wolf);
+    let landed = WOLF_HEALTH - health(&standalone, wolf);
+    fence_subscription(&standalone, &events);
+
+    assert!(
+        landed > 0,
+        "vmangos lands a spell without a speed in its cast"
+    );
+    let logs = event_rows(&events, "game_spell_cast_event_live");
+    assert_eq!(logs.len(), 1, "{logs:?}");
+    assert_eq!(
+        number(&logs[0], "damage"),
+        landed,
+        "the GO carries the damage"
+    );
 }
 
 fn assert_blocked_once(
@@ -190,8 +229,8 @@ fn stage(standalone: &mut Standalone) -> u64 {
     wolf
 }
 
-// The caster stands 15 yards east of the wolf, and both face each other.
-fn face_each_other(standalone: &Standalone, wolf: u64) {
+// The caster stands `distance_yd` east of the wolf, and both face each other.
+fn face_each_other(standalone: &Standalone, wolf: u64, distance_yd: f32) {
     let wolf_row = standalone.query_rows(&format!(
         "SELECT x, y FROM game_world_entity WHERE guid = {wolf}"
     ));
@@ -202,7 +241,7 @@ fn face_each_other(standalone: &Standalone, wolf: u64) {
     ));
     standalone.assert_sql(&format!(
         "UPDATE game_world_entity SET x = {}, y = {wolf_y}, orientation = {} WHERE guid = {PLAYER}",
-        wolf_x + 15.0,
+        wolf_x + distance_yd,
         std::f32::consts::PI
     ));
 }
@@ -211,7 +250,7 @@ fn stage_spell(
     standalone: &Standalone,
     spell: u32,
     damage_class: u8,
-    range_yd: u32,
+    (range_yd, speed_yps): (u32, f32),
     attributes: u32,
 ) {
     standalone.insert_row(
@@ -220,6 +259,7 @@ fn stage_spell(
             ("spell_id", &spell),
             ("name", &"Damage spell block fixture"),
             ("range_yd", &range_yd),
+            ("speed_yps", &speed_yps),
             ("school_mask", &PHYSICAL),
             ("attributes", &attributes),
             ("damage_class", &damage_class),

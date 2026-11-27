@@ -1151,6 +1151,24 @@ The default, 0, means no cap. A row written before the reimport, a test fixture 
 that omit the field reach every unit the area selects, as vmangos does for a spell without the
 field. Packages claim the column.
 
+### Spell travel
+
+`game_spell.speed_yps` is the source `speed` (Spell.dbc Speed) in yards per second, kept verbatim.
+A spell with a speed reaches each target other than its caster after
+`floor(max(distance, 5) / speed * 1000)` ms, as vmangos `Spell::AddUnitTarget` does. The distance is
+3D, from caster to target at launch. These paths travel:
+
+- An `E_DAMAGE` effect schedules its damage in `game_pending_spell_impact`; the cast's GO carries no
+  damage.
+- An Auto Shot or wand Shoot reads the speed of its auto-repeat Spell row (Auto Shot 75 at 40, Shoot
+  5019 at 20), and a cast ranged Weapon Strike reads its own (Throw 20, Multi-Shot 30, Aimed Shot
+  40). Both land through `game_ranged_impact_schedule`.
+
+The default, 0, means no travel: an `E_DAMAGE` effect lands in its cast, as most melee abilities
+such as Bloodthirst and Execute do, and a shot lands in the next scheduler batch. Only the damage
+travels; the spell's other effects still apply in the cast. A row written before the reimport, a
+test fixture and a Package Delta that omit the field do not travel. Packages claim the column.
+
 ### Combo finishers (`module/src/combo.rs`)
 
 A finisher is a Rogue or Druid spell whose `Spell.dbc` AttributesEx carries 0x0010_0000 or

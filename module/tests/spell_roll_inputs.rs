@@ -13,7 +13,7 @@ fn only_creatures_with_a_character_owner_can_crit_with_spells() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60 WHERE guid = {caster}"
     ));
-    shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {CAST_FLAG_IGNORE_RESISTANCES}, range_yd = 0, gcd_ms = 0, cooldown_ms = 0 WHERE spell_id = 133"));
+    shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {CAST_FLAG_IGNORE_RESISTANCES}, range_yd = 0, speed_yps = 0.0, gcd_ms = 0, cooldown_ms = 0 WHERE spell_id = 133"));
     shard.assert_sql("UPDATE game_spell_effect SET base_points = 400, die_sides = 0, per_level = 0.0 WHERE spell_id = 133");
     shard.insert_row(
         "game_conformance_spell_random",

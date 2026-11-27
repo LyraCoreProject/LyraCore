@@ -28,7 +28,9 @@ const DAMAGE_CLASS_RANGED: u8 = 3;
 const RANGED_SLOT: u8 = 17;
 const INVTYPE_THROWN: u8 = 25;
 const THROWN_STACK: u32 = 20;
-// 20 ticks of 50 ms pass the longest flight in these tests.
+// Multi-Shot's Spell.dbc Speed; Chain Lightning has none and lands in its cast.
+const MULTI_SHOT_SPEED_YPS: f32 = 30.0;
+// 20 ticks of 50 ms pass Multi-Shot's 400 ms flight to its third wolf, 12 yd away.
 const FLIGHT_TICKS: &str = "20";
 // Four wolves 4 yd apart in a line ahead of the Character; the cast aims at the nearest.
 const WOLF_OFFSETS: [f32; 4] = [4.0, 8.0, 12.0, 16.0];
@@ -141,6 +143,7 @@ fn stage(name: &str) -> (Standalone, [u64; 4]) {
             ("school_mask", &PHYSICAL),
             ("attributes", &MULTI_SHOT_ATTRIBUTES),
             ("damage_class", &DAMAGE_CLASS_RANGED),
+            ("speed_yps", &MULTI_SHOT_SPEED_YPS),
             (
                 "cast_flags",
                 &(CAST_FLAG_ALWAYS_HIT | CAST_FLAG_CANNOT_CRIT),

@@ -34,6 +34,14 @@ const RESIST_SEED_STATE: u32 = 6;
 const SHOT_TICKS: &str = "4";
 // 20 ticks of 50 ms pass the longest flight in these tests.
 const FLIGHT_TICKS: &str = "20";
+// Throw's Spell.dbc Speed carries it the 15 yards in 750 ms.
+const THROW_SPEED_YPS: f32 = 20.0;
+const BEFORE_THROW_LANDS_TICKS: &str = "14";
+const PAST_THROW_LANDING_TICKS: &str = "2";
+// Speeds unlike Auto Shot's 40 and Shoot's 20, so only the Spell row can give these 15 yd flights.
+const AUTO_SHOT_ROW_SPEED: (u32, &str) = (30, "500");
+const SHOOT_ROW_SPEED: (u32, &str) = (25, "600");
+const SHOT_EVENTS: &str = "SELECT * FROM game_combat_event_live WHERE attacker_guid = 1";
 const STRIKE: u32 = 5_121_201;
 const PROC_WATCH: u32 = 5_121_202;
 const ABSORB_SHIELD: u32 = 5_121_203;
@@ -223,6 +231,72 @@ fn a_cast_ranged_strike_is_partly_blocked_by_a_facing_creature_and_reports_it() 
         health(&standalone, wolf),
         WOLF_HEALTH - number(blocked, "damage") - number(unblocked, "damage")
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_cast_ranged_strike_lands_when_its_own_speed_carries_it_to_the_target() {
+    let mut standalone = Standalone::start("ranged-impact-strike-travel");
+    let wolf = stage(&mut standalone);
+    stage_strike(&standalone, 40);
+    face_each_other(&standalone, wolf);
+    seed_caster(&standalone, wolf, CLEAR_CASTER_STATE);
+
+    standalone.assert_call(
+        "debug_cast_at",
+        &[&PLAYER.to_string(), &STRIKE.to_string(), &wolf.to_string()],
+    );
+    standalone.assert_call("debug_advance_roll_batch", &[BEFORE_THROW_LANDS_TICKS]);
+    assert_eq!(
+        health(&standalone, wolf),
+        WOLF_HEALTH,
+        "the strike is still in flight after 700 ms"
+    );
+    standalone.assert_call("debug_advance_roll_batch", &[PAST_THROW_LANDING_TICKS]);
+    assert!(health(&standalone, wolf) < WOLF_HEALTH, "the strike lands");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_auto_shot_flies_at_the_speed_of_its_spell_row() {
+    let mut standalone = Standalone::start("ranged-impact-auto-shot-speed");
+    let wolf = stage(&mut standalone);
+    insert_shot_spell(&standalone, AUTO_SHOT, PHYSICAL, DAMAGE_CLASS_RANGED);
+    equip_ranged(&standalone, THROWN, 0);
+    assert_shot_flight(&standalone, wolf, AUTO_SHOT, AUTO_SHOT_ROW_SPEED);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_wand_shot_flies_at_the_speed_of_its_spell_row() {
+    let mut standalone = Standalone::start("ranged-impact-wand-speed");
+    let wolf = stage(&mut standalone);
+    insert_shot_spell(&standalone, SHOOT, ARCANE, DAMAGE_CLASS_MAGIC);
+    equip_ranged(&standalone, WAND, 0);
+    assert_shot_flight(&standalone, wolf, SHOOT, SHOOT_ROW_SPEED);
+}
+
+fn assert_shot_flight(
+    standalone: &Standalone,
+    wolf: u64,
+    spell_id: u32,
+    (speed_yps, flight_ms): (u32, &str),
+) {
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell SET speed_yps = {speed_yps} WHERE spell_id = {spell_id}"
+    ));
+    aim(standalone, wolf, spell_id);
+    let events = subscribe_with_fence(standalone, &[SHOT_EVENTS]);
+
+    shoot(standalone, &[NORMAL_TABLE_ROLL, 0, NOT_BLOCKING_ROLL]);
+    fence_subscription(standalone, &events);
+
+    let shots: Vec<_> = event_rows(&events, "game_combat_event_live")
+        .into_iter()
+        .filter(|row| row["ranged_spell_id"] == spell_id.to_string())
+        .collect();
+    assert_eq!(shots.len(), 1, "{shots:?}");
+    assert_eq!(shots[0]["impact_delay_ms"], flight_ms, "{shots:?}");
 }
 
 #[test]
@@ -420,6 +494,7 @@ fn stage_strike(standalone: &Standalone, weapon_damage: u32) {
             ("spell_id", &STRIKE),
             ("name", &"Ranged strike fixture"),
             ("range_yd", &30),
+            ("speed_yps", &THROW_SPEED_YPS),
             ("school_mask", &PHYSICAL),
             ("attributes", &STRIKE_ATTRIBUTES),
             ("damage_class", &DAMAGE_CLASS_RANGED),

@@ -952,6 +952,7 @@ fn push_spell_header_row(
         channel_interrupt_flags: s.channel_interrupt_flags,
         prevention_type: s.prevention_type.min(255) as u8,
         max_affected_targets: s.max_affected_targets,
+        speed_yps: s.speed,
     });
     if spell_overrides::binding_summon(
         spell_id,
@@ -1597,7 +1598,7 @@ fn assemble_spell_sql(
     push_insert(
         &mut stmts,
         "game_spell",
-        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex_2,visual_id,duration_index,category,category_cooldown_ms,equipped_item_class,equipped_item_subclass_mask,equipped_item_inventory_mask,attributes_ex_3,attributes_ex_4,damage_class,gcd_category,interrupt_flags,channel_interrupt_flags,prevention_type,max_affected_targets",
+        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex_2,visual_id,duration_index,category,category_cooldown_ms,equipped_item_class,equipped_item_subclass_mask,equipped_item_inventory_mask,attributes_ex_3,attributes_ex_4,damage_class,gcd_category,interrupt_flags,channel_interrupt_flags,prevention_type,max_affected_targets,speed_yps",
         &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
@@ -1945,6 +1946,7 @@ mod tests {
             (31, 0),
             (32, 33),
             (36, 1),
+            (37, 20.0f32.to_bits()),
             (39, 5),
             (41, 987),
             (42, 111),
@@ -2330,7 +2332,7 @@ mod tests {
         assert_eq!((header.duration_ms, header.max_duration_ms), (6000, 21000));
         let header_sql = header.sql_values();
         let values: Vec<_> = header_sql.trim_matches(['(', ')']).split(',').collect();
-        assert_eq!(values.len(), 47);
+        assert_eq!(values.len(), 48);
         assert_eq!(values[42], "133");
         assert_eq!(&values[25..28], &["21000", "1024", "7"]);
         let effect = &rows.effects[0];
@@ -3199,6 +3201,7 @@ mod tests {
             (99, 88, 2)
         );
         assert_eq!(header.max_affected_targets, 4);
+        assert_eq!(header.speed_yps, 20.0);
         assert_eq!(
             (header.family_name, header.family_flags),
             (3, 0x1234_5678_8000_0001)

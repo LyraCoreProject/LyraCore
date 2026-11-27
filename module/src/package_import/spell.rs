@@ -564,6 +564,7 @@ fn apply_spell_field(spell: &mut Spell, field: &str, value: &FieldValue) -> Resu
         "channel_interrupt_flags" => spell.channel_interrupt_flags = as_u32(field, value)?,
         "prevention_type" => spell.prevention_type = as_u8(field, value)?,
         "max_affected_targets" => spell.max_affected_targets = as_u32(field, value)?,
+        "speed_yps" => spell.speed_yps = as_f32(field, value)?,
 
         "custom_flags" => spell.custom_flags = as_u32(field, value)?,
         "min_target_level" => spell.min_target_level = as_u32(field, value)?,
