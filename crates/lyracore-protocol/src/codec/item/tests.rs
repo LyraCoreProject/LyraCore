@@ -568,6 +568,8 @@ fn ring_of_fire_resistance() -> ItemTemplateView {
 #[test]
 fn item_query_preserves_the_five_spell_category_overrides() {
     let mut item = ring_of_fire_resistance();
+    item.spellid_1 = 12343;
+    item.spellid_2 = 12344;
     item.spell_categories = [30, 94, 1141, 0, 1160];
     let response = build_item_query_response(item.entry, Some(&item));
     let found = response.found.unwrap();
