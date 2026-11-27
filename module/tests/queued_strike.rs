@@ -288,6 +288,8 @@ fn a_queued_strike_raises_the_victims_melee_ability_proc_and_a_white_swing_does_
 fn a_dodged_heroic_strike_gives_back_82_percent_of_its_rage() {
     let mut standalone = Standalone::start("queued-strike-dodge-refund");
     standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     stage_on_next_swing_spell(
         &standalone,
         QueuedStrike::rage(HEROIC_STRIKE, "Heroic Strike", HEROIC_STRIKE_COST),
