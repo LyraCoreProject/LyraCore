@@ -369,21 +369,45 @@ struct EventMail {
     sender: u32,
 }
 
-/// The `game_event_mail` rows vmangos keeps: its event is defined, its race mask names a playable
-/// race and its sender is a creature. vmangos reads `event` as unsigned, so a negative (event stop)
-/// row names no event and is dropped. The Module checks the mail template when it sends.
-fn event_mails(
-    rows: impl IntoIterator<Item = EventMail>,
-    defined: impl Fn(u32) -> bool,
-    creature: impl Fn(u32) -> bool,
-) -> Vec<EventMail> {
+/// What the World Source holds that a `game_event_mail` row names.
+struct MailSources {
+    /// Events of a length above 0, which vmangos `GameEventData::isValid` accepts.
+    events: BTreeSet<u32>,
+    quests: BTreeSet<u32>,
+    creature_templates: BTreeSet<u32>,
+}
+
+/// The `game_event_mail` rows vmangos `GameEventMgr::LoadFromDB` keeps: a valid event, a race mask
+/// that names a playable race, no quest or one that exists, and a creature sender. vmangos reads
+/// `event` as unsigned, so a negative (event stop) row names no event and is dropped. The mail
+/// template is client data, so the Module checks it when it sends.
+fn event_mails(rows: impl IntoIterator<Item = EventMail>, sources: &MailSources) -> Vec<EventMail> {
     rows.into_iter()
         .filter(|mail| {
-            u32::try_from(mail.event).is_ok_and(|event| event != 0 && defined(event))
+            u32::try_from(mail.event)
+                .is_ok_and(|event| event != 0 && sources.events.contains(&event))
                 && mail.race_mask & ALL_PLAYABLE_RACE_MASK != 0
-                && creature(mail.sender)
+                && (mail.quest == 0 || sources.quests.contains(&mail.quest))
+                && sources.creature_templates.contains(&mail.sender)
         })
         .collect()
+}
+
+fn mail_sources(
+    dump: &(impl TableRows + ?Sized),
+    creature_templates: BTreeSet<u32>,
+) -> Result<MailSources> {
+    let mut events = BTreeSet::new();
+    for row in parse_table(dump, "game_event")?.iter() {
+        if row.number::<u32>("length")? > 0 {
+            events.insert(row.number("entry")?);
+        }
+    }
+    Ok(MailSources {
+        events,
+        quests: entries(dump, "quest_template")?,
+        creature_templates,
+    })
 }
 
 fn source_mails(dump: &(impl TableRows + ?Sized)) -> Result<Vec<EventMail>> {
@@ -451,11 +475,12 @@ pub(super) fn plan(dump: &(impl TableRows + ?Sized), args: &WorldImportArgs) -> 
             spells: &entries(dump, "spell_template")?,
         },
     );
-    let mails = event_mails(
-        source_mails(dump)?,
-        |event| definitions.contains_key(&event),
-        |entry| creature_templates.contains(&entry),
-    );
+    let source_mails = source_mails(dump)?;
+    let mails = if source_mails.is_empty() {
+        Vec::new()
+    } else {
+        event_mails(source_mails, &mail_sources(dump, creature_templates)?)
+    };
 
     // An event the World Source leaves out for patch 1.12 is disabled, as vmangos disables it, so
     // its spawns stay hidden and its quests and vendor items are not offered.
@@ -760,44 +785,35 @@ mod tests {
     }
 
     #[test]
-    fn an_event_mail_needs_a_started_defined_event_a_playable_race_and_a_creature_sender() {
-        let mail = EventMail {
+    fn only_a_start_row_of_a_valid_event_for_a_playable_race_from_a_creature_is_kept() {
+        let kept = EventMail {
             event: 26,
-            race_mask: 0x100,
-            quest: 0,
+            race_mask: 0x1,
+            quest: 8_311,
             mail_template: 140,
             sender: 15_864,
         };
         let rows = [
+            kept,
+            EventMail { event: 0, ..kept },
+            EventMail { event: -26, ..kept },
+            EventMail { event: 27, ..kept },
             EventMail {
-                race_mask: 0x1,
-                ..mail
-            },
-            EventMail { event: 0, ..mail },
-            EventMail {
-                event: -26,
-                race_mask: 0x1,
-                ..mail
+                race_mask: 0x100,
+                ..kept
             },
             EventMail {
-                event: 27,
-                race_mask: 0x1,
-                ..mail
+                quest: 8_312,
+                ..kept
             },
-            mail,
-            EventMail {
-                race_mask: 0x1,
-                sender: 1,
-                ..mail
-            },
+            EventMail { sender: 1, ..kept },
         ];
-        assert_eq!(
-            event_mails(rows, |event| event == 26, |entry| entry == 15_864),
-            [EventMail {
-                race_mask: 0x1,
-                ..mail
-            }]
-        );
+        let sources = MailSources {
+            events: BTreeSet::from([26]),
+            quests: BTreeSet::from([8_311]),
+            creature_templates: BTreeSet::from([15_864]),
+        };
+        assert_eq!(event_mails(rows, &sources), [kept]);
     }
 
     #[test]

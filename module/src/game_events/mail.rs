@@ -10,6 +10,7 @@ use super::GameEventState;
 use crate::game_character;
 use crate::mail::Letter;
 use crate::quest::game_character_quest;
+use crate::transfer::game_transfer_in;
 
 /// One vmangos `game_event_mail` row: a letter to each Character of `race_mask` when its event
 /// starts.
@@ -40,12 +41,13 @@ enum Edge {
     Stop,
 }
 
-/// The edge an event crosses from what this Shard last followed. An unscheduled event crosses
-/// none, as vmangos `GameEventMgr::Update` skips a disabled event.
+/// The edge an event crosses from what this Shard last followed. A started event that no longer
+/// runs, stopped or unscheduled, has stopped, as vmangos `GameEventMgr::EnableEvent` stops an event
+/// it disables.
 fn edge(state: GameEventState, started: bool) -> Option<Edge> {
     match (state, started) {
         (GameEventState::Active, false) => Some(Edge::Start),
-        (GameEventState::Inactive, true) => Some(Edge::Stop),
+        (GameEventState::Inactive | GameEventState::Unscheduled, true) => Some(Edge::Stop),
         _ => None,
     }
 }
@@ -76,8 +78,8 @@ pub(super) fn follow(ctx: &ReducerContext, states: &BTreeMap<u32, GameEventState
     }
 }
 
-/// Mails each Character this Shard holds that the event's mail addresses; `insert_letter` routes a
-/// letter for one behind the Transfer Gate to its new home.
+/// Mails each Character this Shard holds that the event's mail addresses. A Character still arriving
+/// by Transfer gets its letter from the Shard it leaves, whose `insert_letter` routes it.
 fn send(ctx: &ReducerContext, event_entry: u32) {
     let mails: Vec<GameEventMail> = ctx
         .db
@@ -92,6 +94,14 @@ fn send(ctx: &ReducerContext, event_entry: u32) {
         .db
         .game_character()
         .iter()
+        .filter(|character| {
+            ctx.db
+                .game_transfer_in()
+                .by_character()
+                .filter(character.guid)
+                .next()
+                .is_none()
+        })
         .map(|character| (character.guid, character.race))
         .collect();
     for mail in mails {
@@ -163,9 +173,9 @@ mod tests {
     }
 
     #[test]
-    fn an_unscheduled_event_neither_starts_nor_stops() {
+    fn an_unscheduled_event_stops_once_started_and_never_starts() {
         assert_eq!(edge(GameEventState::Unscheduled, false), None);
-        assert_eq!(edge(GameEventState::Unscheduled, true), None);
+        assert_eq!(edge(GameEventState::Unscheduled, true), Some(Edge::Stop));
     }
 
     #[test]

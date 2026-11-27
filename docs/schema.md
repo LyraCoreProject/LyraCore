@@ -1049,12 +1049,15 @@ a letter to every Character the Shard holds whose race is in the row's mask and,
 names a quest, whose reward of that quest is recorded. The letter comes from the sender creature
 with the mail template's id, body and item, at once and marked returned so it cannot be returned,
 as vmangos `MassMailMgr` sends it. A missing mail template or item template sends nothing and logs
-the row. An event that stops leaves `game_event_started`, so its next start mails again; a stop
-sends no mail, as vmangos drops its negative rows. An unscheduled event, such as one an import
-has briefly removed, leaves `game_event_started` as it is, so an import mails no one again. Each
-Shard mails the Characters it holds, so on a split Realm every Character gets one letter from its
-own World Shard; a Character behind the Transfer Gate gets its letter through mail routing at its
-new home.
+the row. An event that stops, or that becomes disabled or zero length, leaves `game_event_started`,
+so its next start mails again, as vmangos `EnableEvent` stops an event it disables. A stop sends no
+mail, as vmangos drops its negative rows. An event that no `game_event` row defines, such as one an
+import has deleted and not yet written again, is not followed, so an import mails no one again.
+Each Shard mails the Characters it holds, except one still arriving by Transfer: the Shard it
+leaves sends that letter and mail routing takes it to the new home. On a split Realm a Character
+so gets one letter from its own World Shard; the known gaps in
+`conformance/features/world/game_events.toml` say when it can get two or none. One pass writes
+every letter of a start, with no limit per pass.
 
 Before the `events` family is imported no link exists, and a creature population member's
 `event_ids` keep a member with a positive event out of its population's selection, as they did

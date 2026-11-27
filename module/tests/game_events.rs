@@ -34,8 +34,9 @@ const ELWYNN_FAIRE_LANTERN: u32 = 5_300_403;
 const MULGORE_FAIRE_LANTERN: u32 = 5_300_404;
 
 const FESTIVAL_MAIL_TEMPLATE: u32 = 5_300_600;
-// vmangos `RACE_HUMAN`; the seeded Character is a Human.
+// The mask bit of vmangos race 1, Human; the seeded Character is a Human.
 const HUMAN_RACE_MASK: u32 = 0x1;
+const HUMAN: &str = "1";
 const ORC: &str = "2";
 // vmangos `MAIL_CREATURE` and `MAIL_CHECK_MASK_RETURNED`.
 const MAIL_CREATURE: &str = "3";
@@ -658,9 +659,8 @@ fn a_creature_that_respawns_while_its_event_runs_comes_back_in_its_event_data() 
     );
 }
 
-/// A realm whose festival mails its Humans a letter with a blade, and an Orc Character in the world.
-fn festival_mail_realm(name: &str) -> (Standalone, u64) {
-    let (shard, _) = realm(name);
+/// An offline Character of `race` on the seeded Character's Account.
+fn offline_character(shard: &Standalone, name: &str, race: &str) -> u64 {
     let account = shard.query_rows(&format!(
         "SELECT account_id FROM game_character WHERE guid = {CHARACTER}"
     ))[0]["account_id"]
@@ -669,8 +669,8 @@ fn festival_mail_realm(name: &str) -> (Standalone, u64) {
         "create_character",
         &[
             &account,
-            "\"Grunt\"",
-            ORC,
+            &format!("\"{name}\""),
+            race,
             "1",
             "0",
             "0",
@@ -680,11 +680,20 @@ fn festival_mail_realm(name: &str) -> (Standalone, u64) {
             "0",
         ],
     );
-    let orc: u64 = number(
-        &shard.query_rows("SELECT guid FROM game_character WHERE name = 'Grunt'")[0],
+    number(
+        &shard.query_rows(&format!(
+            "SELECT guid FROM game_character WHERE name = '{name}'"
+        ))[0],
         "guid",
-    );
-    shard.assert_call("debug_spawn_player_entity", &[&orc.to_string()]);
+    )
+}
+
+/// A realm whose festival mails its Humans a letter with a blade. Besides the seeded Human in the
+/// world it holds an offline Human, whose guid it returns, and an offline Orc.
+fn festival_mail_realm(name: &str) -> (Standalone, u64) {
+    let (shard, _) = realm(name);
+    let offline_human = offline_character(&shard, "Reveler", HUMAN);
+    offline_character(&shard, "Grunt", ORC);
     shard.insert_row(
         "game_mail_template",
         &[
@@ -711,7 +720,7 @@ fn festival_mail_realm(name: &str) -> (Standalone, u64) {
             ("sender_entry", &TEST_WOLF_ENTRY),
         ],
     );
-    (shard, orc)
+    (shard, offline_human)
 }
 
 /// The recipients of every festival letter, one entry per letter.
@@ -730,7 +739,7 @@ fn festival_mail(shard: &Standalone) -> Vec<u64> {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_event_start_mails_each_character_of_its_races_once() {
-    let (shard, orc) = festival_mail_realm("game-event-mail-start");
+    let (shard, offline_human) = festival_mail_realm("game-event-mail-start");
     festival(&shard, VIRTUAL_START_SECS + 30, 10, Kind::Calendar);
     settle(&shard);
     assert!(
@@ -742,8 +751,8 @@ fn an_event_start_mails_each_character_of_its_races_once() {
 
     assert_eq!(
         festival_mail(&shard),
-        [CHARACTER],
-        "the Human gets the letter and the Orc {orc} none"
+        [CHARACTER, offline_human],
+        "both Humans get the letter, online or not, and the Orc none"
     );
     let letter = &shard.query_rows(&format!(
         "SELECT sender_kind, sender_entry, check_flags, item_entry, item_stack_count, \
@@ -774,7 +783,7 @@ fn an_event_start_mails_each_character_of_its_races_once() {
     shard.assert_call("debug_advance_roll_batch", &["1200"]);
     assert_eq!(
         festival_mail(&shard),
-        [CHARACTER],
+        [CHARACTER, offline_human],
         "the next pass of the running festival sends no second letter"
     );
 }
@@ -782,25 +791,45 @@ fn an_event_start_mails_each_character_of_its_races_once() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_event_mails_again_only_when_it_starts_again_after_a_stop() {
-    let (shard, _) = festival_mail_realm("game-event-mail-restart");
+    let (shard, offline_human) = festival_mail_realm("game-event-mail-restart");
     festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
+    settle(&shard);
+    let once = [CHARACTER, offline_human];
+
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    assert_eq!(festival_mail(&shard), once, "a running event mails once");
+
+    shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
+    assert_eq!(festival_mail(&shard), once, "a stop sends no letter");
+
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    assert_eq!(
+        festival_mail(&shard),
+        [CHARACTER, CHARACTER, offline_human, offline_human],
+        "the next start mails again"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_disabled_event_mails_again_at_its_next_operator_start_after_a_clear() {
+    let (shard, offline_human) = festival_mail_realm("game-event-mail-disabled");
+    festival(&shard, VIRTUAL_START_SECS - 30, 10, Kind::Disabled);
     settle(&shard);
 
     shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
-    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    shard.assert_call("debug_event_clear", &[&FESTIVAL.to_string()]);
     assert_eq!(
         festival_mail(&shard),
-        [CHARACTER],
-        "a running event mails once"
+        [CHARACTER, offline_human],
+        "the Operator start mails and the clear sends nothing"
     );
 
-    shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
-    assert_eq!(festival_mail(&shard), [CHARACTER], "a stop sends no letter");
-
     shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
     assert_eq!(
         festival_mail(&shard),
-        [CHARACTER, CHARACTER],
-        "the next start mails again"
+        [CHARACTER, CHARACTER, offline_human, offline_human],
+        "the clear stopped the event, so the next start mails again"
     );
 }
