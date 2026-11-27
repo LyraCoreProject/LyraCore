@@ -49,17 +49,7 @@ pub(crate) fn plan_reward_letter(
         0 => quest_ender.ok_or("the quest ender is neither a creature nor a gameobject")?,
         entry => QuestGiver::Creature(entry),
     };
-    let body = body.ok_or_else(|| format!("no mail template {}", reward.mail_template_id))?;
-    let item = match loot {
-        None => ItemSnapshot::default(),
-        Some(loot) => ItemSnapshot {
-            entry: loot.item_entry,
-            stack_count: loot.count,
-            durability: max_durability
-                .ok_or_else(|| format!("no item template {}", loot.item_entry))?,
-            ..ItemSnapshot::default()
-        },
-    };
+    let (body, item) = template_contents(reward.mail_template_id, body, loot, max_durability)?;
     Ok(RewardLetter {
         header: RewardHeader {
             giver,
@@ -70,6 +60,62 @@ pub(crate) fn plan_reward_letter(
         item,
         delay_secs: reward.delay_secs,
     })
+}
+
+/// A mail template's body and its one item, or what is missing for them.
+fn template_contents(
+    mail_template_id: u32,
+    body: Option<String>,
+    loot: Option<&MailLoot>,
+    max_durability: Option<u32>,
+) -> Result<(String, ItemSnapshot), String> {
+    let body = body.ok_or_else(|| format!("no mail template {mail_template_id}"))?;
+    let item = match loot {
+        None => ItemSnapshot::default(),
+        Some(loot) => ItemSnapshot {
+            entry: loot.item_entry,
+            stack_count: loot.count,
+            durability: max_durability
+                .ok_or_else(|| format!("no item template {}", loot.item_entry))?,
+            ..ItemSnapshot::default()
+        },
+    };
+    Ok((body, item))
+}
+
+/// The body and item a letter of `mail_template_id` carries, from `game_mail_template`,
+/// `game_mail_loot` and the item's template.
+pub(crate) fn template_letter(
+    ctx: &ReducerContext,
+    mail_template_id: u32,
+) -> Result<(String, ItemSnapshot), String> {
+    let (body, loot, max_durability) = template_rows(ctx, mail_template_id);
+    template_contents(mail_template_id, body, loot.as_ref(), max_durability)
+}
+
+fn template_rows(
+    ctx: &ReducerContext,
+    mail_template_id: u32,
+) -> (Option<String>, Option<MailLoot>, Option<u32>) {
+    let body = ctx
+        .db
+        .game_mail_template()
+        .id()
+        .find(mail_template_id)
+        .map(|t| t.body);
+    let loot = ctx
+        .db
+        .game_mail_loot()
+        .mail_template_id()
+        .find(mail_template_id);
+    let max_durability = loot.as_ref().and_then(|loot| {
+        ctx.db
+            .game_item_template()
+            .entry()
+            .find(loot.item_entry)
+            .map(|t| t.max_durability)
+    });
+    (body, loot, max_durability)
 }
 
 pub(crate) fn file_reward_letter(
@@ -86,24 +132,7 @@ pub(crate) fn file_reward_letter(
     else {
         return Ok(());
     };
-    let body = ctx
-        .db
-        .game_mail_template()
-        .id()
-        .find(reward.mail_template_id)
-        .map(|t| t.body);
-    let loot = ctx
-        .db
-        .game_mail_loot()
-        .mail_template_id()
-        .find(reward.mail_template_id);
-    let max_durability = loot.as_ref().and_then(|loot| {
-        ctx.db
-            .game_item_template()
-            .entry()
-            .find(loot.item_entry)
-            .map(|t| t.max_durability)
-    });
+    let (body, loot, max_durability) = template_rows(ctx, reward.mail_template_id);
     let quest_ender = crate::quest::quest_ender(ctx, giver_guid);
     let letter = match plan_reward_letter(&reward, quest_ender, body, loot.as_ref(), max_durability)
     {

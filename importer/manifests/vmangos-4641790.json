@@ -1185,6 +1185,18 @@
       },
       "locked_rows": 12137
     },
+    "game_event_mail": {
+      "columns": {
+        "integer": [
+          "event",
+          "mailTemplateId",
+          "quest",
+          "raceMask",
+          "senderEntry"
+        ]
+      },
+      "locked_rows": 0
+    },
     "game_event_quest": {
       "columns": {
         "integer": [

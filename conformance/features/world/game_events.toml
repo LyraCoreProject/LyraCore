@@ -1,7 +1,7 @@
 schema_version = 1
 id = "game_events"
 system = "world"
-scope = "Game Events run on the Realm Clock calendar and decide which creature and GameObject spawns exist, which template, equipment and spells their event creatures take, which event quests givers offer and which event items vendors sell."
+scope = "Game Events run on the Realm Clock calendar and decide which creature and GameObject spawns exist, which template, equipment and spells their event creatures take, which event quests givers offer, which event items vendors sell and which Characters an event start mails."
 requests = []
 replies = []
 dependencies = []
@@ -47,6 +47,12 @@ tests = [
     { path = "importer/src/world_import_game_events.rs", function = "a_creature_data_model_and_an_equipment_with_several_choices_are_counted", rung = "unit" },
     { path = "module/tests/game_events.rs", function = "a_live_creature_takes_its_event_data_as_the_event_starts_and_its_own_as_it_stops", rung = "durable_module" },
     { path = "module/tests/game_events.rs", function = "a_creature_that_spawns_while_its_event_runs_comes_in_its_event_data", rung = "durable_module" },
+    { path = "module/src/game_events/mail.rs", function = "an_event_mails_when_it_starts_and_again_only_after_it_stopped", rung = "unit" },
+    { path = "module/src/game_events/mail.rs", function = "an_unscheduled_event_neither_starts_nor_stops", rung = "unit" },
+    { path = "module/src/game_events/mail.rs", function = "a_mail_goes_to_the_races_of_its_mask_who_were_rewarded_its_quest", rung = "unit" },
+    { path = "importer/src/world_import_game_events.rs", function = "an_event_mail_needs_a_started_defined_event_a_playable_race_and_a_creature_sender", rung = "unit" },
+    { path = "module/tests/game_events.rs", function = "an_event_start_mails_each_character_of_its_races_once", rung = "durable_module" },
+    { path = "module/tests/game_events.rs", function = "an_event_mails_again_only_when_it_starts_again_after_a_stop", rung = "durable_module" },
 ]
 
 [vmangos]
@@ -116,12 +122,6 @@ description = "The first pass on a new Realm or after an events import casts eac
 path = "module/src/creatures/event_data.rs"
 symbol = "follow_one"
 evidence = "vmangos Creature::ApplyGameEventSpells at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
-
-[[known_gaps]]
-description = "Event start and end mail (game_event_mail) is not sent."
-path = "importer/src/world_import_game_events.rs"
-symbol = "plan"
-evidence = "vmangos GameEventMgr::SendEventMails at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
 [[known_gaps]]
 description = "Scripted events (vmangos hardcoded: Elemental Invasions, Scourge Invasion, AQ War Effort, Fireworks, Post Firework Toasting Goblets, Lunar Festival Minions of Omen, Dragons of Nightmare) have no script, so they stay stopped: their spawns stay hidden, their quests are not offered and their absence spawns show until an Operator starts them."

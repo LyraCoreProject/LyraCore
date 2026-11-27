@@ -201,6 +201,9 @@ event 0 and resolving `equipment_id` to its `creature_equip_template` items; an 
 spell the World Source lacks becomes none, and a row left with nothing to change is dropped. A row's
 model and an equipment entry with several item choices are not applied and appear as
 `events.creature-display` and `events.equipment-choice`.
+It reads `game_event_mail` and keeps a row whose event is defined, whose race mask names a playable
+race and whose sender is a creature template, as vmangos does. vmangos reads the event as unsigned,
+so a negative (event stop) row names no event and is dropped; the pinned World Source has no rows.
 A `creatures` or `gameobjects` import writes the `events` family with it. The Module rules are in
 [Game events](schema.md#game-events).
 

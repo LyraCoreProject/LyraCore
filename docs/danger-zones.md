@@ -319,6 +319,19 @@ world, within two passes. A rerun writes the same rows and walks the running eve
 again, so it casts each start spell again whose aura the creature no longer has. A corpse takes the
 data when it respawns.
 
+### Game event mail migration
+
+The private `game_event_mail` and `game_event_started` tables are new and start empty. No existing
+column or reducer argument changes, so no Package builds a changed row. The first Game Event pass
+after the publish records each running event in `game_event_started` without mail, because
+`game_event_mail` is still empty.
+
+With the updated importer, run `--family events` again. A `creatures` or `gameobjects` import also
+writes the `events` family. The pinned World Source has no `game_event_mail` rows, so the import
+writes none. An imported row for an event that is already running sends nothing until the event's
+next start, as vmangos sends nothing for an event that resumes. A rerun writes the same rows and
+sends nothing.
+
 ### Game event quest and vendor migration
 
 The private `game_event_quest` and `game_event_vendor_item` tables are new and start empty. No

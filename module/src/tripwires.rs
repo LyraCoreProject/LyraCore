@@ -1082,6 +1082,7 @@ mod character_fence_tripwire {
         ("module/src/talent.rs", 1, "the guid comes from the caller's own entity_by_owner-resolved entity"),
         ("module/src/gm.rs", 2, "set_gm_level is FENCED (character_by_name); the two raw reads are gm_command's own Account authority probe and its .money write, both on the caller's entity_by_owner-resolved guid"),
         ("module/src/loot/mod.rs", 1, "DEFER: credit_purse writes the durable row AFTER folding the delta into the escrowed blob (`transfer::defer_money_delta`) — refusing would drop a third party's copper"),
+        ("module/src/game_events/mail.rs", 1, "Game Event mail reads the race of every Character the Shard holds; one behind the Transfer Gate still gets its letter, which `insert_letter` routes to its new home — no write to the character"),
     ];
 
     const PACKAGE_FILE_BUDGET: &[(&str, usize, &str)] = &[(
