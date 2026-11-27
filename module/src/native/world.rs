@@ -306,7 +306,11 @@ pub(super) fn leave(
     };
     let guid = player.character_guid;
     super::loot::release_source(ctx, guid, player.open_loot);
-    super::realm_party::presence(ctx, guid, false);
+    if departure == CharacterDeparture::Transfer {
+        super::realm_party::transferred(ctx, guid);
+    } else {
+        super::realm_party::presence(ctx, guid, false);
+    }
     super::clear_audience(ctx, connection_id);
     super::member_stats::stop(ctx, connection_id);
     super::teleport::restore_origin(ctx, guid, player.teleport_origin);
@@ -314,7 +318,9 @@ pub(super) fn leave(
     super::motion_permit::withdraw(ctx, connection_id);
     crate::online::world_session_ended(ctx, guid);
     super::social::presence(ctx, guid, false);
-    super::guild::presence(ctx, guid, false);
+    if departure == CharacterDeparture::Logout {
+        super::guild::presence(ctx, guid, false);
+    }
 
     if let Some(entity) = ctx.db.game_world_entity().guid().find(guid) {
         crate::character::remove_live_character(ctx, entity, departure);

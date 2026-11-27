@@ -592,6 +592,14 @@ offline. Invite admission uses the latest accepted target facts, then delivery r
 Gate on the recipient's World Shard. These are asynchronous facts, not a simultaneous Realm
 snapshot. Login, logout, level, zone and ignore changes refresh them.
 
+A Transfer's source reports the Character to the Group stream but not to the guild: the stored guild
+row stays online, so the departure sends no sign-off and no logout time, and the destination's
+online report finds the row unchanged and sends no sign-on and no MOTD. The roster and the invite by
+name count a member online while its World Session lives on any World Shard, the rule
+[Groups across World Shards](#groups-across-world-shards) gives. A member that disconnects after the
+move stays online in the guild row until the close report of its destination arrives; the roster
+counts it offline as soon as the Realm's away record ends.
+
 Guild snapshots and individual memberships have separate revision records. A guild snapshot never
 implicitly removes its former members: each membership change carries its own revision and a
 retained deletion record. This prevents a delayed roster from clearing a newer guild membership.

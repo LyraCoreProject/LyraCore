@@ -210,6 +210,15 @@ fn current(ctx: &ReducerContext, facts: &Facts) -> bool {
         && realm_party::current(ctx, &facts.character) == Some(ctx.sender())
 }
 
+/// A member counts online while its World Session lives on a Shard, even if another Shard reported it.
+fn counts_online(ctx: &ReducerContext, character: &PartyCharacter) -> bool {
+    realm_party::counts_online(
+        character.online,
+        character.world,
+        realm_party::current(ctx, character),
+    )
+}
+
 fn store_character(ctx: &ReducerContext, facts: Facts) -> bool {
     let table = ctx.db.game_guild_character();
     let guid = facts.character.guid;
@@ -349,9 +358,7 @@ fn invitee(ctx: &ReducerContext, actor: u64, name: &str) -> Option<super::guild:
     let characters = ctx.db.game_guild_character();
     let mut matches = characters.iter().filter(|row| {
         let character = &row.facts.character;
-        character.name.eq_ignore_ascii_case(name)
-            && character.online
-            && realm_party::current(ctx, character) == Some(character.world)
+        character.name.eq_ignore_ascii_case(name) && counts_online(ctx, character)
     });
     let target = matches.next()?;
     if matches.next().is_some() {
@@ -367,7 +374,7 @@ pub(super) fn invitee_by_guid(
 ) -> Option<super::guild::Invitee> {
     let target = ctx.db.game_guild_character().guid().find(guid)?;
     let character = &target.facts.character;
-    if !character.online || realm_party::current(ctx, character) != Some(character.world) {
+    if !counts_online(ctx, character) {
         return None;
     }
     Some(super::guild::Invitee {
@@ -742,20 +749,19 @@ pub(super) fn roster_line(ctx: &ReducerContext, line: &mut codec::GuildRosterLin
     line.level = row.level;
     line.zone_id = row.zone;
     line.class = character.class;
-    line.days_offline =
-        if character.online && realm_party::current(ctx, &character) == Some(character.world) {
-            None
+    line.days_offline = if counts_online(ctx, &character) {
+        None
+    } else {
+        Some(if row.logout_micros == 0 {
+            0.0
         } else {
-            Some(if row.logout_micros == 0 {
-                0.0
-            } else {
-                ctx.timestamp
-                    .to_micros_since_unix_epoch()
-                    .saturating_sub(row.logout_micros)
-                    .max(0) as f32
-                    / 86_400_000_000.0
-            })
-        };
+            ctx.timestamp
+                .to_micros_since_unix_epoch()
+                .saturating_sub(row.logout_micros)
+                .max(0) as f32
+                / 86_400_000_000.0
+        })
+    };
 }
 
 pub(super) fn deleted(ctx: &ReducerContext, guid: u64) {
