@@ -313,12 +313,12 @@ pub(crate) fn running(ctx: &ReducerContext, event_entry: u32) -> bool {
 
 /// A loot row's vmangos `CONDITION_ACTIVE_GAME_EVENT` on `event_entry`, or its reversed form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct EventCondition {
+pub(crate) struct GameEventCondition {
     pub event_entry: u32,
     pub reversed: bool,
 }
 
-impl EventCondition {
+impl GameEventCondition {
     /// The condition a row's `event_entry` and `event_reversed` columns store; 0 is none.
     pub(crate) fn of_row(event_entry: u32, reversed: bool) -> Option<Self> {
         (event_entry != 0).then_some(Self {

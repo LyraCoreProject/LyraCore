@@ -12,6 +12,7 @@ fn fixed(item: u64, chance_bp: u32, group_id: u32, quest_only: bool) -> LootDrop
         group_id,
         quest_only,
         event: None,
+        equal_chance: false,
     }
 }
 
@@ -105,8 +106,8 @@ fn vmangos_loot_selects_patch_rows_expands_nested_references_and_excludes_forbid
     assert_eq!(
         loot.fishing_rows,
         [
-            "(1,10,100,4000,1,0,1,0,false)",
-            "(2,10,103,500,1,0,1,0,false)"
+            "(1,10,100,4000,1,0,1,0,false,false)",
+            "(2,10,103,500,1,0,1,0,false,false)"
         ]
     );
     assert_eq!(
@@ -183,8 +184,14 @@ fn vmangos_equal_chance_group_shares_the_remainder_after_forbidden_items() {
         parse_creature_drops(&source).unwrap()[&7],
         [
             fixed(100, 2500, 1000001, false),
-            fixed(101, 3750, 1000001, false),
-            fixed(102, 3750, 1000001, false)
+            LootDrop {
+                equal_chance: true,
+                ..fixed(101, 3750, 1000001, false)
+            },
+            LootDrop {
+                equal_chance: true,
+                ..fixed(102, 3750, 1000001, false)
+            }
         ]
     );
 }
@@ -396,6 +403,7 @@ fn an_item_row_keeps_its_count_range_and_a_reference_repeats_its_children() {
         group_id: 0,
         quest_only: false,
         event: None,
+        equal_chance: false,
     };
     assert_eq!(
         drops[&1],
@@ -509,7 +517,7 @@ fn a_game_event_condition_stays_on_its_row_and_a_reference_passes_its_own_to_its
     assert_eq!(event_of(101), Some((12, false)));
     let creature = drops[&1].iter().find(|drop| drop.item == 4500).unwrap();
     assert_eq!(
-        creature.row_with_event(5, 1),
-        "(5,1,4500,10000,1,0,false,1,12,true)"
+        creature.creature_row(5, 1),
+        "(5,1,4500,10000,1,0,false,1,12,true,false)"
     );
 }

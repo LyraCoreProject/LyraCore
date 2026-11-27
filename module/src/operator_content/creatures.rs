@@ -730,6 +730,7 @@ fn replace_creature_loot(
             min_count: row.min_count,
             event_entry: 0,
             event_reversed: false,
+            equal_chance: false,
         }
     );
     let old: Vec<_> = old

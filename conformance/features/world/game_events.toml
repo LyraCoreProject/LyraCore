@@ -61,7 +61,11 @@ tests = [
     { path = "module/tests/gossip_conditions.rs", function = "a_game_event_condition_offers_its_option_while_the_event_runs_and_reversed_while_it_does_not", rung = "durable_module" },
     { path = "importer/src/world_import_loot_tests.rs", function = "a_game_event_condition_stays_on_its_row_and_a_reference_passes_its_own_to_its_items", rung = "unit" },
     { path = "module/tests/game_events.rs", function = "event_loot_drops_while_its_event_runs_and_reversed_loot_while_it_does_not", rung = "durable_module" },
-    { path = "module/tests/game_events.rs", function = "a_group_member_whose_event_condition_fails_leaves_the_pick_to_the_others", rung = "durable_module" },
+    { path = "module/tests/game_events.rs", function = "a_grouped_explicit_member_whose_event_condition_fails_is_skipped_for_the_next_member", rung = "durable_module" },
+    { path = "module/tests/game_events.rs", function = "an_equal_chance_member_takes_the_whole_rest_of_its_group_while_an_event_member_fails", rung = "durable_module" },
+    { path = "module/src/loot/mod.rs", function = "a_refused_explicit_member_leaves_its_chance_to_the_allowed_equal_chance_members", rung = "unit" },
+    { path = "module/src/loot/mod.rs", function = "a_refused_equal_chance_member_leaves_its_share_to_the_other_equal_chance_members", rung = "unit" },
+    { path = "module/src/loot/mod.rs", function = "a_group_without_equal_chance_members_leaves_a_refused_chance_empty", rung = "unit" },
     { path = "importer/src/eventai_vmangos.rs", function = "condition_reader_uses_vmangos_numbers_and_refuses_unimplemented_quest_states", rung = "unit" },
     { path = "module/src/creatures/eventai/loader.rs", function = "a_game_event_predicate_names_a_nonzero_event_alone_or_reversed", rung = "unit" },
     { path = "module/src/creatures/cycle/harness/eventai_profile.rs", function = "script_game_event_condition_checks_the_event_without_an_invoker", rung = "unit" },
@@ -179,7 +183,7 @@ symbol = "debug_event_start"
 evidence = "vmangos GameEventMgr::StartEvent runs for the whole world server at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
 [[known_gaps]]
-description = "A Game Event condition is evaluated for gossip options, creature and fishing loot and EventAI events only. The pinned World Source uses it in 14 gossip_menu greetings, which no condition can select yet; 4 creature_ai_scripts commands (Darkmaster Gandling, the Midsummer Bonfire, Bloodmage Thalnos), whose rules the import leaves out because a command keeps only a condition that is always true; and 6 quest_end_scripts rows, which are not imported. Pickpocket, chest, item and skinning loot rows keep no condition; the pinned World Source has no Game Event condition there."
+description = "A Game Event condition is evaluated for gossip options, creature and fishing loot and EventAI events only. The pinned World Source uses it in 14 gossip_menu greetings, which no condition can select yet; 4 creature_ai_scripts commands (Darkmaster Gandling, the Midsummer Bonfire, Bloodmage Thalnos), whose rules the import leaves out because a command keeps only a condition that is always true; and 6 quest_end_scripts rows, which are not imported. Pickpocket, chest, item and skinning loot rows keep no condition, so the Mithril Lockbox (5758) and Thorium Lockbox (5759), whose item loot reaches reference loot 2063 and 2073, give the Hallow's End Pumpkin Bag and the Traveler's Backpack it replaces all year; the loot.condition count keeps those reference rows."
 path = "importer/src/world_import_loot.rs"
 symbol = "parse"
 evidence = "conditions type 12 counted per condition_id user in the pinned World Source; vmangos ConditionEntry::Meets CONDITION_ACTIVE_GAME_EVENT at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
@@ -189,12 +193,6 @@ description = "An EventAI event condition that combines a Game Event with anothe
 path = "importer/src/eventai_vmangos.rs"
 symbol = "predicates"
 evidence = "creature_ai_events 1484201, 1484202, 1484301, 1484302 and 1519701 to 1519704; vmangos CreatureEventAI::ProcessEvent at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
-
-[[known_gaps]]
-description = "A loot group member with no chance of its own, whose Game Event condition fails, leaves its share of the group empty; the Reference Server picks among the group's other equal-chance members instead. In the pinned World Source this is Hallow's End's Pumpkin Bag and the Traveler's Backpack it replaces in reference loot 2063 and 2073, so one of 251 and one of 158 members leaves its share empty at any time."
-path = "module/src/loot/mod.rs"
-symbol = "roll_loot_rows"
-evidence = "vmangos LootTemplate::LootGroup::Roll at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
 [[known_gaps]]
 description = "A creature loot edit in the World Editor writes its rows without a Game Event condition, so an edited creature's event loot drops all year."

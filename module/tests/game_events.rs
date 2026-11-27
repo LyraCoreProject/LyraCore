@@ -965,6 +965,37 @@ fn festival_loot(shard: &Standalone, group_id: u32) {
     }
 }
 
+/// A fishing-shaped group: `JERKY` at 60% while the festival runs, and `BLADE` with no chance of
+/// its own, which the import gave the 40% left.
+fn festival_group_with_an_equal_chance_member(shard: &Standalone) {
+    shard.assert_sql(&format!(
+        "DELETE FROM game_creature_loot WHERE creature_entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.insert_rows(
+        "game_creature_loot",
+        &[
+            &[
+                ("id", &900_201u64),
+                ("creature_entry", &TEST_WOLF_ENTRY),
+                ("item_entry", &FIXTURE_JERKY),
+                ("chance_bp", &6_000u32),
+                ("count", &1u32),
+                ("group_id", &1u32),
+                ("event_entry", &FESTIVAL),
+            ],
+            &[
+                ("id", &900_202u64),
+                ("creature_entry", &TEST_WOLF_ENTRY),
+                ("item_entry", &FIXTURE_BLADE),
+                ("chance_bp", &4_000u32),
+                ("count", &1u32),
+                ("group_id", &1u32),
+                ("equal_chance", &true),
+            ],
+        ],
+    );
+}
+
 fn loot_of_a_kill(shard: &Standalone, wolf: &str) -> Vec<u32> {
     shard.assert_call("debug_apply_damage", &[wolf, "1", &CHARACTER.to_string()]);
     shard.assert_call("debug_kill_creature", &[&CHARACTER.to_string(), wolf]);
@@ -994,7 +1025,7 @@ fn event_loot_drops_while_its_event_runs_and_reversed_loot_while_it_does_not() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_group_member_whose_event_condition_fails_leaves_the_pick_to_the_others() {
+fn a_grouped_explicit_member_whose_event_condition_fails_is_skipped_for_the_next_member() {
     let (shard, _) = realm("game-event-loot-group");
     festival(&shard, VIRTUAL_START_SECS - 30, 1, Kind::Scripted);
     festival_loot(&shard, 1);
@@ -1035,4 +1066,17 @@ fn an_eventai_rule_on_a_game_event_runs_only_while_the_event_runs() {
     assert_ne!(faction_of_a_spawned_wolf(&shard), "35");
     shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
     assert_eq!(faction_of_a_spawned_wolf(&shard), "35");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_equal_chance_member_takes_the_whole_rest_of_its_group_while_an_event_member_fails() {
+    let (shard, _) = realm("game-event-loot-equal-chance");
+    festival(&shard, VIRTUAL_START_SECS - 30, 1, Kind::Scripted);
+    festival_group_with_an_equal_chance_member(&shard);
+    let wolves = wolves_beside(&shard, &CHARACTER.to_string(), &[3.0, 4.0, 5.0, 6.0]);
+
+    for wolf in &wolves {
+        assert_eq!(loot_of_a_kill(&shard, wolf), [FIXTURE_BLADE]);
+    }
 }

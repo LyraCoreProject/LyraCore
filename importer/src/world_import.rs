@@ -1025,7 +1025,7 @@ fn build_items_and_loot(
                 continue;
             }
             item_ids.insert(drop.item);
-            loot_rows.push(drop.row_with_event(loot_id, *creature_entry));
+            loot_rows.push(drop.creature_row(loot_id, *creature_entry));
             loot_id += 1;
         }
     }
@@ -1881,7 +1881,7 @@ fn build_loot_family_rows(
     zones.sort();
     for zone in zones {
         for drop in &drops_by_zone[zone] {
-            fishing_rows.push(drop.row_without_quest_only_with_event(fishing_row_id, *zone));
+            fishing_rows.push(drop.fishing_row(fishing_row_id, *zone));
             fishing_row_id += 1;
         }
     }
@@ -1941,7 +1941,7 @@ fn push_item_statements(
     push_insert(
         stmts,
         "game_creature_loot",
-        "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only,min_count,event_entry,event_reversed",
+        "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only,min_count,event_entry,event_reversed,equal_chance",
         loot_rows,
     );
     push_insert(
@@ -1986,7 +1986,7 @@ fn push_loot_statements(stmts: &mut Vec<String>, loot: &LootFamilyRows) {
     push_insert(
         stmts,
         "game_fishing_loot",
-        "id,zone_id,item_entry,chance_bp,count,group_id,min_count,event_entry,event_reversed",
+        "id,zone_id,item_entry,chance_bp,count,group_id,min_count,event_entry,event_reversed,equal_chance",
         fishing_rows,
     );
     push_insert(
@@ -2370,12 +2370,9 @@ fn vmangos_loot_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Du
     })
 }
 
-/// The source loot tables whose Game Event conditions the import keeps.
-const EVENT_LOOT_TABLES: [&str; 3] = [
-    "creature_loot_template",
-    "reference_loot_template",
-    "fishing_loot_template",
-];
+/// The source loot tables whose Game Event conditions the import keeps. Reference rows still count:
+/// item loot such as the Mithril and Thorium Lockboxes reaches them and keeps no condition.
+const EVENT_LOOT_TABLES: [&str; 2] = ["creature_loot_template", "fishing_loot_template"];
 
 fn loot_findings(dump: &impl TableRows, tables: &[&str]) -> Result<Vec<serde_json::Value>> {
     let forbidden = forbidden_items(dump)?;

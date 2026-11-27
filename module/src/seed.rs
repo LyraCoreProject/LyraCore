@@ -467,6 +467,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         min_count: 0,
         event_entry: 0,
         event_reversed: false,
+        equal_chance: false,
     });
     ctx.db.game_creature_loot().insert(CreatureLoot {
         id: 0,
@@ -479,6 +480,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         min_count: 0,
         event_entry: 0,
         event_reversed: false,
+        equal_chance: false,
     });
     ctx.db.game_creature_loot().insert(CreatureLoot {
         id: 0,
@@ -491,6 +493,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         min_count: 0,
         event_entry: 0,
         event_reversed: false,
+        equal_chance: false,
     });
 
     ctx.db

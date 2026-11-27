@@ -172,9 +172,11 @@ keeps each group's basis-point total equal to its intended share. An item row ke
 `mincountOrRef`, or a `maxcount` below it) are skipped.
 A creature or fishing loot row, or a reference those rows expand, whose condition is a
 `CONDITION_ACTIVE_GAME_EVENT` keeps its event and reversed flag in `event_entry` and
-`event_reversed`; a reference's condition passes to its items, and one whose item asks for another
-event fails the import. Other runtime conditions and quest-only skinning or fishing drops
-appear in the Compatibility Manifest. Item-container and disenchant tables have no current world
+`event_reversed`, and a group member with chance 0 keeps `equal_chance`; a reference's condition
+passes to its items, and one whose item asks for another event fails the import. Other loot tables
+keep no condition, so a reference that item loot reaches stays in the `loot.condition` count. Other
+runtime conditions and quest-only skinning or fishing drops appear in the Compatibility Manifest.
+Item-container and disenchant tables have no current world
 import path; the manifest counts them as unsupported.
 
 The gameobjects import selects template patches and spawn ranges, skips disabled spawns, and

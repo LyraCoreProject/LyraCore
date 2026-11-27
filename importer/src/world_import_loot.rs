@@ -18,6 +18,8 @@ pub(super) struct LootDrop {
     pub(super) group_id: u32,
     pub(super) quest_only: bool,
     pub(super) event: Option<EventCondition>,
+    /// A group member with vmangos chance 0, whose `chance_bp` is its share of the group's rest.
+    pub(super) equal_chance: bool,
 }
 
 impl LootDrop {
@@ -35,11 +37,23 @@ impl LootDrop {
         format!("({id},{key},{item},{chance_bp},{max_count},{group_id},{quest_only},{min_count})")
     }
 
-    /// `row` followed by `event_entry,event_reversed`, for creature loot.
-    pub(super) fn row_with_event(&self, id: u64, key: u64) -> String {
-        let (event, reversed) = self.event.unwrap_or_default();
-        let row = self.row(id, key);
-        format!("{},{event},{reversed})", &row[..row.len() - 1])
+    /// `row` followed by `event_entry,event_reversed,equal_chance`, for creature loot.
+    pub(super) fn creature_row(&self, id: u64, key: u64) -> String {
+        let Self {
+            item,
+            chance_bp,
+            min_count,
+            max_count,
+            group_id,
+            quest_only,
+            event,
+            equal_chance,
+        } = *self;
+        let (event_entry, event_reversed) = event.unwrap_or_default();
+        format!(
+            "({id},{key},{item},{chance_bp},{max_count},{group_id},{quest_only},{min_count},\
+             {event_entry},{event_reversed},{equal_chance})"
+        )
     }
 
     /// `(id,key,item_entry,chance_bp,count,group_id,min_count)` for skinning and fishing.
@@ -55,11 +69,23 @@ impl LootDrop {
         format!("({id},{key},{item},{chance_bp},{max_count},{group_id},{min_count})")
     }
 
-    /// `row_without_quest_only` followed by `event_entry,event_reversed`, for fishing loot.
-    pub(super) fn row_without_quest_only_with_event(&self, id: u64, key: u64) -> String {
-        let (event, reversed) = self.event.unwrap_or_default();
-        let row = self.row_without_quest_only(id, key);
-        format!("{},{event},{reversed})", &row[..row.len() - 1])
+    /// `row_without_quest_only` followed by `event_entry,event_reversed,equal_chance`, for fishing.
+    pub(super) fn fishing_row(&self, id: u64, key: u64) -> String {
+        let Self {
+            item,
+            chance_bp,
+            min_count,
+            max_count,
+            group_id,
+            event,
+            equal_chance,
+            ..
+        } = *self;
+        let (event_entry, event_reversed) = event.unwrap_or_default();
+        format!(
+            "({id},{key},{item},{chance_bp},{max_count},{group_id},{min_count},\
+             {event_entry},{event_reversed},{equal_chance})"
+        )
     }
 }
 
@@ -80,6 +106,7 @@ struct Member {
     max_count: u32,
     quest_only: bool,
     event: Option<EventCondition>,
+    equal_chance: bool,
 }
 
 struct Roll {
@@ -187,6 +214,7 @@ fn expand(
                 max_count: row.count,
                 quest_only: row.quest_only,
                 event: events.get(&row.condition).copied(),
+                equal_chance: false,
             };
             if row.group != 0 {
                 groups.entry(row.group).or_default().push(member);
@@ -210,6 +238,7 @@ fn expand(
         for member in &mut members {
             if member.chance == 0.0 {
                 member.chance = share;
+                member.equal_chance = true;
             }
             member.chance = member.chance.min(remaining);
             remaining -= member.chance;
@@ -283,6 +312,7 @@ pub(super) fn parse(
                     group_id: group,
                     quest_only: member.quest_only,
                     event: member.event,
+                    equal_chance: member.equal_chance,
                 });
             }
         }

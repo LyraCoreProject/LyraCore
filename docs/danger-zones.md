@@ -306,12 +306,13 @@ Events, otherwise the existing links still name the same spawns.
 
 ### Game event condition migration
 
-`game_creature_loot` and `game_fishing_loot` gain `event_entry` and `event_reversed`, end-appended
-with defaults 0 and false; shared import SQL defaults fill older inserts. Rust Packages that
-construct `CreatureLoot` must supply both fields. The stored EventAI `EventPredicate` gains
-`GameEventRunning` and `GameEventNotRunning` after its existing variants, so stored rules keep their
-discriminants; SpacetimeDB classifies the appended variants as a client-breaking change, which a
-normal publish acknowledges without deleting data (see
+`game_creature_loot` and `game_fishing_loot` gain `event_entry`, `event_reversed` and
+`equal_chance`, end-appended with defaults 0, false and false; shared import SQL defaults fill older
+inserts. Rust Packages that construct `CreatureLoot` must supply all three fields. A Package Delta
+fishing loot claim cannot name them, so a Package fishing row has no event and no equal chance. The
+stored EventAI `EventPredicate` gains `GameEventRunning` and `GameEventNotRunning` after its
+existing variants, so stored rules keep their discriminants; SpacetimeDB classifies the appended
+variants as a client-breaking change, which a normal publish acknowledges without deleting data (see
 [command lists in EventAI](data-ingestion.md#command-lists-in-eventai)). `game_gossip_condition`
 keeps its columns and gains kind 12 as data. No reducer argument changes.
 
