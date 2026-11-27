@@ -236,7 +236,8 @@ pub struct AcceptanceRequirements {
     /// Positive: only one quest of the group. Negative: a successor needs every quest of the group.
     pub exclusive_group: i32,
     pub next_in_chain: u32,
-    /// Quests whose `NextQuestInChain` names this quest; one in the log closes it.
+    /// Quests whose `NextQuestInChain` names this quest; one taken and neither failed nor rewarded
+    /// closes it.
     pub prev_chain: Vec<u32>,
     pub quest_flags: u32,
     /// The first one met decides; vmangos's order is unspecified.
