@@ -157,6 +157,16 @@ pub(crate) fn detach_item(
     if inst.soulbound {
         return Err(MailRefusal::ItemIsSoulbound);
     }
+    // vmangos HandleSendMailCallback refuses ITEM_FLAG_CONJURED beside Item::CanBeTraded.
+    if ctx
+        .db
+        .game_item_template()
+        .entry()
+        .find(inst.entry)
+        .is_some_and(|template| crate::items::is_conjured(template.item_flags))
+    {
+        return Err(lyracore_shared::mail::ITEM_IS_CONJURED.to_string().into());
+    }
     // vmangos HandleSendMail answers MAIL_ERR_INTERNAL_ERROR when Item::CanBeTraded refuses.
     if crate::loot::has_generated_loot(ctx, inst.guid) {
         return Err(lyracore_shared::mail::ITEM_HAS_LOOT.to_string().into());

@@ -82,6 +82,13 @@ pub(crate) fn is_quest_bonded(item_bonding: u8) -> bool {
     )
 }
 
+const ITEM_FLAG_CONJURED: u32 = 0x2;
+
+// vmangos refuses a conjured item at an Auction House and as a mail attachment.
+pub(crate) fn is_conjured(item_flags: u32) -> bool {
+    item_flags & ITEM_FLAG_CONJURED != 0
+}
+
 // vmangos Player::StoreItem binds BIND_WHEN_PICKED_UP and BIND_QUEST_ITEM when it stores them.
 pub(crate) fn binds_on_grant(item_bonding: u8) -> bool {
     matches!(

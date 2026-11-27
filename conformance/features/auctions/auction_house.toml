@@ -11,6 +11,7 @@ prerequisites = []
 tests = [
     { path = "module/tests/conformance/auction_offered_item.rs", function = "a_soulbound_quest_bonded_item_cannot_be_listed", rung = "durable_module" },
     { path = "module/tests/conformance/auction_offered_item.rs", function = "a_zero_item_guid_answers_the_bare_code_and_a_missing_item_the_inventory_pair", rung = "durable_module" },
+    { path = "module/tests/conformance/auction_offered_item.rs", function = "a_conjured_item_cannot_be_listed", rung = "durable_module" },
 ]
 
 [vmangos]

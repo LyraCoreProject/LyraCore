@@ -120,6 +120,41 @@ fn an_opened_item_cannot_be_mailed() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_conjured_item_cannot_be_mailed() {
+    let f = fixture("conjured-item-mail");
+    f.shard.assert_sql(&format!(
+        "UPDATE game_item_template SET item_flags = 2 WHERE entry = {FIXTURE_JERKY}"
+    ));
+    let item = f.grant_at(FIXTURE_JERKY, 1, 23);
+    f.shard.assert_call("debug_set_money", &["1", "1000"]);
+
+    refused(
+        &f.shard,
+        "realm_mail_send",
+        &[
+            ACTOR,
+            &f.other,
+            "\"Water\"",
+            "\"\"",
+            "0",
+            "0",
+            &item,
+            "true",
+        ],
+        lyracore_shared::mail::ITEM_IS_CONJURED,
+    );
+
+    assert_eq!(f.owner_of(&item), ["1"]);
+    assert!(f
+        .shard
+        .query_rows(&format!(
+            "SELECT id FROM game_mail WHERE item_entry = {FIXTURE_JERKY}"
+        ))
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_opened_item_can_be_neither_offered_nor_traded_at_accept() {
     let f = fixture("opened-item-trade");
     let opened = f.grant_at(FIXTURE_JERKY, 1, 23);

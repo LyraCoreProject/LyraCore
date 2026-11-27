@@ -305,6 +305,7 @@ struct ListingItem {
     owner_guid: u64,
     slot: u8,
     mailable: bool,
+    conjured: bool,
     offered: bool,
     has_generated_loot: bool,
     has_spent_charges: bool,
@@ -1072,6 +1073,7 @@ impl ListingSource for CtxSource<'_> {
             slot: item.slot,
             mailable: crate::items::validate_bag_dest_slot(self.ctx, item.owner_guid, item.slot)
                 .is_ok(),
+            conjured: crate::items::is_conjured(template.item_flags),
             offered: crate::trade::item_is_offered(self.ctx, item.owner_guid, item.guid),
             has_generated_loot: crate::loot::has_generated_loot(self.ctx, item.guid),
             has_spent_charges: crate::items::has_spent_charges(self.ctx, item.guid),
@@ -1670,6 +1672,7 @@ fn prepare_listing(
     if item.owner_guid != seller_guid
         || !crate::items::is_unequipped_carried_slot(item.slot)
         || !item.mailable
+        || item.conjured
         || item.snapshot.stack_count == 0
         || item.snapshot.soulbound
         || item.offered
