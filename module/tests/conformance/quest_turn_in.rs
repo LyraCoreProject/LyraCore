@@ -14,6 +14,7 @@ const QUEST: u32 = 5_091_200;
 const OBJECTIVE_QUEST: u32 = 5_091_201;
 const UNRELATED_QUEST: u32 = 5_091_202;
 const WORN_ITEM_QUEST: u32 = 5_091_203;
+const ABANDON_QUEST: u32 = 5_091_204;
 const WORN_ITEM_STAMINA: u32 = 20;
 const REQUIRED_COUNT: u32 = 5;
 const CHOICE_COUNT: u32 = 2;
@@ -837,13 +838,7 @@ fn max_health(shard: &Standalone, guid: u64) -> u32 {
 }
 
 fn blade_slots(shard: &Standalone, guid: u64) -> Vec<String> {
-    shard
-        .query_rows(&format!(
-            "SELECT slot FROM game_item_instance WHERE owner_guid = {guid} AND entry = {FIXTURE_BLADE}"
-        ))
-        .iter()
-        .map(|row| row["slot"].clone())
-        .collect()
+    item_slots(shard, guid, FIXTURE_BLADE)
 }
 
 fn stage_worn_item_quest(name: &str) -> (Standalone, ReducerConnection, u64, u64, u32) {
@@ -933,4 +928,86 @@ fn abandoning_a_quest_whose_source_item_is_worn_removes_the_item_and_its_stats()
 
     assert!(blade_slots(&shard, guid).is_empty());
     assert_eq!(max_health(&shard, guid), base_health);
+}
+
+fn item_slots(shard: &Standalone, guid: u64, entry: u32) -> Vec<String> {
+    let mut slots: Vec<String> = shard
+        .query_rows(&format!(
+            "SELECT slot FROM game_item_instance WHERE owner_guid = {guid} AND entry = {entry}"
+        ))
+        .iter()
+        .map(|row| row["slot"].clone())
+        .collect();
+    slots.sort();
+    slots
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn abandoning_a_quest_destroys_its_quest_bonded_required_items_in_bags_and_bank() {
+    let (shard, mut connection, guid, _giver) = stage("quest-abandon-bonded-items");
+    seed_quest(&shard, ABANDON_QUEST, FIXTURE_REINS, true);
+    shard.insert_row(
+        "game_quest_objective",
+        &[
+            ("id", &(u64::from(ABANDON_QUEST) + 1_000_000)),
+            ("quest_entry", &ABANDON_QUEST),
+            ("obj_index", &1),
+            ("kind", &1),
+            ("target_entry", &FIXTURE_JERKY),
+            ("required_count", &1),
+        ],
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET bonding = 4, max_stack = 1 WHERE entry = {FIXTURE_REINS}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET bonding = 0, max_stack = 1 WHERE entry = {FIXTURE_JERKY}"
+    ));
+    grant(&shard, guid, FIXTURE_REINS, 1, 23);
+    grant(&shard, guid, FIXTURE_REINS, 1, 24);
+    grant(&shard, guid, FIXTURE_REINS, 1, 39);
+    grant(&shard, guid, FIXTURE_JERKY, 1, 25);
+    grant(&shard, guid, FIXTURE_JERKY, 1, 40);
+    grant_quest(&shard, guid, ABANDON_QUEST);
+
+    request(&mut connection, CMSG_QUESTLOG_REMOVE_QUEST, vec![0]);
+
+    assert!(
+        item_slots(&shard, guid, FIXTURE_REINS).is_empty(),
+        "every quest-bonded copy is destroyed, bank included"
+    );
+    assert_eq!(item_slots(&shard, guid, FIXTURE_JERKY), ["25", "40"]);
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT * FROM game_character_quest WHERE quest_entry = {ABANDON_QUEST}"
+        ))
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn failing_a_repeatable_untimed_quest_destroys_its_quest_bonded_required_items() {
+    let (shard, _connection, guid, _giver) = stage("quest-fail-bonded-items");
+    seed_quest(&shard, ABANDON_QUEST, FIXTURE_REINS, true);
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET repeatable = true, limit_time = 0 WHERE entry = {ABANDON_QUEST}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET bonding = 4, max_stack = 1 WHERE entry = {FIXTURE_REINS}"
+    ));
+    grant(&shard, guid, FIXTURE_REINS, 1, 23);
+    grant_quest(&shard, guid, ABANDON_QUEST);
+
+    shard.assert_call(
+        "debug_expire_quest",
+        &[&guid.to_string(), &ABANDON_QUEST.to_string()],
+    );
+
+    assert!(item_slots(&shard, guid, FIXTURE_REINS).is_empty());
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT * FROM game_character_quest WHERE quest_entry = {ABANDON_QUEST}"
+        ))
+        .is_empty());
 }

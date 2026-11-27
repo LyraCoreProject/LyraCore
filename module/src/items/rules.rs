@@ -71,7 +71,15 @@ pub mod bonding {
     pub const BIND_ON_PICKUP: u8 = 1;
     pub const BIND_ON_EQUIP: u8 = 2;
     pub const BIND_QUEST_ITEM: u8 = 4;
-    // Bonding 5 (BIND_QUEST_ITEM1) is "not used in game" in vmangos and binds nothing.
+    // Bonding 5 is "not used in game" in vmangos and binds nothing, but quest abandon destroys it.
+    pub const BIND_QUEST_ITEM1: u8 = 5;
+}
+
+pub(crate) fn is_quest_bonded(item_bonding: u8) -> bool {
+    matches!(
+        item_bonding,
+        bonding::BIND_QUEST_ITEM | bonding::BIND_QUEST_ITEM1
+    )
 }
 
 // vmangos Player::StoreItem binds BIND_WHEN_PICKED_UP and BIND_QUEST_ITEM when it stores them.

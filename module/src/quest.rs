@@ -1888,6 +1888,28 @@ pub(crate) fn apply_abandon_quest(
     remove_from_log(ctx, cq)
 }
 
+// vmangos Player::RemoveQuestAtSlot (1.12.1): leaving the log destroys quest-bonded required items.
+fn destroy_quest_bonded_required_items(ctx: &ReducerContext, player_guid: u64, quest_entry: u32) {
+    let quest_bonded: Vec<u32> = ctx
+        .db
+        .game_quest_objective()
+        .by_quest()
+        .filter(&quest_entry)
+        .filter(|o| o.kind == objective_kind::COLLECT_ITEM)
+        .map(|o| o.target_entry)
+        .filter(|&entry| {
+            ctx.db
+                .game_item_template()
+                .entry()
+                .find(entry)
+                .is_some_and(|tmpl| crate::items::is_quest_bonded(tmpl.bonding))
+        })
+        .collect();
+    for entry in quest_bonded {
+        crate::items::destroy_all_copies(ctx, player_guid, entry);
+    }
+}
+
 fn remove_from_log(ctx: &ReducerContext, mut cq: CharacterQuest) -> Result<(), crate::Refusal> {
     let (player_guid, quest_entry) = (cq.character_guid, cq.quest_entry);
     if let Some(tmpl) = ctx.db.game_quest_template().entry().find(quest_entry) {
@@ -1897,6 +1919,7 @@ fn remove_from_log(ctx: &ReducerContext, mut cq: CharacterQuest) -> Result<(), c
             crate::items::remove_items(ctx, player_guid, tmpl.src_item, count)?;
         }
     }
+    destroy_quest_bonded_required_items(ctx, player_guid, quest_entry);
     if CharacterQuestRetake::clear(ctx, player_guid, quest_entry) {
         cq.rewarded = true;
         cq.failed = false;

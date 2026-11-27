@@ -12,7 +12,9 @@ use crate::game_spell_effect;
 use crate::game_start_item;
 use crate::game_world_entity;
 
-use super::inventory::{first_free_backpack_slot, first_free_bag_slot, is_carried_slot};
+use super::inventory::{
+    first_free_backpack_slot, first_free_bag_slot, is_bank_slot, is_carried_slot,
+};
 use super::rules::{
     binds_on_grant, equip_slot, meets_required_level, meets_required_reputation,
     resolve_equip_slot, template_stat, EquipStat,
@@ -415,6 +417,21 @@ pub(crate) fn remove_items(
         }
     }
     Ok(())
+}
+
+/// Includes worn and banked copies; a Trade Session offering one is reset.
+pub(crate) fn destroy_all_copies(ctx: &ReducerContext, owner_guid: u64, item_entry: u32) {
+    let copies: Vec<u64> = ctx
+        .db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(&owner_guid)
+        .filter(|i| i.entry == item_entry && (is_carried_slot(i.slot) || is_bank_slot(i.slot)))
+        .map(|i| i.guid)
+        .collect();
+    for guid in copies {
+        crate::ItemInstance::delete(ctx, guid);
+    }
 }
 
 fn use_spell_for(tmpl: &ItemTemplate) -> Option<u32> {
