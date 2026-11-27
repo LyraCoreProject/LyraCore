@@ -134,11 +134,7 @@ fn a_queued_cleave_strikes_its_victim_and_the_enemy_in_reach_but_not_one_beyond(
         &[&CHARACTER.to_string(), &victim.to_string()],
     );
 
-    let mut gos = Vec::new();
-    for _ in 0..CLEAVE_ATTEMPTS {
-        if hit(&shard, [victim, near]) == [true, true] {
-            break;
-        }
+    let mut cleave = || {
         shard.assert_call(
             "debug_force_cast_at",
             &[
@@ -148,14 +144,18 @@ fn a_queued_cleave_strikes_its_victim_and_the_enemy_in_reach_but_not_one_beyond(
             ],
         );
         shard.assert_call("debug_advance_roll_batch", &[SWING_TICKS]);
-        gos.extend(
-            session
-                .received(&wire.drain_packets())
-                .into_iter()
-                .filter(|packet| {
-                    packet.opcode == Some(SMSG_SPELL_GO) && go_spell(packet) == CLEAVE
-                }),
-        );
+        session
+            .received(&wire.drain_packets())
+            .into_iter()
+            .filter(|packet| packet.opcode == Some(SMSG_SPELL_GO) && go_spell(packet) == CLEAVE)
+            .collect::<Vec<_>>()
+    };
+    let mut gos = Vec::new();
+    for _ in 0..CLEAVE_ATTEMPTS {
+        if hit(&shard, [victim, near]) == [true, true] {
+            break;
+        }
+        gos.extend(cleave());
     }
 
     assert_eq!(
@@ -164,19 +164,39 @@ fn a_queued_cleave_strikes_its_victim_and_the_enemy_in_reach_but_not_one_beyond(
         "vmangos casts the queued Cleave at the victim; its target 6 chain gathers melee units \
          within 5 yd of it"
     );
-    let go = gos.first().expect("the swing sends the Cleave's GO");
+    let mut expected = vec![victim, near];
+    expected.sort_unstable();
+    assert_eq!(
+        go_unit_set(gos.first().expect("the swing sends the Cleave's GO")),
+        expected,
+        "vmangos WriteSpellGoTargets lists the victim and the chained wolf, hit or missed"
+    );
+
+    shard.assert_sql(&format!(
+        "UPDATE game_spell_effect SET chain_targets = 3 WHERE spell_id = {CLEAVE}"
+    ));
+    let go = cleave()
+        .into_iter()
+        .next()
+        .expect("the swing sends the Cleave's GO");
+    assert_eq!(
+        go_unit_set(&go),
+        expected,
+        "a third jump could reach the far wolf 3.5 yd from the near one, but vmangos gathers a \
+         melee chain only within 5 yd of the victim"
+    );
+    assert_eq!(hit(&shard, [far]), [false]);
+}
+
+/// Every unit an SMSG_SPELL_GO lists, hit or missed, in guid order.
+fn go_unit_set(go: &NativePacket) -> Vec<u64> {
     let (hits, misses) = go_units(go);
     let mut units: Vec<u64> = hits
         .into_iter()
         .chain(misses.into_iter().map(|(unit, _)| unit))
         .collect();
     units.sort_unstable();
-    let mut expected = vec![victim, near];
-    expected.sort_unstable();
-    assert_eq!(
-        units, expected,
-        "vmangos WriteSpellGoTargets lists the victim and the chained wolf, hit or missed"
-    );
+    units
 }
 
 fn open_shard(name: &str) -> Standalone {

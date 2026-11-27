@@ -641,7 +641,7 @@ evidence = "Source reading, not measured. At d9173eca, Spell.cpp SpellNotifierCr
 description = "A cast melee Spell that hits more than one unit, such as Swipe, Holy Cleave, Strong Cleave or Sundering Cleave, raises the caster's melee ability proc flag on every unit. A queued strike chain such as Cleave 845 marks its later units as secondary targets, which swap that flag for the harmful spell flag. vmangos raises it on the first unit only and raises a harmful spell proc flag on each later unit, so a caster's melee-only proc such as Sweeping Strikes fires once a cast there and can fire once a unit here."
 path = "module/src/spell/proc.rs"
 symbol = "hit_bits"
-evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::DoAllEffectOnTarget (L1172-L1185) replaces PROC_FLAG_DEAL_MELEE_ABILITY with PROC_FLAG_DEAL_HARMFUL_SPELL in procAttacker when m_targetNum is above 1; it leaves procVictim as it is. LyraCore hit_bits gives the caster PROC_FLAG_SUCCESSFUL_MELEE_SPELL_HIT from each hit alone; only module/src/combat/swing.rs land_chained_strike marks a hit with Hit::as_secondary_target, which fire_aura_procs reads, and the cast path in module/src/spell/cast/resolve.rs does not."
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::DoAllEffectOnTarget (L1172-L1185) replaces PROC_FLAG_DEAL_MELEE_ABILITY with PROC_FLAG_DEAL_HARMFUL_SPELL in procAttacker when m_targetNum is above 1; it leaves procVictim as it is. LyraCore hit_bits gives the caster PROC_FLAG_SUCCESSFUL_MELEE_SPELL_HIT from each hit alone; only module/src/combat/swing.rs MainHandHit::Chained marks a hit, through MainHandHit::hit calling Hit::as_secondary_target, which fire_aura_procs reads, and the cast path in module/src/spell/cast/resolve.rs does not."
 
 [[known_gaps]]
 description = "A single-target spell lands on a unit whose flags make it spawning, not attackable, not selectable, or immune to the caster's side (UNIT_FLAG_SPAWNING, NOT_ATTACKABLE_1, NON_ATTACKABLE_2, NOT_SELECTABLE, IMMUNE_TO_PLAYER, IMMUNE_TO_NPC), and the caster's own IMMUNE_TO_PLAYER or IMMUNE_TO_NPC flag does not stop it, where an area spell passes over such a unit. A Character's Fireball lands on a creature immune to players that its Arcane Explosion spares."
@@ -680,7 +680,7 @@ symbol = "party_area_targets"
 evidence = "Source reading, not measured. vmangos Spell.cpp Spell::CheckTarget at d9173eca."
 
 [[known_gaps]]
-description = "A chain jumps to a unit whose center is within 10 yd of the last unit. vmangos IsWithinDist adds both units' bounding radii to the 10 yd, so a chain between large units jumps farther."
+description = "A chain jumps to a unit whose center is within 10 yd of the last unit, and an enemy chain gathers units whose center is within its reach of the selected unit. vmangos IsWithinDist and IsWithinDistInMap add both units' bounding radii to each distance, so a chain between large units jumps and gathers farther. A queued Cleave on a large creature spares a unit just past 5 yd of its center that vmangos strikes."
 path = "module/src/spell/cast/targeting.rs"
 symbol = "chain_jumps"
-evidence = "Source reading, not measured. vmangos Object.cpp WorldObject::IsWithinDist and Spell.cpp SetTargetMap CHAIN_SPELL_JUMP_RADIUS at d9173eca."
+evidence = "Source reading, not measured. vmangos Object.cpp WorldObject::IsWithinDist and IsWithinDistInMap, GridNotifiers.h AnyAoEVisibleTargetUnitInObjectRangeCheck, and Spell.cpp SetTargetMap CHAIN_SPELL_JUMP_RADIUS at d9173eca. LyraCore select_targets filters the gathered units by center distance squared."
