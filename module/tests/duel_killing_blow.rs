@@ -539,6 +539,11 @@ fn a_duelist_entering_another_instance_flees_and_the_opponent_wins() {
 fn a_challenged_character_teleporting_away_interrupts_the_pending_challenge_without_a_winner() {
     let mut staged = stage_duel("duel-teleport-pending", 0);
     let rival = staged.rival.to_string();
+    staged.standalone.clear_schedule("game_duel_schedule");
+    assert!(
+        duel_exists(&staged.standalone),
+        "the challenge must be pending before the teleport"
+    );
 
     staged.standalone.assert_call(
         "debug_teleport",

@@ -682,7 +682,7 @@ fn started_at_micros(duel: &Duel) -> Option<i64> {
     (duel.state == state::ACTIVE).then_some(duel.countdown_deadline_micros)
 }
 
-/// vmangos `Player::TeleportTo`: leaving the Duel's map or Instance after the accept loses it.
+/// vmangos `Player::TeleportTo` and `SwitchInstance`: leaving the Duel's map or Instance flees it.
 pub(crate) fn flee_by_teleport(ctx: &ReducerContext, character_guid: u64) {
     let Some(duel) = duel_involving(ctx, character_guid) else {
         return;
