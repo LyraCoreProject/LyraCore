@@ -59,13 +59,7 @@ pub(super) fn quest_detail_view(
         money_reward: lyracore_shared::quest::offered_money(tmpl.reward_money, tmpl.required_money),
         next_quest_id: tmpl.next_quest_id,
         max_level_money_reward: tmpl.reward_money_max_level,
-        flags: ctx
-            .db
-            .game_quest_flags()
-            .quest_entry()
-            .find(quest_id)
-            .map(|quest| quest.flags)
-            .unwrap_or(0),
+        flags: crate::quest::quest_flags(ctx, quest_id),
         reward_spell: tmpl.reward_spell,
         src_item: tmpl.src_item,
         rewards: quest_rewards(ctx, quest_id),

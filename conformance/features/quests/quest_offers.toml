@@ -14,6 +14,10 @@ tests = [
     { path = "module/tests/conformance/quest_availability.rs", function = "a_quest_five_levels_below_the_character_shows_no_yellow_mark", rung = "durable_module" },
     { path = "module/tests/conformance/quest_availability.rs", function = "a_hostile_quest_giver_shows_no_mark", rung = "durable_module" },
     { path = "module/tests/conformance/quest_availability.rs", function = "a_reputation_giver_hides_its_mark_only_from_a_hostile_rank", rung = "durable_module" },
+    { path = "module/tests/conformance/quest_availability.rs", function = "a_quest_of_the_chain_in_the_log_closes_the_quests_after_it", rung = "durable_module" },
+    { path = "module/tests/conformance/quest_availability.rs", function = "a_rewarded_repeatable_quest_shows_the_blue_mark", rung = "durable_module" },
+    { path = "crates/lyracore-shared/src/quest.rs", function = "a_rewarded_repeatable_quest_shows_the_repeat_sighting_from_its_minimum_level", rung = "unit" },
+    { path = "crates/lyracore-protocol/src/codec/quest.rs", function = "each_start_sighting_has_its_own_mark", rung = "codec" },
     { path = "crates/lyracore-protocol/src/codec/quest.rs", function = "the_highest_numeric_status_wins", rung = "codec" },
 ]
 
@@ -32,13 +36,7 @@ reason = "The mark follows the LyraCore failed-quest retry, which the maintainer
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/QuestHandler.cpp"
 
 [[known_gaps]]
-description = "A rewarded repeatable quest shows the yellow Available mark. The Reference Server shows DIALOG_STATUS_REWARD_REP, the blue mark."
-path = "crates/lyracore-protocol/src/codec/quest.rs"
-symbol = "eval_status"
-evidence = "vmangos d9173eca QuestHandler.cpp WorldSession::GetDialogStatus."
-
-[[known_gaps]]
-description = "The giver mark and quest list ignore the previous-chain check (SatisfyQuestPrevChain) and breadcrumbs."
+description = "The giver mark and quest list ignore breadcrumbs."
 path = "crates/lyracore-shared/src/quest.rs"
 symbol = "start_sighting"
 evidence = "vmangos d9173eca Player.cpp Player::CanSeeStartQuest; Compatibility Manifest quests.breadcrumb."
