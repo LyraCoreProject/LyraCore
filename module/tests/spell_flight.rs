@@ -63,12 +63,8 @@ fn a_target_that_dies_while_the_spell_travels_gets_no_aura() {
 
     cast(&standalone, wolf);
     standalone.assert_call(
-        "debug_apply_damage",
-        &[
-            &wolf.to_string(),
-            &WOLF_HEALTH.to_string(),
-            &PLAYER.to_string(),
-        ],
+        "debug_kill_creature",
+        &[&PLAYER.to_string(), &wolf.to_string()],
     );
     assert_eq!(
         standalone.query_rows(&format!(
