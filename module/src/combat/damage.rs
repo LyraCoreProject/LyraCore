@@ -253,7 +253,7 @@ pub(crate) fn is_lethal(health: u32, dmg: u32) -> bool {
     dmg > 0 && health <= dmg
 }
 
-/// The active Duel that a hit ends, with its winner.
+/// The Duel that a hit ends, with its winner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DuelFinish {
     pub(crate) duel_id: u64,
@@ -263,7 +263,7 @@ pub(crate) struct DuelFinish {
 }
 
 /// vmangos `Unit::DealDamage` ends the Duel of a duelist that any unit, or none, hits to 1 health
-/// or less. Only the opponent, or a unit it owns, is denied the kill.
+/// or less, from the challenge on. Only the opponent, or a unit it owns, is denied the kill.
 pub(crate) fn duel_finished_by(
     ctx: &ReducerContext,
     attacker: Option<&WorldEntity>,
@@ -272,7 +272,7 @@ pub(crate) fn duel_finished_by(
     if !target.is_player() {
         return None;
     }
-    let duel = crate::duel::active_duel_of(ctx, target.guid)?;
+    let duel = crate::duel::duel_involving(ctx, target.guid)?;
     let winner_guid = crate::duel::opponent_in(&duel, target.guid);
     let spares_loser = attacker
         .and_then(|attacker| crate::pvp::affecting_character(ctx, attacker))
@@ -468,7 +468,7 @@ pub(crate) fn apply_hit(
             crate::spell::pushback_on_damage(ctx, target_guid, attacker_guid);
         }
         super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), target_guid, target_is_player);
-        crate::duel::complete_duel(
+        crate::duel::end_duel_fight(
             ctx,
             finish.duel_id,
             crate::duel::completion_kind::WON,
@@ -732,7 +732,7 @@ pub(crate) fn deal_environmental_damage(
     crate::spell::break_auras_on_damage(ctx, victim_guid, 0, false);
     crate::spell::pushback_on_damage(ctx, victim_guid, victim_guid);
     if let Some(finish) = finish {
-        crate::duel::complete_duel(
+        crate::duel::end_duel_fight(
             ctx,
             finish.duel_id,
             crate::duel::completion_kind::WON,

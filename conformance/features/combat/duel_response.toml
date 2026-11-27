@@ -9,7 +9,31 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
+
+[[tests]]
+path = "module/src/duel.rs"
+function = "pending_cancel_interrupts_while_active_cancel_yields_the_win_to_the_opponent"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/duel_killing_blow.rs"
+function = "a_duel_ending_swing_is_no_killing_blow_and_wins_the_duel"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/duel_killing_blow.rs"
+function = "a_creature_hit_that_leaves_a_duelist_at_one_health_ends_the_duel_for_its_opponent"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/duel_killing_blow.rs"
+function = "a_creature_hit_during_the_countdown_ends_the_duel_for_the_other_duelist"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/duel_killing_blow.rs"
+function = "a_creature_fighting_the_winner_stops_its_attack_when_the_duel_ends"
+rung = "durable_module"
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -18,3 +42,15 @@ symbol = "WorldSession::HandleDuelAcceptedOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "A Duel ends without removing the negative Auras each duelist cast on the other after the countdown. vmangos Player::DuelComplete removes them from both duelists."
+path = "module/src/duel.rs"
+symbol = "complete_duel"
+evidence = "Source reading, not measured. https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp#L6726-L6821"
+
+[[known_gaps]]
+description = "A duelist who teleports to another map or Instance interrupts the Duel, with no SMSG_DUEL_WINNER. vmangos Player::TeleportTo completes it as DUEL_FLED, so the opponent wins."
+path = "module/src/duel.rs"
+symbol = "interrupt_duel_for"
+evidence = "Source reading, not measured. https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp#L1870-L1884"

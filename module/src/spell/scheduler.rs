@@ -570,7 +570,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     flush_pool(ctx, &pending_power, |e, v| e.power = v);
     flush_pool(ctx, &pending_reserve_power, |e, v| e.reserve_power = v);
     for (duel_id, winner_guid, loser_guid) in duel_finishes {
-        crate::duel::complete_duel(
+        crate::duel::end_duel_fight(
             ctx,
             duel_id,
             crate::duel::completion_kind::WON,

@@ -352,13 +352,18 @@ fn kill_character(
     durability_loss: DurabilityLoss,
 ) -> bool {
     let entities = ctx.db.game_world_entity();
+    if !entities
+        .guid()
+        .find(victim_guid)
+        .is_some_and(|victim| victim.is_player() && !victim.dead)
+    {
+        return false;
+    }
+    crate::duel::interrupt_duel_on_death(ctx, victim_guid);
+    // Ending the Duel stops the victim's combat, which rewrites its entity row.
     let Some(mut victim) = entities.guid().find(victim_guid) else {
         return false;
     };
-    if !victim.is_player() || victim.dead {
-        return false;
-    }
-    crate::duel::interrupt_duel_for(ctx, victim_guid);
     victim.health = 0;
     victim.dead = true;
     crate::drunk::sober_on_death(&mut victim);
