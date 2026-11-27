@@ -625,7 +625,7 @@ fn relocate(
         .is_some_and(|character| !character.online);
     let changes_partition = e.map_id != map_id || e.instance_id != instance_id;
     if changes_partition {
-        crate::duel::interrupt_duel_for(ctx, player_guid);
+        crate::duel::flee_by_teleport(ctx, player_guid);
         crate::trade::cancel_trade_for(ctx, player_guid);
         crate::summoning_ritual::character_left(ctx, player_guid);
     }

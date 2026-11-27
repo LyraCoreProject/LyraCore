@@ -7,7 +7,11 @@ replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
-deliberate_deviations = []
+deliberate_deviations = [
+  { id = "unstarted_duel_removes_no_auras", result = "A Duel that ends before its countdown finishes removes no Aura. vmangos DuelComplete compares each Aura's apply time with a start time that is still 0, so it removes every negative Aura the opponent cast, including ones that predate the challenge.", reason = "Auras cast before the challenge are not part of the Duel, and no Aura can be cast on the opponent between the challenge and the start.", source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp#L6726-L6821" },
+  { id = "pending_challenge_teleport_has_no_winner", result = "A Character that teleports to another map or Instance while its challenge is still pending interrupts it with no SMSG_DUEL_WINNER. vmangos completes it as DUEL_FLED and names the other Character the winner.", reason = "A challenge nobody accepted has no winner to announce.", source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp#L1870-L1884" },
+  { id = "duel_end_removes_only_the_opponents_auras", result = "A Duel's end removes only the opponent's Auras of each negative spell. vmangos RemoveAurasDueToSpell removes every Aura of that spell id, including a third party's identical debuff.", reason = "A third party's debuff is not part of the Duel and stays on the duelist.", source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp#L6726-L6821" },
+]
 prerequisites = []
 
 [[tests]]
@@ -35,6 +39,31 @@ path = "module/tests/duel_killing_blow.rs"
 function = "a_creature_fighting_the_winner_stops_its_attack_when_the_duel_ends"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/duel_killing_blow.rs"
+function = "a_duel_ending_removes_the_negative_auras_each_duelist_cast_on_the_other_after_the_countdown"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/duel_killing_blow.rs"
+function = "a_duel_ending_before_its_start_removes_no_aura"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/duel_killing_blow.rs"
+function = "a_duelist_teleporting_to_another_map_flees_and_the_opponent_wins"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/duel_killing_blow.rs"
+function = "a_duelist_entering_another_instance_flees_and_the_opponent_wins"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/duel_killing_blow.rs"
+function = "a_challenged_character_teleporting_away_interrupts_the_pending_challenge_without_a_winner"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/DuelHandler.cpp"
@@ -42,15 +71,3 @@ symbol = "WorldSession::HandleDuelAcceptedOpcode"
 
 [real_client]
 status = "unverified"
-
-[[known_gaps]]
-description = "A Duel ends without removing the negative Auras each duelist cast on the other after the countdown. vmangos Player::DuelComplete removes them from both duelists."
-path = "module/src/duel.rs"
-symbol = "complete_duel"
-evidence = "Source reading, not measured. https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp#L6726-L6821"
-
-[[known_gaps]]
-description = "A duelist who teleports to another map or Instance interrupts the Duel, with no SMSG_DUEL_WINNER. vmangos Player::TeleportTo completes it as DUEL_FLED, so the opponent wins."
-path = "module/src/duel.rs"
-symbol = "interrupt_duel_for"
-evidence = "Source reading, not measured. https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp#L1870-L1884"
