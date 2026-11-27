@@ -1801,6 +1801,28 @@ which is how Fear Ward is used up: it fires on any spell whose header mechanic i
 the result. A cast an aura started runs no such pass, a harmful item cast runs it, and a helpful spell raises no
 proc event. A finisher refused whole keeps its combo points.
 
+### Immunity purge
+
+`game_spell.attributes_ex` is the verbatim Spell.dbc AttributesEx. A Spell with
+`SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT` (0x8000) removes, when one of its immunity effects lands,
+the Auras of its unit that the effect makes the unit immune to, as vmangos `Aura::HandleModMechanicImmunity`
+and its siblings do. Every Aura of a matched Spell goes, whatever its effect. The immunity's own Spell
+stays. Every Aura that lands runs the check, including a refresh, an area Aura copy and an equipped
+item's Aura.
+
+| Immunity effect | Removes Auras whose |
+| --- | --- |
+| Mechanic (77) or mechanic mask (147) | Spell `mechanic` or effect `effect_mechanic` is named; a Spell with `SPELL_ATTR_NO_IMMUNITIES` stays |
+| School (39), on a helpful Spell only | Spell is harmful and its school is in the mask; a Spell with `SPELL_ATTR_NO_IMMUNITIES` stays |
+| State (38) | source aura id is the type; only `A_CONTROL`, `A_FLAG` and `A_IMMUNITY` Auras keep it in `eff_p1` |
+| Dispel (41) | Spell `dispel_type` is the type, or Magic, Curse, Disease or Poison for type 7 |
+
+State and dispel purges spare no `SPELL_ATTR_NO_IMMUNITIES` Spell, as in vmangos.
+
+A stun, fear or polymorph refuses every cast, except a Spell with the attribute whose mechanic, school
+or dispel immunity covers each Aura that causes the state, as vmangos `Spell::CheckCasterAuras` does.
+So a feared Undead can cast Will of the Forsaken, and a stunned one cannot.
+
 ### Follow-up casts
 
 `game_spell_follow_up` names, for a spell, the spell its caster casts as a Follow-up Cast at each

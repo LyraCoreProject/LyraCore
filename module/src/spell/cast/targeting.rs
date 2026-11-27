@@ -1161,6 +1161,7 @@ pub(crate) fn place_aura(
         }
         .insert_from_item(ctx, source_item);
     }
+    crate::spell::immunity_purge::purge_on_land(ctx, hdr, e, target_guid);
     if e.kind == lyracore_shared::spell::taxonomy::A_SHAPESHIFT {
         let form_id = e.p0.max(0) as u32;
         if refreshing {

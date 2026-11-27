@@ -355,6 +355,7 @@ impl Table {
                     | "prevention_type"
                     | "max_affected_targets"
                     | "speed_yps"
+                    | "attributes_ex"
             ) | (Self::SpellEffect, "bonus_coefficient" | "equip_supported")
                 | (
                     Self::Form,
@@ -472,6 +473,7 @@ const SPELL_COLUMNS: &[Column] = &[
     column("prevention_type", FieldType::U8),
     column("max_affected_targets", FieldType::U32),
     column("speed_yps", FieldType::F32),
+    column("attributes_ex", FieldType::U32),
 ];
 
 const SPELL_EFFECT_COLUMNS: &[Column] = &[

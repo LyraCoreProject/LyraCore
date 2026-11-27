@@ -30,6 +30,7 @@ game_quest_template reward_spell 0
 game_quest_template reward_spell_cast 0
 game_spell form_mask 0
 game_spell form_exclude 0
+game_spell attributes_ex 0
 game_spell attributes_ex_2 0
 game_spell visual_id 0
 game_spell duration_index 0
