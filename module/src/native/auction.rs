@@ -250,7 +250,7 @@ pub(super) fn result_two(refusal: AuctionRefusal) -> ResultTwo {
     match refusal {
         AuctionRefusal::ItemNotFound => ResultTwo::ErrItemNotFound,
         // vmangos AuctionHouseHandler answers AUCTION_ERR_INVENTORY with EQUIP_ERR_ITEM_NOT_FOUND.
-        AuctionRefusal::ItemNotTradeable => ResultTwo::ErrInventory {
+        AuctionRefusal::ItemNotListable => ResultTwo::ErrInventory {
             inventory_result2: InventoryResult::ItemNotFound,
         },
         AuctionRefusal::NotEnoughMoney => ResultTwo::ErrNotEnoughMoney,
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn a_listing_vmangos_refuses_for_the_item_answers_the_inventory_pair() {
         assert_eq!(
-            result_two(AuctionRefusal::ItemNotTradeable),
+            result_two(AuctionRefusal::ItemNotListable),
             ResultTwo::ErrInventory {
                 inventory_result2: InventoryResult::ItemNotFound
             }
@@ -512,7 +512,7 @@ mod tests {
         assert_eq!(
             result_two(AuctionRefusal::ItemNotFound),
             ResultTwo::ErrItemNotFound,
-            "only a zero item guid answers the bare code"
+            "a zero item guid, or an Auction or Character that is not there, answers the bare code"
         );
     }
 }

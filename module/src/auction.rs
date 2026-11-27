@@ -1663,21 +1663,21 @@ fn prepare_listing(
     terms: ListingTerms,
     house: AuctionHousePolicy,
 ) -> Result<u32, AuctionRefusal> {
-    // vmangos answers every one of these with AUCTION_ERR_INVENTORY and EQUIP_ERR_ITEM_NOT_FOUND.
+    // Each item refusal answers the vmangos inventory pair; see `AuctionRefusal::ItemNotListable`.
     let Some(item) = item else {
-        return Err(AuctionRefusal::ItemNotTradeable);
+        return Err(AuctionRefusal::ItemNotListable);
     };
     if item.owner_guid != seller_guid
         || !crate::items::is_unequipped_carried_slot(item.slot)
         || !item.mailable
         || item.snapshot.stack_count == 0
         || item.snapshot.soulbound
-        // A Listing cannot carry spent charges; see the item_use Feature Ledger deviation.
         || item.offered
         || item.has_generated_loot
+        // A Listing cannot carry spent charges; see the item_use Feature Ledger deviation.
         || item.has_spent_charges
     {
-        return Err(AuctionRefusal::ItemNotTradeable);
+        return Err(AuctionRefusal::ItemNotListable);
     }
     if terms.start_bid == 0 || (terms.buyout != 0 && terms.buyout < terms.start_bid) {
         return Err(AuctionRefusal::InvalidTerms);

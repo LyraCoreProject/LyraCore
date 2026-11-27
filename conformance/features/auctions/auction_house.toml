@@ -7,7 +7,6 @@ replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
-deliberate_deviations = []
 prerequisites = []
 tests = [
     { path = "module/tests/conformance/auction_offered_item.rs", function = "a_soulbound_quest_bonded_item_cannot_be_listed", rung = "durable_module" },
@@ -21,3 +20,15 @@ symbol = "WorldSession::HandleAuctionHelloOpcode"
 
 [real_client]
 status = "unverified"
+
+[[deliberate_deviations]]
+id = "idempotent_relisting"
+result = "A Listing with the same item, house, bids and duration as a Listing that is still active answers OK with that Auction's id and creates nothing. The Reference Server answers AUCTION_ERR_INVENTORY with EQUIP_ERR_ITEM_NOT_FOUND, because the item already stands in an Auction. When the Auction is gone, a repeat answers the same pair."
+reason = "A retried Listing request must not list the item twice, and the retry reads the first OK."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/AuctionHouseHandler.cpp"
+
+[[deliberate_deviations]]
+id = "equipped_item_listing"
+result = "A Listing of an equipped item answers AUCTION_ERR_INVENTORY with EQUIP_ERR_ITEM_NOT_FOUND. The Reference Server refuses only a bank position and lets an equipped item list when Item::CanBeTraded accepts it."
+reason = "LyraCore lists only from an unequipped carried slot and does not run the unequip rules for a Listing."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/AuctionHouseHandler.cpp"

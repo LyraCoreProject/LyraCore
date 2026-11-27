@@ -1,6 +1,6 @@
 use lyracore_protocol::messages::vanilla::{
     opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-    SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction as Action,
+    InventoryResult, SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction as Action,
     SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult as BidResult,
     SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo as ResultTwo,
 };
@@ -542,7 +542,9 @@ pub fn idc_realm_auction_request(
                     wire::command(
                         0,
                         Action::Started {
-                            result2: ResultTwo::ErrItemNotFound,
+                            result2: ResultTwo::ErrInventory {
+                                inventory_result2: InventoryResult::ItemNotFound,
+                            },
                         },
                     ),
                     "Listing is no longer active",
