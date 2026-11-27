@@ -17,10 +17,13 @@ const LEGACY_NOTIFICATIONS: &[&str] = &[
 ];
 
 // Columns END-appended after the upgrade baseline; every other published column must stay intact.
-const APPENDED_NOTIFICATION_COLUMNS: &[(&str, &[&str])] = &[(
-    "game_spell_cast_event",
-    &["blocked_amount", "strike_swing_report"],
-)];
+const APPENDED_NOTIFICATION_COLUMNS: &[(&str, &[&str])] = &[
+    (
+        "game_spell_cast_event",
+        &["blocked_amount", "strike_swing_report"],
+    ),
+    ("game_spell_impact_event", &["blocked"]),
+];
 
 fn assert_saved_taxi_flight_upgrade(baseline: &[u8]) {
     let mut shard = Standalone::start("taxi-resume-schema-upgrade");

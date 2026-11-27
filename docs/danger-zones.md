@@ -489,6 +489,17 @@ whose `damage_class` is 3 (ranged) rolls a partial block for an Auto Shot or a c
 Strike, and not one with `SPELL_ATTR_NO_ACTIVE_DEFENSE` or `SPELL_ATTR_EX3_COMPLETELY_BLOCKED`, so a
 ranged shot with no imported Spell row never blocks.
 
+### Spell impact block migration
+
+`game_pending_spell_impact`, `game_spell_impact_event` and `game_spell_impact_event_live` gain
+`blocked`, end-appended with default 0. A travelling spell launched before the update lands with 0,
+which means no partial block. The pending table is transient and nothing reads stored event rows,
+so no repair or reimport is needed. Only a Spell row whose `damage_class` is 2 (melee) or 3
+(ranged) rolls the partial block of an `E_DAMAGE` or `E_FINISHER_DAMAGE` effect, and not one with
+`SPELL_ATTR_NO_ACTIVE_DEFENSE` or `SPELL_ATTR_EX3_COMPLETELY_BLOCKED`. The Native Host's delivery
+layouts do not change. An SDK client that subscribes to `game_spell_impact_event_live` needs
+regenerated bindings to decode the new column.
+
 ### Summoning ritual migration
 
 The imported `game_gameobject_ritual` table and the private `game_summoning_ritual`,

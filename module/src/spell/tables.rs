@@ -1370,10 +1370,12 @@ pub struct PendingSpellImpact {
     pub school_index: u8,
     pub is_crit: bool,
     pub resisted: u32,
-    pub after_resist: i32, // Rolled at cast time, after crit and resist but before absorb.
+    pub after_resist: i32, // Rolled at cast time, after crit, block and resist but before absorb.
     // Preserve triggered origin across travel time so a proc missile cannot trigger more procs.
     #[default(false)]
     pub triggered: bool,
+    #[default(0u32)]
+    pub blocked: u32,
 }
 
 #[table(
@@ -1403,6 +1405,8 @@ pub struct SpellImpactEvent {
     pub grid_x: i32,
     #[default(0i32)]
     pub grid_y: i32,
+    #[default(0u32)]
+    pub blocked: u32,
 }
 
 #[table(accessor = game_resurrect_request, public)]

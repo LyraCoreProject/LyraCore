@@ -916,9 +916,9 @@ fn rolls_spell_block(
         && crate::conformance_rolls::draw(ctx, stream) % 10_000 < partial_block_bp
 }
 
-/// A cast Weapon Strike's partial block: its damage after the block and the amount blocked.
-/// The draw comes from the Caster stream, after the cast's hit roll and the effect's points draw.
-pub(crate) fn block_cast_strike(
+/// A cast Spell's partial block: its damage after the block and the amount blocked.
+/// The draw comes from the Caster stream, after the cast's hit roll and the effect's other draws.
+pub(crate) fn block_cast_spell(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     target: &WorldEntity,
@@ -926,6 +926,12 @@ pub(crate) fn block_cast_strike(
     attack_type: AttackType,
     rolled: u32,
 ) -> (u32, u32) {
+    if !matches!(
+        spell.damage_class,
+        crate::spell::proc::DAMAGE_CLASS_MELEE | crate::spell::proc::DAMAGE_CLASS_RANGED
+    ) {
+        return (rolled, 0);
+    }
     let table = attack_table_for(
         ctx,
         attacker,
@@ -939,6 +945,35 @@ pub(crate) fn block_cast_strike(
     }
     let blocked = defender_block_value(ctx, target).min(rolled);
     (rolled - blocked, blocked)
+}
+
+/// Deals a cast Spell's damage after its partial block; returns the damage dealt and absorbed.
+/// A block arms the target's Revenge, and a full block still fires an untriggered hit's procs.
+pub(crate) fn deal_blocked_spell_damage(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    target_guid: u64,
+    damage: i32,
+    blocked: u32,
+    hit: Hit,
+) -> (u32, u32) {
+    let hit = hit.with_block(blocked);
+    let dealt = deal_damage(ctx, caster_guid, target_guid, damage, hit);
+    if blocked == 0 {
+        return dealt;
+    }
+    arm_react(ctx, target_guid, ReactKind::Revenge);
+    if damage <= 0 && hit.source != HitSource::Triggered {
+        crate::spell::proc::run_unlanded_proc_pass(
+            ctx,
+            caster_guid,
+            target_guid,
+            &hit,
+            AttackOutcome::Normal,
+            (0, 0),
+        );
+    }
+    dealt
 }
 
 pub(crate) fn roll_ranged_swing(

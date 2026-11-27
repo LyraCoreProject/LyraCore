@@ -20,42 +20,65 @@ pub(crate) fn bonus_magnitude(points: i32, power: i32, coefficient: f32, flags: 
     }
 }
 
+/// A direct spell hit after armor, the partial block and the resist, before absorb.
+pub(crate) struct SpellMitigation {
+    pub(crate) after_resist: i32,
+    pub(crate) resisted: u32,
+    pub(crate) blocked: u32,
+}
+
+// vmangos CalculateSpellDamage applies armor; CalculateAbsorbResistBlock blocks before the resist.
 pub(crate) fn mitigate_spell(
     ctx: &ReducerContext,
     hdr: &Spell,
     caster: u64,
     target: u64,
     mut damage: f32,
-) -> (i32, u32) {
+) -> SpellMitigation {
+    let entities = ctx.db.game_world_entity();
+    let units = entities
+        .guid()
+        .find(caster)
+        .zip(entities.guid().find(target));
     if hdr.school_mask & RESIST_ARMOR != 0
         && hdr.custom_flags & custom::IGNORE_ARMOR == 0
         && damage > 0.0
     {
-        if let (Some(caster), Some(target)) = (
-            ctx.db.game_world_entity().guid().find(caster),
-            ctx.db.game_world_entity().guid().find(target),
-        ) {
+        if let Some((caster, target)) = &units {
             let percent = crate::combat::armor_mitigation_pct(
-                crate::modifiers::effective_armor(ctx, &target),
+                crate::modifiers::effective_armor(ctx, target),
                 caster.level,
             );
             // vmangos CalcArmorReducedDamage truncates before and after armor and floors at 1.
             damage = crate::combat::armor_mitigated((damage as u32).max(1), percent) as f32;
         }
     }
-    let before_resist = bonuses::round_damage(ctx, target, damage);
+    let before_block = bonuses::round_damage(ctx, target, damage).max(0) as u32;
+    // vmangos rolls every spell's partial block with the main-hand weapon skill (BASE_ATTACK).
+    let blocks = units.filter(|_| caster != target);
+    let (before_resist, blocked) = blocks.map_or((before_block, 0), |(caster, target)| {
+        crate::combat::block_cast_spell(
+            ctx,
+            &caster,
+            &target,
+            hdr,
+            crate::combat::AttackType::Melee,
+            before_block,
+        )
+    });
     let after_resist = apply_resistance(
         ctx,
         target,
         caster,
         hdr.school_mask,
-        before_resist,
+        before_resist as i32,
         hdr.spell_id,
     );
-    (
+    SpellMitigation {
         after_resist,
-        before_resist.saturating_sub(after_resist).max(0) as u32,
-    )
+        resisted: (before_resist as i32).saturating_sub(after_resist).max(0) as u32,
+        blocked,
+    }
 }
 
 pub(crate) fn aura_casters_coexist(hdr: &Spell, kind: u8) -> bool {
