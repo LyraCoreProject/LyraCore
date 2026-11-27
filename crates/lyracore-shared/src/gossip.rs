@@ -13,6 +13,8 @@ pub enum ConditionKind {
     RaceClass,
     Level,
     QuestAbsent,
+    /// vmangos `CONDITION_ACTIVE_GAME_EVENT`: value1 is the Game Event.
+    ActiveGameEvent,
     Unsupported(i32),
 }
 
@@ -26,6 +28,7 @@ impl ConditionKind {
             6 => Self::Team,
             8 => Self::QuestRewarded,
             9 => Self::QuestTaken,
+            12 => Self::ActiveGameEvent,
             14 => Self::RaceClass,
             15 => Self::Level,
             22 => Self::QuestAbsent,
@@ -42,6 +45,7 @@ impl ConditionKind {
             Self::Team => 6,
             Self::QuestRewarded => 8,
             Self::QuestTaken => 9,
+            Self::ActiveGameEvent => 12,
             Self::RaceClass => 14,
             Self::Level => 15,
             Self::QuestAbsent => 22,
@@ -94,6 +98,7 @@ pub fn evaluate_option(
     value2: u32,
     character: CharacterFacts,
     quest: impl Fn(u32) -> QuestState,
+    event_running: impl Fn(u32) -> bool,
     condition: impl Fn(u32) -> Option<Condition>,
 ) -> Result<bool, Unavailable> {
     let condition_kind = match kind {
@@ -106,11 +111,11 @@ pub fn evaluate_option(
         encoded::RACE_CLASS => ConditionKind::RaceClass,
         encoded::QUEST_NONE => ConditionKind::QuestAbsent,
         encoded::REFERENCE => {
-            return evaluate_reference(value1, character, quest, condition);
+            return evaluate_reference(value1, character, quest, event_running, condition);
         }
         _ => return Err(Unavailable::Unsupported(kind as i32)),
     };
-    Evaluation::new(character, &quest, &condition).row(Condition {
+    Evaluation::new(character, &quest, &event_running, &condition).row(Condition {
         kind: condition_kind,
         values: [value1, value2, 0, 0],
         flags: 0,
@@ -122,28 +127,37 @@ pub fn evaluate_reference(
     id: u32,
     character: CharacterFacts,
     quest: impl Fn(u32) -> QuestState,
+    event_running: impl Fn(u32) -> bool,
     condition: impl Fn(u32) -> Option<Condition>,
 ) -> Result<bool, Unavailable> {
-    Evaluation::new(character, &quest, &condition).reference(id)
+    Evaluation::new(character, &quest, &event_running, &condition).reference(id)
 }
 
-struct Evaluation<'a, Q, C> {
+struct Evaluation<'a, Q, E, C> {
     character: CharacterFacts,
     quest: &'a Q,
+    event_running: &'a E,
     condition: &'a C,
     path: Vec<u32>,
     remaining: usize,
 }
 
-impl<'a, Q, C> Evaluation<'a, Q, C>
+impl<'a, Q, E, C> Evaluation<'a, Q, E, C>
 where
     Q: Fn(u32) -> QuestState,
+    E: Fn(u32) -> bool,
     C: Fn(u32) -> Option<Condition>,
 {
-    fn new(character: CharacterFacts, quest: &'a Q, condition: &'a C) -> Self {
+    fn new(
+        character: CharacterFacts,
+        quest: &'a Q,
+        event_running: &'a E,
+        condition: &'a C,
+    ) -> Self {
         Self {
             character,
             quest,
+            event_running,
             condition,
             path: Vec::new(),
             remaining: 256,
@@ -240,6 +254,7 @@ where
                     QuestState::Absent | QuestState::Failed
                 )
             }
+            ConditionKind::ActiveGameEvent if a != 0 && b == 0 => (self.event_running)(a),
             ConditionKind::Unsupported(kind) => return Err(Unavailable::Unsupported(kind)),
             ConditionKind::Not
             | ConditionKind::Always
@@ -247,7 +262,8 @@ where
             | ConditionKind::QuestRewarded
             | ConditionKind::QuestTaken
             | ConditionKind::Level
-            | ConditionKind::QuestAbsent => return Err(Unavailable::Operands(row.kind.code())),
+            | ConditionKind::QuestAbsent
+            | ConditionKind::ActiveGameEvent => return Err(Unavailable::Operands(row.kind.code())),
         };
         Ok(if row.flags & 1 != 0 { !result } else { result })
     }
@@ -289,6 +305,7 @@ mod tests {
             (6, ConditionKind::Team),
             (8, ConditionKind::QuestRewarded),
             (9, ConditionKind::QuestTaken),
+            (12, ConditionKind::ActiveGameEvent),
             (14, ConditionKind::RaceClass),
             (15, ConditionKind::Level),
             (22, ConditionKind::QuestAbsent),
@@ -317,6 +334,7 @@ mod tests {
                         operand as u32,
                         HUMAN_WARRIOR,
                         |_| state,
+                        |_| false,
                         |_| None
                     ),
                     Ok(expected)
@@ -329,6 +347,7 @@ mod tests {
                     0,
                     HUMAN_WARRIOR,
                     |_| state,
+                    |_| false,
                     |_| None
                 ),
                 Ok(state == QuestState::Rewarded)
@@ -355,7 +374,15 @@ mod tests {
             (encoded::RACE_CLASS, 0x101, 0x21, true),
         ] {
             assert_eq!(
-                evaluate_option(kind, a, b, HUMAN_WARRIOR, |_| QuestState::Absent, |_| None),
+                evaluate_option(
+                    kind,
+                    a,
+                    b,
+                    HUMAN_WARRIOR,
+                    |_| QuestState::Absent,
+                    |_| false,
+                    |_| None
+                ),
                 Ok(expected)
             );
         }
@@ -375,6 +402,7 @@ mod tests {
                 id,
                 HUMAN_WARRIOR,
                 |_| QuestState::Absent,
+                |_| false,
                 |id| rows.get(&id).copied(),
             )
         };
@@ -384,6 +412,34 @@ mod tests {
         assert_eq!(eval(5, &rows), Ok(true));
         rows.get_mut(&4).unwrap().flags = 1;
         assert_eq!(eval(4, &rows), Ok(false));
+    }
+
+    #[test]
+    fn a_game_event_condition_follows_its_event_alone_and_reversed_or_combined() {
+        const FESTIVAL: u32 = 12;
+        let mut reversed = row(ConditionKind::ActiveGameEvent, FESTIVAL, 0);
+        reversed.flags = 1;
+        let rows = HashMap::from([
+            (1, row(ConditionKind::ActiveGameEvent, FESTIVAL, 0)),
+            (2, reversed),
+            (3, row(ConditionKind::Level, 20, 0)),
+            (4, row(ConditionKind::All, 1, 3)),
+            (5, row(ConditionKind::Any, 2, 6)),
+            (6, row(ConditionKind::ActiveGameEvent, 0, 0)),
+        ]);
+        let eval = |id, running: bool| {
+            evaluate_reference(
+                id,
+                HUMAN_WARRIOR,
+                |_| QuestState::Absent,
+                |event| running && event == FESTIVAL,
+                |id| rows.get(&id).copied(),
+            )
+        };
+        assert_eq!([eval(1, true), eval(1, false)], [Ok(true), Ok(false)]);
+        assert_eq!([eval(2, true), eval(2, false)], [Ok(false), Ok(true)]);
+        assert_eq!([eval(4, true), eval(4, false)], [Ok(true), Ok(false)]);
+        assert_eq!(eval(5, false), Err(Unavailable::Operands(12)));
     }
 
     #[test]
@@ -405,6 +461,7 @@ mod tests {
                     id,
                     HUMAN_WARRIOR,
                     |_| QuestState::Absent,
+                    |_| false,
                     |id| rows.get(&id).copied()
                 )
                 .is_err());
@@ -415,6 +472,7 @@ mod tests {
                 2,
                 HUMAN_WARRIOR,
                 |_| QuestState::Absent,
+                |_| false,
                 |id| if id == 2 { Some(reverse) } else { None }
             )
             .is_err());
@@ -427,6 +485,7 @@ mod tests {
             1,
             HUMAN_WARRIOR,
             |_| QuestState::Absent,
+            |_| false,
             |id| {
                 Some(if id < 20 {
                     row(ConditionKind::All, id + 1, id + 1)
@@ -451,6 +510,7 @@ mod tests {
                             id,
                             HUMAN_WARRIOR,
                             |_| QuestState::Absent,
+                            |_| false,
                             |id| rows.get(&id).copied(),
                         ),
                         Err(Unavailable::Operands(14))
@@ -482,6 +542,7 @@ mod tests {
                             id,
                             HUMAN_WARRIOR,
                             |_| QuestState::Missing,
+                            |_| false,
                             |id| rows.get(&id).copied(),
                         ),
                         Err(Unavailable::MissingQuest(777))

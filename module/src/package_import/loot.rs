@@ -483,6 +483,8 @@ fn blank_fishing_loot(id: u64) -> GameFishingLoot {
         count: 0,
         group_id: 0,
         min_count: 0,
+        event_entry: 0,
+        event_reversed: false,
     }
 }
 

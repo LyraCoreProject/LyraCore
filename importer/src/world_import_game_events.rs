@@ -147,22 +147,35 @@ fn event_quests(rows: impl IntoIterator<Item = (u32, u32)>) -> BTreeMap<u32, u32
     quests
 }
 
-/// The events of conditions that only ask for a running event, by condition entry.
-pub(super) fn active_event_conditions(
+/// Each `CONDITION_ACTIVE_GAME_EVENT` condition's `(event, reversed)`, by condition entry.
+pub(super) fn event_conditions(
     dump: &(impl TableRows + ?Sized),
-) -> Result<BTreeMap<u32, u32>> {
+) -> Result<BTreeMap<u32, (u32, bool)>> {
     let mut events = BTreeMap::new();
     for row in parse_table(dump, "conditions")?.iter() {
         let event: i64 = row.number("value1")?;
-        if row.number::<i32>("type")? == CONDITION_ACTIVE_GAME_EVENT
-            && row.number::<u8>("flags")? == 0
-        {
+        let reversed = match row.number::<u8>("flags")? {
+            0 => false,
+            1 => true,
+            _ => continue,
+        };
+        if row.number::<i32>("type")? == CONDITION_ACTIVE_GAME_EVENT {
             if let Ok(event @ 1..) = u32::try_from(event) {
-                events.insert(row.number("condition_entry")?, event);
+                events.insert(row.number("condition_entry")?, (event, reversed));
             }
         }
     }
     Ok(events)
+}
+
+/// The events of conditions that only ask for a running event, by condition entry.
+pub(super) fn active_event_conditions(
+    dump: &(impl TableRows + ?Sized),
+) -> Result<BTreeMap<u32, u32>> {
+    Ok(event_conditions(dump)?
+        .into_iter()
+        .filter_map(|(condition, (event, reversed))| (!reversed).then_some((condition, event)))
+        .collect())
 }
 
 /// Each vendor item's event, from `(creature, item, condition)` offers in import order. The first

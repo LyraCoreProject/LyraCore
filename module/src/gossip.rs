@@ -222,6 +222,7 @@ fn condition_gate(
             class: character.class,
         },
         |quest_entry| quest_state(ctx, character_guid, quest_entry),
+        |event_entry| crate::game_events::running(ctx, event_entry),
         |id| {
             ctx.db
                 .game_gossip_condition()

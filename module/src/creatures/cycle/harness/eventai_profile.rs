@@ -707,3 +707,31 @@ fn script_map_condition_checks_the_creature_without_an_invoker() {
         assert_eq!(!scenario.eventai_emotes().is_empty(), expected);
     }
 }
+
+#[test]
+fn script_game_event_condition_checks_the_event_without_an_invoker() {
+    const FESTIVAL: u32 = 2;
+    for (predicate, running, expected) in [
+        (EventPredicate::GameEventRunning(FESTIVAL), true, true),
+        (EventPredicate::GameEventRunning(FESTIVAL), false, false),
+        (EventPredicate::GameEventNotRunning(FESTIVAL), true, false),
+        (EventPredicate::GameEventNotRunning(FESTIVAL), false, true),
+    ] {
+        let mut definition = command_list_definition(false, vec![]);
+        definition.rules[0].event = EventCondition::OnEvade;
+        definition.rules[0].execution = ExecutionPolicy::ScriptEvent(ScriptEventPolicy {
+            not_casting: false,
+            check_result: false,
+            predicate,
+        });
+        let mut scenario = world().eventai_native_definition(definition);
+        if running {
+            scenario = scenario.eventai_game_event_running(FESTIVAL);
+        }
+        evaluate(
+            &mut scenario,
+            EventAiRequest::Edge(EventContext::empty(EventKind::OnEvade, CREATURE, 1_000)),
+        );
+        assert_eq!(!scenario.eventai_emotes().is_empty(), expected);
+    }
+}

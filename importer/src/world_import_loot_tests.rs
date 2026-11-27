@@ -11,6 +11,7 @@ fn fixed(item: u64, chance_bp: u32, group_id: u32, quest_only: bool) -> LootDrop
         max_count: 1,
         group_id,
         quest_only,
+        event: None,
     }
 }
 
@@ -103,7 +104,10 @@ fn vmangos_loot_selects_patch_rows_expands_nested_references_and_excludes_forbid
     );
     assert_eq!(
         loot.fishing_rows,
-        ["(1,10,100,4000,1,0,1)", "(2,10,103,500,1,0,1)"]
+        [
+            "(1,10,100,4000,1,0,1,0,false)",
+            "(2,10,103,500,1,0,1,0,false)"
+        ]
     );
     assert_eq!(
         loot.item_loot_rows,
@@ -391,6 +395,7 @@ fn an_item_row_keeps_its_count_range_and_a_reference_repeats_its_children() {
         max_count,
         group_id: 0,
         quest_only: false,
+        event: None,
     };
     assert_eq!(
         drops[&1],
@@ -400,5 +405,111 @@ fn an_item_row_keeps_its_count_range_and_a_reference_repeats_its_children() {
             range(104, 2, 5),
             range(104, 2, 5)
         ]
+    );
+}
+
+#[test]
+fn a_game_event_condition_stays_on_its_row_and_a_reference_passes_its_own_to_its_items() {
+    let columns = &[
+        ("entry", "INTEGER"),
+        ("item", "INTEGER"),
+        ("ChanceOrQuestChance", "REAL"),
+        ("groupid", "INTEGER"),
+        ("mincountOrRef", "INTEGER"),
+        ("maxcount", "INTEGER"),
+        ("condition_id", "INTEGER"),
+        ("patch_min", "INTEGER"),
+        ("patch_max", "INTEGER"),
+    ];
+    let row = |entry, item, reference, condition| {
+        vec![
+            ("entry", N(entry)),
+            ("item", N(item)),
+            ("ChanceOrQuestChance", F(100.0)),
+            ("groupid", N(0)),
+            ("mincountOrRef", N(reference)),
+            ("maxcount", N(1)),
+            ("condition_id", N(condition)),
+            ("patch_min", N(0)),
+            ("patch_max", N(10)),
+        ]
+    };
+    let condition_columns = [
+        "condition_entry",
+        "type",
+        "value1",
+        "value2",
+        "value3",
+        "value4",
+        "flags",
+    ]
+    .map(|name| (name, "INTEGER"));
+    let condition = |id, kind, event, flags| {
+        condition_columns
+            .iter()
+            .zip([id, kind, event, 0, 0, 0, flags])
+            .map(|((name, _), value)| (*name, N(value)))
+            .collect::<Vec<_>>()
+    };
+    // 108 asks for Hallow's End (12), 109 for it not to run, and 7 is a level condition.
+    let drops = [
+        row(1, 20400, 1, 108),
+        row(1, 4500, 1, 109),
+        row(1, 100, 1, 7),
+        row(1, 0, -20, 108),
+    ];
+    let refs = [row(20, 101, 1, 0)];
+    let conditions = [
+        condition(108, 12, 12, 0),
+        condition(109, 12, 12, 1),
+        condition(7, 15, 20, 0),
+    ];
+    let source = sqlite_fixture(&[
+        FixtureTable {
+            name: "forbidden_items",
+            columns: &[
+                ("entry", "INTEGER"),
+                ("patch", "INTEGER"),
+                ("after_or_before", "INTEGER"),
+            ],
+            key: &[],
+            rows: &[],
+        },
+        FixtureTable {
+            name: "conditions",
+            columns: &condition_columns,
+            key: &["condition_entry"],
+            rows: &conditions.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        },
+        FixtureTable {
+            name: "creature_loot_template",
+            columns,
+            key: &[],
+            rows: &drops.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        },
+        FixtureTable {
+            name: "reference_loot_template",
+            columns,
+            key: &[],
+            rows: &refs.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        },
+    ])
+    .unwrap();
+    let drops = parse_creature_drops(&source).unwrap();
+    let event_of = |item| {
+        drops[&1]
+            .iter()
+            .find(|drop| drop.item == item)
+            .unwrap()
+            .event
+    };
+    assert_eq!(event_of(20400), Some((12, false)));
+    assert_eq!(event_of(4500), Some((12, true)));
+    assert_eq!(event_of(100), None);
+    assert_eq!(event_of(101), Some((12, false)));
+    let creature = drops[&1].iter().find(|drop| drop.item == 4500).unwrap();
+    assert_eq!(
+        creature.row_with_event(5, 1),
+        "(5,1,4500,10000,1,0,false,1,12,true)"
     );
 }

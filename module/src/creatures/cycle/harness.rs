@@ -215,6 +215,7 @@ struct Scenario {
     eventai_templates: RefCell<HashSet<u32>>,
     eventai_exclude_caster_spells: RefCell<HashSet<u32>>,
     eventai_quests_taken: RefCell<HashSet<(u64, u32)>>,
+    eventai_running_events: RefCell<HashSet<u32>>,
     eventai_areas: RefCell<HashMap<u64, u32>>,
     eventai_returning_home: RefCell<HashSet<u64>>,
     eventai_movement: RefCell<HashMap<u64, ScenarioMovement>>,
@@ -349,6 +350,11 @@ impl Scenario {
         self.eventai_quests_taken
             .borrow_mut()
             .insert((guid, quest_entry));
+        self
+    }
+
+    fn eventai_game_event_running(self, event_entry: u32) -> Self {
+        self.eventai_running_events.borrow_mut().insert(event_entry);
         self
     }
 
@@ -1674,6 +1680,12 @@ impl EventAiWorld for Scenario {
             EventPredicate::Map(map_id) => self
                 .eventai_unit(guid)
                 .is_some_and(|unit| unit.map_id == map_id),
+            EventPredicate::GameEventRunning(event_entry) => {
+                self.eventai_running_events.borrow().contains(&event_entry)
+            }
+            EventPredicate::GameEventNotRunning(event_entry) => {
+                !self.eventai_running_events.borrow().contains(&event_entry)
+            }
         }
     }
 

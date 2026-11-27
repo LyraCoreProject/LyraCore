@@ -168,6 +168,7 @@ fn options(
                     level: 1,
                 },
                 |_| QuestState::Absent,
+                |_| false,
                 |id| conditions.get(&id).copied(),
             )
             .is_err()

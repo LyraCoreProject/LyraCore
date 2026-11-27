@@ -139,6 +139,11 @@ pub struct CreatureLoot {
     pub quest_only: bool,
     #[default(0)]
     pub min_count: u32,
+    // 0, or the Game Event the row drops while it runs; reversed, while it does not.
+    #[default(0)]
+    pub event_entry: u32,
+    #[default(false)]
+    pub event_reversed: bool,
 }
 
 // vmangos ItemPrototype.h: each looter gets their own copy of such an item.
@@ -186,6 +191,7 @@ pub(crate) struct LootRow {
     // Zero is independent; nonzero selects a pool with at most one drop.
     pub(crate) group_id: u32,
     pub(crate) quest_only: bool,
+    pub(crate) event: Option<crate::game_events::EventCondition>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,6 +235,7 @@ impl From<CreatureLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
+            event: crate::game_events::EventCondition::of_row(row.event_entry, row.event_reversed),
         }
     }
 }
@@ -242,6 +249,7 @@ impl From<GamePickpocketLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
+            event: None,
         }
     }
 }
@@ -255,6 +263,7 @@ impl From<GameObjectLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
+            event: None,
         }
     }
 }
@@ -268,6 +277,7 @@ impl From<GameItemLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
+            event: None,
         }
     }
 }
@@ -281,6 +291,7 @@ impl From<GameSkinningLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: false,
+            event: None,
         }
     }
 }
@@ -294,6 +305,7 @@ impl From<GameFishingLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: false,
+            event: crate::game_events::EventCondition::of_row(row.event_entry, row.event_reversed),
         }
     }
 }
@@ -306,7 +318,8 @@ fn source_draw(ctx: &ReducerContext, source_guid: u64) -> u32 {
 }
 
 /// Draws on `source_guid`'s stream each ungrouped row's chance, then each group's pick; a winner
-/// draws its stack next.
+/// draws its stack next. A row whose Game Event condition fails still draws its chance but drops
+/// nothing, and weighs nothing in its group's pick, as vmangos `LootGroup::Roll` skips it.
 pub(crate) fn roll_loot_rows(
     ctx: &ReducerContext,
     source_guid: u64,
@@ -315,12 +328,16 @@ pub(crate) fn roll_loot_rows(
     let mut winners = Vec::new();
     let mut grouped: std::collections::BTreeMap<u32, Vec<LootRow>> =
         std::collections::BTreeMap::new();
-    for row in rows {
+    for mut row in rows {
+        let allowed = row.event.is_none_or(|event| event.holds(ctx));
         if row.group_id == 0 {
-            if loot_drops(row.chance_bp, source_draw(ctx, source_guid) % 10000) {
+            if loot_drops(row.chance_bp, source_draw(ctx, source_guid) % 10000) && allowed {
                 winners.push(row.drop(ctx, source_guid));
             }
         } else {
+            if !allowed {
+                row.chance_bp = 0;
+            }
             grouped.entry(row.group_id).or_default().push(row);
         }
     }
@@ -704,6 +721,11 @@ pub struct GameFishingLoot {
     pub group_id: u32,
     #[default(0)]
     pub min_count: u32,
+    // As on `CreatureLoot`.
+    #[default(0)]
+    pub event_entry: u32,
+    #[default(false)]
+    pub event_reversed: bool,
 }
 
 pub(crate) fn roll_pickpocket_loot(
@@ -1108,6 +1130,7 @@ mod tests {
             count,
             group_id: 0,
             quest_only: false,
+            event: None,
         };
         assert_eq!(row(1, 3).stack_range(), (1, 3));
         assert_eq!(row(2, 2).stack_range(), (2, 2));

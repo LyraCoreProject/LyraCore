@@ -520,6 +520,12 @@ fn parse_event_predicate(encoded: &str) -> Result<EventPredicate, String> {
             nonzero_u32(&value[17..], "quest").map(EventPredicate::QuestIncomplete)
         }
         value if value.starts_with("map.") => parse_u32(&value[4..]).map(EventPredicate::Map),
+        value if value.starts_with("event.") => {
+            nonzero_u32(&value[6..], "event").map(EventPredicate::GameEventRunning)
+        }
+        value if value.starts_with("not-event.") => {
+            nonzero_u32(&value[10..], "event").map(EventPredicate::GameEventNotRunning)
+        }
         value => value
             .strip_prefix("quest-taken.")
             .map(parse_u32)
@@ -1267,6 +1273,20 @@ pub fn debug_verify_eventai_revision_fixture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_game_event_predicate_names_a_nonzero_event_alone_or_reversed() {
+        assert_eq!(
+            parse_event_predicate("event.12"),
+            Ok(EventPredicate::GameEventRunning(12))
+        );
+        assert_eq!(
+            parse_event_predicate("not-event.1"),
+            Ok(EventPredicate::GameEventNotRunning(1))
+        );
+        assert!(parse_event_predicate("event.0").is_err());
+        assert!(parse_event_predicate("not-event.x").is_err());
+    }
 
     #[test]
     fn command_list_boundaries_and_abort_indices_are_checked_before_loading() {

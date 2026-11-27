@@ -18,6 +18,7 @@ fn source_kind(kind: i32) -> ConditionKind {
         6 => ConditionKind::Team,
         8 => ConditionKind::QuestRewarded,
         9 => ConditionKind::QuestTaken,
+        12 => ConditionKind::ActiveGameEvent,
         14 => ConditionKind::RaceClass,
         15 => ConditionKind::Level,
         22 => ConditionKind::QuestAbsent,
@@ -115,6 +116,7 @@ pub(super) fn resolve(
         id,
         facts,
         |_| QuestState::Absent,
+        |_| false,
         |id| conditions.get(&id).copied(),
     ) {
         diagnostic(&format!("condition {id}: {reason:?}"));
@@ -172,6 +174,7 @@ mod tests {
                     id,
                     CharacterFacts::default(),
                     |_| QuestState::Absent,
+                    |_| false,
                     |id| rows.get(&id).copied()
                 ),
                 Err(unavailable)

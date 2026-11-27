@@ -100,11 +100,15 @@ game_taxi_node own_mount_horde true
 game_taxi_node own_mount_alliance true
 game_taxi_node in_taxi_network true
 game_creature_loot min_count 0
+game_creature_loot event_entry 0
+game_creature_loot event_reversed false
 game_pickpocket_loot min_count 0
 game_gameobject_loot min_count 0
 game_gameobject_template money_min 0
 game_gameobject_template money_max 0
 game_skinning_loot min_count 0
 game_fishing_loot min_count 0
+game_fishing_loot event_entry 0
+game_fishing_loot event_reversed false
 game_trainer_spell required_skill 0
 game_trainer_spell required_skill_value 0

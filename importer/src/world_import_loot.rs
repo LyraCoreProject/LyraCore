@@ -4,6 +4,9 @@ use anyhow::{ensure, Result};
 
 use crate::dump::TableRows;
 
+/// A row's `CONDITION_ACTIVE_GAME_EVENT` as `(event, reversed)`.
+pub(super) type EventCondition = (u32, bool);
+
 type Templates = BTreeMap<u64, Vec<Entry>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,6 +17,7 @@ pub(super) struct LootDrop {
     pub(super) max_count: u32,
     pub(super) group_id: u32,
     pub(super) quest_only: bool,
+    pub(super) event: Option<EventCondition>,
 }
 
 impl LootDrop {
@@ -26,8 +30,16 @@ impl LootDrop {
             max_count,
             group_id,
             quest_only,
+            ..
         } = *self;
         format!("({id},{key},{item},{chance_bp},{max_count},{group_id},{quest_only},{min_count})")
+    }
+
+    /// `row` followed by `event_entry,event_reversed`, for creature loot.
+    pub(super) fn row_with_event(&self, id: u64, key: u64) -> String {
+        let (event, reversed) = self.event.unwrap_or_default();
+        let row = self.row(id, key);
+        format!("{},{event},{reversed})", &row[..row.len() - 1])
     }
 
     /// `(id,key,item_entry,chance_bp,count,group_id,min_count)` for skinning and fishing.
@@ -42,6 +54,13 @@ impl LootDrop {
         } = *self;
         format!("({id},{key},{item},{chance_bp},{max_count},{group_id},{min_count})")
     }
+
+    /// `row_without_quest_only` followed by `event_entry,event_reversed`, for fishing loot.
+    pub(super) fn row_without_quest_only_with_event(&self, id: u64, key: u64) -> String {
+        let (event, reversed) = self.event.unwrap_or_default();
+        let row = self.row_without_quest_only(id, key);
+        format!("{},{event},{reversed})", &row[..row.len() - 1])
+    }
 }
 
 struct Entry {
@@ -51,6 +70,7 @@ struct Entry {
     count: u32,
     group: u32,
     quest_only: bool,
+    condition: u32,
 }
 
 struct Member {
@@ -59,6 +79,7 @@ struct Member {
     min_count: u32,
     max_count: u32,
     quest_only: bool,
+    event: Option<EventCondition>,
 }
 
 struct Roll {
@@ -97,15 +118,28 @@ fn read(
             count,
             group,
             quest_only: chance < 0.0,
+            condition: row.number("condition_id")?,
         });
     }
     Ok(templates)
+}
+
+/// A reference's Game Event condition passes to its items; an item that asks for another fails.
+fn pass_event(member: &mut Member, event: Option<EventCondition>, reference: u64) -> Result<()> {
+    ensure!(
+        event.is_none() || member.event.is_none_or(|own| Some(own) == event),
+        "reference_loot_template: reference {reference} and its item {} ask for different events",
+        member.item
+    );
+    member.event = member.event.or(event);
+    Ok(())
 }
 
 fn expand(
     rows: &[Entry],
     group: u32,
     refs: &Templates,
+    events: &BTreeMap<u32, EventCondition>,
     path: &mut HashSet<u64>,
 ) -> Result<Vec<Roll>> {
     let mut rolls = Vec::new();
@@ -132,11 +166,13 @@ fn expand(
                 row.chance
             );
             if let Some(children) = refs.get(&id) {
+                let event = events.get(&row.condition).copied();
                 for _ in 0..row.count {
-                    let mut children = expand(children, row.group, refs, path)?;
+                    let mut children = expand(children, row.group, refs, events, path)?;
                     for roll in &mut children {
                         for member in &mut roll.members {
                             member.chance *= row.chance / 100.0;
+                            pass_event(member, event, id)?;
                         }
                     }
                     rolls.extend(children);
@@ -150,6 +186,7 @@ fn expand(
                 min_count: row.reference as u32,
                 max_count: row.count,
                 quest_only: row.quest_only,
+                event: events.get(&row.condition).copied(),
             };
             if row.group != 0 {
                 groups.entry(row.group).or_default().push(member);
@@ -209,9 +246,19 @@ pub(super) fn parse(
     let forbidden = super::forbidden_items(dump)?;
     let refs = read(dump, "reference_loot_template", &forbidden)?;
     let templates = read(dump, table, &forbidden)?;
+    let conditional = refs
+        .values()
+        .chain(templates.values())
+        .flatten()
+        .any(|row| row.condition != 0);
+    let events = if conditional {
+        super::game_events::event_conditions(dump)?
+    } else {
+        BTreeMap::new()
+    };
     let mut result = HashMap::new();
     for (entry, rows) in templates {
-        let rolls = expand(&rows, 0, &refs, &mut HashSet::new())?;
+        let rolls = expand(&rows, 0, &refs, &events, &mut HashSet::new())?;
         let mut drops = Vec::new();
         let mut next_group = 1_000_000u32;
         for roll in rolls {
@@ -235,6 +282,7 @@ pub(super) fn parse(
                     max_count: member.max_count,
                     group_id: group,
                     quest_only: member.quest_only,
+                    event: member.event,
                 });
             }
         }

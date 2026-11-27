@@ -1,7 +1,7 @@
 schema_version = 1
 id = "game_events"
 system = "world"
-scope = "Game Events run on the Realm Clock calendar and decide which creature and GameObject spawns exist, which template, equipment and spells their event creatures take, which event quests givers offer, which event items vendors sell and which Characters an event start mails."
+scope = "Game Events run on the Realm Clock calendar and decide which creature and GameObject spawns exist, which template, equipment and spells their event creatures take, which event quests givers offer, which event items vendors sell, which Characters an event start mails, and which gossip options, creature and fishing loot and EventAI rules their conditions allow."
 requests = []
 replies = []
 dependencies = []
@@ -56,6 +56,16 @@ tests = [
     { path = "module/tests/game_events.rs", function = "an_event_start_mails_each_character_of_its_races_once", rung = "durable_module" },
     { path = "module/tests/game_events.rs", function = "an_event_mails_again_only_when_it_starts_again_after_a_stop", rung = "durable_module" },
     { path = "module/tests/game_events.rs", function = "a_disabled_event_mails_again_at_its_next_operator_start_after_a_clear", rung = "durable_module" },
+    { path = "crates/lyracore-shared/src/gossip.rs", function = "a_game_event_condition_follows_its_event_alone_and_reversed_or_combined", rung = "unit" },
+    { path = "importer/src/world_import_gossip_tests.rs", function = "patch_constants_and_unsupported_predicates_keep_boolean_gates", rung = "unit" },
+    { path = "module/tests/gossip_conditions.rs", function = "a_game_event_condition_offers_its_option_while_the_event_runs_and_reversed_while_it_does_not", rung = "durable_module" },
+    { path = "importer/src/world_import_loot_tests.rs", function = "a_game_event_condition_stays_on_its_row_and_a_reference_passes_its_own_to_its_items", rung = "unit" },
+    { path = "module/tests/game_events.rs", function = "event_loot_drops_while_its_event_runs_and_reversed_loot_while_it_does_not", rung = "durable_module" },
+    { path = "module/tests/game_events.rs", function = "a_group_member_whose_event_condition_fails_leaves_the_pick_to_the_others", rung = "durable_module" },
+    { path = "importer/src/eventai_vmangos.rs", function = "condition_reader_uses_vmangos_numbers_and_refuses_unimplemented_quest_states", rung = "unit" },
+    { path = "module/src/creatures/eventai/loader.rs", function = "a_game_event_predicate_names_a_nonzero_event_alone_or_reversed", rung = "unit" },
+    { path = "module/src/creatures/cycle/harness/eventai_profile.rs", function = "script_game_event_condition_checks_the_event_without_an_invoker", rung = "unit" },
+    { path = "module/tests/game_events.rs", function = "an_eventai_rule_on_a_game_event_runs_only_while_the_event_runs", rung = "durable_module" },
 ]
 
 [vmangos]
@@ -107,6 +117,12 @@ id = "creature_data_at_respawn"
 result = "A creature that respawns while its event runs comes back with all of its event data, its start spells included. The Reference Server's in-place respawn casts the start spell again only when it changes the creature's entry, so a creature whose row only casts a spell, such as a Lunar Festival vendor's costume, respawns without it until the event starts again."
 reason = "The start spell is part of what the creature takes while its event runs; casting it at every spawn gives the same creature for the same calendar. The Reference Server also casts it again on every grid load (Creature::LoadFromDB, Create, UpdateEntry, ApplyGameEventSpells), so there the creature lacks it only until its grid next loads, and LyraCore never unloads grids."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Creature.cpp"
+
+[[deliberate_deviations]]
+id = "loot_condition_at_the_roll"
+result = "A loot row's Game Event condition is checked when the loot is rolled, so an item that dropped stays in the Loot Window when its event stops, and one that did not drop does not appear when its event starts. The Reference Server rolls the row and checks its condition each time a player views the loot (LootItem::AllowedForPlayer), so a dropped event item can vanish from a corpse and a hidden one appear."
+reason = "Loot a player saw drop should not disappear because a calendar boundary passed before they took it; deciding once at the roll gives one answer and needs no check per view."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/LootMgr.cpp"
 
 [[known_gaps]]
 description = "A creature data row's model (display_id) is not applied, and an equipment entry with several item choices shows no equipment; the Compatibility Manifest counts them as events.creature-display and events.equipment-choice. The pinned World Source has neither."
@@ -163,10 +179,28 @@ symbol = "debug_event_start"
 evidence = "vmangos GameEventMgr::StartEvent runs for the whole world server at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
 [[known_gaps]]
-description = "Conditions on a running Game Event (vmangos CONDITION_ACTIVE_GAME_EVENT in gossip, loot and scripts) are not evaluated."
-path = "module/src/game_events.rs"
-symbol = "event_state"
-evidence = "vmangos ConditionEntry::Meets CONDITION_ACTIVE_GAME_EVENT at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
+description = "A Game Event condition is evaluated for gossip options, creature and fishing loot and EventAI events only. The pinned World Source uses it in 14 gossip_menu greetings, which no condition can select yet; 4 creature_ai_scripts commands (Darkmaster Gandling, the Midsummer Bonfire, Bloodmage Thalnos), whose rules the import leaves out because a command keeps only a condition that is always true; and 6 quest_end_scripts rows, which are not imported. Pickpocket, chest, item and skinning loot rows keep no condition; the pinned World Source has no Game Event condition there."
+path = "importer/src/world_import_loot.rs"
+symbol = "parse"
+evidence = "conditions type 12 counted per condition_id user in the pinned World Source; vmangos ConditionEntry::Meets CONDITION_ACTIVE_GAME_EVENT at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
+
+[[known_gaps]]
+description = "An EventAI event condition that combines a Game Event with another condition is not translated, so the import leaves the rule out, as it does for every compound EventAI condition: Melnan Darkstone and Kruban Darkblade's Darkmoon Faire lines (either Faire, building or open) and Darkcaller Yanka's Wickerman yells (Hallow's End at a time of day) in the pinned World Source."
+path = "importer/src/eventai_vmangos.rs"
+symbol = "predicates"
+evidence = "creature_ai_events 1484201, 1484202, 1484301, 1484302 and 1519701 to 1519704; vmangos CreatureEventAI::ProcessEvent at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
+
+[[known_gaps]]
+description = "A loot group member with no chance of its own, whose Game Event condition fails, leaves its share of the group empty; the Reference Server picks among the group's other equal-chance members instead. In the pinned World Source this is Hallow's End's Pumpkin Bag and the Traveler's Backpack it replaces in reference loot 2063 and 2073, so one of 251 and one of 158 members leaves its share empty at any time."
+path = "module/src/loot/mod.rs"
+symbol = "roll_loot_rows"
+evidence = "vmangos LootTemplate::LootGroup::Roll at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
+
+[[known_gaps]]
+description = "A creature loot edit in the World Editor writes its rows without a Game Event condition, so an edited creature's event loot drops all year."
+path = "module/src/operator_content/creatures.rs"
+symbol = "replace_creature_loot"
+evidence = "game_creature_loot event_entry and event_reversed; the Operator loot row has no event fields."
 
 [[known_gaps]]
 description = "A creature pool tied to an event keeps the members it rolled once; the Reference Server rolls the pool again at each event start."

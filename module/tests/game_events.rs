@@ -1,14 +1,14 @@
 mod support;
 
 use lyracore_package_delta::fixture_ids::{
-    FIXTURE_BLADE, TEST_WOLF_ELDER_ENTRY, TEST_WOLF_ENTRY, WELL_FED_SPELL,
+    FIXTURE_BLADE, FIXTURE_JERKY, TEST_WOLF_ELDER_ENTRY, TEST_WOLF_ENTRY, WELL_FED_SPELL,
 };
 use lyracore_package_delta::{packed_creature_spawn_guid, packed_gameobject_spawn_guid};
 use lyracore_shared::game_event::{
     DARKMOON_FAIRE_ELWYNN, DARKMOON_FAIRE_ELWYNN_BUILDING, DARKMOON_FAIRE_EVENTS,
     DARKMOON_FAIRE_MULGORE,
 };
-use support::{number, refused, Standalone};
+use support::{number, refused, wolves_beside, Standalone};
 
 const CHARACTER: u64 = 1;
 const VIRTUAL_START_SECS: i64 = 1_800_000_000;
@@ -937,4 +937,102 @@ fn a_disabled_event_mails_again_at_its_next_operator_start_after_a_clear() {
         [CHARACTER, CHARACTER, offline_human, offline_human],
         "the clear stopped the event, so the next start mails again"
     );
+}
+
+/// Two wolf loot rows on the festival: `JERKY` drops while it runs and `BLADE`, reversed, while it
+/// does not; `group_id` 0 rolls each alone and 1 puts both in one group.
+fn festival_loot(shard: &Standalone, group_id: u32) {
+    shard.assert_sql(&format!(
+        "DELETE FROM game_creature_loot WHERE creature_entry = {TEST_WOLF_ENTRY}"
+    ));
+    for (id, item_entry, event_reversed) in [
+        (900_201u64, FIXTURE_JERKY, false),
+        (900_202, FIXTURE_BLADE, true),
+    ] {
+        shard.insert_row(
+            "game_creature_loot",
+            &[
+                ("id", &id),
+                ("creature_entry", &TEST_WOLF_ENTRY),
+                ("item_entry", &item_entry),
+                ("chance_bp", &10_000u32),
+                ("count", &1u32),
+                ("group_id", &group_id),
+                ("event_entry", &FESTIVAL),
+                ("event_reversed", &event_reversed),
+            ],
+        );
+    }
+}
+
+fn loot_of_a_kill(shard: &Standalone, wolf: &str) -> Vec<u32> {
+    shard.assert_call("debug_apply_damage", &[wolf, "1", &CHARACTER.to_string()]);
+    shard.assert_call("debug_kill_creature", &[&CHARACTER.to_string(), wolf]);
+    let mut items: Vec<u32> = shard
+        .query_rows(&format!(
+            "SELECT item_entry FROM game_corpse_loot WHERE corpse_guid = {wolf}"
+        ))
+        .iter()
+        .map(|row| number(row, "item_entry"))
+        .collect();
+    items.sort_unstable();
+    items
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn event_loot_drops_while_its_event_runs_and_reversed_loot_while_it_does_not() {
+    let (shard, _) = realm("game-event-loot");
+    festival(&shard, VIRTUAL_START_SECS - 30, 1, Kind::Scripted);
+    festival_loot(&shard, 0);
+    let wolves = wolves_beside(&shard, &CHARACTER.to_string(), &[3.0, 4.0]);
+
+    assert_eq!(loot_of_a_kill(&shard, &wolves[0]), [FIXTURE_BLADE]);
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    assert_eq!(loot_of_a_kill(&shard, &wolves[1]), [FIXTURE_JERKY]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_group_member_whose_event_condition_fails_leaves_the_pick_to_the_others() {
+    let (shard, _) = realm("game-event-loot-group");
+    festival(&shard, VIRTUAL_START_SECS - 30, 1, Kind::Scripted);
+    festival_loot(&shard, 1);
+    let wolves = wolves_beside(&shard, &CHARACTER.to_string(), &[3.0, 4.0]);
+
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    assert_eq!(loot_of_a_kill(&shard, &wolves[0]), [FIXTURE_JERKY]);
+    shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
+    assert_eq!(loot_of_a_kill(&shard, &wolves[1]), [FIXTURE_BLADE]);
+}
+
+fn faction_of_a_spawned_wolf(shard: &Standalone) -> String {
+    let wolf = &wolves_beside(shard, &CHARACTER.to_string(), &[3.0])[0];
+    shard.query_rows(&format!(
+        "SELECT faction_template FROM game_world_entity WHERE guid = {wolf}"
+    ))[0]["faction_template"]
+        .clone()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_eventai_rule_on_a_game_event_runs_only_while_the_event_runs() {
+    let (shard, _) = realm("game-event-eventai");
+    festival(&shard, VIRTUAL_START_SECS - 30, 1, Kind::Scripted);
+    let rules =
+        format!("1,spawn,100,4294967295,once,lists:0:1:,script:0:0:event.{FESTIVAL},faction:35");
+    shard.assert_call(
+        "import_creature_ai_definitions",
+        &[
+            &serde_json::to_string(&lyracore_shared::eventai::encode_definition(
+                &format!("entry:{TEST_WOLF_ENTRY}"),
+                &rules,
+            ))
+            .unwrap(),
+        ],
+    );
+
+    assert_ne!(faction_of_a_spawned_wolf(&shard), "35");
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    assert_eq!(faction_of_a_spawned_wolf(&shard), "35");
 }
