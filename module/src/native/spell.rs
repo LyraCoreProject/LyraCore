@@ -605,6 +605,7 @@ mod tests {
             (crate::spell::CAST_MISS_MISS, 1),
             (crate::spell::CAST_MISS_DODGE, 3),
             (crate::spell::CAST_MISS_PARRY, 4),
+            (crate::spell::CAST_MISS_BLOCK, 5),
             (crate::spell::CAST_MISS_EVADE, 6),
             (crate::spell::CAST_MISS_IMMUNE, 7),
         ] {

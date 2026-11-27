@@ -745,9 +745,10 @@ _Avoid_: spell miss flag, resist flag
 The one roll that decides a weapon attack's outcome: miss, dodge, parry, glancing, block, crit,
 crushing or hit. White swings, queued strikes, ranged attacks and melee or ranged spells share
 it; the attack type and the delivered Spell's facts select which bands apply. A ranged attack rolls
-only miss and crit. A sitting, sleeping or kneeling Character is never missed and always crit,
-unless the attack cannot crit or a Character attacker has no crit chance. Damage stays with the
-caller. See `module/src/combat/attack_table.rs`.
+only miss and crit. A cast Spell crits only through an effect that deals or heals an amount. A
+sitting, sleeping or kneeling Character is never missed and always crit, unless the attack cannot
+crit or is a Character's white swing with no crit chance; the crit of a white swing it sat for
+raises no crit proc for it. Damage stays with the caller. See `module/src/combat/attack_table.rs`.
 _Avoid_: combat table, swing table
 
 **Weapon Strike**:

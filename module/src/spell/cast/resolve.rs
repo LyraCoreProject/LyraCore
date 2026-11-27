@@ -820,7 +820,7 @@ impl<'a> CastTargets<'a> {
                         let level = self.level;
                         *self.rolls.entry(t).or_insert_with(|| {
                             self.rolled.push(t);
-                            hit_roll(ctx, caster_guid, level, t, table, hdr)
+                            hit_roll(ctx, caster_guid, level, t, table, spell)
                         })
                     }
                     _ => AttackOutcome::Normal,
@@ -1336,10 +1336,10 @@ fn hit_roll(
     level: u8,
     target_guid: u64,
     table: HitTable,
-    spell: &Spell,
+    spell: &LoadedSpell,
 ) -> AttackOutcome {
     let HitTable::Weapon { ranged } = table else {
-        return if super::targeting::spell_misses(ctx, level, target_guid, spell) {
+        return if super::targeting::spell_misses(ctx, level, target_guid, &spell.header) {
             AttackOutcome::Miss
         } else {
             AttackOutcome::Normal
@@ -1361,7 +1361,10 @@ fn hit_roll(
                 &caster,
                 &target,
                 attack_type,
-                Some(crate::combat::DeliveredSpell::cast(spell)),
+                Some(
+                    crate::combat::DeliveredSpell::cast(&spell.header)
+                        .crits_through(&spell.effects),
+                ),
             );
             roll
         }

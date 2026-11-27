@@ -472,9 +472,27 @@ fn fire_aura_procs(
                 crate::combat::attack_time(ctx, &a, proc_attack(hit.source, damage_class))
             }),
     };
+    let victim_hit = ProcHit {
+        result: victim_result(hit, result),
+        ..proc_hit
+    };
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     for (holder, side, counterparty_guid) in candidates {
-        fire_holder(ctx, &holder, side, counterparty_guid, &proc_hit, now_micros);
+        let side_hit = match side {
+            ProcSide::Dealer => &proc_hit,
+            ProcSide::Victim => &victim_hit,
+        };
+        fire_holder(ctx, &holder, side, counterparty_guid, side_hit, now_micros);
+    }
+}
+
+// vmangos ProcDamageAndSpellFor: a Character that sat to force a white swing's crit gains no
+// crit proc from it; the attacker's procs, queued strikes and Spells keep the crit.
+fn victim_result(hit: &Hit, result: u32) -> u32 {
+    if hit.seated_victim && hit.spell_id == 0 {
+        result & !PROC_EX_CRITICAL_HIT
+    } else {
+        result
     }
 }
 
@@ -1553,6 +1571,19 @@ mod tests {
         );
         let landed = Hit::spell(HitSource::MeleeSpell, 12294, false);
         assert_eq!(unlanded_result(AttackOutcome::Normal, &landed, 0, 0), None);
+    }
+
+    #[test]
+    fn a_seated_victim_gains_no_crit_proc_from_a_white_swing_but_does_from_a_queued_strike() {
+        let crit = PROC_EX_CRITICAL_HIT | PROC_EX_BLOCK;
+        let white = Hit::weapon(HitSource::MainHand, true).on_seated_victim(true);
+        assert_eq!(victim_result(&white, crit), PROC_EX_BLOCK);
+        let off_hand = Hit::weapon(HitSource::OffHand, true).on_seated_victim(true);
+        assert_eq!(victim_result(&off_hand, crit), PROC_EX_BLOCK);
+        let strike = Hit::spell(HitSource::MainHand, 78, true).on_seated_victim(true);
+        assert_eq!(victim_result(&strike, crit), crit);
+        let standing = Hit::weapon(HitSource::MainHand, true);
+        assert_eq!(victim_result(&standing, crit), crit);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use spacetimedb::ReducerContext;
 
 use crate::conformance_rolls::{draw, RollStream};
-use crate::{game_creature_template, game_world_entity, Spell, WorldEntity};
+use crate::{game_creature_template, game_world_entity, Spell, SpellEffect, WorldEntity};
 
 use super::folds::{
     defender_block_value, effective_crit_bp, effective_ranged_crit_bp,
@@ -71,7 +71,7 @@ pub(crate) struct DeliveredSpell {
     pub(crate) always_hit: bool,
     pub(crate) cannot_crit: bool,
     /// A creature no player owns casts it, so its crit chance is 0.
-    pub(crate) cast_by_mob: bool,
+    pub(crate) cast_by_unowned_creature: bool,
     pub(crate) no_active_defense: bool,
     /// SPELL_ATTR_EX3_COMPLETELY_BLOCKED: the table's block band refuses all its effects.
     pub(crate) completely_blocked: bool,
@@ -89,13 +89,36 @@ impl DeliveredSpell {
         Self::of(Some(spell), false)
     }
 
+    /// vmangos `SpellEntry::CanCrit`: a cast Spell crits only through an effect that deals or
+    /// heals an amount.
+    pub(crate) fn crits_through(self, effects: &[SpellEffect]) -> Self {
+        use crate::spell::{
+            E_DAMAGE, E_FINISHER_DAMAGE, E_HEAL, E_HEAL_MAX_HEALTH, E_POWER_BURN, E_WEAPON_STRIKE,
+        };
+        let crit_effect = effects.iter().any(|effect| {
+            matches!(
+                effect.kind,
+                E_DAMAGE
+                    | E_FINISHER_DAMAGE
+                    | E_WEAPON_STRIKE
+                    | E_POWER_BURN
+                    | E_HEAL
+                    | E_HEAL_MAX_HEALTH
+            )
+        });
+        Self {
+            cannot_crit: self.cannot_crit || !crit_effect,
+            ..self
+        }
+    }
+
     fn of(spell: Option<&Spell>, next_melee_swing: bool) -> Self {
         let flags = spell.map_or(0, |spell| spell.cast_flags);
         Self {
             next_melee_swing,
             always_hit: flags & crate::spell::CAST_FLAG_ALWAYS_HIT != 0,
             cannot_crit: flags & crate::spell::CAST_FLAG_CANNOT_CRIT != 0,
-            cast_by_mob: false,
+            cast_by_unowned_creature: false,
             no_active_defense: spell
                 .is_some_and(|spell| spell.attributes & SPELL_ATTR_NO_ACTIVE_DEFENSE != 0),
             completely_blocked: spell.is_some_and(|spell| {
@@ -109,7 +132,7 @@ impl DeliveredSpell {
     /// The spell as the attacker delivers it.
     fn cast_by(self, attacker: &WorldEntity) -> Self {
         Self {
-            cast_by_mob: !attacker.crits_with_spells(),
+            cast_by_unowned_creature: !attacker.crits_with_spells(),
             ..self
         }
     }
@@ -260,7 +283,10 @@ pub(crate) fn attack_table(facts: &AttackFacts) -> AttackTable {
     } else {
         (skills.weapon.min(skills.maximum) - skills.defense) * 20
     };
-    let crit = if facts.spell.is_some_and(|spell| spell.cast_by_mob) {
+    let crit = if facts
+        .spell
+        .is_some_and(|spell| spell.cast_by_unowned_creature)
+    {
         0
     } else {
         (base.crit as i32 + crit_bonus).max(0) as u32
@@ -270,11 +296,12 @@ pub(crate) fn attack_table(facts: &AttackFacts) -> AttackTable {
     let band = |open: bool, chance: u32| if open { chance } else { 0 };
     let defends = !facts.spell.is_some_and(|spell| spell.no_active_defense);
     let partial_block = band(can_roll_block && (facts.spell.is_some() || !melee), block);
-    // vmangos crits a sitting Character after the miss band, which is empty for it.
+    // vmangos crits a sitting Character after the miss band, which is empty for it; a Spell's
+    // crit chance against it is 100% (Unit::GetSpellCritChance).
     if can_crit
         && skills.target_is_character
         && !facts.target_standing
-        && (crit > 0 || facts.attacker_is_creature)
+        && (crit > 0 || facts.attacker_is_creature || facts.spell.is_some())
     {
         return AttackTable {
             crit: 10_000,
@@ -516,7 +543,7 @@ mod tests {
         next_melee_swing: true,
         always_hit: false,
         cannot_crit: false,
-        cast_by_mob: false,
+        cast_by_unowned_creature: false,
         no_active_defense: false,
         completely_blocked: false,
         level_skill: false,
@@ -526,7 +553,7 @@ mod tests {
         next_melee_swing: false,
         always_hit: false,
         cannot_crit: false,
-        cast_by_mob: false,
+        cast_by_unowned_creature: false,
         no_active_defense: false,
         completely_blocked: false,
         level_skill: false,
@@ -713,12 +740,12 @@ mod tests {
     #[test]
     fn a_creature_crits_with_a_spell_only_when_a_player_owns_it() {
         let creature = WorldEntity::blank(2, 0, 0, [0.0; 4]);
-        assert!(CAST.cast_by(&creature).cast_by_mob);
+        assert!(CAST.cast_by(&creature).cast_by_unowned_creature);
         let pet = WorldEntity {
             owner_guid: 1,
             ..WorldEntity::blank(3, 0, 0, [0.0; 4])
         };
-        assert!(!CAST.cast_by(&pet).cast_by_mob);
+        assert!(!CAST.cast_by(&pet).cast_by_unowned_creature);
         let mut cast = level_63();
         cast.spell = Some(CAST.cast_by(&creature));
         assert_eq!(attack_table(&cast).crit, 0);
@@ -868,12 +895,18 @@ mod tests {
         player.skills.weapon = 290;
         assert_eq!(attack_table(&player).crit, 0);
         assert_eq!(attack_table(&player).outcome(9_999), AttackOutcome::Normal);
+        player.spell = Some(CAST);
+        assert_eq!(
+            attack_table(&player).crit,
+            10_000,
+            "vmangos gives a weapon Spell 100% crit chance against a sitting Character"
+        );
         let mut creature = sitting_character(0);
         creature.skills.weapon = 290;
         creature.attacker_is_creature = true;
         assert_eq!(attack_table(&creature).crit, 10_000);
         creature.spell = Some(DeliveredSpell {
-            cast_by_mob: true,
+            cast_by_unowned_creature: true,
             ..CAST
         });
         assert_eq!(
@@ -896,6 +929,46 @@ mod tests {
         creature.skills.target_is_character = false;
         let table = attack_table(&creature);
         assert_eq!([table.miss, table.crit], [0, 500]);
+    }
+
+    fn effect(kind: u8) -> SpellEffect {
+        SpellEffect {
+            kind,
+            ..SpellEffect::blank(7386, 0)
+        }
+    }
+
+    #[test]
+    fn a_cast_spell_crits_only_through_an_effect_that_deals_or_heals_an_amount() {
+        use crate::spell::{A_MOD_RESISTANCE, E_ADD_COMBO, E_DAMAGE, E_INTERRUPT, E_WEAPON_STRIKE};
+        let sunder_armor = CAST.crits_through(&[effect(A_MOD_RESISTANCE), effect(E_ADD_COMBO)]);
+        assert!(sunder_armor.cannot_crit);
+        for crits in [E_DAMAGE, E_WEAPON_STRIKE] {
+            assert!(
+                !CAST
+                    .crits_through(&[effect(E_INTERRUPT), effect(crits)])
+                    .cannot_crit
+            );
+        }
+        let flagged = DeliveredSpell {
+            cannot_crit: true,
+            ..CAST
+        };
+        assert!(flagged.crits_through(&[effect(E_DAMAGE)]).cannot_crit);
+    }
+
+    #[test]
+    fn a_spell_without_a_crit_effect_has_no_crit_band_and_no_sitting_crit() {
+        use crate::spell::A_MOD_RESISTANCE;
+        let sunder_armor = CAST.crits_through(&[effect(A_MOD_RESISTANCE)]);
+        let mut standing = level_60();
+        standing.spell = Some(sunder_armor);
+        assert_eq!(attack_table(&standing).crit, 0);
+        let mut sitting = sitting_character(500);
+        sitting.spell = Some(sunder_armor);
+        let table = attack_table(&sitting);
+        assert_eq!(table.crit, 0);
+        assert!(table.dodge > 0, "it is still dodged: {table:?}");
     }
 
     #[test]
