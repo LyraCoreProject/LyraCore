@@ -75,6 +75,16 @@ fn emit(ctx: &ReducerContext, source: u64, message: ServerOpcodeMessage, source_
     }
 }
 
+/// vmangos `Player::SendAttackSwingCancelAttack`: the client stops its melee and ranged attack.
+pub(crate) fn cancel_combat(ctx: &ReducerContext, character_guid: u64) {
+    emit(
+        ctx,
+        character_guid,
+        ServerOpcodeMessage::SMSG_CANCEL_COMBAT,
+        true,
+    );
+}
+
 pub(crate) fn damage_shield(
     ctx: &ReducerContext,
     bearer: u64,

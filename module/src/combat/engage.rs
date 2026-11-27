@@ -382,6 +382,50 @@ pub(crate) fn stop_duel_combat(ctx: &ReducerContext, first_guid: u64, second_gui
     }
 }
 
+/// vmangos `Unit::CombatStopWithPets(true)`: the unit, its pet and its guardians stop fighting.
+/// Threat stays, so a creature that holds some picks its victim again.
+pub(crate) fn stop_combat_with_pets(ctx: &ReducerContext, unit_guid: u64) {
+    let pet_guid = crate::creatures::pet_of(ctx, unit_guid).map(|pet| pet.guid);
+    let guardians: Vec<u64> = ctx
+        .db
+        .game_world_entity()
+        .by_owner_guid()
+        .filter(unit_guid)
+        .map(|unit| unit.guid)
+        .filter(|&guid| {
+            Some(guid) != pet_guid && crate::creatures::guardian::is_guardian(ctx, guid)
+        })
+        .collect();
+    for guid in std::iter::once(unit_guid).chain(pet_guid).chain(guardians) {
+        stop_combat(ctx, guid);
+    }
+}
+
+/// vmangos `Unit::CombatStop(true)`.
+fn stop_combat(ctx: &ReducerContext, guid: u64) {
+    crate::spell::break_channel(ctx, guid);
+    let attackers: Vec<u64> = ctx
+        .db
+        .game_melee_attack()
+        .by_target()
+        .filter(&guid)
+        .map(|attack| attack.attacker_guid)
+        .collect();
+    for attacker_guid in std::iter::once(guid).chain(attackers) {
+        crate::MeleeAttack::delete(ctx, attacker_guid);
+        clear_target(ctx, attacker_guid);
+    }
+    let Some(mut unit) = ctx.db.game_world_entity().guid().find(guid) else {
+        return;
+    };
+    if unit.is_player() {
+        crate::native::combat::cancel_combat(ctx, guid);
+    }
+    unit.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
+    unit.combat_until_ms = 0;
+    unit.update(ctx);
+}
+
 pub(crate) fn clear_target(ctx: &ReducerContext, guid: u64) {
     let entities = ctx.db.game_world_entity();
     if let Some(mut e) = entities.guid().find(guid) {

@@ -565,7 +565,7 @@ fn apply_boundary_transition(
             } else {
                 duel.initiator_guid
             };
-            complete_duel(
+            end_duel_fight(
                 ctx,
                 duel.id,
                 completion_kind::FLED,
@@ -577,16 +577,57 @@ fn apply_boundary_transition(
     }
 }
 
-pub(crate) fn complete_duel(
+/// vmangos casts Beg on the loser of a Duel that a hit or a forfeit decides.
+const BEG_SPELL: u32 = 7267;
+
+/// vmangos `CombatStopWithPets(true)` for both duelists, then `Player::DuelComplete`: how a hit, a
+/// death, a forfeit or fleeing the boundary ends a Duel. The loser of a `WON` Duel casts Beg first.
+pub(crate) fn end_duel_fight(
+    ctx: &ReducerContext,
+    duel_id: u64,
+    kind: u8,
+    winner_guid: u64,
+    loser_guid: u64,
+) {
+    let Some(duel) = ctx.db.game_duel().id().find(duel_id) else {
+        return;
+    };
+    crate::combat::stop_combat_with_pets(ctx, duel.initiator_guid);
+    crate::combat::stop_combat_with_pets(ctx, duel.challenged_guid);
+    if kind == completion_kind::WON {
+        beg(ctx, loser_guid);
+    }
+    complete_duel(ctx, duel_id, kind, winner_guid, loser_guid);
+}
+
+fn beg(ctx: &ReducerContext, loser_guid: u64) {
+    let Some(loser) = ctx.db.game_world_entity().guid().find(loser_guid) else {
+        return;
+    };
+    if let Err(reason) =
+        crate::spell::cast_triggered(ctx, loser_guid, BEG_SPELL, loser.level as u8, loser_guid)
+    {
+        spacetimedb::log::info!("Duel loser {loser_guid} did not cast Beg: {reason}");
+    }
+}
+
+/// vmangos `Unit::DealDamage`: a duelist's death stops both duelists' combat and ends the Duel.
+pub(crate) fn interrupt_duel_on_death(ctx: &ReducerContext, victim_guid: u64) {
+    if let Some(duel) = duel_involving(ctx, victim_guid) {
+        end_duel_fight(ctx, duel.id, completion_kind::INTERRUPTED, 0, 0);
+    }
+}
+
+fn complete_duel(
     ctx: &ReducerContext,
     duel_id: u64,
     completion_kind: u8,
     winner_guid: u64,
     loser_guid: u64,
-) -> bool {
+) {
     let duels = ctx.db.game_duel();
     let Some(duel) = duels.id().find(duel_id) else {
-        return false;
+        return;
     };
     duels.id().delete(duel_id);
     crate::combat::stop_duel_combat(ctx, duel.initiator_guid, duel.challenged_guid);
@@ -610,7 +651,6 @@ pub(crate) fn complete_duel(
         winner_guid,
         loser_guid,
     );
-    true
 }
 
 pub(crate) fn interrupt_duel_for(ctx: &ReducerContext, character_guid: u64) {
@@ -619,12 +659,13 @@ pub(crate) fn interrupt_duel_for(ctx: &ReducerContext, character_guid: u64) {
     }
 }
 
+/// vmangos `HandleDuelCancelledOpcode`: a forfeit after the countdown gives the opponent the win.
 fn cancellation_result(duel: &Duel, actor_guid: u64) -> (u8, u64, u64) {
     if duel.state != state::ACTIVE {
         return (completion_kind::INTERRUPTED, 0, 0);
     }
     (
-        completion_kind::FLED,
+        completion_kind::WON,
         opponent_in(duel, actor_guid),
         actor_guid,
     )
@@ -638,7 +679,11 @@ pub(crate) fn cancel_duel(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64)
         return;
     }
     let (kind, winner, loser) = cancellation_result(&duel, actor_guid);
-    complete_duel(ctx, duel.id, kind, winner, loser);
+    if kind == completion_kind::WON {
+        end_duel_fight(ctx, duel.id, kind, winner, loser);
+    } else {
+        complete_duel(ctx, duel.id, kind, winner, loser);
+    }
 }
 
 #[reducer]
@@ -840,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_cancel_interrupts_while_active_cancel_surrenders_to_the_opponent() {
+    fn pending_cancel_interrupts_while_active_cancel_yields_the_win_to_the_opponent() {
         let mut duel = duel();
         assert_eq!(
             cancellation_result(&duel, duel.challenged_guid),
@@ -850,7 +895,7 @@ mod tests {
         assert_eq!(
             cancellation_result(&duel, duel.challenged_guid),
             (
-                completion_kind::FLED,
+                completion_kind::WON,
                 duel.initiator_guid,
                 duel.challenged_guid
             )
@@ -858,7 +903,7 @@ mod tests {
         assert_eq!(
             cancellation_result(&duel, duel.initiator_guid),
             (
-                completion_kind::FLED,
+                completion_kind::WON,
                 duel.challenged_guid,
                 duel.initiator_guid
             )

@@ -468,7 +468,7 @@ pub(crate) fn apply_hit(
             crate::spell::pushback_on_damage(ctx, target_guid, attacker_guid);
         }
         super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), target_guid, target_is_player);
-        crate::duel::complete_duel(
+        crate::duel::end_duel_fight(
             ctx,
             finish.duel_id,
             crate::duel::completion_kind::WON,
@@ -732,7 +732,7 @@ pub(crate) fn deal_environmental_damage(
     crate::spell::break_auras_on_damage(ctx, victim_guid, 0, false);
     crate::spell::pushback_on_damage(ctx, victim_guid, victim_guid);
     if let Some(finish) = finish {
-        crate::duel::complete_duel(
+        crate::duel::end_duel_fight(
             ctx,
             finish.duel_id,
             crate::duel::completion_kind::WON,

@@ -1495,9 +1495,9 @@ def check_duels(host):
     flag = request()
     activate(flag)
     first.send(0x16d, struct.pack('<Q', flag))
-    completion(first.collect(), flag, 1)
-    completion(second.collect(), flag, 1)
-    assert duel_packets(watcher.collect()) == [(0x16b, b'\x01Dueltwo\0Duelone\0')]
+    completion(first.collect(), flag, 0)
+    completion(second.collect(), flag, 0)
+    assert duel_packets(watcher.collect()) == [(0x16b, b'\x00Dueltwo\0Duelone\0')]
 
     flag = request()
     activate(flag)
