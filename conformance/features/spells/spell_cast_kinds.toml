@@ -126,12 +126,6 @@ symbol = "log_each"
 evidence = "Source reading, not measured. At d9173eca, Spell::EffectEnergize sends SendEnergizeSpellLog from DoSpellHitOnUnit; UnitLogs::log_each logs only damage and healing, and the ProcLog delivery in native/spell.rs sends no energize log."
 
 [[known_gaps]]
-description = "A Spell with SPELL_ATTR_EX3_COMPLETELY_BLOCKED, such as Hamstring, Wing Clip, Shield Bash or Kick, rolls the Attack Table but is never fully blocked. vmangos opens the block band for such a Spell, and a block refuses all its effects; 35 imported Spells carry the attribute."
-path = "module/src/combat/attack_table.rs"
-symbol = "attack_table"
-evidence = "Source reading, not measured. At d9173eca, SpellCaster::RollMeleeOutcomeAgainst (SpellCaster.cpp:546-547) sets canBlock only for a Spell with SPELL_ATTR_EX3_COMPLETELY_BLOCKED and returns MELEE_HIT_BLOCK at line 676; attack_table closes the block band for every Spell."
-
-[[known_gaps]]
 description = "A Spell with SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS keeps its whole cost when it is avoided. vmangos gives back 82% of an energy cost on a miss, dodge, parry or immune result, and 82% of a rage cost on a dodge or parry."
 path = "module/src/spell/cast/resolve.rs"
 symbol = "run_spell_effects"

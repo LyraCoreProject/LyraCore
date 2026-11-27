@@ -889,7 +889,7 @@ impl RangedRoll {
 }
 
 pub(super) const SPELL_ATTR_NO_ACTIVE_DEFENSE: u32 = 0x0020_0000;
-const SPELL_ATTR_EX3_COMPLETELY_BLOCKED: u32 = 0x0000_0008;
+pub(super) const SPELL_ATTR_EX3_COMPLETELY_BLOCKED: u32 = 0x0000_0008;
 
 // Only a melee or ranged damage-class spell blocks, not a wand's Shoot, nor one
 // `IsSpellPartiallyBlocked` excludes by attribute.

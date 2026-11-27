@@ -19,6 +19,8 @@ const DAMAGE_CLASS_MELEE: u8 = 2;
 // Spell.dbc Attributes of a melee ability: ability, not while shapeshifted, tracks its target.
 const STRIKE_ATTRIBUTES: u32 = 0x0041_0010;
 const SPELL_ATTR_NO_ACTIVE_DEFENSE: u32 = 0x0020_0000;
+const SPELL_ATTR_EX3_COMPLETELY_BLOCKED: u32 = 0x0000_0008;
+const CAST_MISS_BLOCK: &str = "5";
 // A charge spends only after the watch Aura has aged past the tick that applied it.
 const ONE_TICK: &str = "1";
 const WATCH_CHARGES: u8 = 3;
@@ -34,6 +36,8 @@ const GO_EVENTS: &str =
 // the wolf's 500 basis point block chance; draws 2 to 5 of the blocking state each fall under 200.
 const BLOCKING_CASTER_STATE: u64 = 12_934_727;
 const CLEAR_CASTER_STATE: u64 = 4;
+// Its first draw, 3895, falls in the wolf's 500 basis point block band right after the dodge band.
+const BLOCK_BAND_CASTER_STATE: u64 = 60;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -109,6 +113,45 @@ fn a_fully_blocked_cast_melee_strike_fires_the_victims_block_proc() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_fully_blocked_cast_melee_strike_also_raises_a_normal_hit_for_a_default_proc() {
     assert_full_block_spends_a_watch_charge("melee-strike-default-proc", None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_completely_blocked_strike_that_rolls_a_block_takes_none_of_its_effects() {
+    let mut standalone = Standalone::start("melee-strike-completely-blocked");
+    let wolf = stage(&mut standalone);
+    stage_strike(&standalone, 40, STRIKE_ATTRIBUTES);
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell SET attributes_ex_3 = {SPELL_ATTR_EX3_COMPLETELY_BLOCKED} \
+         WHERE spell_id = {STRIKE}"
+    ));
+    face_each_other(&standalone, wolf);
+    stage_proc_watch(&standalone, wolf, Some(PROC_EX_BLOCK));
+    seed_caster(&standalone, wolf, BLOCK_BAND_CASTER_STATE);
+    let events = subscribe_with_fence(&standalone, &[GO_EVENTS]);
+    standalone.assert_call("debug_advance_roll_batch", &[ONE_TICK]);
+
+    strike(&standalone, wolf);
+    fence_subscription(&standalone, &events);
+
+    let gos = event_rows(&events, "game_spell_cast_event_live");
+    assert_eq!(gos.len(), 1, "{gos:?}");
+    assert_eq!(
+        gos[0]["miss_info"], CAST_MISS_BLOCK,
+        "vmangos reports SPELL_MISS_BLOCK for the target: {gos:?}"
+    );
+    assert_eq!(gos[0]["damage"], "0");
+    assert_eq!(gos[0]["blocked_amount"], "0");
+    assert_eq!(health(&standalone, wolf), WOLF_HEALTH);
+    assert!(
+        revenge_until_ms(&standalone, wolf) > 0,
+        "vmangos arms the victim's Revenge on a block"
+    );
+    assert_eq!(
+        watch_charges(&standalone, wolf),
+        Some(WATCH_CHARGES - 1),
+        "vmangos raises PROC_EX_BLOCK on the victim"
+    );
 }
 
 fn assert_full_block_spends_a_watch_charge(name: &str, proc_ex: Option<u32>) {

@@ -4,7 +4,8 @@ use crate::conformance_rolls::{draw, RollStream};
 use crate::{game_creature_template, game_world_entity, Spell, WorldEntity};
 
 use super::folds::{
-    defender_block_value, effective_crit_bp, effective_ranged_crit_bp, SPELL_ATTR_NO_ACTIVE_DEFENSE,
+    defender_block_value, effective_crit_bp, effective_ranged_crit_bp,
+    SPELL_ATTR_EX3_COMPLETELY_BLOCKED, SPELL_ATTR_NO_ACTIVE_DEFENSE,
 };
 use super::tables::{crushing_chance_bp, dodge_chance_bp, BLOCK_BP, PARRY_BP};
 
@@ -51,6 +52,11 @@ impl AttackOutcome {
             Self::Normal | Self::Crit | Self::Glancing | Self::Crushing | Self::Block => false,
         }
     }
+
+    /// Whether a delivered Spell takes none of its effects: avoided, or blocked whole by its table.
+    pub(crate) fn refuses_spell(self) -> bool {
+        self.is_avoided() || self == Self::Block
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,6 +71,8 @@ pub(crate) struct DeliveredSpell {
     pub(crate) always_hit: bool,
     pub(crate) cannot_crit: bool,
     pub(crate) no_active_defense: bool,
+    /// SPELL_ATTR_EX3_COMPLETELY_BLOCKED: the table's block band refuses all its effects.
+    pub(crate) completely_blocked: bool,
     /// Neither combat range nor a weapon spell: it rolls with the level's maximum skill.
     pub(crate) level_skill: bool,
     pub(crate) school_mask: u8,
@@ -87,6 +95,9 @@ impl DeliveredSpell {
             cannot_crit: flags & crate::spell::CAST_FLAG_CANNOT_CRIT != 0,
             no_active_defense: spell
                 .is_some_and(|spell| spell.attributes & SPELL_ATTR_NO_ACTIVE_DEFENSE != 0),
+            completely_blocked: spell.is_some_and(|spell| {
+                spell.attributes_ex_3 & SPELL_ATTR_EX3_COMPLETELY_BLOCKED != 0
+            }),
             level_skill: flags & crate::spell::CAST_FLAG_LEVEL_SKILL != 0,
             school_mask: spell.map_or(0, |spell| spell.school_mask),
         }
@@ -259,7 +270,10 @@ pub(crate) fn attack_table(facts: &AttackFacts) -> AttackTable {
         ),
         parry: band(melee && defends && faced && !facts.no_parry, parry),
         glancing: band(melee && swing && facts.attacker_can_glance, glancing),
-        block: band(can_block && facts.spell.is_none(), block),
+        block: band(
+            can_block && defends && facts.spell.is_none_or(|spell| spell.completely_blocked),
+            block,
+        ),
         crit: band(!facts.spell.is_some_and(|spell| spell.cannot_crit), crit),
         crushing: band(melee && swing, base.crushing),
         partial_block: band(can_roll_block && (facts.spell.is_some() || !melee), block),
@@ -480,6 +494,7 @@ mod tests {
         always_hit: false,
         cannot_crit: false,
         no_active_defense: false,
+        completely_blocked: false,
         level_skill: false,
         school_mask: 1,
     };
@@ -488,6 +503,7 @@ mod tests {
         always_hit: false,
         cannot_crit: false,
         no_active_defense: false,
+        completely_blocked: false,
         level_skill: false,
         school_mask: 1,
     };
@@ -747,6 +763,58 @@ mod tests {
             sitting.spell = spell;
             assert_eq!(attack_table(&sitting).miss, 0);
         }
+    }
+
+    const COMPLETELY_BLOCKED: DeliveredSpell = DeliveredSpell {
+        completely_blocked: true,
+        ..CAST
+    };
+
+    #[test]
+    fn a_completely_blocked_spell_opens_the_block_band_of_a_facing_target() {
+        let mut cast = level_63();
+        cast.spell = Some(COMPLETELY_BLOCKED);
+        assert_eq!(
+            bands(attack_table(&cast)),
+            [800, 650, 1400, 0, 500, 200, 0, 500]
+        );
+        cast.target_faces_attacker = false;
+        assert_eq!(attack_table(&cast).block, 0);
+    }
+
+    #[test]
+    fn a_completely_blocked_spell_keeps_its_block_band_closed_where_a_swing_cannot_block() {
+        let closed = |change: fn(&mut AttackFacts)| {
+            let mut cast = level_63();
+            cast.spell = Some(COMPLETELY_BLOCKED);
+            change(&mut cast);
+            attack_table(&cast).block
+        };
+        assert_eq!(closed(|cast| cast.no_block = true), 0);
+        assert_eq!(closed(|cast| cast.attack_type = AttackType::Ranged), 0);
+        assert_eq!(
+            closed(|cast| {
+                cast.spell = Some(DeliveredSpell {
+                    no_active_defense: true,
+                    ..COMPLETELY_BLOCKED
+                });
+            }),
+            0
+        );
+    }
+
+    #[test]
+    fn a_completely_blocked_spells_block_is_an_outcome_that_refuses_the_spell() {
+        let mut cast = level_63();
+        cast.spell = Some(COMPLETELY_BLOCKED);
+        let table = attack_table(&cast);
+        let block_floor = table.miss + table.dodge + table.parry;
+        assert_eq!(table.outcome(block_floor), AttackOutcome::Block);
+        assert!(AttackOutcome::Block.refuses_spell());
+        assert!(
+            !AttackOutcome::Block.is_avoided(),
+            "a white swing's block still lands"
+        );
     }
 
     #[test]

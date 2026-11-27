@@ -934,7 +934,7 @@ fn run_spell_effects(
                 continue;
             };
             targets.answer(t);
-            if roll.is_avoided() {
+            if roll.refuses_spell() {
                 continue;
             }
             if immune {
@@ -992,7 +992,7 @@ fn run_spell_effects(
     answer_whole_refusals(ctx, &targets.immunity, caster_guid, origin, spell);
     // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
     if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0
-        && !targets.roll(target_guid).is_avoided()
+        && !targets.roll(target_guid).refuses_spell()
         && targets.immunity.miss(target_guid).is_none()
     {
         crate::combo::spend_combo(ctx, caster_guid);
@@ -1352,13 +1352,14 @@ fn arm_avoidance_reacts(
             arm_react(ctx, caster_guid, ReactKind::Overpower);
             arm_react(ctx, target_guid, ReactKind::Revenge);
         }
-        AttackOutcome::Parry => arm_react(ctx, target_guid, ReactKind::Revenge),
+        AttackOutcome::Parry | AttackOutcome::Block => {
+            arm_react(ctx, target_guid, ReactKind::Revenge);
+        }
         AttackOutcome::Normal
         | AttackOutcome::Crit
         | AttackOutcome::Miss
         | AttackOutcome::Glancing
         | AttackOutcome::Crushing
-        | AttackOutcome::Block
         | AttackOutcome::Immune
         | AttackOutcome::Evade => {}
     }
@@ -1373,11 +1374,11 @@ pub(crate) fn cast_miss(roll: AttackOutcome, weapon: bool) -> u8 {
         AttackOutcome::Miss => crate::spell::CAST_MISS_RESIST,
         AttackOutcome::Immune => crate::spell::CAST_MISS_IMMUNE,
         AttackOutcome::Evade => crate::spell::CAST_MISS_EVADE,
+        AttackOutcome::Block => crate::spell::CAST_MISS_BLOCK,
         AttackOutcome::Normal
         | AttackOutcome::Crit
         | AttackOutcome::Glancing
-        | AttackOutcome::Crushing
-        | AttackOutcome::Block => crate::spell::CAST_MISS_NONE,
+        | AttackOutcome::Crushing => crate::spell::CAST_MISS_NONE,
     }
 }
 
@@ -3421,6 +3422,10 @@ mod cast_miss_tests {
         assert_eq!(
             cast_miss(AttackOutcome::Parry, true),
             crate::spell::CAST_MISS_PARRY
+        );
+        assert_eq!(
+            cast_miss(AttackOutcome::Block, true),
+            crate::spell::CAST_MISS_BLOCK
         );
     }
 }

@@ -137,7 +137,7 @@ fn landed_result(hit: &Hit, absorbed: u32) -> u32 {
 // vmangos Unit::CalculateMeleeDamage raises PROC_EX_BLOCK alone for a full block; a ranged hit is
 // a Spell and keeps its quality (CreateProcExtendMask), even when a block, an absorb or a resist
 // takes all of it, as does any other Spell a block takes whole. An absorb that takes the rest keeps
-// the hit's quality and adds PROC_EX_ABSORB.
+// the hit's quality and adds PROC_EX_ABSORB. A Spell's table block is SPELL_MISS_BLOCK: block alone.
 fn unlanded_result(outcome: AttackOutcome, hit: &Hit, dealt: u32, absorbed: u32) -> Option<u32> {
     match outcome {
         AttackOutcome::Miss => Some(PROC_EX_MISS),
@@ -145,6 +145,7 @@ fn unlanded_result(outcome: AttackOutcome, hit: &Hit, dealt: u32, absorbed: u32)
         AttackOutcome::Parry => Some(PROC_EX_PARRY),
         AttackOutcome::Immune => Some(PROC_EX_IMMUNE),
         AttackOutcome::Evade => None,
+        AttackOutcome::Block if hit.spell_id != 0 => Some(PROC_EX_BLOCK),
         AttackOutcome::Normal
         | AttackOutcome::Crit
         | AttackOutcome::Glancing
@@ -1552,6 +1553,15 @@ mod tests {
         );
         let landed = Hit::spell(HitSource::MeleeSpell, 12294, false);
         assert_eq!(unlanded_result(AttackOutcome::Normal, &landed, 0, 0), None);
+    }
+
+    #[test]
+    fn a_spell_its_table_blocks_whole_raises_the_block_alone() {
+        let kick = Hit::spell(HitSource::MeleeSpell, 1766, false);
+        assert_eq!(
+            unlanded_result(AttackOutcome::Block, &kick, 0, 0),
+            Some(PROC_EX_BLOCK)
+        );
     }
 
     #[test]
