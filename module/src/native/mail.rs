@@ -237,14 +237,20 @@ fn send_letter(
             item_guid: request.item.guid(),
         },
     )
-    .map_err(|refusal| match refusal {
+    .map_err(send_refusal_result)
+}
+
+fn send_refusal_result(refusal: MailRefusal) -> MailResult {
+    match refusal {
         MailRefusal::NotEnoughMoney => MailResult::ErrNotEnoughMoney,
-        MailRefusal::ItemIsSoulbound => MailResult::ErrCantSendWrappedCod,
-        MailRefusal::NotYourItem => MailResult::ErrMailAttachmentInvalid,
-        MailRefusal::InventoryFull | MailRefusal::CodNotAffordable | MailRefusal::Refused(_) => {
-            MailResult::ErrInternalError
-        }
-    })
+        // vmangos HandleSendMailCallback answers MAIL_ERR_INTERNAL_ERROR for a missing item and
+        // for one that fails CanBeTraded.
+        MailRefusal::ItemIsSoulbound
+        | MailRefusal::NotYourItem
+        | MailRefusal::InventoryFull
+        | MailRefusal::CodNotAffordable
+        | MailRefusal::Refused(_) => MailResult::ErrInternalError,
+    }
 }
 
 fn item_text(ctx: &ReducerContext, guid: u64, text_id: u32, item_hint: u32) -> String {
@@ -316,4 +322,28 @@ pub(crate) fn arrived(ctx: &ReducerContext, recipient_guid: u64) {
         ServerOpcodeMessage::SMSG_RECEIVED_MAIL(codec::build_received_mail()),
         super::EncodeFailure::Panic,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_attachment_vmangos_refuses_answers_the_internal_error() {
+        for refusal in [
+            MailRefusal::ItemIsSoulbound,
+            MailRefusal::NotYourItem,
+            MailRefusal::from("bank slot".to_string()),
+        ] {
+            assert_eq!(
+                send_refusal_result(refusal),
+                MailResult::ErrInternalError,
+                "MailHandler.cpp answers MAIL_ERR_INTERNAL_ERROR"
+            );
+        }
+        assert_eq!(
+            send_refusal_result(MailRefusal::NotEnoughMoney),
+            MailResult::ErrNotEnoughMoney
+        );
+    }
 }

@@ -250,7 +250,7 @@ pub(super) fn result_two(refusal: AuctionRefusal) -> ResultTwo {
     match refusal {
         AuctionRefusal::ItemNotFound => ResultTwo::ErrItemNotFound,
         // vmangos AuctionHouseHandler answers AUCTION_ERR_INVENTORY with EQUIP_ERR_ITEM_NOT_FOUND.
-        AuctionRefusal::ItemNotTradeable => ResultTwo::ErrInventory {
+        AuctionRefusal::ItemNotListable => ResultTwo::ErrInventory {
             inventory_result2: InventoryResult::ItemNotFound,
         },
         AuctionRefusal::NotEnoughMoney => ResultTwo::ErrNotEnoughMoney,
@@ -495,4 +495,24 @@ pub(super) fn realm_page(
             codec::build_auction_bidder_list_result(&rows, total, now),
         )),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_listing_vmangos_refuses_for_the_item_answers_the_inventory_pair() {
+        assert_eq!(
+            result_two(AuctionRefusal::ItemNotListable),
+            ResultTwo::ErrInventory {
+                inventory_result2: InventoryResult::ItemNotFound
+            }
+        );
+        assert_eq!(
+            result_two(AuctionRefusal::ItemNotFound),
+            ResultTwo::ErrItemNotFound,
+            "a zero item guid, or an Auction or Character that is not there, answers the bare code"
+        );
+    }
 }

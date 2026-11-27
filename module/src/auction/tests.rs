@@ -364,7 +364,7 @@ fn listing_accepts_only_one_owned_mailable_bag_stack_and_valid_terms() {
     for slot in [15, 19, 39, 63, 119, 192] {
         assert_eq!(
             prepare_listing(Some(&item(slot)), 7, 10, terms(), policy()),
-            Err(AuctionRefusal::ItemNotFound),
+            Err(AuctionRefusal::ItemNotListable),
             "slot {slot} must not be auctionable"
         );
     }
@@ -373,35 +373,35 @@ fn listing_accepts_only_one_owned_mailable_bag_stack_and_valid_terms() {
     foreign.owner_guid = 8;
     assert_eq!(
         prepare_listing(Some(&foreign), 7, 10, terms(), policy()),
-        Err(AuctionRefusal::ItemNotFound)
+        Err(AuctionRefusal::ItemNotListable)
     );
 
     let mut soulbound = item(23);
     soulbound.snapshot.soulbound = true;
     assert_eq!(
         prepare_listing(Some(&soulbound), 7, 10, terms(), policy()),
-        Err(AuctionRefusal::ItemNotFound)
+        Err(AuctionRefusal::ItemNotListable)
     );
 
     let mut not_mailable = item(120);
     not_mailable.mailable = false;
     assert_eq!(
         prepare_listing(Some(&not_mailable), 7, 10, terms(), policy()),
-        Err(AuctionRefusal::ItemNotFound)
+        Err(AuctionRefusal::ItemNotListable)
     );
 
     let mut opened = item(23);
     opened.has_generated_loot = true;
     assert_eq!(
         prepare_listing(Some(&opened), 7, 10, terms(), policy()),
-        Err(AuctionRefusal::ItemNotTradeable)
+        Err(AuctionRefusal::ItemNotListable)
     );
 
     let mut spent = item(23);
     spent.has_spent_charges = true;
     assert_eq!(
         prepare_listing(Some(&spent), 7, 10, terms(), policy()),
-        Err(AuctionRefusal::ItemNotTradeable)
+        Err(AuctionRefusal::ItemNotListable)
     );
 
     let mut letter = item(23);
@@ -414,7 +414,7 @@ fn listing_accepts_only_one_owned_mailable_bag_stack_and_valid_terms() {
 
     assert_eq!(
         prepare_listing(None, 7, 10, terms(), policy()),
-        Err(AuctionRefusal::ItemNotFound)
+        Err(AuctionRefusal::ItemNotListable)
     );
     assert_eq!(
         prepare_listing(Some(&item(23)), 7, 9, terms(), policy()),
@@ -553,6 +553,23 @@ fn local_listing_refusals_leave_item_purse_and_market_unchanged() {
 }
 
 #[test]
+fn a_zero_item_guid_is_the_only_bare_item_not_found() {
+    let mut store = local();
+    let before = store.clone();
+    let zero = ListingRequest {
+        item_guid: 0,
+        ..request()
+    };
+
+    assert_eq!(
+        create_local_listing(&mut store, zero),
+        Err(AuctionRefusal::ItemNotFound)
+    );
+    assert_eq!(store.money, before.money);
+    assert!(store.committed.is_none());
+}
+
+#[test]
 fn an_item_offered_in_a_trade_is_refused_and_stays_with_the_seller() {
     let mut store = local();
     store.item.as_mut().expect("a listing item").offered = true;
@@ -560,7 +577,7 @@ fn an_item_offered_in_a_trade_is_refused_and_stays_with_the_seller() {
 
     assert_eq!(
         create_local_listing(&mut store, request()),
-        Err(AuctionRefusal::ItemNotTradeable)
+        Err(AuctionRefusal::ItemNotListable)
     );
     assert_eq!(store.money, before.money);
     assert_eq!(store.item, before.item);

@@ -25,9 +25,11 @@ pub fn auction_cut(bid: u32, consignment_rate: u32) -> Option<u32> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuctionRefusal {
+    /// A zero item guid in a listing, or an Auction or a Character that is not there.
     ItemNotFound,
-    /// vmangos `Item::CanBeTraded` refuses, as for an opened item.
-    ItemNotTradeable,
+    /// A listing refused for its item. The client reads the vmangos answer for an item that
+    /// cannot be listed: `AUCTION_ERR_INVENTORY` with `EQUIP_ERR_ITEM_NOT_FOUND`.
+    ItemNotListable,
     NotEnoughMoney,
     InvalidTerms,
     Database,
@@ -36,7 +38,7 @@ pub enum AuctionRefusal {
 impl AuctionRefusal {
     pub const ALL: [Self; 5] = [
         Self::ItemNotFound,
-        Self::ItemNotTradeable,
+        Self::ItemNotListable,
         Self::NotEnoughMoney,
         Self::InvalidTerms,
         Self::Database,
@@ -45,7 +47,7 @@ impl AuctionRefusal {
     pub fn as_tag(self) -> &'static str {
         match self {
             Self::ItemNotFound => "auction:item_not_found",
-            Self::ItemNotTradeable => "auction:item_not_tradeable",
+            Self::ItemNotListable => "auction:item_not_listable",
             Self::NotEnoughMoney => "auction:not_enough_money",
             Self::InvalidTerms => "auction:invalid_terms",
             Self::Database => "auction:database",
