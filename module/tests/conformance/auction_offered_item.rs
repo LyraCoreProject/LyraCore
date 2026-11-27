@@ -251,3 +251,47 @@ fn a_zero_item_guid_answers_the_bare_code_and_a_missing_item_the_inventory_pair(
     );
     assert!(shard.query_rows("SELECT * FROM game_auction").is_empty());
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_conjured_item_cannot_be_listed() {
+    let (shard, guid, _account, auctioneer) = auction_fixture("auction-conjured-item");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET item_flags = 2 WHERE entry = {FIXTURE_BLADE}"
+    ));
+    let mut connection = enter(&shard, guid);
+    shard.assert_sql(&format!(
+        "DELETE FROM game_item_instance WHERE owner_guid = {guid}"
+    ));
+    connection.drain_packets();
+    shard.assert_call(
+        "debug_grant_item",
+        &[&guid.to_string(), &FIXTURE_BLADE.to_string(), "1"],
+    );
+    let item: u64 = shard.query_rows(&format!(
+        "SELECT guid FROM game_item_instance WHERE owner_guid = {guid}"
+    ))[0]["guid"]
+        .parse()
+        .unwrap();
+
+    let refused = request(
+        &mut connection,
+        CMSG_AUCTION_SELL_ITEM,
+        sell_item_body(auctioneer, item),
+    );
+
+    assert!(
+        refused.contains(&(SMSG_AUCTION_COMMAND_RESULT, NOT_TRADEABLE_REPLY.to_vec())),
+        "{refused:?}"
+    );
+    assert!(shard.query_rows("SELECT * FROM game_auction").is_empty());
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT guid FROM game_item_instance WHERE guid = {item} AND owner_guid = {guid}"
+            ))
+            .len(),
+        1,
+        "the item stays with the seller"
+    );
+}

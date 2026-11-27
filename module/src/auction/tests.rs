@@ -285,6 +285,7 @@ fn item(slot: u8) -> ListingItem {
         owner_guid: 7,
         slot,
         mailable: true,
+        conjured: false,
         offered: false,
         has_generated_loot: false,
         has_spent_charges: false,
@@ -387,6 +388,13 @@ fn listing_accepts_only_one_owned_mailable_bag_stack_and_valid_terms() {
     not_mailable.mailable = false;
     assert_eq!(
         prepare_listing(Some(&not_mailable), 7, 10, terms(), policy()),
+        Err(AuctionRefusal::ItemNotListable)
+    );
+
+    let mut conjured = item(23);
+    conjured.conjured = true;
+    assert_eq!(
+        prepare_listing(Some(&conjured), 7, 10, terms(), policy()),
         Err(AuctionRefusal::ItemNotListable)
     );
 

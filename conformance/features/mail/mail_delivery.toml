@@ -9,7 +9,9 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "module/tests/item_state_transfers.rs", function = "a_conjured_item_cannot_be_mailed", rung = "durable_module" },
+]
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"

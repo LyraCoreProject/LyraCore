@@ -179,6 +179,7 @@ pub fn not_at_mailbox(mailbox_guid: u64) -> String {
 pub const NOTHING_TO_TAKE: &str = "mail: nothing to take from that mail";
 pub const NOT_YOUR_ITEM: &str = "mail: that item is not yours to send";
 pub const ITEM_IS_SOULBOUND: &str = "mail: soulbound items cannot be mailed";
+pub const ITEM_IS_CONJURED: &str = "mail: a conjured item cannot be mailed";
 pub const ITEM_HAS_LOOT: &str = "mail: an opened item cannot be mailed";
 pub const ITEM_HAS_SPENT_CHARGES: &str = "mail: an item with spent charges cannot be mailed";
 pub const ITEM_IN_BANK_OR_BAG_SLOT: &str = "mail: a bank item or an equipped bag cannot be mailed";
