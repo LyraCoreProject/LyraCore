@@ -702,7 +702,7 @@ while shapeshifted, track target in cast), ex3 `0x8000` (normal ranged attack), 
 zero, damage class 3 (ranged), school 0, mechanic 0, category 76, range index 74, speed 20,
 cast-time index 1, no power cost, cooldown or start recovery, equipped item class 2 with subclass
 mask 65536 (thrown), custom flag `0x80` (face target), and one effect 58 (weapon damage) at the
-enemy target with base points 0 and a one-sided die. Build-5875 `SpellRange.dbc` (SHA-256
+enemy target with base points -1 and a one-sided die, a flat amount of zero. Build-5875 `SpellRange.dbc` (SHA-256
 `8e45482ad8d4c913304062c2de202cf36f2c0babb9a0d2bdb2064983424a3f9e`) gives range 74 as 8 to 30 yd.
 Neither the always-hit, cannot-crit, no-active-defense nor completely-blocked attribute is set.
 `item_template` 2947 (`mangos.sql:2696`), Small Throwing Knife, is a quality 1 thrown weapon
@@ -776,8 +776,9 @@ crossbows 226. The ranged crit percentage reads the same skill (StatSystem.cpp:5
 crit or block line reads the subclass otherwise. At skill 300/300 a bow and a crossbow therefore
 derive exactly the gun's rates, so they share the Auto Shot context and get none of their own.
 A thrown weapon also derives the same rates; this context measures it because Throw is the only
-way to throw. A wrong subclass-to-skill mapping for a bow or crossbow stays unmeasured by Roll
-Conformance; a durable test or a context with a lower skill would catch it.
+way to throw. A unit test in `module/src/skill.rs` checks the subclass-to-skill mapping. Whether a
+cast or auto-repeat ranged roll reads the bow's or crossbow's skill stays unmeasured; a context
+with a lower skill would catch a wrong one.
 
 Tier 1 enters through `CMSG_CAST_SPELL` for every Throw, ordinary cast admission and resolution,
 the ranged impact schedule and delivered packets, with the caster seam stream and the public seeds.
@@ -787,7 +788,8 @@ cast is cast-time index 1's zero plus 500 ms for a ranged-slot spell that does n
 Tier 1 drops it, as the cast Weapon Strike context drops its cooldowns, and gives the knife a
 10,000 stack. The roll formulas read neither; the Reference Server keeps both. A Character casts
 again once its last Throw is counted. Each batch advances 550 ms, longer than the 500 ms flight
-over ten yards at speed 20. An unretained readiness check requires two counted Throws per
+over ten yards at speed 20 and LyraCore's 250 ms one. A Throw that draws no `SMSG_SPELL_GO` in its
+batch blocks the sample as refused. An unretained readiness check requires two counted Throws per
 Character. This context reserves its own family: 1e-6 over four checks, two levels and three
 seeds, 24 tests at `1e-6/24`. Each submission's false-failure bound across the seven contexts is
 therefore 6e-6. The signatures join `white_melee_outcomes`: rule

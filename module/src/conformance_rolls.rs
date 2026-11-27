@@ -378,7 +378,8 @@ mod fixture {
         spell.equipped_item_class = 2;
         spell.equipped_item_subclass_mask = 262156;
         spell.damage_class = 3;
-        arm_ranged_swing(ctx, character_guid, spell, 46)
+        spell.cast_flags = lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
+        arm_ranged_spell(ctx, character_guid, spell, vec![], 46)
     }
 
     /// A priest with a wand's Shoot and the white melee inputs, against a passive target; ADR 0007.
@@ -441,7 +442,8 @@ mod fixture {
         spell.equipped_item_class = 2;
         spell.equipped_item_subclass_mask = 524288;
         spell.damage_class = 1;
-        arm_ranged_swing(ctx, character_guid, spell, 228)
+        spell.cast_flags = lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
+        arm_ranged_spell(ctx, character_guid, spell, vec![], 228)
     }
 
     /// White melee's warrior with Throw on the caster stream, against a passive target; ADR 0007.
@@ -454,7 +456,6 @@ mod fixture {
         seed: u64,
         stream: u64,
     ) -> Result<(), String> {
-        use crate::{game_spell, game_spell_effect};
         use lyracore_shared::spell::taxonomy::{CAST_FLAG_REFUSES_SELF_CAST, P_RAW};
 
         crate::helpers::require_operator(ctx)?;
@@ -499,24 +500,15 @@ mod fixture {
         spell.equipped_item_class = 2;
         spell.equipped_item_subclass_mask = 65536;
         spell.damage_class = 3;
-        ctx.db.game_spell().spell_id().delete(2764);
-        ctx.db.game_spell().insert(spell);
-        let effects = ctx.db.game_spell_effect();
-        for effect in effects.by_spell().filter(&2764u32).collect::<Vec<_>>() {
-            effects.id().delete(effect.id);
-        }
         let mut strike = crate::SpellEffect::blank(2764, 0);
         strike.kind = crate::spell::E_WEAPON_STRIKE;
-        strike.base_points = 1;
+        strike.base_points = 0;
         strike.die_sides = 1;
         strike.target = crate::spell::T_TARGET_ENEMY;
         strike.p0 = 100;
         strike.p0_kind = P_RAW;
         strike.bonus_coefficient = 1.0;
-        effects.insert(strike);
-        let learner = crate::helpers::live_entity(ctx, character_guid)?;
-        crate::spell::learn_spell(ctx, character_guid, learner.owner_identity, 2764);
-        crate::skill::debug_set_skill(ctx, character_guid, 176, 300)?;
+        arm_ranged_spell(ctx, character_guid, spell, vec![strike], 176)?;
         seed_caster_stream(ctx, character_guid, target_guid, seed, stream);
         Ok(())
     }
@@ -594,22 +586,25 @@ mod fixture {
         Ok(())
     }
 
-    // The auto-repeat path reads only the spell header, so the fixture stores no effect rows.
-    fn arm_ranged_swing(
+    // An auto-repeat swing reads only the spell header, so it passes no effect rows.
+    fn arm_ranged_spell(
         ctx: &ReducerContext,
         character_guid: u64,
-        mut spell: crate::Spell,
+        spell: crate::Spell,
+        spell_effects: Vec<crate::SpellEffect>,
         skill_line: u32,
     ) -> Result<(), String> {
         use crate::{game_spell, game_spell_effect};
 
         let spell_id = spell.spell_id;
-        spell.cast_flags = lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
         ctx.db.game_spell().spell_id().delete(spell_id);
         ctx.db.game_spell().insert(spell);
         let effects = ctx.db.game_spell_effect();
         for effect in effects.by_spell().filter(&spell_id).collect::<Vec<_>>() {
             effects.id().delete(effect.id);
+        }
+        for effect in spell_effects {
+            effects.insert(effect);
         }
         let learner = crate::helpers::live_entity(ctx, character_guid)?;
         crate::spell::learn_spell(ctx, character_guid, learner.owner_identity, spell_id);

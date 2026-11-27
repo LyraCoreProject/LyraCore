@@ -67,7 +67,7 @@ const WAND_SHOT: Shooter = Shooter {
     ticks_per_shot: 8,
 };
 
-// A 550 ms batch outlasts an instant Throw's 500 ms flight over 10 yd at 20 yd/s.
+// A 550 ms batch outlasts Throw's 10 yd flight at vmangos's 20 yd/s and LyraCore's 40.
 const THROW: Shooter = Shooter {
     swing: &spec::THROW,
     firing: Firing::EachShot,
@@ -126,7 +126,15 @@ impl Character {
             packets,
             (self.guid, self.target),
             quota,
-        )
+        )?;
+        ensure!(
+            shooter.firing == Firing::AutoRepeat
+                || self.cast_at != Some(self.counts.trials())
+                || !self.flight.is_empty(),
+            "an instant {} drew no SMSG_SPELL_GO in its batch; the cast was refused",
+            shooter.swing.context.label()
+        );
+        Ok(())
     }
 }
 
