@@ -143,3 +143,18 @@ _Avoid_: wire harness, test harness
 <a id="verification"></a>**Verification**:
 A written record of a targeted check of server behaviour against the real client or game data.
 _Avoid_: probe
+
+## Pull requests
+
+<a id="evidence-document"></a>**Evidence document**:
+The JSON document `./conformance/evidence` prints for one pull request head. It records each named
+test at the merge-base and at the head, and each tier 1 scenario run. The Contribution check reads
+it from the pull request description.
+_Avoid_: evidence (unqualified, when meaning the document)
+
+<a id="review-lane"></a>**Review lane**:
+The fast or slow review that the Contribution check names for an outside pull request with a valid
+Evidence document. The slow lane lists what a maintainer must judge, such as a maintainer-only path,
+a changed test or a fix that no scenario measures. The lane advises reviewers; nothing merges
+automatically.
+_Avoid_: queue, track, tier (tiers are test tiers)

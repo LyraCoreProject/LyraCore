@@ -18,6 +18,7 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [Spell Roll Conformance](../conformance/reports/2026-11-05-spell-rolls.md) | Verification | You check the pinned spell rates or the blocked core measurement |
 | [Feature Ledger](../conformance/README.md) | Reference | You add or assess a conformance Behavior and its evidence requirements |
 | [climb-conformance](../.claude/skills/climb-conformance/SKILL.md) | Agent skill | You implement a ranked Behavior or author its scenario |
+| [contribute-fix](../.claude/skills/contribute-fix/SKILL.md) | Agent skill | An outside contributor's agent takes a `ready-for-agent` issue to a pull request |
 | [testing.md](./testing.md) | Reference | You run CI checks locally or choose a verification rung |
 | [benilla-compatibility.md](./benilla-compatibility.md) | Reference | You change packet layouts or the opcode inventory |
 | [native-operations.md](./native-operations.md) | Runbook | An Operator updates a deployed Realm |
