@@ -1,0 +1,120 @@
+name: Clean machine conformance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+  pull_request:
+    paths:
+      - ".github/workflows/clean-machine-conformance.yml"
+      - "conformance/run"
+      - "conformance/workspace.py"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  SPACETIME_VERSION: 2.14.0
+  SCENARIO: two_character_visibility
+
+# Follows docs/quickstart.md section 1 with no dependency cache, so the times are cold.
+jobs:
+  clean-machine:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-26]
+    steps:
+      - name: Start the clock
+        run: |
+          mkdir -p "$RUNNER_TEMP/clean-machine"
+          cat > "$RUNNER_TEMP/clean-machine/phase.sh" <<'SH'
+          phase_log="$RUNNER_TEMP/clean-machine/phases.tsv"
+          phase() {
+            local name=$1 started status=0
+            shift
+            started=$(date +%s)
+            "$@" || status=$?
+            printf '%s\t%s\n' "$name" "$(($(date +%s) - started))" >> "$phase_log"
+            return "$status"
+          }
+          SH
+          date +%s > "$RUNNER_TEMP/clean-machine/start"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record the clone time
+        run: |
+          . "$RUNNER_TEMP/clean-machine/phase.sh"
+          printf 'clone\t%s\n' "$(($(date +%s) - $(cat "$RUNNER_TEMP/clean-machine/start")))" >> "$phase_log"
+          uname -srm
+          python3 --version
+
+      - name: Install Rust and the system packages
+        run: |
+          . "$RUNNER_TEMP/clean-machine/phase.sh"
+          phase toolchain bash -e -c '
+            if [ "$RUNNER_OS" = Linux ]; then
+              sudo apt-get update
+              sudo apt-get install -y build-essential pkg-config libssl-dev openssl python3 git curl
+            else
+              brew install openssl@3
+              echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+              PATH="$(brew --prefix openssl@3)/bin:$PATH" openssl version
+            fi
+            # The runner image ships rustup (a Homebrew formula on macOS); remove it to measure the documented install.
+            if [ "$RUNNER_OS" = macOS ]; then brew uninstall --ignore-dependencies rustup; fi
+            rm -rf "${CARGO_HOME:-$HOME/.cargo}" "${RUSTUP_HOME:-$HOME/.rustup}"
+            if command -v cargo; then exit 1; fi
+            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            . "$HOME/.cargo/env"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            # rustup installs the toolchain rust-toolchain.toml pins on the first cargo call in the checkout.
+            cargo --version
+          '
+
+      - name: Install SpacetimeDB ${{ env.SPACETIME_VERSION }}
+        run: |
+          . "$RUNNER_TEMP/clean-machine/phase.sh"
+          phase spacetimedb bash -e -c '
+            curl -sSf https://install.spacetimedb.com | sh -s -- -y
+            export PATH="$HOME/.local/bin:$PATH"
+            spacetime version install "$SPACETIME_VERSION"
+            spacetime version use "$SPACETIME_VERSION"
+            spacetime --version
+          '
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build the scenario
+        run: |
+          . "$RUNNER_TEMP/clean-machine/phase.sh"
+          phase build bash -e -c '
+            cargo test --quiet --locked -p lyracore-module --test native_conformance --no-run
+            cargo build --quiet --locked -p lyracore-conformance --example run
+          '
+
+      - name: Run ${{ env.SCENARIO }}
+        run: |
+          . "$RUNNER_TEMP/clean-machine/phase.sh"
+          phase scenario ./conformance/run "$SCENARIO"
+
+      - name: Write the phase times
+        if: ${{ !cancelled() }}
+        run: |
+          . "$RUNNER_TEMP/clean-machine/phase.sh"
+          {
+            echo "### ${{ matrix.os }} (\`$(uname -sm)\`, scenario \`$SCENARIO\`)"
+            echo
+            echo "| Phase | Seconds |"
+            echo "| --- | ---: |"
+            awk -F'\t' '{ printf "| %s | %d |\n", $1, $2; total += $2 } END { printf "| **total** | **%d** |\n", total }' "$phase_log"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
