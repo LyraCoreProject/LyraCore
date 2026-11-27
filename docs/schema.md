@@ -1549,7 +1549,10 @@ an `A_IMMUNITY` row with `p0_kind` `P_MECHANIC`: aura 77 keeps its misc value, a
 its mask, with the source aura id in the low byte of `p1`. An `A_CONTROL` row's `p0` is not a
 Spell.dbc mechanic but a control class (`M_STUN`, `M_ROOT`, `M_FEAR`, `M_POLY`), which several
 mechanics share: it picks the unit's control state and its diminishing-returns category, and no
-immunity reads it.
+immunity reads it. Its `p1` keeps the source aura id (`EffectApplyAuraName`), and its Aura copies
+it to `eff_p1`. `M_POLY` covers confuse, charm, possess, pacify and Gouge's stun; the Module reads
+the source aura to release a Character's loot on a confuse, charm, possess or stun but not on a
+pacify, as vmangos does.
 
 A target is immune to a whole cast when it holds an immunity Aura that names the Spell's `mechanic`,
 before the hit roll and before any effect runs, as vmangos `IsImmuneToSpell` decides. It is immune

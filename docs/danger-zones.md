@@ -332,6 +332,14 @@ then chests give no money.
 imports with no purse rows; an older Shard has opened no item. An older destination refuses the new
 manifest, so update both Shards before moving active World Sessions.
 
+### Control aura source migration
+
+An `A_CONTROL` effect's `p1` now keeps its source aura id, and the Module reads it to release a
+Character's Loot Window on a Polymorph, Gouge, charm or possess. No schema changes. Reimport
+`spell`, then call `debug_repair_after_publish` to copy the new `p1` to live control Auras. Until
+the reimport, every control effect keeps `p1` 0: a stun or fear still releases the window, and a
+confuse, charm, possess or Gouge leaves it open, as before.
+
 ### Corpse AOI migration
 
 The native runtime indexes `game_corpse` by map, Instance and `cell`. The end-appended `cell`

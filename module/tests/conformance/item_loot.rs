@@ -1,6 +1,8 @@
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY};
 use lyracore_package_delta::packed_spell_effect_id;
-use lyracore_shared::spell::taxonomy::{A_CONTROL, M_FEAR, M_ROOT, M_STUN, P_MECHANIC, T_SELF};
+use lyracore_shared::spell::taxonomy::{
+    A_CONTROL, M_FEAR, M_POLY, M_ROOT, M_STUN, P_MECHANIC, T_SELF,
+};
 use lyracore_test_support::{Field, ReducerConnection, Standalone};
 
 use super::buy_in_slot::{delivered_until, request};
@@ -37,6 +39,13 @@ const VIRTUAL_START_MICROS: &str = "1800000000000000";
 const CLAM_COPPER: u32 = 37;
 const CHEST_COPPER: u32 = 25;
 const CONTROL_SELF: u32 = 5_093_091;
+// (control class, Spell.dbc source aura); Gouge's source stun imports with the M_POLY class.
+const STUN: (i32, i32) = (M_STUN, 12);
+const FEAR: (i32, i32) = (M_FEAR, 7);
+const ROOT: (i32, i32) = (M_ROOT, 26);
+const POLYMORPH: (i32, i32) = (M_POLY, 5);
+const GOUGE: (i32, i32) = (M_POLY, 12);
+const PACIFY: (i32, i32) = (M_POLY, 25);
 
 struct Stage {
     shard: Standalone,
@@ -353,7 +362,7 @@ impl Stage {
             .clone()
     }
 
-    fn control_self(&self, mechanic: i32) {
+    fn control_self(&self, (control_class, source_aura): (i32, i32)) {
         self.shard.insert_row(
             "game_spell",
             &[
@@ -374,8 +383,9 @@ impl Stage {
                 ("effect_index", &0u8),
                 ("kind", &A_CONTROL),
                 ("target", &T_SELF),
-                ("p_0", &mechanic),
+                ("p_0", &control_class),
                 ("p_0_kind", &P_MECHANIC),
+                ("p_1", &source_aura),
             ],
         );
         self.shard.assert_call(
@@ -385,9 +395,24 @@ impl Stage {
     }
 
     /// Applies a self-cast control Aura and returns the packets up to the release of `source`.
-    fn control_with_window_on(&mut self, mechanic: i32, source: u64) -> Vec<(u16, Vec<u8>)> {
-        self.control_self(mechanic);
+    fn control_with_window_on(&mut self, control: (i32, i32), source: u64) -> Vec<(u16, Vec<u8>)> {
+        self.control_self(control);
         delivered_until(&mut self.connection, &release_response(source))
+    }
+
+    fn control_leaves_window_open(&mut self, control: (i32, i32)) {
+        self.lootable_template(CLAM, 0, CLAM_COPPER);
+        let (clam, slot) = self.grant(CLAM);
+        window(&self.open(slot), clam);
+
+        self.control_self(control);
+
+        let control_auras = self.shard.query_rows(&format!(
+            "SELECT id FROM game_aura WHERE target_guid = {} AND spell_id = {CONTROL_SELF}",
+            self.character
+        ));
+        assert_eq!(control_auras.len(), 1);
+        assert_eq!(self.open_loot(), clam.to_string());
     }
 
     fn clam_opened_and_emptied(&mut self) -> u64 {
@@ -834,7 +859,7 @@ fn a_stun_on_a_character_with_an_emptied_chest_open_releases_it() {
     window(&stage.use_chest(chest), chest);
     request(&mut stage.connection, CMSG_AUTOSTORE_LOOT_ITEM, vec![0]);
 
-    let packets = stage.control_with_window_on(M_STUN, chest);
+    let packets = stage.control_with_window_on(STUN, chest);
 
     assert!(packets.contains(&release_response(chest)));
     assert_eq!(stage.open_loot(), "0");
@@ -847,7 +872,7 @@ fn a_fear_on_a_character_with_an_emptied_opened_item_open_releases_it() {
     let mut stage = stage("item-loot-clam-fear");
     let clam = stage.clam_opened_and_emptied();
 
-    let packets = stage.control_with_window_on(M_FEAR, clam);
+    let packets = stage.control_with_window_on(FEAR, clam);
 
     assert!(packets.contains(&release_response(clam)));
     assert_eq!(stage.open_loot(), "0");
@@ -858,23 +883,45 @@ fn a_fear_on_a_character_with_an_emptied_opened_item_open_releases_it() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_root_on_a_character_with_a_loot_window_open_leaves_it_open() {
     let mut stage = stage("item-loot-clam-root");
-    stage.lootable_template(CLAM, 0, CLAM_COPPER);
-    let (clam, slot) = stage.grant(CLAM);
-    window(&stage.open(slot), clam);
+    stage.control_leaves_window_open(ROOT);
+}
 
-    stage.control_self(M_ROOT);
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_pacify_on_a_character_with_a_loot_window_open_leaves_it_open() {
+    let mut stage = stage("item-loot-clam-pacify");
+    stage.control_leaves_window_open(PACIFY);
+}
 
-    assert_eq!(
-        stage
-            .shard
-            .query_rows(&format!(
-                "SELECT id FROM game_aura WHERE target_guid = {} AND spell_id = {CONTROL_SELF}",
-                stage.character
-            ))
-            .len(),
-        1
-    );
-    assert_eq!(stage.open_loot(), clam.to_string());
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_polymorph_on_a_character_with_an_emptied_opened_item_open_releases_it() {
+    let mut stage = stage("item-loot-clam-polymorph");
+    let clam = stage.clam_opened_and_emptied();
+
+    let packets = stage.control_with_window_on(POLYMORPH, clam);
+
+    assert!(packets.contains(&release_response(clam)));
+    assert_eq!(stage.open_loot(), "0");
+    assert_eq!(stage.held(CLAM), 0, "the emptied clam is destroyed");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_gouge_on_a_character_with_an_emptied_chest_open_releases_it() {
+    let mut stage = stage("item-loot-chest-gouge");
+    stage
+        .shard
+        .assert_call("debug_start_virtual_clock", &[VIRTUAL_START_MICROS]);
+    let chest = stage.spawn_chest_with_jerky(RESPAWNING_CHEST);
+    window(&stage.use_chest(chest), chest);
+    request(&mut stage.connection, CMSG_AUTOSTORE_LOOT_ITEM, vec![0]);
+
+    let packets = stage.control_with_window_on(GOUGE, chest);
+
+    assert!(packets.contains(&release_response(chest)));
+    assert_eq!(stage.open_loot(), "0");
+    assert!(stage.despawned(chest));
 }
 
 #[test]

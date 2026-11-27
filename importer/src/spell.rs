@@ -1116,8 +1116,8 @@ fn push_spell_effect_rows(
             wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
         }
         let effect_mechanic = s.effect_mechanic[i] as u8;
-        let p1 = if kind == A_FLAG {
-            // docs/schema.md#flag-auras: the Module finds SPELL_AURA_RESIST_PUSHBACK by this id.
+        let p1 = if kind == A_FLAG || kind == A_CONTROL {
+            // docs/schema.md#flag-auras, #mechanic-numbering: the Module reads this source aura id.
             s.effect_aura[i] as i32
         } else if kind == A_IMMUNITY {
             // docs/schema.md#damage-shields gives this A_IMMUNITY p1 encoding.
@@ -3075,7 +3075,10 @@ mod tests {
                 .iter()
                 .find(|effect| effect.spell_id == spell_id)
                 .unwrap();
-            assert_eq!((control.kind, control.p0), (A_CONTROL, M_POLY));
+            assert_eq!(
+                (control.kind, control.p0, control.p1),
+                (A_CONTROL, M_POLY, AuraMod::ModStun as i32)
+            );
         }
         let unrelated = rows
             .effects
@@ -3083,6 +3086,41 @@ mod tests {
             .find(|effect| effect.spell_id == 999_999)
             .unwrap();
         assert_eq!((unrelated.kind, unrelated.p0), (A_CONTROL, M_STUN));
+    }
+
+    #[test]
+    fn a_control_aura_keeps_its_source_aura_in_p1() {
+        let auras = [
+            AuraMod::ModConfuse,
+            AuraMod::ModCharm,
+            AuraMod::ModPossess,
+            AuraMod::ModPacify,
+            AuraMod::ModPacifySilence,
+        ];
+        let mut dbc = fixture_tables();
+        dbc.spells = auras
+            .iter()
+            .zip(900_001..)
+            .map(|(aura, id)| Spell {
+                id,
+                name: "Control fixture".into(),
+                effect: [EFFECT_APPLY_AURA, 0, 0],
+                effect_aura: [*aura as u32, 0, 0],
+                implicit_target_a: [6, 0, 0],
+                ..Default::default()
+            })
+            .collect();
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let imported: Vec<_> = rows
+            .effects
+            .iter()
+            .map(|effect| (effect.kind, effect.p0, effect.p1))
+            .collect();
+        assert_eq!(
+            imported,
+            [5, 6, 2, 25, 60].map(|source| (A_CONTROL, M_POLY, source))
+        );
     }
 
     #[test]
