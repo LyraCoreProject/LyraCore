@@ -66,7 +66,7 @@ class Claim(unittest.TestCase):
             comment_facts(labels=("ready-for-agent", "in progress"), assignees=("bob", "carol"))
         )
         self.assertEqual(len(actions), 1)
-        self.assertIn("held by @bob, @carol", actions[0].value)
+        self.assertIn("held by `bob`, `carol`", actions[0].value)
 
     def test_holder_claiming_again_is_told_they_hold_it(self):
         actions = claims.decide_comment(
@@ -366,7 +366,7 @@ class Workflow(unittest.TestCase):
         gh = FakeGithub({7: issue(labels=("ready-for-agent", "in progress"), assignees=("bob",))})
         claims.main(comment_env("/claim"), gh, NOW)
         self.assertEqual([(m, p) for m, p, _ in gh.writes], [("POST", "repos/Org/Repo/issues/7/comments")])
-        self.assertIn("held by @bob", gh.writes[0][2][0])
+        self.assertIn("held by `bob`", gh.writes[0][2][0])
 
     def test_claim_counts_other_open_claims(self):
         gh = FakeGithub({7: issue()}, claims_of={"alice": [3, 5]})

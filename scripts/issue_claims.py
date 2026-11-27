@@ -103,7 +103,7 @@ def decide_claim(facts):
     if facts.assignees:
         return reply(
             facts,
-            f"This issue is held by {mentions(facts.assignees)}. "
+            f"This issue is held by {', '.join(f'`{login}`' for login in facts.assignees)}. "
             f"Pick another issue with the `{READY}` label.",
         )
     if IN_PROGRESS in facts.labels:
