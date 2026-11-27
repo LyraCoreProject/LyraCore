@@ -170,8 +170,13 @@ whole template `maxcount` times, with separate groups for each roll. Largest-rem
 keeps each group's basis-point total equal to its intended share. An item row keeps its
 `mincountOrRef`..`maxcount` stack range, and rows that `LootStoreItem::IsValid` rejects (a zero
 `mincountOrRef`, or a `maxcount` below it) are skipped.
-Runtime conditions and quest-only skinning or fishing drops
-appear in the Compatibility Manifest. Item-container and disenchant tables have no current world
+A creature or fishing loot row, or a reference those rows expand, whose condition is a
+`CONDITION_ACTIVE_GAME_EVENT` keeps its event and reversed flag in `event_entry` and
+`event_reversed`, and a group member with chance 0 keeps `equal_chance`; a reference's condition
+passes to its items, and one whose item asks for another event fails the import. Other loot tables
+keep no condition, so a reference that item loot reaches stays in the `loot.condition` count. Other
+runtime conditions and quest-only skinning or fishing drops appear in the Compatibility Manifest.
+Item-container and disenchant tables have no current world
 import path; the manifest counts them as unsupported.
 
 The gameobjects import selects template patches and spawn ranges, skips disabled spawns, and
@@ -277,7 +282,8 @@ the last unconditional greeting wins; a menu with none uses `0xffffff`. Conditio
 remain unsupported.
 
 `lyracore-shared::gossip::ConditionKind` owns runtime meanings and persistent encoding. Only the
-importer translates source numbers into supported Boolean, quest, level, team and race/class kinds.
+importer translates source numbers into supported Boolean, quest, level, team, race/class and
+Game Event kinds.
 Patch predicates become constants at import time, with inversion preserved. Other kinds become an
 unavailable sentinel. Unknown flags, missing references and unsupported predicates cannot become
 eligible through inversion or OR. Existing condition rows retain their encoding.
@@ -723,10 +729,11 @@ are eligible only in map-509 Instances. His map-1 spawn line, map-509 spawn fact
 use source map predicates. Display-template dependencies come from each accepted command. Fixture identifiers remain unavailable as subjects, broadcasts and display dependencies.
 
 The condition reader follows `Conditions.h` at the pinned source: 33 is map, 15 is level,
-6 is team, and 9 is quest-taken. State 0 accepts active quests and state 1 requires incomplete
-objectives. Level and quest state 2 remain unsupported.
+6 is team, 9 is quest-taken and 12 is an active Game Event, alone or reversed. State 0 accepts
+active quests and state 1 requires incomplete objectives. Level and quest state 2 remain
+unsupported.
 Static conditions use 0 (always), 24 (patch), -1 (and), -2 (or), and -3 (not); these numbers also
-match that header. Flagged runtime conditions remain unsupported.
+match that header. Other flagged runtime conditions remain unsupported.
 
 ### The vmangos Source Profile
 

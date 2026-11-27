@@ -193,6 +193,7 @@ fn source() -> WorldSource {
                 &condition(5, -3, 4, 0, 0),
                 &condition(6, -2, 1, 5, 0),
                 &condition(7, 9, 800, 2, 0),
+                &condition(8, 12, 12, 0, 1),
             ],
         },
         FixtureTable {
@@ -279,6 +280,7 @@ fn patch_constants_and_unsupported_predicates_keep_boolean_gates() {
             id,
             CharacterFacts::default(),
             |_| QuestState::Complete,
+            |event| event == 12,
             |id| conditions.get(&id).copied(),
         )
     };
@@ -293,6 +295,8 @@ fn patch_constants_and_unsupported_predicates_keep_boolean_gates() {
     }
     assert_eq!(conditions[&7].kind, ConditionKind::QuestTaken);
     assert_eq!(evaluate(7), Ok(true));
+    assert_eq!(conditions[&8].kind, ConditionKind::ActiveGameEvent);
+    assert_eq!(evaluate(8), Ok(false));
 }
 
 #[test]

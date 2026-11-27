@@ -139,6 +139,14 @@ pub struct CreatureLoot {
     pub quest_only: bool,
     #[default(0)]
     pub min_count: u32,
+    // 0, or the Game Event the row drops while it runs; reversed, while it does not.
+    #[default(0)]
+    pub event_entry: u32,
+    #[default(false)]
+    pub event_reversed: bool,
+    // vmangos chance 0 in a group: an equal part of what the group's explicit chances leave.
+    #[default(false)]
+    pub equal_chance: bool,
 }
 
 // vmangos ItemPrototype.h: each looter gets their own copy of such an item.
@@ -186,6 +194,8 @@ pub(crate) struct LootRow {
     // Zero is independent; nonzero selects a pool with at most one drop.
     pub(crate) group_id: u32,
     pub(crate) quest_only: bool,
+    pub(crate) event: Option<crate::game_events::GameEventCondition>,
+    pub(crate) equal_chance: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,6 +239,11 @@ impl From<CreatureLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
+            event: crate::game_events::GameEventCondition::of_row(
+                row.event_entry,
+                row.event_reversed,
+            ),
+            equal_chance: row.equal_chance,
         }
     }
 }
@@ -242,6 +257,8 @@ impl From<GamePickpocketLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
+            event: None,
+            equal_chance: false,
         }
     }
 }
@@ -255,6 +272,8 @@ impl From<GameObjectLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
+            event: None,
+            equal_chance: false,
         }
     }
 }
@@ -268,6 +287,8 @@ impl From<GameItemLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
+            event: None,
+            equal_chance: false,
         }
     }
 }
@@ -281,6 +302,8 @@ impl From<GameSkinningLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: false,
+            event: None,
+            equal_chance: false,
         }
     }
 }
@@ -294,6 +317,11 @@ impl From<GameFishingLoot> for LootRow {
             count: row.count,
             group_id: row.group_id,
             quest_only: false,
+            event: crate::game_events::GameEventCondition::of_row(
+                row.event_entry,
+                row.event_reversed,
+            ),
+            equal_chance: row.equal_chance,
         }
     }
 }
@@ -306,31 +334,69 @@ fn source_draw(ctx: &ReducerContext, source_guid: u64) -> u32 {
 }
 
 /// Draws on `source_guid`'s stream each ungrouped row's chance, then each group's pick; a winner
-/// draws its stack next.
+/// draws its stack next. Game Event conditions: docs/schema.md#game-events.
 pub(crate) fn roll_loot_rows(
     ctx: &ReducerContext,
     source_guid: u64,
     rows: impl IntoIterator<Item = LootRow>,
 ) -> Vec<LootDrop> {
     let mut winners = Vec::new();
-    let mut grouped: std::collections::BTreeMap<u32, Vec<LootRow>> =
+    let mut grouped: std::collections::BTreeMap<u32, Vec<(LootRow, bool)>> =
         std::collections::BTreeMap::new();
     for row in rows {
+        let allowed = row.event.is_none_or(|event| event.holds(ctx));
         if row.group_id == 0 {
-            if loot_drops(row.chance_bp, source_draw(ctx, source_guid) % 10000) {
+            if loot_drops(row.chance_bp, source_draw(ctx, source_guid) % 10000) && allowed {
                 winners.push(row.drop(ctx, source_guid));
             }
         } else {
-            grouped.entry(row.group_id).or_default().push(row);
+            grouped
+                .entry(row.group_id)
+                .or_default()
+                .push((row, allowed));
         }
     }
     for members in grouped.into_values() {
-        let weights: Vec<u32> = members.iter().map(|row| row.chance_bp).collect();
-        if let Some(i) = group_pick(&weights, source_draw(ctx, source_guid) % 10000) {
-            winners.push(members[i].drop(ctx, source_guid));
+        let roll = source_draw(ctx, source_guid) % 10000;
+        if let Some(i) = group_pick(&group_weights(&members), roll) {
+            winners.push(members[i].0.drop(ctx, source_guid));
         }
     }
     winners
+}
+
+/// Each `(member, allowed)` weight in basis points: its stored chance while every member is
+/// allowed. Otherwise, as vmangos `LootGroup::Roll`, a refused member weighs nothing and the allowed
+/// equal-chance members share equally what the group holds beyond its allowed explicit chances.
+fn group_weights(members: &[(LootRow, bool)]) -> Vec<u32> {
+    if members.iter().all(|&(_, allowed)| allowed) {
+        return members.iter().map(|(row, _)| row.chance_bp).collect();
+    }
+    let total = members
+        .iter()
+        .fold(0u32, |sum, (row, _)| sum.saturating_add(row.chance_bp));
+    let explicit = members
+        .iter()
+        .filter(|&&(row, allowed)| allowed && !row.equal_chance)
+        .fold(0u32, |sum, (row, _)| sum.saturating_add(row.chance_bp));
+    let equal = members
+        .iter()
+        .filter(|&&(row, allowed)| allowed && row.equal_chance)
+        .count() as u32;
+    let pool = total.saturating_sub(explicit);
+    let mut remainder = pool.checked_rem(equal).unwrap_or(0);
+    members
+        .iter()
+        .map(|&(row, allowed)| match (allowed, row.equal_chance) {
+            (false, _) => 0,
+            (true, false) => row.chance_bp,
+            (true, true) => {
+                let extra = u32::from(remainder > 0);
+                remainder -= extra;
+                pool / equal + extra
+            }
+        })
+        .collect()
 }
 
 // vmangos checks the quest need again at take, even for a looter's own party-loot copy.
@@ -704,6 +770,13 @@ pub struct GameFishingLoot {
     pub group_id: u32,
     #[default(0)]
     pub min_count: u32,
+    // As on `CreatureLoot`.
+    #[default(0)]
+    pub event_entry: u32,
+    #[default(false)]
+    pub event_reversed: bool,
+    #[default(false)]
+    pub equal_chance: bool,
 }
 
 pub(crate) fn roll_pickpocket_loot(
@@ -1099,6 +1172,52 @@ mod tests {
         assert_eq!(group_pick(&eq, 2500), Some(1));
     }
 
+    fn member(chance_bp: u32, equal_chance: bool, allowed: bool) -> (LootRow, bool) {
+        let row = LootRow {
+            item_entry: 25,
+            chance_bp,
+            min_count: 0,
+            count: 1,
+            group_id: 1,
+            quest_only: false,
+            event: None,
+            equal_chance,
+        };
+        (row, allowed)
+    }
+
+    #[test]
+    fn a_refused_explicit_member_leaves_its_chance_to_the_allowed_equal_chance_members() {
+        // A fishing group: a 20.2% fish of a stopped event, a 30% fish and two equal-chance fish.
+        let group = [
+            member(2020, false, false),
+            member(3000, false, true),
+            member(2490, true, true),
+            member(2490, true, true),
+        ];
+        assert_eq!(group_weights(&group), [0, 3000, 3500, 3500]);
+        let mut running = group;
+        running[0].1 = true;
+        assert_eq!(group_weights(&running), [2020, 3000, 2490, 2490]);
+    }
+
+    #[test]
+    fn a_refused_equal_chance_member_leaves_its_share_to_the_other_equal_chance_members() {
+        // Reference loot 2073 at 2%: the Pumpkin Bag and two equal-chance neighbours.
+        let group = [
+            member(67, true, false),
+            member(67, true, true),
+            member(66, true, true),
+        ];
+        assert_eq!(group_weights(&group), [0, 100, 100]);
+    }
+
+    #[test]
+    fn a_group_without_equal_chance_members_leaves_a_refused_chance_empty() {
+        let group = [member(6000, false, false), member(3000, false, true)];
+        assert_eq!(group_weights(&group), [0, 3000]);
+    }
+
     #[test]
     fn a_stack_spans_the_row_minimum_to_its_count_and_zero_keeps_it_fixed() {
         let row = |min_count, count| LootRow {
@@ -1108,6 +1227,8 @@ mod tests {
             count,
             group_id: 0,
             quest_only: false,
+            event: None,
+            equal_chance: false,
         };
         assert_eq!(row(1, 3).stack_range(), (1, 3));
         assert_eq!(row(2, 2).stack_range(), (2, 2));

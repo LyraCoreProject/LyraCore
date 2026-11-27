@@ -306,8 +306,30 @@ fn state_of(ctx: &ReducerContext, event_entry: u32, now_secs: i64) -> GameEventS
     )
 }
 
-fn running(ctx: &ReducerContext, event_entry: u32) -> bool {
+/// vmangos `GameEventMgr::IsActiveEvent`, which `CONDITION_ACTIVE_GAME_EVENT` reads.
+pub(crate) fn running(ctx: &ReducerContext, event_entry: u32) -> bool {
     state_of(ctx, event_entry, crate::time::now_secs(ctx) as i64) == GameEventState::Active
+}
+
+/// A loot row's vmangos `CONDITION_ACTIVE_GAME_EVENT` on `event_entry`, or its reversed form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GameEventCondition {
+    pub event_entry: u32,
+    pub reversed: bool,
+}
+
+impl GameEventCondition {
+    /// The condition a row's `event_entry` and `event_reversed` columns store; 0 is none.
+    pub(crate) fn of_row(event_entry: u32, reversed: bool) -> Option<Self> {
+        (event_entry != 0).then_some(Self {
+            event_entry,
+            reversed,
+        })
+    }
+
+    pub(crate) fn holds(self, ctx: &ReducerContext) -> bool {
+        running(ctx, self.event_entry) != self.reversed
+    }
 }
 
 /// vmangos `Quest::IsActive`: whether givers offer `quest_entry` now.

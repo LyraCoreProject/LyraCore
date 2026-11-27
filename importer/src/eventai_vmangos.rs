@@ -246,6 +246,13 @@ fn predicates(source: &(impl TableRows + ?Sized)) -> Result<BTreeMap<u32, Option
             && (1..=i64::from(u32::MAX)).contains(&values[0])
         {
             Some(format!("quest-incomplete.{}", values[0]))
+        } else if kind == 12
+            && flags <= 1
+            && values[1..].iter().all(|v| *v == 0)
+            && (1..=i64::from(u32::MAX)).contains(&values[0])
+        {
+            let prefix = if flags == 1 { "not-" } else { "" };
+            Some(format!("{prefix}event.{}", values[0]))
         } else if flags == 0 && values[1..].iter().all(|v| *v == 0) {
             match (kind, values[0]) {
                 (6, 469) => Some("alliance".into()),
@@ -1056,6 +1063,10 @@ mod tests {
             [23, -2, 20, 21, 0, 0, 0],
             [24, -3, 20, 0, 0, 0, 0],
             [25, -3, 24, 0, 0, 0, 0],
+            [110, 12, 2, 0, 0, 0, 0],
+            [309, 12, 1, 0, 0, 0, 1],
+            [26, 12, 2, 5, 0, 0, 0],
+            [27, -2, 110, 309, 0, 0, 0],
         ];
         let rows: Vec<Vec<_>> = values
             .into_iter()
@@ -1086,6 +1097,10 @@ mod tests {
             assert_eq!(predicates[&id].as_deref(), Some("always"));
         }
         assert_eq!(predicates[&24], None);
+        assert_eq!(predicates[&110].as_deref(), Some("event.2"));
+        assert_eq!(predicates[&309].as_deref(), Some("not-event.1"));
+        assert_eq!(predicates[&26], None);
+        assert_eq!(predicates[&27], None);
     }
 
     pub(super) fn source() -> Source {

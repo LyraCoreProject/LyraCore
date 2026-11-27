@@ -22,7 +22,7 @@ symbol = "LootTemplate::Process"
 status = "unverified"
 
 [[known_gaps]]
-description = "loot.condition selected 4085: The loot tables have no runtime condition field. Static WOW_PATCH conditions are applied before expansion."
+description = "loot.condition selected 4085: Only creature and fishing loot keep a runtime condition, a Game Event one; other conditions, and every condition on the other loot tables, are not kept. Static WOW_PATCH conditions are applied before expansion."
 path = "importer/src/world_import_loot.rs"
 symbol = "parse"
 evidence = "Compatibility Manifest loot.condition; conformance/vmangos-port-census/loot.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."

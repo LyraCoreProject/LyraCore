@@ -304,6 +304,29 @@ whose event an import removed. An importer from before this change re-importing 
 `event_ids` but no links; if no `events` import ever ran, the Realm keeps the behavior before Game
 Events, otherwise the existing links still name the same spawns.
 
+### Game event condition migration
+
+`game_creature_loot` and `game_fishing_loot` gain `event_entry`, `event_reversed` and
+`equal_chance`, end-appended with defaults 0, false and false; shared import SQL defaults fill older
+inserts. Rust Packages that construct `CreatureLoot` must supply all three fields. A Package Delta
+fishing loot claim cannot name them, so a Package fishing row has no event and no equal chance. The
+stored EventAI `EventPredicate` gains `GameEventRunning` and `GameEventNotRunning` after its
+existing variants, so stored rules keep their discriminants; SpacetimeDB classifies the appended
+variants as a client-breaking change, which a normal publish acknowledges without deleting data (see
+[command lists in EventAI](data-ingestion.md#command-lists-in-eventai)). `game_gossip_condition`
+keeps its columns and gains kind 12 as data. No reducer argument changes.
+
+**A publish alone changes nothing a player sees.** Every loot row still has no event, so event
+loot such as the Hallow's End Pumpkin Bag and the winter fish keeps dropping all year; every
+imported type-12 gossip condition is still stored as the unavailable sentinel, so its options stay
+hidden; and the EventAI import left the rules on an event out.
+
+With the updated importer, reimport `items` for creature loot (a cold import of the item catalogue,
+creature loot and vendor offers; see [vendor stock migration](#vendor-stock-migration)), `loot`
+for fishing loot, `gossip` for gossip conditions and `creature-ai` for EventAI rules. Each family
+takes effect alone. A rerun writes the same rows. A corpse rolled before the `items` reimport keeps
+the loot it rolled.
+
 ### Game event creature data migration
 
 The private `game_event_creature_data` table is new and starts empty. The private

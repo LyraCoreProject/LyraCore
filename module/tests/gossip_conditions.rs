@@ -184,6 +184,37 @@ fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction(
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_game_event_condition_offers_its_option_while_the_event_runs_and_reversed_while_it_does_not() {
+    const FESTIVAL: u32 = 5_300_001;
+    let event = ConditionKind::ActiveGameEvent.code();
+    let (shard, npc) = fixture("gossip-game-event");
+    shard.insert_row(
+        "game_event",
+        &[
+            ("event_entry", &FESTIVAL),
+            ("start_secs", &0i64),
+            ("end_secs", &i64::from(i32::MAX)),
+            ("occurrence_mins", &525_600u32),
+            ("length_mins", &1_440u32),
+            ("scripted", &true),
+            ("disabled", &false),
+            ("description", &"Fixture festival"),
+        ],
+    );
+    shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {event}, value1 = {FESTIVAL}, value2 = 0 WHERE condition_id = {CONDITION}"));
+    select(&shard, &npc, OPTION, CONDITION_FAILS);
+    shard.assert_call("debug_event_start", &[&FESTIVAL.to_string()]);
+    select(&shard, &npc, OPTION, ALLOWED);
+    shard.assert_sql(&format!(
+        "UPDATE game_gossip_condition SET flags = 1 WHERE condition_id = {CONDITION}"
+    ));
+    select(&shard, &npc, OPTION, CONDITION_FAILS);
+    shard.assert_call("debug_event_stop", &[&FESTIVAL.to_string()]);
+    select(&shard, &npc, OPTION, ALLOWED);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook() {
     let always = ConditionKind::Always.code();
     const FIRST_MENU: u32 = 509_9001;

@@ -986,7 +986,7 @@ place like any chest.
 ### Game events
 
 `module/src/game_events.rs` runs vmangos Game Events for spawns, creature data, quests, vendor
-items and mail, as `GameEventMgr` does.
+items, mail and the conditions that ask for one, as `GameEventMgr` does.
 `game_event` holds each event's calendar: `start_secs` and `end_secs` on the Realm Clock, and every
 `occurrence_mins` the event runs for `length_mins`. `scripted` marks a vmangos `hardcoded` event,
 which its script runs instead of the calendar, and `disabled` an event vmangos disables or leaves
@@ -1059,6 +1059,18 @@ in the log when the event ends, and a turn-in request at its ender still rewards
 vmangos. A vendor item tied to an event is left out of the vendor's list and refused as an item the
 vendor does not sell while the event does not run. Both read the event's state at the moment of
 the request, not the minute pass.
+
+A vmangos `CONDITION_ACTIVE_GAME_EVENT` holds while its event runs, as vmangos
+`GameEventMgr::IsActiveEvent`, and reversed while it does not, including while the event is
+unscheduled; an Operator hold counts. A gossip option's condition reads it through
+`game_gossip_condition` kind 12, alone or inside a compound condition. A `game_creature_loot` or
+`game_fishing_loot` row with a nonzero `event_entry` drops only while that event runs, or with
+`event_reversed` only while it does not. The condition is checked as the loot rolls. A refused
+ungrouped row still draws its chance and drops nothing. In a group, as vmangos `LootGroup::Roll`, a
+refused member weighs nothing, and the members with `equal_chance` (vmangos chance 0, stored as
+their share of what the explicit chances leave) share equally what the group holds beyond its
+allowed explicit chances; a group with every member allowed rolls its stored chances. An EventAI
+rule whose event condition is `event.N` or `not-event.N` checks the event, whoever invoked it.
 
 Each pass first follows every event's start, as vmangos `ApplyNewEvent` does. An event that runs
 and is not in `game_event_started` is recorded there, and each of its `game_event_mail` rows sends

@@ -286,7 +286,9 @@ fn evaluate_rule<W: EventAiWorld>(
             return;
         }
         let predicate_subject = match policy.predicate {
-            EventPredicate::Map(_) => Some(context.creature_guid),
+            EventPredicate::Map(_)
+            | EventPredicate::GameEventRunning(_)
+            | EventPredicate::GameEventNotRunning(_) => Some(context.creature_guid),
             _ => context.invoker_guid.or(context.current_target_guid),
         };
         if policy.predicate != EventPredicate::Always
@@ -1247,6 +1249,12 @@ impl EventAiWorld for DatabaseWorld<'_> {
             EventPredicate::Map(map_id) => self
                 .eventai_unit(guid)
                 .is_some_and(|unit| unit.map_id == map_id),
+            EventPredicate::GameEventRunning(event_entry) => {
+                crate::game_events::running(self.ctx, event_entry)
+            }
+            EventPredicate::GameEventNotRunning(event_entry) => {
+                !crate::game_events::running(self.ctx, event_entry)
+            }
         }
     }
 

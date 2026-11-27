@@ -728,6 +728,9 @@ fn replace_creature_loot(
             group_id: row.group_id,
             quest_only: row.quest_only,
             min_count: row.min_count,
+            event_entry: 0,
+            event_reversed: false,
+            equal_chance: false,
         }
     );
     let old: Vec<_> = old

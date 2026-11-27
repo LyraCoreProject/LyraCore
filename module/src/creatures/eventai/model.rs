@@ -135,6 +135,9 @@ pub enum EventPredicate {
     QuestTaken(QuestTakenPredicate),
     Map(u32),
     QuestIncomplete(u32),
+    // vmangos `CONDITION_ACTIVE_GAME_EVENT` on the event, then its reversed form.
+    GameEventRunning(u32),
+    GameEventNotRunning(u32),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
