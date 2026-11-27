@@ -1067,6 +1067,7 @@ mod character_fence_tripwire {
         ("module/src/world.rs", 1, "`teleport` takes a guid already resolved through a fenced live entity"),
         ("module/src/character.rs", 9, "World entry carries its own `is_in_transit` fence (2 reads); `set_home` and `persist_entity` take a guid resolved through a fenced entity (`begin_transfer` calls `persist_entity`); `debug_delete_character` keeps a raw existence probe so a missing Character stays a no-op while an in-transit one is refused, and `cascade_delete_character`'s raw delete is the sweep that probe guards; creation checks name uniqueness; the deletion Gate distinguishes absence, ownership and the Transfer fence"),
         ("module/src/group.rs", 2, "Group events and departure read member identity while changing membership."),
+        ("module/src/instance.rs", 2, "the Group join reset reads the rows a Transfer fence hides, so a fenced joiner on this Shard is reset here and gets no marker"),
         ("module/src/auth.rs", 2, "the guid allocator seeds from every Character guid; `adopt_character_gm_levels` is the Realm-wide repair scan that moves legacy Character GM levels onto Accounts"),
         ("module/src/items/ops.rs", 2, "race/class reads for the starter loadout and the mana-class gate — no write to the character"),
         ("module/src/spell/cast/targeting.rs", 1, "caster NAME for the resurrect prompt — no write"),
