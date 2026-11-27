@@ -1,5 +1,31 @@
 use spacetimedb::ReducerContext;
 
+use super::{
+    CAST_FLAG_CANNOT_CRIT, E_DAMAGE, E_FINISHER_DAMAGE, E_HEAL, E_HEAL_MAX_HEALTH, E_POWER_BURN,
+    E_WEAPON_STRIKE,
+};
+use crate::{Spell, SpellEffect};
+
+/// vmangos `SpellEntry::CanCrit`.
+pub(crate) fn can_crit(hdr: &Spell, effects: &[SpellEffect]) -> bool {
+    hdr.cast_flags & CAST_FLAG_CANNOT_CRIT == 0 && has_crit_effect(effects)
+}
+
+/// vmangos `Spells::IsEffectThatCanCrit`: an effect that deals or heals an amount.
+pub(crate) fn has_crit_effect(effects: &[SpellEffect]) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect.kind,
+            E_DAMAGE
+                | E_FINISHER_DAMAGE
+                | E_WEAPON_STRIKE
+                | E_POWER_BURN
+                | E_HEAL
+                | E_HEAL_MAX_HEALTH
+        )
+    })
+}
+
 pub(super) fn integer_roll(ctx: &ReducerContext, target_guid: u64, maximum: u32) -> u32 {
     loop {
         if let Some(roll) = integer_candidate(

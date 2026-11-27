@@ -147,6 +147,7 @@ pub const CAST_FLAG_REQ_REVENGE: u32 = 0x0040;
 pub const CAST_FLAG_REQ_DAGGER: u32 = 0x0100;
 pub const SPELL_FAMILY_DRUID: u8 = 7;
 pub const SPELL_FAMILY_ROGUE: u8 = 8;
+pub const SPELL_FAMILY_POTION: u8 = 13;
 // Spell.dbc SpellFamilyFlags bits, as vmangos `SpellClassMask.h` names them.
 pub const FAMILY_FLAG_ROGUE_EVISCERATE: u64 = 0x0002_0000;
 pub const FAMILY_FLAG_ROGUE_RUPTURE: u64 = 0x0010_0000;
@@ -172,6 +173,7 @@ pub const P_ITEM_ENTRY: u8 = 8;
 pub const P_ENTRY: u8 = 9;
 pub const P_ENCHANT_ID: u8 = 10;
 pub const SPELLMOD_OP_DAMAGE: i32 = 0;
+pub const SPELLMOD_OP_CRITICAL_CHANCE: i32 = 7;
 pub const SPELLMOD_OP_CASTING_TIME: i32 = 10;
 pub const SPELLMOD_OP_COST: i32 = 14;
 pub const SPELLMOD_OP_MULTIPLE_VALUE: i32 = 27;

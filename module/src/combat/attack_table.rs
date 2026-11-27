@@ -1,7 +1,10 @@
+use lyracore_shared::spell::taxonomy::SPELLMOD_OP_CRITICAL_CHANCE;
 use spacetimedb::ReducerContext;
 
 use crate::conformance_rolls::{draw, RollStream};
-use crate::{game_creature_template, game_world_entity, Spell, SpellEffect, WorldEntity};
+use crate::{
+    game_creature_template, game_spell, game_world_entity, Spell, SpellEffect, WorldEntity,
+};
 
 use super::folds::{
     defender_block_value, effective_crit_bp, effective_ranged_crit_bp,
@@ -67,6 +70,8 @@ pub(crate) enum AttackType {
 
 #[derive(Clone, Copy)]
 pub(crate) struct DeliveredSpell {
+    /// 0 for a queued strike without a Spell row.
+    pub(crate) spell_id: u32,
     pub(crate) next_melee_swing: bool,
     pub(crate) always_hit: bool,
     pub(crate) cannot_crit: bool,
@@ -92,22 +97,8 @@ impl DeliveredSpell {
     /// vmangos `SpellEntry::CanCrit`: a cast Spell crits only through an effect that deals or
     /// heals an amount.
     pub(crate) fn crits_through(self, effects: &[SpellEffect]) -> Self {
-        use crate::spell::{
-            E_DAMAGE, E_FINISHER_DAMAGE, E_HEAL, E_HEAL_MAX_HEALTH, E_POWER_BURN, E_WEAPON_STRIKE,
-        };
-        let crit_effect = effects.iter().any(|effect| {
-            matches!(
-                effect.kind,
-                E_DAMAGE
-                    | E_FINISHER_DAMAGE
-                    | E_WEAPON_STRIKE
-                    | E_POWER_BURN
-                    | E_HEAL
-                    | E_HEAL_MAX_HEALTH
-            )
-        });
         Self {
-            cannot_crit: self.cannot_crit || !crit_effect,
+            cannot_crit: self.cannot_crit || !crate::spell::has_crit_effect(effects),
             ..self
         }
     }
@@ -115,6 +106,7 @@ impl DeliveredSpell {
     fn of(spell: Option<&Spell>, next_melee_swing: bool) -> Self {
         let flags = spell.map_or(0, |spell| spell.cast_flags);
         Self {
+            spell_id: spell.map_or(0, |spell| spell.spell_id),
             next_melee_swing,
             always_hit: flags & crate::spell::CAST_FLAG_ALWAYS_HIT != 0,
             cannot_crit: flags & crate::spell::CAST_FLAG_CANNOT_CRIT != 0,
@@ -173,6 +165,8 @@ pub(crate) struct AttackFacts {
     pub(crate) skills: Skills,
     pub(crate) base: BaseChances,
     pub(crate) hit_bonus: i32,
+    /// The attacker's summed flat and percent crit chance modifiers on the spell.
+    pub(crate) crit_modifier: (i32, i32),
     pub(crate) attack_type: AttackType,
     pub(crate) spell: Option<DeliveredSpell>,
     pub(crate) attacker_is_creature: bool,
@@ -289,7 +283,8 @@ pub(crate) fn attack_table(facts: &AttackFacts) -> AttackTable {
     {
         0
     } else {
-        (base.crit as i32 + crit_bonus).max(0) as u32
+        let crit = (base.crit as i32 + crit_bonus).max(0) as f32 / 100.0;
+        (crate::spell::crit_chance_under(crit, facts.crit_modifier) * 100.0).round() as u32
     };
     let can_crit = !facts.spell.is_some_and(|spell| spell.cannot_crit);
 
@@ -428,6 +423,11 @@ pub(crate) fn attack_table_for(
             attacker.guid,
             crate::items::EquipStat::Hit,
         ),
+        crit_modifier: spell
+            .and_then(|spell| ctx.db.game_spell().spell_id().find(spell.spell_id))
+            .map_or((0, 0), |hdr| {
+                crate::spell::spell_mod(ctx, attacker.guid, SPELLMOD_OP_CRITICAL_CHANCE, &hdr)
+            }),
         attack_type,
         spell,
         attacker_is_creature: !attacker.is_player(),
@@ -540,6 +540,7 @@ mod tests {
     use super::*;
 
     const QUEUED: DeliveredSpell = DeliveredSpell {
+        spell_id: 0,
         next_melee_swing: true,
         always_hit: false,
         cannot_crit: false,
@@ -550,6 +551,7 @@ mod tests {
         school_mask: 1,
     };
     const CAST: DeliveredSpell = DeliveredSpell {
+        spell_id: 0,
         next_melee_swing: false,
         always_hit: false,
         cannot_crit: false,
@@ -580,6 +582,7 @@ mod tests {
                 crushing: 0,
             },
             hit_bonus: hit,
+            crit_modifier: (0, 0),
             attack_type: AttackType::Melee,
             spell: None,
             attacker_is_creature: false,
@@ -735,6 +738,18 @@ mod tests {
         assert_eq!(rolled_skill(Some(hammer), 0, 300), 300);
         assert_eq!(rolled_skill(Some(CAST), 250, 300), 250);
         assert_eq!(rolled_skill(None, 250, 300), 250);
+    }
+
+    #[test]
+    fn a_crit_chance_modifier_changes_a_spells_crit_band_after_the_skill_bonus() {
+        let mut cold_blood = level_60();
+        cold_blood.spell = Some(CAST);
+        cold_blood.crit_modifier = (100, 0);
+        assert_eq!(attack_table(&cold_blood).crit, 10_500);
+        let mut percent = level_63();
+        percent.spell = Some(CAST);
+        percent.crit_modifier = (0, 50);
+        assert_eq!(attack_table(&percent).crit, 300);
     }
 
     #[test]

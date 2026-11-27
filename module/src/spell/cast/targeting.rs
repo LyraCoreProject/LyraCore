@@ -1,6 +1,7 @@
+use crate::spell::proc::DAMAGE_CLASS_MAGIC;
 use crate::spell::source_behavior;
 use lyracore_shared::constants::tracer_spell;
-use lyracore_shared::spell::taxonomy::E_REVIVE_PET;
+use lyracore_shared::spell::taxonomy::{E_REVIVE_PET, SPELL_FAMILY_POTION};
 use lyracore_shared::spell_custom as custom;
 
 use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
@@ -1488,16 +1489,22 @@ fn direct_spell_crit_chance(
             .crit as f32
                 / 100.0
         }
-        _ if hdr.school_mask & RESIST_ARMOR != 0 => 0.0,
-        _ => {
-            spell_crit_chance(ctx, caster_guid)
-                + if hdr.damage_class == 1 {
-                    bonuses::school_crit(ctx, caster_guid, 1 << school_index(hdr.school_mask))
-                } else {
-                    0.0
-                }
+        DAMAGE_CLASS_MAGIC => {
+            let chance = if hdr.school_mask & RESIST_ARMOR != 0 {
+                0.0
+            } else {
+                magic_crit_chance(ctx, hdr, caster_guid)
+            };
+            crate::spell::modified_crit_chance(ctx, caster_guid, hdr, chance)
         }
+        _ if hdr.school_mask & RESIST_ARMOR != 0 => 0.0,
+        _ => spell_crit_chance(ctx, caster_guid),
     }
+}
+
+fn magic_crit_chance(ctx: &ReducerContext, hdr: &Spell, caster_guid: u64) -> f32 {
+    spell_crit_chance(ctx, caster_guid)
+        + bonuses::school_crit(ctx, caster_guid, 1 << school_index(hdr.school_mask))
 }
 
 /// A landed hit's crit: its weapon roll's, else its own Caster draw, as vmangos `AddUnitTarget`.
@@ -2081,11 +2088,11 @@ fn apply_heal(
     let scaled = points as f32
         + power as f32 * bonuses::spell_coefficient(ctx, hdr, e, caster_guid, caster_guid, true);
     let scaled = bonuses::healing_taken(ctx, hdr, e, target_guid, scaled, 1);
-    let chance = if hdr.family_name == 13 {
-        10.0
-    } else if hdr.damage_class == 1 {
-        spell_crit_chance(ctx, caster_guid)
-            + bonuses::school_crit(ctx, caster_guid, 1 << school_index(hdr.school_mask))
+    let chance = if hdr.family_name == SPELL_FAMILY_POTION {
+        crate::spell::modified_crit_chance(ctx, caster_guid, hdr, 10.0)
+    } else if hdr.damage_class == DAMAGE_CLASS_MAGIC {
+        let chance = magic_crit_chance(ctx, hdr, caster_guid);
+        crate::spell::modified_crit_chance(ctx, caster_guid, hdr, chance)
     } else {
         0.0
     };

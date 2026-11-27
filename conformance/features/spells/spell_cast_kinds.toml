@@ -54,10 +54,10 @@ symbol = "dummy_proc"
 evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::HandleDummyAuraProc case 12292 casts 12723 at a random unit near the victim and returns SPELL_AURA_PROC_FAILED, keeping the charge, when it finds none; dummy_proc returns Failed for 12292 and 18765."
 
 [[known_gaps]]
-description = "A crit chance spell modifier (SPELLMOD_CRITICAL_CHANCE) changes no crit roll. Cold Blood 14177 and Divine Favor 20216 carry only that modifier, so the next spell their family mask covers spends them and gets no crit bonus. Inner Focus and Elemental Mastery are spent through their cost modifier and also give no crit bonus."
-path = "module/src/spell/cast/targeting.rs"
-symbol = "direct_spell_crit_chance"
-evidence = "Source reading, not measured. At d9173eca, Unit::GetSpellCritChance (Unit.cpp:5212) applies SPELLMOD_CRITICAL_CHANCE through Player::ApplySpellMod (Unit.cpp:5312); direct_spell_crit_chance and the heal crit read no spell modifier."
+description = "A charged crit chance spell modifier, such as Cold Blood 14177, is spent by every cast whose crit roll would read it, even when that roll never runs. vmangos keeps it when a weapon roll misses before the crit band, and when the cast reaches no unit target."
+path = "module/src/spell/spell_modifier.rs"
+symbol = "used_rows"
+evidence = "Source reading, not measured. At d9173eca, SpellCaster::RollMeleeOutcomeAgainst returns on a miss before it calls Unit::GetSpellCritChance, and only Spell::AddUnitTarget rolls a spell crit; Player::DropModCharge runs only inside that ApplySpellMod."
 
 [[known_gaps]]
 description = "A Trigger Child Cast uses and can spend a charged spell modifier that its parent cast already uses, because the parent spends its charges only after its effects. vmangos hides a charge that an in-flight cast took from every other cast."
@@ -338,6 +338,21 @@ function = "a_spell_outside_the_family_mask_spends_no_clearcasting"
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_crit_chance_modifier_is_kept_by_a_spell_that_cannot_crit_and_spent_by_the_crit_it_gives"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_crit_chance_modifier_makes_the_next_masked_heal_crit"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_crit_chance_modifier_makes_the_next_masked_weapon_strike_crit"
+rung = "durable_module"
+
+[[tests]]
 path = "module/tests/queued_strike.rs"
 function = "a_queued_strike_under_a_free_cost_modifier_is_free_and_spends_it_at_the_swing"
 rung = "durable_module"
@@ -360,6 +375,21 @@ rung = "unit"
 [[tests]]
 path = "module/src/spell/spell_modifier.rs"
 function = "natures_grace_is_kept_by_a_cast_natures_swiftness_made_instant"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/spell_modifier.rs"
+function = "a_crit_chance_modifier_adds_its_flat_percent_then_scales_by_its_percent"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/spell_modifier.rs"
+function = "a_crit_chance_modifier_is_used_only_by_a_cast_whose_crit_roll_reads_it"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/spell_modifier.rs"
+function = "a_spell_rolls_a_modified_crit_when_it_can_crit_with_a_damage_class_or_as_a_potion"
 rung = "unit"
 
 [[tests]]
@@ -855,6 +885,11 @@ rung = "unit"
 [[tests]]
 path = "module/src/combat/attack_table.rs"
 function = "a_creature_crits_with_a_spell_only_when_a_player_owns_it"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/attack_table.rs"
+function = "a_crit_chance_modifier_changes_a_spells_crit_band_after_the_skill_bonus"
 rung = "unit"
 
 [[tests]]

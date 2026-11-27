@@ -7,11 +7,12 @@ use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
     A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE, A_PROC_TRIGGER, A_SPELLMOD_FLAT,
-    A_SPELLMOD_PCT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES, COMBAT_ATTACK_POWER,
-    COMBAT_CRIT, COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, E_TRIGGER, M_FEAR, M_POLY, M_STUN,
-    P_COMBAT_FIELD, P_MECHANIC, P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR,
-    SPEED_CAST, SPEED_MOVE, SPEED_SWING, SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST, T_SELF,
-    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    A_SPELLMOD_PCT, CAST_FLAG_ALWAYS_HIT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES,
+    COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_SPELL_CRIT, E_DAMAGE, E_HEAL, E_INTERRUPT, E_TRIGGER,
+    E_WEAPON_STRIKE, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD, P_MECHANIC, P_NONE, P_RAW,
+    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST, SPEED_MOVE, SPEED_SWING,
+    SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST, SPELLMOD_OP_CRITICAL_CHANCE, T_SELF, T_TARGET_ALLY,
+    T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
@@ -26,6 +27,9 @@ const NATURE: u8 = 0x08;
 // vmangos SpellDamageClass; class 0 rolls no hit.
 const DAMAGE_CLASS_NONE: u8 = 0;
 const DAMAGE_CLASS_MAGIC: u8 = 1;
+const DAMAGE_CLASS_MELEE: u8 = 2;
+// Spell.dbc Attributes bit SPELL_ATTR_NO_ACTIVE_DEFENSE: no dodge, parry or block.
+const ATTR_NO_ACTIVE_DEFENSE: u32 = 0x0020_0000;
 
 // vmangos SpellDefines.h ProcFlags and ProcFlagsEx.
 const DEAL_MELEE_SWING: u32 = 0x4;
@@ -123,6 +127,12 @@ const PRESENCE_OF_MIND: u32 = 5_091_144;
 const MAGE_BOLT: u32 = 5_091_145;
 const SLOW_MAGE_BOLT: u32 = 5_091_146;
 const UNMASKED_MAGE_BOLT: u32 = 5_091_147;
+const COLD_BLOOD_FIXTURE: u32 = 5_091_148;
+const UNCRITTABLE_MAGE_BOLT: u32 = 5_091_149;
+const MAGE_HEAL: u32 = 5_091_150;
+const MAGE_STRIKE: u32 = 5_091_151;
+// Cold Blood 14177 and Divine Favor 20216: a flat +100% crit chance modifier with one charge.
+const CERTAIN_CRIT_PERCENT: i32 = 100;
 const SPELL_FAMILY_MAGE: u8 = 3;
 const MAGE_BOLT_FAMILY_FLAG: i32 = 0x1;
 const UNMASKED_FAMILY_FLAG: i32 = 0x2;
@@ -1514,6 +1524,90 @@ fn a_spell_outside_the_family_mask_spends_no_clearcasting() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_crit_chance_modifier_is_kept_by_a_spell_that_cannot_crit_and_spent_by_the_crit_it_gives() {
+    let mut standalone = Standalone::start("aura-charges-crit-modifier-spell");
+    let wolf = stage(&mut standalone);
+    cold_blood_fixture(&standalone);
+    mage_bolt(
+        &standalone,
+        UNCRITTABLE_MAGE_BOLT,
+        MAGE_BOLT_FAMILY_FLAG,
+        &format!(
+            "damage_class = {DAMAGE_CLASS_MAGIC}, \
+             cast_flags = {}",
+            CAST_FLAG_CANNOT_CRIT | CAST_FLAG_IGNORE_RESISTANCES
+        ),
+    );
+    mage_bolt(
+        &standalone,
+        MAGE_BOLT,
+        MAGE_BOLT_FAMILY_FLAG,
+        &format!("damage_class = {DAMAGE_CLASS_MAGIC}"),
+    );
+
+    let go = go_event(&standalone, PLAYER, UNCRITTABLE_MAGE_BOLT, wolf);
+    assert_eq!(go["is_crit"], "false");
+    assert_eq!(
+        charges(&standalone, PLAYER, COLD_BLOOD_FIXTURE),
+        Some(1),
+        "vmangos GetSpellCritChance returns before the modifier for a Spell that cannot crit"
+    );
+    advance(&standalone);
+    let go = go_event(&standalone, PLAYER, MAGE_BOLT, wolf);
+    assert_eq!(
+        go["is_crit"], "true",
+        "the +100% crit chance makes the crit certain"
+    );
+    assert_eq!(charges(&standalone, PLAYER, COLD_BLOOD_FIXTURE), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_crit_chance_modifier_makes_the_next_masked_heal_crit() {
+    let mut standalone = Standalone::start("aura-charges-crit-modifier-heal");
+    stage(&mut standalone);
+    cold_blood_fixture(&standalone);
+    mage_spell(
+        &standalone,
+        MAGE_HEAL,
+        (E_HEAL, T_SELF, 0, P_NONE),
+        &format!("damage_class = {DAMAGE_CLASS_MAGIC}"),
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = 1 WHERE guid = {PLAYER}"
+    ));
+
+    let go = go_event(&standalone, PLAYER, MAGE_HEAL, PLAYER);
+    assert_eq!(go["is_crit"], "true");
+    assert_eq!(charges(&standalone, PLAYER, COLD_BLOOD_FIXTURE), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_crit_chance_modifier_makes_the_next_masked_weapon_strike_crit() {
+    let mut standalone = Standalone::start("aura-charges-crit-modifier-strike");
+    let wolf = stage(&mut standalone);
+    cold_blood_fixture(&standalone);
+    mage_spell(
+        &standalone,
+        MAGE_STRIKE,
+        (E_WEAPON_STRIKE, T_TARGET_ENEMY, 100, P_RAW),
+        &format!(
+            "damage_class = {DAMAGE_CLASS_MELEE}, school_mask = {PHYSICAL}, \
+             attributes = {ATTR_NO_ACTIVE_DEFENSE}, cast_flags = {CAST_FLAG_ALWAYS_HIT}"
+        ),
+    );
+
+    let go = go_event(&standalone, PLAYER, MAGE_STRIKE, wolf);
+    assert_eq!(
+        go["is_crit"], "true",
+        "vmangos RollMeleeOutcomeAgainst takes the crit band from GetSpellCritChance"
+    );
+    assert_eq!(charges(&standalone, PLAYER, COLD_BLOOD_FIXTURE), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn flurry_keeps_its_last_charge_on_a_crit() {
     let mut standalone = Standalone::start("aura-charges-flurry-crit");
     let wolf = stage(&mut standalone);
@@ -2235,6 +2329,28 @@ fn bolt(standalone: &Standalone, spell_id: u32, school_mask: u8, cast_flags: u32
 }
 
 fn mage_modifier(standalone: &Standalone, spell_id: u32, amount: i32, op: i32) {
+    mage_modifier_of_kind(standalone, spell_id, (A_SPELLMOD_PCT, amount, op));
+}
+
+fn cold_blood_fixture(standalone: &Standalone) {
+    mage_modifier_of_kind(
+        standalone,
+        COLD_BLOOD_FIXTURE,
+        (
+            A_SPELLMOD_FLAT,
+            CERTAIN_CRIT_PERCENT,
+            SPELLMOD_OP_CRITICAL_CHANCE,
+        ),
+    );
+    standalone.assert_call("debug_force_cast", &["1", &COLD_BLOOD_FIXTURE.to_string()]);
+    advance(standalone);
+}
+
+fn mage_modifier_of_kind(
+    standalone: &Standalone,
+    spell_id: u32,
+    (kind, amount, op): (u8, i32, i32),
+) {
     aura_spell(
         standalone,
         Charged {
@@ -2244,7 +2360,7 @@ fn mage_modifier(standalone: &Standalone, spell_id: u32, amount: i32, op: i32) {
             proc_flags: 0,
             charges: 1,
         },
-        &[(A_SPELLMOD_PCT, amount, op, P_SPELLMOD_OP)],
+        &[(kind, amount, op, P_SPELLMOD_OP)],
     );
     set_spell(
         standalone,
@@ -2262,6 +2378,44 @@ fn mage_bolt(standalone: &Standalone, spell_id: u32, family_flag: i32, assignmen
         standalone,
         spell_id,
         &format!("family_name = {SPELL_FAMILY_MAGE}, family_flags = {family_flag}, {assignments}"),
+    );
+}
+
+fn mage_spell(
+    standalone: &Standalone,
+    spell_id: u32,
+    (kind, target, p0, p0_kind): (u8, u8, i32, u8),
+    assignments: &str,
+) {
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &format!("Mage fixture {spell_id}")),
+            ("school_mask", &FIRE),
+            ("range_yd", &30),
+            ("is_negative", &(target != T_SELF)),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, 0)),
+            ("spell_id", &spell_id),
+            ("kind", &kind),
+            ("base_points", &100),
+            ("target", &target),
+            ("p_0", &p0),
+            ("p_0_kind", &p0_kind),
+        ],
+    );
+    set_spell(
+        standalone,
+        spell_id,
+        &format!(
+            "family_name = {SPELL_FAMILY_MAGE}, family_flags = {MAGE_BOLT_FAMILY_FLAG}, \
+             {assignments}"
+        ),
     );
 }
 
