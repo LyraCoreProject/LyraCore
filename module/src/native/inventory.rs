@@ -146,7 +146,7 @@ pub(crate) fn item_purchased(ctx: &ReducerContext, item: &ItemInstance, count: u
 
 fn create_item(view: &codec::ItemInstanceView, packets: &mut Vec<Packet>) {
     packets.push(update(codec::build_item_create_object(view)));
-    if let Some((opcode, body)) = codec::build_enchantment_slot_values(view) {
+    if let Some((opcode, body)) = codec::build_item_followup_values(view) {
         packets.push(Packet { opcode, body });
     }
 }
@@ -251,7 +251,7 @@ pub(crate) fn item_changed(
         (None, Some(row)) => {
             let view = super::view::item(ctx, row);
             packets.push(update(codec::build_item_create_object(&view)));
-            if let Some((opcode, body)) = codec::build_enchantment_slot_values(&view) {
+            if let Some((opcode, body)) = codec::build_item_followup_values(&view) {
                 packets.push(Packet { opcode, body });
             }
             slot(ctx, row.owner_guid, row.slot, &view, &mut packets);
@@ -278,7 +278,7 @@ pub(crate) fn item_changed(
                     codec::build_destroy_object(row.guid),
                 )));
                 packets.push(update(codec::build_item_create_object(&view)));
-                if let Some((opcode, body)) = codec::build_enchantment_slot_values(&view) {
+                if let Some((opcode, body)) = codec::build_item_followup_values(&view) {
                     packets.push(Packet { opcode, body });
                 }
                 if old.slot == row.slot {
@@ -349,6 +349,43 @@ pub(crate) fn item_changed(
         if let Some(old) = previous.filter(|old| old.entry != row.entry) {
             super::quest::item_changed(ctx, old.owner_guid, old.entry);
         }
+    }
+}
+
+/// The item-use refusals vmangos answers with SMSG_CAST_RESULT: the spell and its failure code.
+fn cast_result_refusal(ctx: &ReducerContext, refusal: ItemRefusal) -> Option<(u32, u8)> {
+    match refusal {
+        ItemRefusal::SpellCooldown(spell) => {
+            let on_event = ctx
+                .db
+                .game_spell()
+                .spell_id()
+                .find(spell)
+                .is_some_and(|header| header.attributes & SPELL_ATTR_COOLDOWN_ON_EVENT != 0);
+            let failure = if on_event {
+                codec::cast_failure::DONT_REPORT
+            } else {
+                codec::cast_failure::NOT_READY
+            };
+            Some((spell, failure))
+        }
+        ItemRefusal::NoChargesRemain(spell) => {
+            Some((spell, codec::cast_failure::NO_CHARGES_REMAIN))
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn spell_charges_changed(
+    ctx: &ReducerContext,
+    item: &ItemInstance,
+    changed: [Option<i32>; 5],
+) {
+    if !super::has_world_session(ctx, item.owner_guid) {
+        return;
+    }
+    if let Some((opcode, body)) = codec::build_spell_charge_values(item.guid, changed) {
+        super::send_raw_to_character(ctx, item.owner_guid, opcode, body);
     }
 }
 
@@ -509,18 +546,7 @@ pub(super) fn receive(
         }
     })();
     let handled = result.map_err(|reason| {
-        if let ItemRefusal::SpellCooldown(spell) = reason {
-            let failure = if ctx
-                .db
-                .game_spell()
-                .spell_id()
-                .find(spell)
-                .is_some_and(|header| header.attributes & SPELL_ATTR_COOLDOWN_ON_EVENT != 0)
-            {
-                codec::cast_failure::DONT_REPORT
-            } else {
-                codec::cast_failure::NOT_READY
-            };
+        if let Some((spell, failure)) = cast_result_refusal(ctx, reason) {
             return Rollback::replies(
                 vec![Packet {
                     opcode: codec::SMSG_CAST_RESULT_OPCODE,

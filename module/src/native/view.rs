@@ -179,6 +179,9 @@ pub(super) fn item(ctx: &ReducerContext, item: &crate::ItemInstance) -> codec::I
         max_durability: template
             .as_ref()
             .map_or(item.durability, |t| t.max_durability),
+        spell_charges: template.as_ref().map_or([0; 5], |t| {
+            crate::items::displayed_charges(t, crate::items::spent_charges(ctx, item.guid))
+        }),
         container_slots: template.map_or(0, |t| t.container_slots),
         random_property_enchant_ids: enchantments,
         temporary_enchantment: temporary_enchantment(ctx, item.guid),
@@ -311,6 +314,13 @@ pub(super) fn item_template(t: crate::ItemTemplate) -> codec::ItemTemplateView {
             t.spellcategory_3,
             t.spellcategory_4,
             t.spellcategory_5,
+        ],
+        spell_charges: [
+            t.spellcharges_1,
+            t.spellcharges_2,
+            t.spellcharges_3,
+            t.spellcharges_4,
+            t.spellcharges_5,
         ],
         required_skill: t.required_skill,
         required_skill_rank: t.required_skill_rank,

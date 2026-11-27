@@ -209,18 +209,8 @@ fn equip_cooldown_packets_gate_zero_cooldown_use_and_preserve_longer_delays() {
         vec![&(0xb0, expected)]
     );
     let before = inventory(&shard, guid);
-    let mut frame = Vec::new();
-    CMSG_USE_ITEM {
-        bag_index: 255,
-        bag_slot: 10,
-        spell_index: 4,
-        targets: SpellCastTargets {
-            target_flags: SpellCastTargets_SpellCastTargetFlags::default(),
-        },
-    }
-    .write_unencrypted_client(&mut std::io::Cursor::new(&mut frame))
-    .unwrap();
-    let packets = request(&mut connection, 0xab, frame[6..].to_vec());
+    let frame = use_item_frame(10, 4);
+    let packets = request(&mut connection, 0xab, frame.clone());
     assert_eq!(
         packets,
         vec![(
@@ -233,7 +223,7 @@ fn equip_cooldown_packets_gate_zero_cooldown_use_and_preserve_longer_delays() {
         "UPDATE game_spell SET attributes = 33554432 WHERE spell_id = {USE}"
     ));
     assert_eq!(
-        request(&mut connection, 0xab, frame[6..].to_vec()),
+        request(&mut connection, 0xab, frame.clone()),
         vec![(
             0x130,
             lyracore_protocol::codec::build_cast_result_failed(USE, 0x17)
@@ -305,18 +295,7 @@ fn an_item_cast_sends_its_spell_go_before_it_destroys_the_used_up_item() {
         "UPDATE game_item_template SET spellid_1 = {USE}, spelltrigger_1 = 0, spellcharges_1 = -1, spellcategory_1 = 0 WHERE entry = {FIXTURE_JERKY}"
     ));
     let jerky = grant(&shard, guid, FIXTURE_JERKY, 1, 23);
-    let mut frame = Vec::new();
-    CMSG_USE_ITEM {
-        bag_index: 255,
-        bag_slot: 23,
-        spell_index: 0,
-        targets: SpellCastTargets {
-            target_flags: SpellCastTargets_SpellCastTargetFlags::default(),
-        },
-    }
-    .write_unencrypted_client(&mut std::io::Cursor::new(&mut frame))
-    .unwrap();
-    let packets = request(&mut connection, 0xab, frame[6..].to_vec());
+    let packets = request(&mut connection, 0xab, use_item_frame(23, 0));
     let spell_go = packets.iter().position(|(opcode, _)| *opcode == 0x132);
     let destroy = packets
         .iter()
@@ -1360,4 +1339,47 @@ fn equip_review_7598_ranged_crit_uses_the_ranged_weapon_skill() {
     shard.assert_call("debug_set_skill", &[&guid.to_string(), "176", "300"]);
     let trained = fields(review_packets(&mut connection));
     assert_eq!(f32::from_bits(trained[&1110]), 7.0);
+}
+
+fn use_item_frame(bag_slot: u8, spell_index: u8) -> Vec<u8> {
+    let mut frame = Vec::new();
+    CMSG_USE_ITEM {
+        bag_index: 255,
+        bag_slot,
+        spell_index,
+        targets: SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::default(),
+        },
+    }
+    .write_unencrypted_client(&mut std::io::Cursor::new(&mut frame))
+    .unwrap();
+    frame[6..].to_vec()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_item_use_with_no_charges_left_answers_no_charges_remain_and_the_client_sees_each_charge() {
+    let (shard, mut connection, guid, _) = fixture("item-use-no-charges");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET max_stack = 1, spellid_1 = {USE}, spelltrigger_1 = 0, spellcharges_1 = 1, spellcategory_1 = 0 WHERE entry = {FIXTURE_JERKY}"
+    ));
+    let jerky = grant(&shard, guid, FIXTURE_JERKY, 1, 23);
+
+    let packets = request(&mut connection, 0xab, use_item_frame(23, 0));
+    let charge_words_after_use = packets
+        .iter()
+        .filter(|(opcode, _)| *opcode == 0xa9)
+        .flat_map(|(_, body)| lyracore_protocol::codec::values_mask::parse_values_updates(body))
+        .find(|update| update.guid == jerky)
+        .map(|update| update.fields);
+    assert_eq!(charge_words_after_use, Some(vec![(16, 0)]), "{packets:?}");
+
+    advance(&shard, 2000);
+    assert_eq!(
+        request(&mut connection, 0xab, use_item_frame(23, 0)),
+        vec![(
+            0x130,
+            lyracore_protocol::codec::build_cast_result_failed(USE, 0x44)
+        )]
+    );
 }

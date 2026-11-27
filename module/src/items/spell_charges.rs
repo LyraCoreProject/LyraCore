@@ -39,16 +39,20 @@ pub(crate) enum CastItemUse {
     UseUp,
 }
 
+fn template_charges(template: &ItemTemplate) -> [i32; 5] {
+    [
+        template.spellcharges_1,
+        template.spellcharges_2,
+        template.spellcharges_3,
+        template.spellcharges_4,
+        template.spellcharges_5,
+    ]
+}
+
 fn limited_charges(template: &ItemTemplate) -> impl Iterator<Item = i32> {
     super::equip::spells(template)
         .into_iter()
-        .zip([
-            template.spellcharges_1,
-            template.spellcharges_2,
-            template.spellcharges_3,
-            template.spellcharges_4,
-            template.spellcharges_5,
-        ])
+        .zip(template_charges(template))
         .filter(|((spell, _), charges)| *spell != 0 && *charges != 0)
         .map(|(_, charges)| charges)
 }
@@ -60,6 +64,20 @@ fn keeps_spent_charges(template: &ItemTemplate) -> bool {
 
 fn remaining(charges: i32, spent: u32) -> u32 {
     charges.unsigned_abs().saturating_sub(spent)
+}
+
+/// The charges per spell slot that ITEM_FIELD_SPELL_CHARGES shows: what a limited spell has left,
+/// signed as the template's. An item that stacks keeps its template charges.
+pub(crate) fn displayed_charges(template: &ItemTemplate, spent: u32) -> [i32; 5] {
+    let mut shown = template_charges(template);
+    if keeps_spent_charges(template) {
+        for ((spell, _), charges) in super::equip::spells(template).into_iter().zip(&mut shown) {
+            if spell != 0 && *charges != 0 {
+                *charges = charges.signum() * remaining(*charges, spent) as i32;
+            }
+        }
+    }
+    shown
 }
 
 /// vmangos `Spell::CheckItems`: false when a spell slot with charges has none left.
@@ -128,8 +146,9 @@ pub(crate) fn take_cast_item(ctx: &ReducerContext, item_guid: u64, item_use: Cas
         CastItemUse::Keep => {}
         CastItemUse::SpendCharge => {
             if let Some(item) = ctx.db.game_item_instance().guid().find(item_guid) {
-                let spent = spent_charges(ctx, item_guid) + 1;
-                record_spent(ctx, item_guid, item.owner_guid, spent);
+                let before_spent = spent_charges(ctx, item_guid);
+                record_spent(ctx, item_guid, item.owner_guid, before_spent + 1);
+                show_spent_charges(ctx, item_guid, before_spent);
             }
         }
         CastItemUse::UseUp => super::use_up_one(ctx, item_guid),
@@ -151,6 +170,21 @@ pub(crate) fn record_spent(ctx: &ReducerContext, item_guid: u64, owner_guid: u64
     } else {
         rows.insert(row);
     }
+}
+
+/// Sends the owner the charge words that changed when the item went from `before_spent` to its
+/// spent count; an unchanged item sends nothing.
+pub(crate) fn show_spent_charges(ctx: &ReducerContext, item_guid: u64, before_spent: u32) {
+    let Some(item) = ctx.db.game_item_instance().guid().find(item_guid) else {
+        return;
+    };
+    let Some(template) = ctx.db.game_item_template().entry().find(item.entry) else {
+        return;
+    };
+    let before = displayed_charges(&template, before_spent);
+    let after = displayed_charges(&template, spent_charges(ctx, item_guid));
+    let changed = std::array::from_fn(|slot| (before[slot] != after[slot]).then_some(after[slot]));
+    crate::native::inventory::spell_charges_changed(ctx, &item, changed);
 }
 
 pub(crate) fn forget_item(ctx: &ReducerContext, item_guid: u64) {
@@ -217,6 +251,20 @@ mod tests {
         let item = template(1, [(100, -1), (200, 3)]);
         assert_eq!(cast_item_use(&item, 0), CastItemUse::SpendCharge);
         assert!(!charges_remain(&item, 1));
+    }
+
+    #[test]
+    fn the_client_sees_the_charges_a_limited_spell_has_left() {
+        let wand = template(1, [(100, -3), (200, 4)]);
+        assert_eq!(displayed_charges(&wand, 0), [-3, 4, 0, 0, 0]);
+        assert_eq!(displayed_charges(&wand, 2), [-1, 2, 0, 0, 0]);
+        assert_eq!(displayed_charges(&wand, 9), [0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_stack_shows_its_template_charges_whatever_was_spent() {
+        let potion = template(5, [(100, -1), (0, 0)]);
+        assert_eq!(displayed_charges(&potion, 3), [-1, 0, 0, 0, 0]);
     }
 
     #[test]

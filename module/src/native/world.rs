@@ -260,10 +260,7 @@ fn replay_item_details(
     connection_id: ConnectionId,
     items: &[codec::ItemInstanceView],
 ) -> Result<(), String> {
-    for (opcode, body) in items
-        .iter()
-        .filter_map(codec::build_enchantment_slot_values)
-    {
+    for (opcode, body) in items.iter().filter_map(codec::build_item_followup_values) {
         super::send_raw(ctx, connection_id, opcode, body, false);
     }
     for item in items

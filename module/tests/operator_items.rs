@@ -30,7 +30,12 @@ fn fields(shard: &Standalone) -> Value {
                 key != "entry"
                     && !matches!(
                         key.as_str(),
-                        "damage_school" | "lock_id" | "money_min" | "money_max"
+                        "damage_school"
+                            | "lock_id"
+                            | "money_min"
+                            | "money_max"
+                            | "required_spell"
+                            | "required_honor_rank"
                     )
                     && !key.starts_with("spellppmrate_")
                     && !key.starts_with("spellcategory_")

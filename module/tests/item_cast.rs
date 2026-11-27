@@ -222,7 +222,10 @@ fn an_item_without_charges_left_stays_and_refuses_its_use() {
     let refused = shard.call("gw_use_item", &[&actor(PLAYER), &slot]);
     let text = String::from_utf8_lossy(&refused.stderr);
     assert!(!refused.status.success(), "{text}");
-    assert!(text.contains(ItemRefusal::NotRightNow.as_tag()), "{text}");
+    assert!(
+        text.contains(ItemRefusal::NoChargesRemain(INSTANT_SPELL).as_tag()),
+        "{text}"
+    );
     assert_eq!(stack(&shard, CHARGED_ITEM), Some(1));
 }
 

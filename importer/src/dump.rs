@@ -96,6 +96,8 @@ pub(crate) mod it {
     pub const ALLOWED_RACE: &str = "allowable_race";
     pub const REQUIRED_SKILL: &str = "required_skill";
     pub const REQUIRED_SKILL_RANK: &str = "required_skill_rank";
+    pub const REQUIRED_SPELL: &str = "required_spell";
+    pub const REQUIRED_HONOR_RANK: &str = "required_honor_rank";
     pub const REQUIRED_REPUTATION_FACTION: &str = "required_reputation_faction";
     pub const REQUIRED_REPUTATION_RANK: &str = "required_reputation_rank";
     pub const MAX_COUNT: &str = "max_count";

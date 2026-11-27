@@ -18,6 +18,11 @@ pub(crate) fn meets_required_reputation(
         || u32::from(crate::reputation::reputation_rank(standing.unwrap_or(0))) >= required_rank
 }
 
+// vmangos compares the Character's rank with the item's RequiredHonorRank as bytes.
+pub(crate) fn meets_required_honor_rank(character_rank: u32, required_rank: u32) -> bool {
+    character_rank as u8 >= required_rank as u8
+}
+
 pub(crate) fn sell_value(unit_price: u32, count: u32) -> u32 {
     unit_price.saturating_mul(count)
 }
@@ -502,6 +507,14 @@ pub(crate) mod tests {
         assert!(!can_equip_into(4, t::WEAPON, e::OFFHAND, true));
         assert!(can_equip_into(2, t::WEAPON, e::MAINHAND, true));
         assert!(can_equip_into(2, t::WEAPON, e::MAINHAND, false));
+    }
+
+    #[test]
+    fn an_honor_rank_item_needs_the_character_to_hold_that_rank() {
+        assert!(meets_required_honor_rank(0, 0));
+        assert!(!meets_required_honor_rank(0, 1));
+        assert!(meets_required_honor_rank(4, 4));
+        assert!(!meets_required_honor_rank(3, 4));
     }
 
     #[test]

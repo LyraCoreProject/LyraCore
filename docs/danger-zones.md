@@ -586,6 +586,23 @@ spent charges, as they refuse an opened item, until their rows can carry the cha
 and imports with no rows; an older Shard has spent no charges. An older destination refuses the new
 manifest, so update both Shards before moving active World Sessions.
 
+### Item use requirement migration
+
+`game_item_template` gains `required_spell` and `required_honor_rank`, end-appended with default 0,
+and `ItemRefusal` gains `CantEquipRank` and `NoChargesRemain`. Shared import SQL defaults fill older
+inserts. Between the publish and the reimport every template has both at zero, so no item asks for
+a spell or an honor rank. Reimport the `items` family before players can reach the Realm. The
+Module keeps no honor, so every Character holds rank 0 and an item with a required honor rank above
+0 is refused until one does. The Operator Content API and Package Deltas do not carry the columns,
+so a created item needs neither and an update keeps them.
+
+An item's client charges now come from the template: the item query carries the `spellcharges` of
+each slot that has a spell, and an item's create carries the first `ITEM_FIELD_SPELL_CHARGES` word
+with the charges it has left. A later word follows in a VALUES update only when it is not zero, and
+spending a charge updates the words it changes. An older client session sees the new words after
+its next login. The importer sets a `required_spell` that names no imported spell to 0, as vmangos
+does.
+
 ### Party area Aura migration
 
 A plain Module publish adds the private `game_area_aura_source` and `game_area_aura_copy` tables,

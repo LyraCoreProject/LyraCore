@@ -7,8 +7,9 @@ use lyracore_shared::race_class::{mask_admits, ZeroMask};
 use super::{next_item_guid, refuse, refused};
 
 use super::rules::{
-    binds_on_equip, can_equip_into, equip_slot, invtype, meets_required_level,
-    meets_required_reputation, meets_required_skill, merge_amount, resolve_equip_slot, Proficiency,
+    binds_on_equip, can_equip_into, equip_slot, invtype, meets_required_honor_rank,
+    meets_required_level, meets_required_reputation, meets_required_skill, merge_amount,
+    resolve_equip_slot, Proficiency,
 };
 use super::tables::{
     game_item_instance, game_item_template, item_in_slot, slot_occupied, ItemInstance,
@@ -293,7 +294,8 @@ pub(super) fn validate_equipment(
     Ok(())
 }
 
-/// vmangos `Player::CanUseItem`: the class and race masks, then the required skill and its rank.
+/// vmangos `Player::CanUseItem`: the class and race masks, the required skill and its rank, the
+/// required spell, then the required honor rank.
 pub(super) fn check_user_requirements(
     ctx: &ReducerContext,
     character: &crate::WorldEntity,
@@ -323,8 +325,19 @@ pub(super) fn check_user_requirements(
     ) {
         return Err(InventoryResult::CantEquipSkill);
     }
+    if template.required_spell != 0
+        && !crate::spell::knows_spell(ctx, character.guid, template.required_spell)
+    {
+        return Err(InventoryResult::NoRequiredProficiency);
+    }
+    if !meets_required_honor_rank(CHARACTER_HONOR_RANK, template.required_honor_rank) {
+        return Err(InventoryResult::CantEquipRank);
+    }
     Ok(())
 }
+
+/// The Module keeps no honor, so every Character holds rank 0.
+const CHARACTER_HONOR_RANK: u32 = 0;
 
 fn equipment_refusal(result: lyracore_protocol::messages::vanilla::InventoryResult) -> ItemRefusal {
     use lyracore_protocol::messages::vanilla::InventoryResult;
@@ -333,6 +346,7 @@ fn equipment_refusal(result: lyracore_protocol::messages::vanilla::InventoryResu
             ItemRefusal::NoProficiency
         }
         InventoryResult::CantEquipSkill => ItemRefusal::RequiredSkill,
+        InventoryResult::CantEquipRank => ItemRefusal::CantEquipRank,
         _ => ItemRefusal::CannotEquip,
     }
 }

@@ -8,6 +8,7 @@ use super::fixture;
 const BOOK: u32 = 900_701;
 const TEACHER: u32 = 900_702;
 const TAUGHT: u32 = 900_703;
+const REQUIRED_SPELL: u32 = 900_704;
 const TAILORING: u32 = 197;
 const MAGE_CLASS_MASK: u32 = 0x80;
 const FACTION: u32 = 900_710;
@@ -162,4 +163,41 @@ fn a_reputation_pattern_teaches_only_from_its_required_rank() {
     );
     stage.use_book(&slot).unwrap();
     assert!(stage.knows_taught_spell());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_item_needing_a_spell_teaches_only_a_character_who_knows_it() {
+    let stage = stage("item-learn-required-spell", E_LEARN_SPELL, T_TARGET_ALLY);
+    stage.shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &REQUIRED_SPELL),
+            ("name", &"Required fixture"),
+            ("spell_level", &1),
+        ],
+    );
+    let slot = stage.book(&[("required_spell", REQUIRED_SPELL)]);
+
+    let refusal = stage.use_book(&slot).unwrap_err();
+    assert!(refusal.contains("item:no_proficiency"), "{refusal}");
+    assert!(!stage.knows_taught_spell());
+
+    stage.shard.assert_call(
+        "debug_learn_spell",
+        &[&stage.character.to_string(), &REQUIRED_SPELL.to_string()],
+    );
+    stage.use_book(&slot).unwrap();
+    assert!(stage.knows_taught_spell());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_item_needing_an_honor_rank_is_refused_a_character_without_one() {
+    let stage = stage("item-learn-honor-rank", E_LEARN_SPELL, T_TARGET_ALLY);
+    let slot = stage.book(&[("required_honor_rank", 1)]);
+
+    let refusal = stage.use_book(&slot).unwrap_err();
+    assert!(refusal.contains("item:cant_equip_rank"), "{refusal}");
+    assert!(!stage.knows_taught_spell());
 }

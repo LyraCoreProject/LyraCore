@@ -26,6 +26,18 @@ tests = [
     { path = "module/tests/conformance/item_learn.rs", function = "a_grimoire_teaches_its_user_nothing", rung = "durable_module" },
     { path = "module/tests/conformance/item_learn.rs", function = "a_reputation_pattern_teaches_only_from_its_required_rank", rung = "durable_module" },
     { path = "importer/src/spell.rs", function = "a_learn_effect_teaches_its_target_but_a_grimoire_effect_stays_inert", rung = "unit" },
+    { path = "module/tests/conformance/item_learn.rs", function = "an_item_needing_a_spell_teaches_only_a_character_who_knows_it", rung = "durable_module" },
+    { path = "module/tests/conformance/item_learn.rs", function = "an_item_needing_an_honor_rank_is_refused_a_character_without_one", rung = "durable_module" },
+    { path = "module/tests/conformance/item_equip.rs", function = "an_item_use_with_no_charges_left_answers_no_charges_remain_and_the_client_sees_each_charge", rung = "durable_module" },
+    { path = "importer/src/world_import_items_tests.rs", function = "an_imported_item_keeps_its_required_spell_and_honor_rank", rung = "unit" },
+    { path = "crates/lyracore-protocol/src/codec/item/tests.rs", function = "a_charged_item_create_carries_its_first_charges_word", rung = "unit" },
+    { path = "crates/lyracore-protocol/src/codec/item/tests.rs", function = "an_uncharged_item_create_leaves_the_charges_word_unwritten", rung = "unit" },
+    { path = "crates/lyracore-protocol/src/codec/item/tests.rs", function = "a_later_spell_slot_charge_follows_the_create_in_values", rung = "unit" },
+    { path = "crates/lyracore-protocol/src/codec/item/tests.rs", function = "a_spent_charge_marks_only_its_word", rung = "unit" },
+    { path = "crates/lyracore-protocol/src/codec/item/tests.rs", function = "an_item_query_sends_charges_for_a_slot_with_a_spell_and_empty_slots_as_vmangos", rung = "unit" },
+    { path = "importer/src/world_import_items_tests.rs", function = "an_imported_item_drops_a_required_spell_that_was_not_imported", rung = "unit" },
+    { path = "module/src/items/spell_charges.rs", function = "the_client_sees_the_charges_a_limited_spell_has_left", rung = "unit" },
+    { path = "module/src/items/rules.rs", function = "an_honor_rank_item_needs_the_character_to_hold_that_rank", rung = "unit" },
 ]
 
 [vmangos]
@@ -35,6 +47,12 @@ symbol = "WorldSession::HandleUseItemOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "The Module keeps no honor rank, so every Character holds rank 0 and an item with a required honor rank above 0, such as a PvP mount or rank gear, is refused for everyone."
+path = "module/src/items/inventory.rs"
+symbol = "check_user_requirements"
+evidence = "vmangos Player::CanUseItem compares the Character's honor rank with RequiredHonorRank; LyraCore has no honor system and MSG_INSPECT_HONOR_STATS is unavailable (module/src/native/unavailable.rs)."
 
 [[known_gaps]]
 description = "The Module returns an unavailable response for CMSG_WRAP_ITEM."
@@ -61,25 +79,7 @@ reason = "game_mail, game_auction and their cross-Shard parcels cannot carry spe
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/MailHandler.cpp"
 
 [[known_gaps]]
-description = "The Operator Content API and Package Deltas cannot set spellcharges_1 to spellcharges_5, so an Operator-made or Package-made consumable has no charge limit and is never used up."
+description = "The Operator Content API and Package Deltas cannot set spellcharges_1 to spellcharges_5, required_spell or required_honor_rank, so an Operator-made or Package-made consumable has no charge limit and is never used up, and no such item needs a spell or an honor rank."
 path = "module/src/operator_content/items.rs"
 symbol = "item_fields"
-evidence = "operator_content/items.rs keeps the spellcharges columns and a create sets them to zero; the Package Delta item schema in crates/lyracore-package-delta/src/schema.rs has no spellcharges column."
-
-[[known_gaps]]
-description = "An item use refused for no charges left answers \"can't do that right now\", not SPELL_FAILED_NO_CHARGES_REMAIN, and the client shows no charge count."
-path = "module/src/items/ops.rs"
-symbol = "apply_item_use_on"
-evidence = "vmangos Spell::CheckItems sends SPELL_FAILED_NO_CHARGES_REMAIN; apply_item_use_on maps every cast Gate refusal without an item refusal to ItemRefusal::NotRightNow, and the item query and ITEM_FIELD_SPELL_CHARGES send zero charges."
-
-[[known_gaps]]
-description = "An item's required spell is not checked before use. vmangos Player::CanUseItem refuses an item whose RequiredSpell the Character does not know with EQUIP_ERR_NO_REQUIRED_PROFICIENCY."
-path = "module/src/items/inventory.rs"
-symbol = "check_user_requirements"
-evidence = "The importer does not keep item_template.required_spell, so game_item_template has no required spell column."
-
-[[known_gaps]]
-description = "An item's required honor rank is not checked before use. vmangos Player::CanUseItem refuses an item, such as a PvP mount, whose RequiredHonorRank is above the Character's rank with EQUIP_ERR_CANT_EQUIP_RANK."
-path = "module/src/items/ops.rs"
-symbol = "apply_item_use_on"
-evidence = "game_item_template has no required honor rank column, and the Module keeps no honor rank."
+evidence = "operator_content/items.rs keeps the spellcharges, required_spell and required_honor_rank columns and a create sets them to zero; the Package Delta item schema in crates/lyracore-package-delta/src/schema.rs has none of them."

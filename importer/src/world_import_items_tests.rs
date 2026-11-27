@@ -4,7 +4,7 @@ use rusqlite::types::Value::{Integer as N, Real as F, Text};
 use std::collections::HashSet;
 
 fn item_source() -> WorldSource {
-    let numeric = "entry patch class subclass display_id quality flags buy_count buy_price sell_price inventory_type allowable_class allowable_race item_level required_level required_skill required_skill_rank required_reputation_faction required_reputation_rank max_count stackable container_slots dmg_min1 dmg_max1 dmg_type1 armor holy_res fire_res nature_res frost_res shadow_res arcane_res delay spellid_1 spelltrigger_1 spellid_2 spelltrigger_2 spellid_3 spelltrigger_3 spellid_4 spelltrigger_4 spellid_5 spelltrigger_5 bonding page_text start_quest sheath random_property block max_durability bag_family food_type spellppmrate_1 spellppmrate_2 spellppmrate_3 spellppmrate_4 spellppmrate_5 spellcategory_1 spellcategory_2 spellcategory_3 spellcategory_4 spellcategory_5 lock_id min_money_loot max_money_loot spellcharges_1 spellcharges_2 spellcharges_3 spellcharges_4 spellcharges_5";
+    let numeric = "entry patch class subclass display_id quality flags buy_count buy_price sell_price inventory_type allowable_class allowable_race item_level required_level required_skill required_skill_rank required_reputation_faction required_reputation_rank max_count stackable container_slots dmg_min1 dmg_max1 dmg_type1 armor holy_res fire_res nature_res frost_res shadow_res arcane_res delay spellid_1 spelltrigger_1 spellid_2 spelltrigger_2 spellid_3 spelltrigger_3 spellid_4 spelltrigger_4 spellid_5 spelltrigger_5 bonding page_text start_quest sheath random_property block max_durability bag_family food_type spellppmrate_1 spellppmrate_2 spellppmrate_3 spellppmrate_4 spellppmrate_5 spellcategory_1 spellcategory_2 spellcategory_3 spellcategory_4 spellcategory_5 lock_id min_money_loot max_money_loot spellcharges_1 spellcharges_2 spellcharges_3 spellcharges_4 spellcharges_5 required_spell required_honor_rank";
     let mut names = numeric
         .split_whitespace()
         .map(str::to_string)
@@ -338,7 +338,7 @@ fn an_imported_item_keeps_the_procs_per_minute_of_each_spell_slot() {
         .find(|row| row.contains("'Ordinary Water'"))
         .unwrap();
     assert!(
-        water.ends_with(",9.5,0,0,0,0.8,30,0,0,0,1160,0,0,0,0,0,0,0,0,0)"),
+        water.ends_with(",9.5,0,0,0,0.8,30,0,0,0,1160,0,0,0,0,0,0,0,0,0,0,0)"),
         "{water}"
     );
 }
@@ -364,7 +364,7 @@ fn an_imported_item_keeps_its_lock_and_money_range() {
         .iter()
         .find(|row| row.contains("'Ordinary Water'"))
         .unwrap();
-    assert!(water.ends_with(",5,12,34,0,0,0,0,0)"), "{water}");
+    assert!(water.ends_with(",5,12,34,0,0,0,0,0,0,0)"), "{water}");
 }
 
 #[test]
@@ -388,7 +388,31 @@ fn an_imported_item_keeps_the_charges_of_each_spell_slot() {
         .iter()
         .find(|row| row.contains("'Ordinary Water'"))
         .unwrap();
-    assert!(water.ends_with(",0,0,0,-1,0,0,0,3)"), "{water}");
+    assert!(water.ends_with(",0,0,0,-1,0,0,0,3,0,0)"), "{water}");
+}
+
+#[test]
+fn an_imported_item_keeps_its_required_spell_and_honor_rank() {
+    let source = item_source();
+    edit_source(
+        &source,
+        "UPDATE item_template SET required_spell = 7, required_honor_rank = 4 WHERE entry = 1001",
+    );
+    let ItemRows {
+        templates: items, ..
+    } = build_items_and_loot(
+        &source,
+        &HashMap::from([(100, 3)]),
+        &HashSet::from([100]),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .unwrap();
+    let water = items
+        .iter()
+        .find(|row| row.contains("'Ordinary Water'"))
+        .unwrap();
+    assert!(water.ends_with(",0,0,0,0,0,7,4)"), "{water}");
 }
 
 #[test]
@@ -521,4 +545,32 @@ fn vendor_stock_import_omits_inconsistent_stock_limits() {
         };
         assert!(vendors.ends_with(expected), "{change}: {vendors}");
     }
+}
+
+#[test]
+fn an_imported_item_drops_a_required_spell_that_was_not_imported() {
+    let source = item_source();
+    edit_source(
+        &source,
+        "UPDATE item_template SET required_spell = 7 WHERE entry = 1001",
+    );
+    let water_with = |spells: &[u64]| {
+        let ItemRows {
+            templates: items, ..
+        } = build_items_and_loot_with_spells(
+            &source,
+            &HashMap::from([(100, 3)]),
+            &HashSet::from([100]),
+            &HashSet::new(),
+            &HashSet::new(),
+            Some(&spells.iter().copied().collect()),
+        )
+        .unwrap();
+        items
+            .into_iter()
+            .find(|row| row.contains("'Ordinary Water'"))
+            .unwrap()
+    };
+    assert!(water_with(&[7]).ends_with(",0,0,0,0,0,7,0)"));
+    assert!(water_with(&[8]).ends_with(",0,0,0,0,0,0,0)"));
 }

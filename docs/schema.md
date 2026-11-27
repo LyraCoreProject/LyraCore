@@ -150,8 +150,10 @@ spells, and teaches any other target nothing, as vmangos `Spell::EffectLearnSpel
 grimoire's learn effect aims at the caster's pet, so it imports as `E_SCRIPTED` and teaches
 nothing. An `E_CREATE_ITEM` effect that a creature casts on a Character fills that Character's
 bags. Every item use first checks the item's class and race masks, its required skill and rank,
-its required level and its required reputation rank, as vmangos `Player::CanUseItem` does. The
-item's required spell and required honor rank are not imported.
+its required spell, its required honor rank, its required level and its required reputation rank,
+as vmangos `Player::CanUseItem` does. The importer keeps `required_spell` and
+`required_honor_rank` in `game_item_template`. The Module keeps no honor, so every Character holds
+honor rank 0.
 
 ### The three migration rules that have bitten
 
@@ -207,7 +209,9 @@ channel whose Item is destroyed, sold, traded, mailed or auctioned sets it, and 
 typed defaults preserve old rows during an additive publish. The five
 `game_item_template.spellcharges_*` fields hold vmangos `SpellCharges`: zero is unlimited, and a
 negative count is expendable. After the cast's `SMSG_SPELL_GO` and effects, the cast spends a
-charge, and an expendable spell's last charge uses up one Item. See [equip spell
+charge, and an expendable spell's last charge uses up one Item. The item query carries these
+charges, and `ITEM_FIELD_SPELL_CHARGES` carries the charges an Item has left. A use with none left
+answers `SPELL_FAILED_NO_CHARGES_REMAIN`. See [equip spell
 migration](danger-zones.md#equip-spell-migration) before play resumes.
 
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully

@@ -75,6 +75,8 @@ pub struct ItemTemplateView {
     pub spellid_5: u32,
     pub spelltrigger_5: u8,
     pub spell_categories: [u32; 5],
+    /// vmangos SpellCharges per spell slot: negative is expendable, zero is unlimited.
+    pub spell_charges: [i32; 5],
     pub required_skill: u32,
     pub required_skill_rank: u32,
     pub required_reputation_faction: u32,
@@ -106,6 +108,8 @@ pub struct ItemInstanceView {
     pub item_text_id: u32,
     pub enchantment: u32,
     pub temporary_enchantment: TemporaryEnchantmentView,
+    /// The charges left per spell slot, signed as the template's.
+    pub spell_charges: [i32; 5],
 }
 
 /// A zero `enchantment` is an empty slot. `duration_ms` is the time left as the item is sent.
@@ -116,6 +120,7 @@ pub struct TemporaryEnchantmentView {
     pub charges: u32,
 }
 
+pub const ITEM_FIELD_SPELL_CHARGES: u16 = 16;
 pub const ITEM_FIELD_ENCHANTMENT: u16 = 22;
 // vmangos TEMP_ENCHANTMENT_SLOT; each slot holds id, duration and charges words.
 pub const TEMPORARY_ENCHANTMENT_SLOT: u16 = 1;
@@ -133,12 +138,23 @@ const RANDOM_PROPERTY_ENCHANT_ID_FIELDS: [u16; 3] = [
     ITEM_FIELD_ENCHANTMENT + 5 * 3,
 ];
 
-/// The typed CREATE reaches only enchantment slot 0; later slots follow in VALUES.
-pub fn build_enchantment_slot_values(inst: &ItemInstanceView) -> Option<(u16, Vec<u8>)> {
-    if inst.random_property_enchant_ids == [0; 3] && inst.temporary_enchantment.enchantment == 0 {
+/// The typed CREATE reaches only the first spell charges word and enchantment slot 0; the rest
+/// follow in VALUES.
+pub fn build_item_followup_values(inst: &ItemInstanceView) -> Option<(u16, Vec<u8>)> {
+    let later_charges = &inst.spell_charges[1..];
+    if later_charges == [0; 4]
+        && inst.random_property_enchant_ids == [0; 3]
+        && inst.temporary_enchantment.enchantment == 0
+    {
         return None;
     }
     let mut mask = update_mask::UpdateMaskValues::new();
+    for (field, charge) in (ITEM_FIELD_SPELL_CHARGES + 1..)
+        .zip(later_charges)
+        .filter(|&(_, &charge)| charge != 0)
+    {
+        mask.set_u32(field, *charge as u32);
+    }
     if inst.temporary_enchantment.enchantment != 0 {
         set_temporary_enchantment(&mut mask, inst.temporary_enchantment);
     }
@@ -150,6 +166,23 @@ pub fn build_enchantment_slot_values(inst: &ItemInstanceView) -> Option<(u16, Ve
         mask.set_u32(field, enchant_id);
     }
     Some(build_values_update_raw(inst.guid, &mask))
+}
+
+/// Marks only the `Some` words, as vmangos `Item::SetSpellCharges` marks one; none is `None`.
+pub fn build_spell_charge_values(
+    item_guid: u64,
+    changed: [Option<i32>; 5],
+) -> Option<(u16, Vec<u8>)> {
+    let mut mask = update_mask::UpdateMaskValues::new();
+    for (field, charge) in (ITEM_FIELD_SPELL_CHARGES..).zip(changed) {
+        if let Some(charge) = charge {
+            mask.set_u32(field, charge as u32);
+        }
+    }
+    changed
+        .iter()
+        .any(Option::is_some)
+        .then(|| build_values_update_raw(item_guid, &mask))
 }
 
 /// Writes all three words, so an empty view clears the slot.
@@ -234,8 +267,22 @@ pub fn build_item_query_response(
     spells[2] = spell_slot(t.spellid_3, t.spelltrigger_3);
     spells[3] = spell_slot(t.spellid_4, t.spelltrigger_4);
     spells[4] = spell_slot(t.spellid_5, t.spelltrigger_5);
-    for (spell, category) in spells.iter_mut().zip(t.spell_categories) {
-        spell.spell_category = category;
+    for ((spell, category), charges) in spells
+        .iter_mut()
+        .zip(t.spell_categories)
+        .zip(t.spell_charges)
+    {
+        if spell.spell == 0 {
+            // vmangos ItemHandler sends -1 cooldowns for a slot without a spell.
+            *spell = ItemSpells {
+                spell_cooldown: -1,
+                spell_category_cooldown: -1,
+                ..Default::default()
+            };
+        } else {
+            spell.spell_category = category;
+            spell.spell_charges = charges;
+        }
     }
     SMSG_ITEM_QUERY_SINGLE_RESPONSE {
         item: t.entry,
@@ -366,6 +413,11 @@ pub fn build_inventory_refusal(
             item2,
             bag_type_subclass,
         },
+        ItemRefusal::CantEquipRank => SMSG_INVENTORY_CHANGE_FAILURE::CantEquipRank {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
         ItemRefusal::PlayerDead => SMSG_INVENTORY_CHANGE_FAILURE::YouAreDead {
             item1,
             item2,
@@ -386,13 +438,13 @@ pub fn build_inventory_refusal(
             item2,
             bag_type_subclass,
         },
-        ItemRefusal::NotRightNow | ItemRefusal::SpellCooldown(_) => {
-            SMSG_INVENTORY_CHANGE_FAILURE::CantDoRightNow {
-                item1,
-                item2,
-                bag_type_subclass,
-            }
-        }
+        ItemRefusal::NotRightNow
+        | ItemRefusal::SpellCooldown(_)
+        | ItemRefusal::NoChargesRemain(_) => SMSG_INVENTORY_CHANGE_FAILURE::CantDoRightNow {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
         ItemRefusal::CouldntSplitItems => SMSG_INVENTORY_CHANGE_FAILURE::CouldntSplitItems {
             item1,
             item2,
@@ -501,6 +553,9 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
             .set_item_maxdurability(inst.max_durability as i32)
             .set_container_num_slots(inst.container_slots as i32)
             .finalize();
+        if inst.spell_charges[0] != 0 {
+            container.set_item_spell_charges(inst.spell_charges[0]);
+        }
         if inst.item_text_id != 0 {
             container.set_item_item_text_id(inst.item_text_id as i32);
         }
@@ -529,6 +584,9 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
             .set_item_durability(inst.durability as i32)
             .set_item_maxdurability(inst.max_durability as i32)
             .finalize();
+        if inst.spell_charges[0] != 0 {
+            item.set_item_spell_charges(inst.spell_charges[0]);
+        }
         if inst.item_text_id != 0 {
             item.set_item_item_text_id(inst.item_text_id as i32);
         }
