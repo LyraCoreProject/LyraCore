@@ -22,7 +22,8 @@ const DURATION_MS: u32 = 600_000;
 const PHYSICAL: u8 = 0x01;
 const FIRE: u8 = 0x04;
 const NATURE: u8 = 0x08;
-// vmangos SpellDamageClass.
+// vmangos SpellDamageClass; class 0 rolls no hit.
+const DAMAGE_CLASS_NONE: u8 = 0;
 const DAMAGE_CLASS_MAGIC: u8 = 1;
 
 // vmangos SpellDefines.h ProcFlags and ProcFlagsEx.
@@ -535,7 +536,11 @@ fn fear_ward_refuses_a_fear_that_deals_no_damage_and_is_used_up_by_it() {
         None,
         "the refused fear uses Fear Ward up, though it deals no damage"
     );
-    set_spell(&standalone, PSYCHIC_SCREAM, "cast_flags = 0");
+    set_spell(
+        &standalone,
+        PSYCHIC_SCREAM,
+        &format!("damage_class = {DAMAGE_CLASS_NONE}"),
+    );
     cast_by(&standalone, wolf, PSYCHIC_SCREAM, PLAYER);
     assert!(
         stacks(&standalone, PSYCHIC_SCREAM).is_some(),
