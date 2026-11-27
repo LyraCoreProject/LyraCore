@@ -140,7 +140,7 @@ pub(crate) fn detach_item(
         .filter(|item| item.owner_guid == sender_guid)
         .ok_or(MailRefusal::NotYourItem)?;
     let equipped = inst.slot <= crate::items::equip_slot::END;
-    // vmangos HandleSendMail refuses a bank position and Item::CanBeTraded an equipped bag.
+    // vmangos HandleSendMailCallback refuses a bank position and Item::CanBeTraded an equipped bag.
     if !equipped
         && (!crate::items::is_unequipped_carried_slot(inst.slot)
             || crate::items::validate_bag_dest_slot(ctx, sender_guid, inst.slot).is_err())
@@ -167,7 +167,7 @@ pub(crate) fn detach_item(
     {
         return Err(lyracore_shared::mail::ITEM_IS_CONJURED.to_string().into());
     }
-    // vmangos HandleSendMail answers MAIL_ERR_INTERNAL_ERROR when Item::CanBeTraded refuses.
+    // vmangos HandleSendMailCallback answers MAIL_ERR_INTERNAL_ERROR when Item::CanBeTraded refuses.
     if crate::loot::has_generated_loot(ctx, inst.guid) {
         return Err(lyracore_shared::mail::ITEM_HAS_LOOT.to_string().into());
     }
@@ -461,9 +461,7 @@ pub fn debug_seed_mail(
     );
     Ok(())
 }
-/// vmangos HandleSendMailCallback refuses a sender who cannot pay the postage and the sent money
-/// before it looks at the mailbox cap, the recipient's team, the trade or the attachment. This
-/// debits nothing; `send` pays once the attachment is detached.
+/// Refuses a sender who cannot pay postage and sent money; debits nothing (vmangos checks this before any other send check).
 pub(crate) fn check_postage(
     ctx: &ReducerContext,
     sender_guid: u64,
@@ -533,7 +531,7 @@ fn send(
     same_account: bool,
 ) -> Result<(), MailRefusal> {
     check_postage(ctx, sender_guid, mail.money)?;
-    // vmangos HandleSendMail refuses any send while the sender has a trade, even a proposed one.
+    // vmangos HandleSendMailCallback refuses any send while the sender has a trade, even a proposed one.
     if crate::trade::session_involving(ctx, sender_guid).is_some() {
         return Err(lyracore_shared::mail::SENDER_IS_TRADING.to_string().into());
     }
