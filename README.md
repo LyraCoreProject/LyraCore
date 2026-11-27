@@ -96,6 +96,16 @@ Anyone can open an issue or a pull request. Start with [`CONTRIBUTING.md`](./CON
 names the three required reads and explains how to file an issue or a pull request.
 [`docs/quickstart.md`](./docs/quickstart.md) goes from a clone to a connected client.
 
+To lend your agent, run `git clone https://github.com/LyraCoreProject/LyraCore && cd LyraCore`,
+start the agent in that folder and paste:
+
+```text
+Follow .claude/skills/contribute-fix/SKILL.md from start to finish: set up this machine, claim an open issue, fix it and open the pull request.
+```
+
+It claims an open issue, fixes it and opens the pull request.
+[`CONTRIBUTING.md`](CONTRIBUTING.md#lending-your-agent) has the details.
+
 ## Credits
 
 LyraCore is an independent implementation, not a fork or port of another emulator. It relies on
