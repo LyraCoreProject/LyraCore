@@ -14,8 +14,10 @@ const CHARACTER_HEALTH: u32 = 50;
 /// `debug_fill_aura_slots` gives buff slot n spell id `9_000_000 + n` and debuff slots start at 32.
 const SHIELD: u32 = 9_000_000;
 const DRAIN: u32 = 9_000_032;
-/// `SpellCastEventKind::LeechLog`.
+/// `SpellCastEventKind::LeechLog`: the damage log, on the drained unit.
 const LEECH_LOG: u8 = 7;
+/// `SpellCastEventKind::LeechHealLog`: the heal log, on the caster.
+const LEECH_HEAL_LOG: u8 = 8;
 const ALL_SCHOOLS: u32 = 127;
 
 struct Drain {
@@ -85,10 +87,19 @@ fn stage_drain(name: &str, drain: &Drain) -> Standalone {
     standalone
 }
 
-fn tick_once(standalone: &Standalone) -> Row {
-    let ticks = standalone.subscribe(&[&format!(
+struct Tick {
+    damage: Row,
+    heal: Row,
+}
+
+fn tick_once(standalone: &Standalone) -> Tick {
+    let damage_query = format!(
         "SELECT * FROM game_spell_cast_event_live WHERE spell_id = {DRAIN} AND kind = {LEECH_LOG}"
-    )]);
+    );
+    let heal_query = format!(
+        "SELECT * FROM game_spell_cast_event_live WHERE spell_id = {DRAIN} AND kind = {LEECH_HEAL_LOG}"
+    );
+    let ticks = standalone.subscribe(&[&damage_query, &heal_query]);
     let due = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -101,12 +112,21 @@ fn tick_once(standalone: &Standalone) -> Row {
     assert!(
         poll_until(POLL_TIMEOUT, || {
             rows = event_rows(&ticks, "game_spell_cast_event_live");
-            !rows.is_empty()
+            rows.len() >= 2
         }),
-        "the leech tick must log"
+        "the leech tick must log its damage and its heal"
     );
-    assert_eq!(rows.len(), 1);
-    rows.remove(0)
+    assert_eq!(rows.len(), 2);
+    let of_kind = |kind: u8| {
+        rows.iter()
+            .find(|row| number::<u8>(row, "kind") == kind)
+            .cloned()
+            .unwrap_or_else(|| panic!("no event of kind {kind}"))
+    };
+    Tick {
+        damage: of_kind(LEECH_LOG),
+        heal: of_kind(LEECH_HEAL_LOG),
+    }
 }
 
 fn health(standalone: &Standalone, guid: u64) -> u32 {
@@ -117,14 +137,6 @@ fn health(standalone: &Standalone, guid: u64) -> u32 {
         .unwrap()
 }
 
-fn drain_auras(standalone: &Standalone) -> usize {
-    standalone
-        .query_rows(&format!(
-            "SELECT id FROM game_aura WHERE spell_id = {DRAIN}"
-        ))
-        .len()
-}
-
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_drain_life_tick_heals_its_caster_by_the_damage_dealt() {
@@ -132,8 +144,8 @@ fn a_drain_life_tick_heals_its_caster_by_the_damage_dealt() {
 
     let tick = tick_once(&standalone);
 
-    assert_eq!(number::<u32>(&tick, "damage"), 30);
-    assert_eq!(number::<u32>(&tick, "healed"), 30);
+    assert_eq!(number::<u32>(&tick.damage, "damage"), 30);
+    assert_eq!(number::<u32>(&tick.heal, "healed"), 30);
     assert_eq!(health(&standalone, WOLF), 9_970);
     assert_eq!(health(&standalone, CHARACTER), CHARACTER_HEALTH + 30);
 }
@@ -149,8 +161,8 @@ fn a_leech_tick_heals_the_damage_dealt_times_the_effects_multiple_value() {
 
     let tick = tick_once(&standalone);
 
-    assert_eq!(number::<u32>(&tick, "damage"), 30);
-    assert_eq!(number::<u32>(&tick, "healed"), 75);
+    assert_eq!(number::<u32>(&tick.damage, "damage"), 30);
+    assert_eq!(number::<u32>(&tick.heal, "healed"), 75);
     assert_eq!(health(&standalone, CHARACTER), CHARACTER_HEALTH + 75);
 }
 
@@ -165,9 +177,9 @@ fn a_fully_absorbed_leech_tick_heals_nothing() {
 
     let tick = tick_once(&standalone);
 
-    assert_eq!(number::<u32>(&tick, "damage"), 0);
-    assert_eq!(number::<u32>(&tick, "absorbed"), 30);
-    assert_eq!(number::<u32>(&tick, "healed"), 0);
+    assert_eq!(number::<u32>(&tick.damage, "damage"), 0);
+    assert_eq!(number::<u32>(&tick.damage, "absorbed"), 30);
+    assert_eq!(number::<u32>(&tick.heal, "healed"), 0);
     assert_eq!(health(&standalone, WOLF), 10_000);
     assert_eq!(health(&standalone, CHARACTER), CHARACTER_HEALTH);
 }
@@ -189,18 +201,17 @@ fn a_leech_tick_adds_half_the_amount_gained_as_heal_threat() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_killing_leech_tick_heals_only_the_health_left_and_ends_the_channel() {
+fn a_killing_leech_tick_heals_only_the_health_left() {
     let drain = Drain {
         wolf_health: 20,
         ..Drain::plain()
     };
     let standalone = stage_drain("leech-kill", &drain);
-    assert_eq!(drain_auras(&standalone), 1);
 
     let tick = tick_once(&standalone);
 
-    assert_eq!(number::<u32>(&tick, "damage"), 30);
-    assert_eq!(number::<u32>(&tick, "healed"), 20);
+    assert_eq!(number::<u32>(&tick.damage, "damage"), 30);
+    assert_eq!(number::<u32>(&tick.heal, "healed"), 20);
     assert_eq!(health(&standalone, CHARACTER), CHARACTER_HEALTH + 20);
     assert!(poll_until(POLL_TIMEOUT, || {
         standalone.query_rows(&format!(
@@ -208,5 +219,4 @@ fn a_killing_leech_tick_heals_only_the_health_left_and_ends_the_channel() {
         ))[0]["dead"]
             == "true"
     }));
-    assert_eq!(drain_auras(&standalone), 0);
 }

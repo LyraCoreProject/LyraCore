@@ -1692,10 +1692,11 @@ A `SPELL_AURA_PERIODIC_LEECH` (53) effect imports as `A_PERIODIC_DAMAGE` with it
 in `p1`, in hundredths (a value of zero or less imports as 100); every other periodic damage row has
 `p1` 0, and its Aura copies `p1` to `eff_p1`. A tick of such an Aura damages the target as any periodic
 tick does, logs it as a `SpellCastEventKind::LeechLog` event (an `SMSG_SPELLNONMELEEDAMAGELOG` with the
-periodic flag, then `SMSG_SPELLHEALLOG` for a player caster), heals the caster for the damage dealt times
-the multiple and adds half the amount gained as heal threat. A tick that kills the target ends the
-caster's channel of the Spell. A dead caster does not tick, and a persistent-area leech still imports as
-a ground area.
+periodic flag), heals the caster for the damage dealt times the multiple and adds half the amount gained
+as heal threat. A player caster also gets a `LeechHealLog` event, an `SMSG_SPELLHEALLOG` that names the
+caster as healer and victim, even for a heal of 0. A tick that kills the target heals only the health the
+target had left. A dead caster does not tick, and a persistent-area leech still imports as a ground
+area.
 
 ### Flag auras
 

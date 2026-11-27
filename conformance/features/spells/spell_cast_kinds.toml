@@ -837,5 +837,10 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/periodic_leech.rs"
-function = "a_killing_leech_tick_heals_only_the_health_left_and_ends_the_channel"
+function = "a_killing_leech_tick_heals_only_the_health_left"
 rung = "durable_module"
+
+[[tests]]
+path = "module/src/native/spell.rs"
+function = "a_leech_tick_logs_its_damage_on_the_target_and_its_heal_on_the_caster"
+rung = "unit"

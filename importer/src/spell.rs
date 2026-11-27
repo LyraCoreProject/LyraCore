@@ -319,7 +319,7 @@ fn power_burn_ratio_bp(multiple: f32) -> i32 {
 // SPELL_AURA_PERIODIC_LEECH heals the caster for the damage times this; vmangos treats zero or less as 1.
 fn leech_multiple_hundredths(multiple: f32) -> i32 {
     if multiple > 0.0 {
-        power_burn_ratio_bp(multiple).max(1)
+        ((multiple * 100.0).round() as i32).max(1)
     } else {
         100
     }

@@ -224,6 +224,20 @@ fn leech_damage_log(row: &SpellCastEvent) -> Packet {
     )))
 }
 
+/// vmangos `DealHeal(caster, ...)`: the row's unit is the caster, healer and victim alike.
+fn leech_heal_log(row: &SpellCastEvent) -> Packet {
+    use wow_world_messages::vanilla::SMSG_SPELLHEALLOG;
+    message(ServerOpcodeMessage::SMSG_SPELLHEALLOG(Box::new(
+        SMSG_SPELLHEALLOG {
+            victim: Guid::new(row.target_guid),
+            caster: Guid::new(row.caster_guid),
+            id: row.spell_id,
+            damage: row.healed,
+            critical: false,
+        },
+    )))
+}
+
 fn heal_log(row: &SpellCastEvent) -> Option<Packet> {
     use wow_world_messages::vanilla::SMSG_SPELLHEALLOG;
     (row.healed > 0).then(|| {
@@ -274,6 +288,7 @@ fn cast_event_messages(
         5 => SpellCastEventKind::ProcLog,
         6 => SpellCastEventKind::PeriodicLog,
         7 => SpellCastEventKind::LeechLog,
+        8 => SpellCastEventKind::LeechHealLog,
         _ => return out,
     };
     if kind == SpellCastEventKind::Interrupt {
@@ -318,7 +333,10 @@ fn cast_event_messages(
     }
     if kind == SpellCastEventKind::LeechLog {
         out.push((EventAudience::Everyone, leech_damage_log(row)));
-        out.extend(heal_log(row).map(|packet| (EventAudience::Everyone, packet)));
+        return out;
+    }
+    if kind == SpellCastEventKind::LeechHealLog {
+        out.push((EventAudience::Everyone, leech_heal_log(row)));
         return out;
     }
     if kind == SpellCastEventKind::Start {
@@ -530,6 +548,36 @@ mod tests {
             assert_eq!(packets[0].1.opcode, 0x0250);
             assert!(matches!(packets[0].0, EventAudience::Everyone));
         }
+    }
+
+    #[test]
+    fn a_leech_tick_logs_its_damage_on_the_target_and_its_heal_on_the_caster() {
+        const DRAINED: u64 = 9;
+        const CASTER: u64 = 1;
+        let mut damage = event();
+        damage.kind = SpellCastEventKind::LeechLog as u8;
+        damage.caster_guid = CASTER;
+        damage.target_guid = DRAINED;
+        damage.damage = 30;
+        let packets = cast_event_messages(&damage, None, None);
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].1.opcode, 0x0250, "SMSG_SPELLNONMELEEDAMAGELOG");
+        // Packed target and attacker guids, spell, damage, school, absorbed, resisted, periodic.
+        assert_eq!(
+            &packets[0].1.body[..4],
+            &[1, DRAINED as u8, 1, CASTER as u8]
+        );
+        assert_eq!(packets[0].1.body[21], 1, "the periodic flag");
+
+        let mut heal = event();
+        heal.kind = SpellCastEventKind::LeechHealLog as u8;
+        heal.caster_guid = CASTER;
+        heal.target_guid = CASTER;
+        heal.healed = 0;
+        let packets = cast_event_messages(&heal, None, None);
+        assert_eq!(packets.len(), 1, "a heal of 0 is logged too");
+        assert_eq!(packets[0].1.opcode, 0x0150, "SMSG_SPELLHEALLOG");
+        assert_eq!(&packets[0].1.body[..4], &[1, CASTER as u8, 1, CASTER as u8]);
     }
 
     #[test]

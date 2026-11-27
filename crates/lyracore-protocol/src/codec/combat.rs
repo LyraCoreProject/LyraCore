@@ -60,7 +60,6 @@ pub fn build_spell_non_melee_damage_log(
 }
 
 /// A health leech tick's damage log: the periodic flag set, as vmangos sends it.
-#[allow(clippy::too_many_arguments)]
 pub fn build_periodic_spell_non_melee_damage_log(
     target_guid: u64,
     caster_guid: u64,
