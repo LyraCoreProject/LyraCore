@@ -485,10 +485,14 @@ fn a_duel_ending_before_its_start_removes_no_aura() {
     standalone.assert_sql(&format!(
         "UPDATE game_duel SET state = {COUNTDOWN} WHERE id = {DUEL}"
     ));
+    let wolf = spawn_wolf(standalone);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = 40, max_health = 40 WHERE guid = {rival}"
+    ));
 
     standalone.assert_call(
         "debug_apply_damage",
-        &[&rival.to_string(), "1000", &PLAYER.to_string()],
+        &[&rival.to_string(), "1000", &wolf.to_string()],
     );
 
     assert!(!duel_exists(standalone), "the hit must end the Duel");
