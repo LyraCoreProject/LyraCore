@@ -436,8 +436,8 @@ applies the test file rule above.
 
 ## Contribution check
 
-The `Contribution check` workflow judges a pull request whose author is not an owner, member or
-collaborator. For other authors, and for a pull request that changes only Markdown, it reports
+The `Contribution check` workflow judges a pull request whose author cannot write to this
+repository. For an author who can, and for a pull request that changes only Markdown, it reports
 "not applicable" and passes. A maintainer can run it
 by hand with a pull request number: it then judges that pull request as an outside one and writes
 only the job summary. Otherwise it writes the job summary and one pull request comment, which it
