@@ -1,4 +1,6 @@
-use lyracore_shared::spell::taxonomy::{A_SPELLMOD_FLAT, A_SPELLMOD_PCT, SPELLMOD_OP_CASTING_TIME};
+use lyracore_shared::spell::taxonomy::{
+    A_SPELLMOD_FLAT, A_SPELLMOD_PCT, SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST,
+};
 use spacetimedb::{ReducerContext, Timestamp};
 
 use super::tables::SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS;
@@ -6,8 +8,6 @@ use super::{apply_spell_mod, auras_on, shed_auras};
 use crate::modifiers::AuraAmount;
 use crate::{game_spell, Aura, Spell};
 
-// vmangos SpellModOp SPELLMOD_COST.
-pub(crate) const SPELLMOD_OP_COST: i32 = 14;
 // vmangos Player::ApplySpellMod leaves an instant cast-time modifier off a cast this long or longer.
 const INSTANT_CAST_LIMIT_MS: u32 = 10_000;
 
@@ -67,8 +67,7 @@ fn makes_instant(row: &Aura) -> bool {
         && AuraAmount::from(row).total() <= -100
 }
 
-// vmangos Player::ApplySpellMod skips a percent modifier on a zero base, and SpellEntry::GetCastTime
-// applies no cast-time modifier to a zero cast time.
+// Read docs/schema.md#spell-modifiers for the base-value rules.
 fn changes(row: &Aura, base: u32) -> bool {
     if row.eff_p0 == SPELLMOD_OP_CASTING_TIME && base == 0 {
         return false;
@@ -101,17 +100,14 @@ pub(crate) fn spell_cost(ctx: &ReducerContext, caster_guid: u64, hdr: &Spell) ->
     spell_modified_value(ctx, caster_guid, SPELLMOD_OP_COST, hdr, hdr.cost)
 }
 
-/// What a resolving cast read from its modifiers: when its cast time was fixed, and whether it
-/// computes a power cost.
+/// When a resolving cast fixed its cast time, and whether it computes a power cost.
 #[derive(Clone, Copy)]
 pub(crate) struct ModifiedCast {
     pub began_at: Timestamp,
     pub pays_cost: bool,
 }
 
-/// The charged spell modifier Aura Holders a resolving cast uses, as vmangos Player::DropModCharge
-/// collects them in `Spell::m_appliedMods`. Nothing is spent until [`Self::spend`], so a cast that
-/// is refused or interrupted first keeps every charge.
+/// The charged spell modifier rows a resolving cast uses; [`Self::spend`] alone spends them.
 pub(crate) struct ModifierCharges {
     carrier_guid: u64,
     used: Vec<Aura>,
@@ -124,9 +120,20 @@ impl ModifierCharges {
         hdr: &Spell,
         cast: ModifiedCast,
     ) -> Self {
+        let spells = ctx.db.game_spell();
+        // vmangos Aura::HandleAddModifier gives a stacking spell's modifier no charges.
+        let chargeable: Vec<Aura> = affecting(ctx, caster_guid, hdr)
+            .into_iter()
+            .filter(|row| {
+                spells
+                    .spell_id()
+                    .find(row.spell_id)
+                    .is_some_and(|source| source.max_stacks <= 1)
+            })
+            .collect();
         Self {
             carrier_guid: caster_guid,
-            used: used_rows(affecting(ctx, caster_guid, hdr), hdr, cast),
+            used: used_rows(chargeable, hdr, cast),
         }
     }
 
@@ -159,8 +166,7 @@ impl ModifierCharges {
     }
 }
 
-// Each row already affects the spell. A cast-time row counts only if it was on the caster when the
-// cast time was fixed, and Nature's Grace's flat cast time is kept by a cast made instant (1.11).
+// Read docs/schema.md#spell-modifiers for which rows a cast uses.
 fn used_rows(rows: Vec<Aura>, hdr: &Spell, cast: ModifiedCast) -> Vec<Aura> {
     let fixed_cast_time = |row: &Aura| row.applied_at <= cast.began_at;
     let instant = rows

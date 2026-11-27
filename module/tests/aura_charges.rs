@@ -10,7 +10,8 @@ use lyracore_shared::spell::taxonomy::{
     A_SPELLMOD_PCT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES, COMBAT_ATTACK_POWER,
     COMBAT_CRIT, COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, E_TRIGGER, M_FEAR, M_POLY, M_STUN,
     P_COMBAT_FIELD, P_MECHANIC, P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR,
-    SPEED_CAST, SPEED_MOVE, SPEED_SWING, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    SPEED_CAST, SPEED_MOVE, SPEED_SWING, SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST, T_SELF,
+    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
@@ -125,9 +126,6 @@ const UNMASKED_MAGE_BOLT: u32 = 5_091_147;
 const SPELL_FAMILY_MAGE: u8 = 3;
 const MAGE_BOLT_FAMILY_FLAG: i32 = 0x1;
 const UNMASKED_FAMILY_FLAG: i32 = 0x2;
-// vmangos SpellModOp SPELLMOD_CASTING_TIME and SPELLMOD_COST.
-const SPELLMOD_CASTING_TIME: i32 = 10;
-const SPELLMOD_COST: i32 = 14;
 const MANA: u32 = 1000;
 const BOLT_COST: u32 = 10;
 const PROC_ICD_MS: u32 = 100;
@@ -1400,7 +1398,7 @@ fn insight_is_kept_by_a_free_spell_and_spent_by_one_that_costs_power() {
 fn clearcasting_makes_one_spell_free_and_that_spell_spends_it() {
     let mut standalone = Standalone::start("aura-charges-clearcasting");
     let wolf = stage(&mut standalone);
-    mage_modifier(&standalone, CLEARCASTING, -100, SPELLMOD_COST);
+    mage_modifier(&standalone, CLEARCASTING, -100, SPELLMOD_OP_COST);
     mage_bolt(
         &standalone,
         MAGE_BOLT,
@@ -1431,7 +1429,12 @@ fn clearcasting_makes_one_spell_free_and_that_spell_spends_it() {
 fn presence_of_mind_makes_one_cast_instant_and_ends_with_it() {
     let mut standalone = Standalone::start("aura-charges-presence-of-mind");
     let wolf = stage(&mut standalone);
-    mage_modifier(&standalone, PRESENCE_OF_MIND, -100, SPELLMOD_CASTING_TIME);
+    mage_modifier(
+        &standalone,
+        PRESENCE_OF_MIND,
+        -100,
+        SPELLMOD_OP_CASTING_TIME,
+    );
     mage_bolt(
         &standalone,
         SLOW_MAGE_BOLT,
@@ -1460,7 +1463,7 @@ fn presence_of_mind_makes_one_cast_instant_and_ends_with_it() {
 fn an_interrupted_cast_keeps_clearcasting_for_the_cast_that_completes() {
     let mut standalone = Standalone::start("aura-charges-clearcasting-interrupt");
     let wolf = stage(&mut standalone);
-    mage_modifier(&standalone, CLEARCASTING, -100, SPELLMOD_COST);
+    mage_modifier(&standalone, CLEARCASTING, -100, SPELLMOD_OP_COST);
     mage_bolt(
         &standalone,
         SLOW_MAGE_BOLT,
@@ -1493,7 +1496,7 @@ fn an_interrupted_cast_keeps_clearcasting_for_the_cast_that_completes() {
 fn a_spell_outside_the_family_mask_spends_no_clearcasting() {
     let mut standalone = Standalone::start("aura-charges-clearcasting-unmasked");
     let wolf = stage(&mut standalone);
-    mage_modifier(&standalone, CLEARCASTING, -100, SPELLMOD_COST);
+    mage_modifier(&standalone, CLEARCASTING, -100, SPELLMOD_OP_COST);
     mage_bolt(
         &standalone,
         UNMASKED_MAGE_BOLT,

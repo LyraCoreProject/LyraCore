@@ -590,8 +590,10 @@ fn fire_melee_swing(
 
     let queued_spell = if extra { 0 } else { attacker.next_swing_spell };
     let queued_header = ctx.db.game_spell().spell_id().find(queued_spell);
-    let swing_is_spell = queued_spell != 0
-        && super::queued_strike::charge(ctx, attacker, queued_spell, queued_header.as_ref());
+    let paid_cost = (queued_spell != 0)
+        .then(|| super::queued_strike::charge(ctx, attacker, queued_spell, queued_header.as_ref()))
+        .flatten();
+    let swing_is_spell = paid_cost.is_some();
     let strike = swing_is_spell.then(|| super::queued_strike::QueuedStrike {
         damage: queued_header
             .as_ref()
@@ -605,7 +607,7 @@ fn fire_melee_swing(
     let fired = swing_is_spell.then_some(FiredStrike {
         spell_id: queued_spell,
         header: queued_header.as_ref(),
-        paid: attacker.is_player(),
+        paid_cost: paid_cost.unwrap_or(0),
     });
     let chained = strike.map_or_else(Vec::new, |strike| {
         roll_chained_strikes(ctx, attacker, target_guid, queued_header.as_ref(), strike)
@@ -719,8 +721,8 @@ fn fire_melee_swing(
 struct FiredStrike<'a> {
     spell_id: u32,
     header: Option<&'a crate::Spell>,
-    /// A Character paid its cost when the swing fired; a creature pays none.
-    paid: bool,
+    /// The cost a Character paid when the swing fired; a creature pays none.
+    paid_cost: u32,
 }
 
 impl FiredStrike<'_> {
@@ -867,12 +869,12 @@ fn land_main_hand(
         .with_block(blocked)
         .on_seated_victim(seated_character(ctx, target_guid));
     let strike = swing.strike();
-    if let Some(header) = strike
-        .filter(|strike| strike.paid)
-        .and_then(|strike| strike.header)
+    if let Some((header, paid_cost)) = strike
+        .filter(|strike| strike.paid_cost > 0)
+        .and_then(|strike| strike.header.map(|header| (header, strike.paid_cost)))
     {
         let miss = crate::spell::cast::resolve::cast_miss(hit_info, true);
-        crate::spell::refund_avoided_cost(ctx, attacker_guid, header, miss);
+        crate::spell::refund_avoided_cost(ctx, attacker_guid, header, paid_cost, miss);
     }
     // vmangos adds a queued strike's table threat unless it was avoided or refused as immune.
     if let Some(strike) = strike.filter(|_| !hit_info.is_avoided()) {

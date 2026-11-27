@@ -1146,8 +1146,6 @@ behaviour, so none becomes uninterruptible. Packages claim all three columns.
 A cast's resist chance against a pushback or a channel delay is its `SPELLMOD_NOT_LOSE_CASTING_TIME`
 modifiers plus the amounts of its `SPELL_AURA_RESIST_PUSHBACK` Auras, such as Concentration Aura.
 `game_pending_cast.cast_time_ms` holds the full cast time that caps a pushback.
-`game_pending_cast.began_at_micros` holds when the cast began, so its completion spends only the
-charged cast-time modifiers that were on the caster when its cast time was fixed.
 
 `game_channel_delay` holds one private row per caster: the channel's spell, its end after the last
 delay, and the number of delays. Breaking or ending the channel deletes the row. A row left by a
@@ -1204,6 +1202,34 @@ data) reads its map partition through the `by_map` index instead of one lookup p
 The default, 0, means no cap. A row written before the reimport, a test fixture and a Package Delta
 that omit the field reach every unit the area selects, as vmangos does for a spell without the
 field. Packages claim the column.
+
+### Spell modifiers
+
+A spell modifier is an `A_SPELLMOD_FLAT` or `A_SPELLMOD_PCT` Aura row. `eff_p0` is the vmangos
+`SpellModOp` and `eff_p1` is the family mask. The row changes a spell of the same family that
+shares a bit of that mask, unless the spell has `SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS`. No crit
+roll reads the crit chance modifier (`SPELLMOD_CRITICAL_CHANCE`).
+
+The base value decides whether a modifier changes it, as vmangos `Player::ApplySpellMod` and
+`SpellEntry::GetCastTime` do:
+
+- A percent modifier does not change a zero base.
+- No cast-time modifier changes a zero cast time.
+- A cast-time modifier of −100% or less does not change a cast time of 10 seconds or more.
+  Otherwise it makes the cast instant, whatever the other cast-time modifiers are.
+
+A spell modifier Aura Holder with charges is spent by casts, not by the proc pass. vmangos
+`Aura::HandleAddModifier` gives no charges to the modifier of a spell with more than one stack. A
+cast uses each charged row that changes one of its values, and a row of any other op whose family
+mask covers it. When the cast resolves, after its effects, each Holder it used loses one charge,
+and its last charge removes it. A refused or interrupted cast spends nothing. A queued strike
+spends its charges when its swing pays. The cast uses these rows:
+
+- A cost row, only when the cast pays a power cost.
+- A cast-time row, only when it was on the caster when the cast began.
+  `game_pending_cast.began_at_micros` holds that time for a timed cast.
+- No flat cast-time row when a −100% cast-time modifier made the cast instant. In 1.11, Nature's
+  Grace stopped being spent by a cast that Nature's Swiftness made instant.
 
 ### Spell travel
 

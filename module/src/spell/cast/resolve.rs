@@ -201,9 +201,8 @@ fn resolve_loaded_cast(
 
     // Flush the cost before effects so self-heals read the charged caster row.
     if pays_cost && hdr.cost > 0 {
-        charge_spell_cost(ctx, &mut caster, hdr);
+        launched.targets.paid_cost = charge_spell_cost(ctx, &mut caster, hdr);
         caster.update(ctx);
-        launched.targets.cost_paid = true;
     }
 
     let untriggered = phase != CastPhase::Trigger;
@@ -311,13 +310,19 @@ impl CastOrigin {
     }
 }
 
-pub(crate) fn charge_spell_cost(ctx: &ReducerContext, caster: &mut WorldEntity, hdr: &Spell) {
+/// Takes the spell's modified cost from the caster row and returns it.
+pub(crate) fn charge_spell_cost(
+    ctx: &ReducerContext,
+    caster: &mut WorldEntity,
+    hdr: &Spell,
+) -> u32 {
     let cost = crate::spell::spell_cost(ctx, caster.guid, hdr);
     caster.spend_power(hdr.power_type, cost);
     if cost > 0 && hdr.power_type == lyracore_shared::packing::power_type::MANA {
         let now_ms = crate::time::now_ms(ctx);
         caster.mana_regen_paused_until_ms = now_ms + 5000;
     }
+    cost
 }
 
 /// vmangos `Spell::DoAllEffectOnTarget`: the paid cost a SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS
@@ -348,9 +353,15 @@ fn avoided_cost_refund(hdr: &Spell, cost: u32, miss: u8) -> u32 {
     }
 }
 
-/// Gives the caster back part of a cost it paid when the cast's target avoided it.
-pub(crate) fn refund_avoided_cost(ctx: &ReducerContext, caster_guid: u64, hdr: &Spell, miss: u8) {
-    let refund = avoided_cost_refund(hdr, crate::spell::spell_cost(ctx, caster_guid, hdr), miss);
+/// Gives the caster back part of the cost it paid when the cast's target avoided it.
+pub(crate) fn refund_avoided_cost(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    hdr: &Spell,
+    paid_cost: u32,
+    miss: u8,
+) {
+    let refund = avoided_cost_refund(hdr, paid_cost, miss);
     if refund == 0 {
         return;
     }
@@ -742,7 +753,7 @@ struct CastTargets<'a> {
     weapon_targets: Vec<u64>,
     seen_weapon_targets: std::collections::HashSet<u64>,
     capped: CappedPicks,
-    cost_paid: bool,
+    paid_cost: u32,
 }
 
 impl<'a> CastTargets<'a> {
@@ -771,7 +782,7 @@ impl<'a> CastTargets<'a> {
             weapon_targets: Vec::new(),
             seen_weapon_targets: std::collections::HashSet::new(),
             capped: CappedPicks::default(),
-            cost_paid: false,
+            paid_cost: 0,
         }
     }
 
@@ -890,7 +901,7 @@ impl<'a> CastTargets<'a> {
 
     /// Gives back part of the paid cost once for each target that avoided the cast.
     fn refund_avoided_cost(&self) {
-        if !self.cost_paid {
+        if self.paid_cost == 0 {
             return;
         }
         for &t in &self.units {
@@ -898,6 +909,7 @@ impl<'a> CastTargets<'a> {
                 self.ctx,
                 self.caster_guid,
                 &self.spell.header,
+                self.paid_cost,
                 self.miss_info(t),
             );
         }

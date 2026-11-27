@@ -54,10 +54,16 @@ symbol = "dummy_proc"
 evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::HandleDummyAuraProc case 12292 casts 12723 at a random unit near the victim and returns SPELL_AURA_PROC_FAILED, keeping the charge, when it finds none; dummy_proc returns Failed for 12292 and 18765."
 
 [[known_gaps]]
-description = "A crit chance spell modifier (SPELLMOD_CRITICAL_CHANCE), such as the crit of Inner Focus or Elemental Mastery, changes no crit roll. A charged one is still spent by each spell its family mask covers, and Inner Focus and Elemental Mastery are spent through their cost modifier."
+description = "A crit chance spell modifier (SPELLMOD_CRITICAL_CHANCE) changes no crit roll. Cold Blood 14177 and Divine Favor 20216 carry only that modifier, so the next spell their family mask covers spends them and gets no crit bonus. Inner Focus and Elemental Mastery are spent through their cost modifier and also give no crit bonus."
 path = "module/src/spell/cast/targeting.rs"
 symbol = "direct_spell_crit_chance"
-evidence = "Source reading, not measured. At d9173eca, Unit::SpellCrit applies SPELLMOD_CRITICAL_CHANCE through Player::ApplySpellMod; direct_spell_crit_chance and the heal crit read no spell modifier."
+evidence = "Source reading, not measured. At d9173eca, Unit::GetSpellCritChance (Unit.cpp:5212) applies SPELLMOD_CRITICAL_CHANCE through Player::ApplySpellMod (Unit.cpp:5312); direct_spell_crit_chance and the heal crit read no spell modifier."
+
+[[known_gaps]]
+description = "A Trigger Child Cast uses and can spend a charged spell modifier that its parent cast already uses, because the parent spends its charges only after its effects. vmangos hides a charge that an in-flight cast took from every other cast."
+path = "module/src/spell/spell_modifier.rs"
+symbol = "ModifierCharges::used_by"
+evidence = "Source reading, not measured. At d9173eca, Player::DropModCharge sets a mod's last charge to -1 when a cast takes it, and Player::IsAffectedBySpellmod refuses a mod at -1 to a cast that did not take it."
 
 [[known_gaps]]
 description = "An extra attack spends a Flurry charge. vmangos keeps Flurry's charges while the attacker holds extra attacks, for example from Windfury."
@@ -323,6 +329,11 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/aura_charges.rs"
 function = "a_spell_outside_the_family_mask_spends_no_clearcasting"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/queued_strike.rs"
+function = "a_queued_strike_under_a_free_cost_modifier_is_free_and_spends_it_at_the_swing"
 rung = "durable_module"
 
 [[tests]]
