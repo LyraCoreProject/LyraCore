@@ -36,6 +36,12 @@ symbol = "read"
 evidence = "Compatibility Manifest spells.modifier-high-mask; conformance/vmangos-port-census/spell.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
+description = "The importer reads neither the World Source's spell_mod nor its spell_effect_mod rows, which vmangos SpellModMgr::LoadSpellMods applies on top of spell_template, nor the hard-coded overrides that function sets. Hand overrides in importer/src/spell_overrides.rs cover a few of them, such as Holy Light's direct heal and Divine Favor's 0x80202000 mask; the other rows keep their spell_template values."
+path = "importer/src/spell_overrides.rs"
+symbol = "modifier_mask"
+evidence = "vmangos d9173eca src/game/Spells/SpellModMgr.cpp:72-287."
+
+[[known_gaps]]
 description = "spells.script: Selected source script names have no Module dispatcher."
 path = "importer/src/vmangos_spell.rs"
 symbol = "read"
