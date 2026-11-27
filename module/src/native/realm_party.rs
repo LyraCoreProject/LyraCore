@@ -160,7 +160,11 @@ pub(crate) fn online(ctx: &ReducerContext, guid: u64) -> bool {
         })
 }
 
-fn counts_online(reported_online: bool, reported_by: Identity, holder: Option<Identity>) -> bool {
+pub(super) fn counts_online(
+    reported_online: bool,
+    reported_by: Identity,
+    holder: Option<Identity>,
+) -> bool {
     holder.is_some_and(|holder| reported_online || holder != reported_by)
 }
 
@@ -270,8 +274,19 @@ pub struct PartyPresence {
 }
 
 pub(super) fn presence(ctx: &ReducerContext, guid: u64, online: bool) {
+    report(ctx, guid, online, true);
+}
+
+/// Reports a Character offline to the Group stream only, since a Transfer is no guild sign-off.
+pub(super) fn transferred(ctx: &ReducerContext, guid: u64) {
+    report(ctx, guid, false, false);
+}
+
+fn report(ctx: &ReducerContext, guid: u64, online: bool, to_guild: bool) {
     if let (Some(realm), Some(character)) = (realm_shard(ctx), facts(ctx, guid, online)) {
-        super::realm_guild::presence(ctx, character.clone());
+        if to_guild {
+            super::realm_guild::presence(ctx, character.clone());
+        }
         ctx.db.game_party_presence().insert(PartyPresence {
             id: 0,
             database: remote::Identity(realm),
@@ -1196,6 +1211,11 @@ mod tests {
     #[test]
     fn a_member_reported_offline_by_the_shard_it_left_counts_online() {
         assert!(counts_online(false, shard(1), Some(shard(2))));
+    }
+
+    #[test]
+    fn a_member_reported_online_by_the_shard_it_left_counts_online() {
+        assert!(counts_online(true, shard(1), Some(shard(2))));
     }
 
     #[test]

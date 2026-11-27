@@ -713,7 +713,53 @@ pub(super) fn drop_away(
     }) {
         crate::meeting_stone::remove_solo_seeker(ctx, away.character_guid);
         aways.account_id().delete(account_id);
+        super::realm_guild::away_ended(ctx, &away);
     }
+}
+
+/// Records on this Realm Shard that `world` holds the World Session `connection` of a Character,
+/// as a new arrival there.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_native_away(
+    ctx: &ReducerContext,
+    account_id: u64,
+    connection: u128,
+    world: Identity,
+    character_guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let aways = ctx.db.game_native_away();
+    aways.account_id().delete(account_id);
+    aways.insert(NativeAway {
+        account_id,
+        connection_id: ConnectionId::from_u128(connection),
+        world: Some(world),
+        character_guid,
+        arrival: directory::revision(ctx),
+    });
+    Ok(())
+}
+
+/// Drops the away World Session of `connection`, as the close report of its World Shard does.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_native_drop_away(
+    ctx: &ReducerContext,
+    account_id: u64,
+    connection: u128,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let world = ctx
+        .db
+        .game_native_away()
+        .account_id()
+        .find(account_id)
+        .filter(|away| away.connection_id == ConnectionId::from_u128(connection))
+        .and_then(|away| away.world.or_else(|| crate::peer::world_shard(ctx)))
+        .ok_or("the Account has no away World Session for this connection")?;
+    drop_away(ctx, account_id, connection, world, None);
+    Ok(())
 }
 
 /// A request of a connection that waits on another Shard: a Character selection request, a

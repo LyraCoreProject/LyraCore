@@ -13,6 +13,7 @@ use spacetimedb::{
 use super::{
     directory, game_native_player,
     realm_party::{self, PartyCharacter},
+    realm_shard::NativeAway,
     Rollback,
 };
 use crate::{
@@ -210,6 +211,15 @@ fn current(ctx: &ReducerContext, facts: &Facts) -> bool {
         && realm_party::current(ctx, &facts.character) == Some(ctx.sender())
 }
 
+/// Why a report can be stale after a Transfer: docs/architecture.md, "Groups across World Shards".
+pub(super) fn counts_online(ctx: &ReducerContext, character: &PartyCharacter) -> bool {
+    realm_party::counts_online(
+        character.online,
+        character.world,
+        realm_party::current(ctx, character),
+    )
+}
+
 fn store_character(ctx: &ReducerContext, facts: Facts) -> bool {
     let table = ctx.db.game_guild_character();
     let guid = facts.character.guid;
@@ -303,6 +313,29 @@ pub(super) fn record_presence(ctx: &ReducerContext, facts: Facts) -> Result<(), 
     Ok(())
 }
 
+/// Signs a member off when its away World Session ends while its guild row still says online.
+pub(super) fn away_ended(ctx: &ReducerContext, away: &NativeAway) {
+    let Some(row) = ctx
+        .db
+        .game_guild_character()
+        .guid()
+        .find(away.character_guid)
+    else {
+        return;
+    };
+    let mut facts = row.facts;
+    if !facts.character.online || facts.character.connection != away.connection_id.to_u128() {
+        return;
+    }
+    facts.character.online = false;
+    facts.character.stats = None;
+    facts.character.revision = directory::revision(ctx);
+    facts.logout_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    if let Err(error) = record_presence(ctx, facts) {
+        spacetimedb::log::warn!("guild sign-off of {}: {error}", away.character_guid);
+    }
+}
+
 #[table(accessor = game_realm_guild_command, outbox(remote::idc_realm_guild_command))]
 pub struct RealmGuildCommand {
     #[primary_key]
@@ -349,9 +382,7 @@ fn invitee(ctx: &ReducerContext, actor: u64, name: &str) -> Option<super::guild:
     let characters = ctx.db.game_guild_character();
     let mut matches = characters.iter().filter(|row| {
         let character = &row.facts.character;
-        character.name.eq_ignore_ascii_case(name)
-            && character.online
-            && realm_party::current(ctx, character) == Some(character.world)
+        character.name.eq_ignore_ascii_case(name) && counts_online(ctx, character)
     });
     let target = matches.next()?;
     if matches.next().is_some() {
@@ -367,7 +398,7 @@ pub(super) fn invitee_by_guid(
 ) -> Option<super::guild::Invitee> {
     let target = ctx.db.game_guild_character().guid().find(guid)?;
     let character = &target.facts.character;
-    if !character.online || realm_party::current(ctx, character) != Some(character.world) {
+    if !counts_online(ctx, character) {
         return None;
     }
     Some(super::guild::Invitee {
@@ -633,7 +664,7 @@ pub(super) fn deliver(
         return;
     };
     let character = row.facts.character;
-    if !character.online || realm_party::current(ctx, &character) != Some(character.world) {
+    if !counts_online(ctx, &character) {
         return;
     }
     super::realm_communication::deliver(
@@ -742,20 +773,19 @@ pub(super) fn roster_line(ctx: &ReducerContext, line: &mut codec::GuildRosterLin
     line.level = row.level;
     line.zone_id = row.zone;
     line.class = character.class;
-    line.days_offline =
-        if character.online && realm_party::current(ctx, &character) == Some(character.world) {
-            None
+    line.days_offline = if counts_online(ctx, &character) {
+        None
+    } else {
+        Some(if row.logout_micros == 0 {
+            0.0
         } else {
-            Some(if row.logout_micros == 0 {
-                0.0
-            } else {
-                ctx.timestamp
-                    .to_micros_since_unix_epoch()
-                    .saturating_sub(row.logout_micros)
-                    .max(0) as f32
-                    / 86_400_000_000.0
-            })
-        };
+            ctx.timestamp
+                .to_micros_since_unix_epoch()
+                .saturating_sub(row.logout_micros)
+                .max(0) as f32
+                / 86_400_000_000.0
+        })
+    };
 }
 
 pub(super) fn deleted(ctx: &ReducerContext, guid: u64) {

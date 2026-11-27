@@ -112,13 +112,30 @@ def check(host, worlds, character, received):
     assert event(0, ['Guildalpha', 'Guildbeta', 'Member']) in received(peer, 0x92)
     membership([guid, peer_guid])
     client.collect()
+    peer.collect()
+    [[left]] = host.rows(f'SELECT world FROM game_character_directory WHERE guid = {peer_guid}')
     host.call('debug_teleport', [peer_guid, 0, 10, 0, 0, 0], database=western)
     received(peer, 0x3e, auto_ack=False)
     peer.send(0xdc)
     packets = []
     while peer_guid not in creates(packets):
         packets.append(peer.read())
-    peer.collect()
+    [[held]] = host.rows(f'SELECT world FROM game_character_directory WHERE guid = {peer_guid}')
+    assert held != left
+    host.wait_until(lambda: host.rows(f'SELECT world FROM game_party_character WHERE guid = {peer_guid}') == [[held]]
+        and not host.rows('SELECT connection_id FROM game_native_transfer_pending', western),
+        'guild member did not finish Transfer')
+    settled(western)
+    settled(eastern)
+    crossing = [(opcode, body) for opcode, body in packets + peer.collect() + client.collect() if opcode == 0x92]
+    assert not [body for _, body in crossing if body[0] in (2, 12, 13)], crossing
+    [[account_id, [connection]]] = host.rows(f'SELECT account_id, connection_id FROM game_native_away WHERE character_guid = {peer_guid}')
+    [[[world_hex]]] = host.rows(f'SELECT world FROM game_character_directory WHERE guid = {peer_guid}')
+    world = {'__identity__': f'0x{int(world_hex, 16):064x}'}
+    host.call('debug_native_drop_away', [account_id, connection])
+    assert received(client, 0x92).count(event(13, ['Guildbeta'], peer_guid)) == 1
+    assert host.rows(f'SELECT logout_micros FROM game_guild_character WHERE guid = {peer_guid}') != [[0]]
+    host.call('debug_native_away', [account_id, connection, world, peer_guid])
     membership([guid, peer_guid])
     peer.send(0x89)
     assert roster(received(peer, 0x8a)[-1][1])[2][peer_guid][2] == 3

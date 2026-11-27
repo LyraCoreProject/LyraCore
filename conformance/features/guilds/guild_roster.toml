@@ -7,9 +7,12 @@ replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
-deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "module/src/native/realm_party.rs", function = "a_member_reported_online_by_the_shard_it_left_counts_online", rung = "unit" },
+    { path = "module/src/native/realm_party.rs", function = "a_member_reported_offline_by_the_shard_it_left_counts_online", rung = "unit" },
+    { path = "module/src/native/realm_party.rs", function = "a_member_without_a_world_session_counts_offline_even_when_reported_online", rung = "unit" },
+]
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -18,6 +21,12 @@ symbol = "WorldSession::HandleGuildQueryOpcode"
 
 [real_client]
 status = "unverified"
+
+[[deliberate_deviations]]
+id = "moved_guild_member_counts_online"
+result = "A guild member whose World Session a cross-Shard Transfer has moved keeps its stored online state: the departure sends no sign-off and no logout time, and the destination's online report sends no sign-on and no MOTD. Until that report the roster shows the member online and an invite by name finds it. A crossing that ends without arrival signs the member off when the Realm Shard drops its away record, with the logout time of that moment."
+reason = "The Realm Shard hears that the member is in the world only after its client is. The Reference Server has no Transfer and announces sign-off and sign-on only for logout and login."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/WorldSession.cpp"
 
 [[known_gaps]]
 description = "Stock-client use of MSG_UPDATE_GUILD is unverified; vmangos marks it unhandled. Check whether the client sends it and what result to preserve."
