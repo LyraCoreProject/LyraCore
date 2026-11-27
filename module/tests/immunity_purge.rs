@@ -71,13 +71,19 @@ fn will_of_the_forsaken_removes_a_fear_and_keeps_its_own_aura() {
 fn an_immunity_without_the_attribute_removes_nothing() {
     let mut standalone = Standalone::start("immunity-purge-no-attribute");
     let wolf = stage(&mut standalone);
-    insert_fear(&standalone);
     insert_will_of_the_forsaken(&standalone, 0);
-    cast(&standalone, wolf, FEAR, PLAYER);
+    // A fear-mechanic debuff that leaves its holder free to cast.
+    insert_spell(
+        &standalone,
+        SHIELDED_DEBUFF,
+        &[("mechanic", &MECHANIC_FEAR)],
+        &[(A_MOD_DAMAGE_TAKEN, T_TARGET_ENEMY, 0, P_RAW, 0)],
+    );
+    cast(&standalone, wolf, SHIELDED_DEBUFF, PLAYER);
 
     cast(&standalone, PLAYER, WARD, PLAYER);
 
-    assert_eq!(held(&standalone, FEAR), 1);
+    assert_eq!(held(&standalone, SHIELDED_DEBUFF), 1);
     assert_eq!(held(&standalone, WARD), 3);
 }
 
@@ -134,7 +140,6 @@ fn a_mechanic_mask_immunity_removes_the_auras_of_the_mechanics_in_its_mask() {
 fn a_state_immunity_removes_the_auras_of_its_aura_type_only() {
     let mut standalone = Standalone::start("immunity-purge-state");
     let wolf = stage(&mut standalone);
-    insert_fear(&standalone);
     insert_spell(
         &standalone,
         SILENCE,
@@ -143,23 +148,30 @@ fn a_state_immunity_removes_the_auras_of_its_aura_type_only() {
     );
     insert_spell(
         &standalone,
+        SHIELDED_DEBUFF,
+        &[],
+        &[(A_MOD_DAMAGE_TAKEN, T_TARGET_ENEMY, 0, P_RAW, 0)],
+    );
+    // A state immunity does not let a feared caster act, so the purged state is a silence.
+    insert_spell(
+        &standalone,
         WARD,
         &[("attributes_ex", &PURGES_EFFECT)],
         &[(
             A_IMMUNITY,
             T_SELF,
-            AURA_MOD_FEAR,
+            AURA_MOD_SILENCE,
             P_RAW,
             AURA_STATE_IMMUNITY,
         )],
     );
-    cast(&standalone, wolf, FEAR, PLAYER);
     cast(&standalone, wolf, SILENCE, PLAYER);
+    cast(&standalone, wolf, SHIELDED_DEBUFF, PLAYER);
 
     cast(&standalone, PLAYER, WARD, PLAYER);
 
-    assert_eq!(held(&standalone, FEAR), 0);
-    assert_eq!(held(&standalone, SILENCE), 1);
+    assert_eq!(held(&standalone, SILENCE), 0);
+    assert_eq!(held(&standalone, SHIELDED_DEBUFF), 1);
 }
 
 #[test]
