@@ -1493,10 +1493,14 @@ fn cascade_for_transfer(ctx: &ReducerContext, guid: u64, listing_holds: ListingH
             .filter(&guid)
             .collect(),
     };
+    let join_reset = crate::native::realm_party::join_reset_of(ctx, guid);
     mail_text::release(ctx, guid, matches!(listing_holds, ListingHolds::Delete));
     crate::character::cascade_delete_character(ctx, guid);
     for contact in incoming_contacts {
         ctx.db.game_character_contact().insert(contact);
+    }
+    if let Some(marker) = join_reset {
+        crate::native::realm_party::store_join_reset(ctx, marker);
     }
     for hold in kept {
         ctx.db.game_auction_hold().insert(hold);

@@ -10,6 +10,7 @@ use super::{
 };
 use crate::{
     game_area_trigger,
+    group::game_group,
     instance::{self, game_instance, game_instance_binding},
     peer::{realm_shard, require_sender},
     remote_bindings::peer as remote,
@@ -35,6 +36,14 @@ pub struct Request {
 struct Admission {
     request: Request,
     binding_world: Option<Identity>,
+    /// The source's Group when it queued the entry; `None` from a source without the field.
+    queued_group: Option<u64>,
+}
+
+#[derive(SpacetimeType)]
+struct AdmissionBeforeQueuedGroup {
+    request: Request,
+    binding_world: Option<Identity>,
 }
 
 #[derive(SpacetimeType)]
@@ -46,9 +55,17 @@ struct AdmissionParty {
 fn admission(bytes: &[u8]) -> Result<Admission, String> {
     bsatn::from_slice(bytes)
         .or_else(|_| {
+            bsatn::from_slice::<AdmissionBeforeQueuedGroup>(bytes).map(|admission| Admission {
+                request: admission.request,
+                binding_world: admission.binding_world,
+                queued_group: None,
+            })
+        })
+        .or_else(|_| {
             bsatn::from_slice::<Request>(bytes).map(|request| Admission {
                 request,
                 binding_world: None,
+                queued_group: None,
             })
         })
         .map_err(|error| error.to_string())
@@ -160,6 +177,7 @@ fn queue_entry(
             expires,
         },
         binding_world: binding.and_then(|(_, world)| world),
+        queued_group: Some(crate::group::group_of(ctx, guid).map_or(0, |member| member.group_id)),
     })
     .expect("Instance entry encodes");
     ctx.db.game_instance_entry().insert(InstanceEntry {
@@ -296,11 +314,16 @@ pub fn idc_world_instance_entry(
         return Err("Instance Shard routing changed".into());
     }
     let guid = decoded.actor.guid;
+    let mut joined_after_queue = false;
     if let Ok(party) = bsatn::from_slice::<AdmissionParty>(&party) {
         realm_party::apply_snapshot(ctx, &party.snapshot)?;
         if crate::group::group_of(ctx, guid).map_or(0, |member| member.group_id) != party.group {
             return Err("Group changed during Instance admission".into());
         }
+        joined_after_queue = admission
+            .queued_group
+            .is_some_and(|queued| queued != party.group)
+            && joins_as_member(ctx, guid, party.group);
     } else {
         realm_party::apply_snapshot(ctx, &party)?;
     }
@@ -354,7 +377,8 @@ pub fn idc_world_instance_entry(
             .find(decoded.map)
             .map(|owner| owner.world)
     });
-    if decoded.binding != 0 && binding_world == Some(ctx.database_identity()) {
+    if decoded.binding != 0 && binding_world == Some(ctx.database_identity()) && !joined_after_queue
+    {
         instance::bind_character(
             ctx,
             guid,
@@ -407,6 +431,15 @@ pub fn idc_world_instance_entry(
             error: String::new(),
         });
     Ok(())
+}
+
+/// vmangos `Group::AddMember` resets the runs of a member that does not lead the Group it joins.
+fn joins_as_member(ctx: &ReducerContext, guid: u64, group: u64) -> bool {
+    ctx.db
+        .game_group()
+        .group_id()
+        .find(group)
+        .is_some_and(|group| group.leader_guid != guid)
 }
 
 #[reducer(on_result(game_world_instance_entry))]

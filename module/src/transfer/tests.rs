@@ -1134,7 +1134,18 @@ fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
     );
 }
 
-const OLD_BLOBS_MAY_LACK: [&str; 17] = [
+#[test]
+fn a_join_reset_arrives_after_the_bindings_it_resets() {
+    let exported_at = |table: &str| {
+        crate::CHARACTER_OWNED_TRANSFER_NAMES
+            .iter()
+            .position(|exported| *exported == table)
+            .unwrap_or_else(|| panic!("{table} has no transport arm"))
+    };
+    assert!(exported_at("game_instance_binding") < exported_at("game_group_join_reset"));
+}
+
+const OLD_BLOBS_MAY_LACK: [&str; 18] = [
     "game_auction_bid_hold",
     "game_auction_hold",
     "game_buyback_item",
@@ -1145,6 +1156,7 @@ const OLD_BLOBS_MAY_LACK: [&str; 17] = [
     "game_character_regeneration",
     "game_drunk_sobering",
     "game_fatigue_state",
+    "game_group_join_reset",
     "game_group_target_icon",
     "game_guild_fee_hold",
     "game_instance_entry",
@@ -1260,6 +1272,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         ("game_character_regeneration", count),
         ("game_drunk_sobering", count),
         ("game_fatigue_state", count),
+        ("game_group_join_reset", count),
         ("game_group_target_icon", count),
         ("game_guild_fee_hold", count),
         ("game_instance_entry", count),
@@ -1281,7 +1294,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         arms,
     )
     .expect("the filled payload imports");
-    assert_eq!(applied.get(), 18);
+    assert_eq!(applied.get(), 19);
 }
 
 #[test]

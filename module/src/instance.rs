@@ -700,10 +700,17 @@ fn adopt_instance_for_party(ctx: &ReducerContext, instance_id: u64, party_id: u6
     true
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JoinReset {
+    Done,
+    /// The joining member is on another Shard; its import owes the reset.
+    AwaitsArrival,
+}
+
 /// vmangos `Group::AddMember` resets a joining member's own runs, except on the map it stands on.
-pub(crate) fn unbind_joining_member(ctx: &ReducerContext, character_guid: u64) {
+pub(crate) fn unbind_joining_member(ctx: &ReducerContext, character_guid: u64) -> JoinReset {
     let Some(member) = crate::group::group_of(ctx, character_guid) else {
-        return;
+        return JoinReset::Done;
     };
     if ctx
         .db
@@ -712,21 +719,33 @@ pub(crate) fn unbind_joining_member(ctx: &ReducerContext, character_guid: u64) {
         .find(member.group_id)
         .is_none_or(|group| group.leader_guid == character_guid)
     {
-        return;
+        return JoinReset::Done;
     }
     let Some(character) = crate::helpers::character_by_guid(ctx, character_guid) else {
-        return;
+        return JoinReset::AwaitsArrival;
     };
+    unbind_outside_standing_map(ctx, &character);
+    JoinReset::Done
+}
+
+/// The reset `unbind_joining_member` owed a joining member that has since arrived on this Shard.
+pub(crate) fn unbind_arrived_joiner(ctx: &ReducerContext, character_guid: u64) {
+    if let Some(character) = crate::helpers::character_by_guid(ctx, character_guid) {
+        unbind_outside_standing_map(ctx, &character);
+    }
+}
+
+fn unbind_outside_standing_map(ctx: &ReducerContext, character: &crate::character::Character) {
     let standing_map = ctx
         .db
         .game_world_entity()
         .guid()
-        .find(character_guid)
+        .find(character.guid)
         .map(|entity| entity.map_id);
     let bindings = ctx.db.game_instance_binding();
     for binding in bindings
         .by_character()
-        .filter(&character_guid)
+        .filter(&character.guid)
         .collect::<Vec<_>>()
     {
         if binding.map_id != character.map_id && Some(binding.map_id) != standing_map {

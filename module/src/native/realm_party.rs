@@ -25,6 +25,7 @@ use crate::{
         self, game_group, game_group_event, game_group_invite, game_group_member,
         game_group_target_icon, Group, GroupAction, GroupMember, Plane,
     },
+    instance::JoinReset,
     peer::{realm_shard, require_sender, world_shard},
     remote_bindings::peer as remote,
 };
@@ -64,6 +65,60 @@ pub struct PartyProjection {
     #[primary_key]
     pub group_id: u64,
     pub revision: u64,
+}
+
+/// A Group join projected while another Shard held the joiner; see docs/instance-lifecycle.md.
+#[table(accessor = game_group_join_reset)]
+pub struct GroupJoinReset {
+    #[primary_key]
+    pub character_guid: u64,
+    pub revision: u64,
+}
+
+crate::character_owned!(delete, fn sweep_delete_game_group_join_reset(ctx, character_guid) {
+    ctx.db.game_group_join_reset().character_guid().delete(character_guid);
+});
+// The blob row carries the roster revision the source applied, not the source's marker.
+crate::character_owned!(transfer, fn sweep_transfer_game_group_join_reset(ctx, character_guid, io) {
+    crate::transfer::move_rows(
+        ctx,
+        io,
+        || {
+            vec![GroupJoinReset {
+                character_guid,
+                revision: ctx
+                    .db
+                    .game_party_membership()
+                    .guid()
+                    .find(character_guid)
+                    .map_or(0, |membership| membership.revision),
+            }]
+        },
+        |ctx: &ReducerContext, applied| arrived(ctx, &applied),
+    );
+});
+
+/// Settles the marker when its Character arrives: a join the source had not applied resets it.
+fn arrived(ctx: &ReducerContext, applied: &GroupJoinReset) {
+    let markers = ctx.db.game_group_join_reset();
+    let Some(marker) = markers.character_guid().find(applied.character_guid) else {
+        return;
+    };
+    markers.character_guid().delete(marker.character_guid);
+    if marker.revision > applied.revision {
+        crate::instance::unbind_arrived_joiner(ctx, marker.character_guid);
+    }
+}
+
+/// The Transfer cascade keeps the marker for the arriving payload to settle.
+pub(crate) fn join_reset_of(ctx: &ReducerContext, guid: u64) -> Option<GroupJoinReset> {
+    ctx.db.game_group_join_reset().character_guid().find(guid)
+}
+
+pub(crate) fn store_join_reset(ctx: &ReducerContext, marker: GroupJoinReset) {
+    let markers = ctx.db.game_group_join_reset();
+    markers.character_guid().delete(marker.character_guid);
+    markers.insert(marker);
 }
 
 #[derive(SpacetimeType)]
@@ -756,6 +811,7 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
                 raid_slot: 0,
                 revision: update.revision,
             });
+            ctx.db.game_group_join_reset().character_guid().delete(guid);
             restore(ctx, guid);
             crate::instance::reconcile_instance_removal(ctx, guid);
         }
@@ -911,8 +967,18 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
         });
         restore(ctx, guid);
         package::membership_changed(ctx, guid);
-        if joined {
-            crate::instance::unbind_joining_member(ctx, guid);
+        if member.is_none() {
+            ctx.db.game_group_join_reset().character_guid().delete(guid);
+        } else if joined
+            && crate::instance::unbind_joining_member(ctx, guid) == JoinReset::AwaitsArrival
+        {
+            store_join_reset(
+                ctx,
+                GroupJoinReset {
+                    character_guid: guid,
+                    revision,
+                },
+            );
         }
         crate::instance::reconcile_instance_removal(ctx, guid);
     }
@@ -1110,6 +1176,7 @@ crate::outside_table_catalog!(
     game_party_character,
     game_party_membership,
     game_party_projection,
+    game_group_join_reset,
     game_party_presence,
     game_realm_party_command,
     game_world_party_update,
