@@ -5,8 +5,8 @@ use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::constants::{type_mask, unit_flags};
 use lyracore_shared::guid;
 use lyracore_shared::spell::taxonomy::{
-    A_MOD_STAT, CAST_FLAG_AREA_AURA, CAST_FLAG_PET_AREA_AURA, P_STAT_ID, SPELL_ATTR_PASSIVE,
-    STAT_STR, TOTEM_TYPE, T_SELF,
+    A_MOD_STAT, CAST_FLAG_AREA_AURA, CAST_FLAG_PET_AREA_AURA, E_SUMMON_PET, P_ENTRY, P_STAT_ID,
+    SPELL_ATTR_PASSIVE, STAT_STR, TOTEM_TYPE, T_SELF,
 };
 use support::{actor, number, Standalone};
 
@@ -34,6 +34,9 @@ const RACIAL_POINTS: i32 = 7;
 const TIMED_AURA: u32 = 5_137_408;
 const PERMANENT_MS: u32 = u32::MAX;
 const TIMED_MS: u32 = 60_000;
+const SUMMON_PET: u32 = 5_137_409;
+// CMSG_PET_ACTION data 0x07000003: a command action carrying COMMAND_DISMISS.
+const DISMISS: &str = "117440515";
 const TOTEM: u64 = guid::compose(guid::UNIT, 13_742);
 const TRANSFER: &str = "513740";
 // One Aura pass: game_aura_schedule runs every second, 20 ticks of the 50 ms virtual clock.
@@ -358,6 +361,48 @@ fn a_character_transfer_moves_own_auras_and_leaves_copies_behind() {
         vec![(PET_AURA, CHARACTER, PARTY_AURA_POINTS)],
         "a copy stays with its source's Shard; vmangos drops a copy whose caster is gone"
     );
+    source.assert_call("confirm_import", &[TRANSFER, &actor("0")]);
+    source.assert_call("finish_transfer", &[TRANSFER, &actor("0")]);
+    assert!(
+        auras(&source, CHARACTER).is_empty(),
+        "the copy left behind goes with the departed Character"
+    );
+    assert!(source
+        .query_rows("SELECT aura_id FROM game_area_aura_copy")
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_resummoned_pets_aura_reaches_its_owner_again() {
+    let shard = stage("party-aura-resummon");
+    let pet = pet_guid(CHARACTER);
+    let summon = || {
+        cast(&shard, CHARACTER, SUMMON_PET);
+        set_faction(&shard, pet, CHARACTER_FACTION);
+    };
+    summon();
+    cast(&shard, pet, PARTY_AURA);
+    pass(&shard);
+    assert_eq!(
+        auras(&shard, CHARACTER),
+        vec![(PARTY_AURA, pet, PARTY_AURA_POINTS)]
+    );
+
+    shard.assert_call("debug_pet_command", &[&CHARACTER.to_string(), DISMISS, "0"]);
+    pass(&shard);
+    assert!(
+        auras(&shard, CHARACTER).is_empty(),
+        "a dismissed pet's copy goes"
+    );
+
+    summon();
+    pass(&shard);
+    assert_eq!(
+        auras(&shard, CHARACTER),
+        vec![(PARTY_AURA, pet, PARTY_AURA_POINTS)],
+        "Blood Pact 6307 shape: the pet keeps its Aura, and its world entry makes it a source again"
+    );
 }
 
 fn stage(name: &str) -> Standalone {
@@ -387,6 +432,7 @@ fn stage(name: &str) -> Standalone {
     for fixture in &FIXTURES {
         insert_area_aura(&shard, fixture);
     }
+    insert_summon_pet(&shard);
     for (spell_id, prev_spell, rank) in [(LOW_RANK, 0, 1), (HIGH_RANK, LOW_RANK, 2)] {
         shard.insert_row(
             "game_spell_chain",
@@ -489,6 +535,33 @@ fn insert_area_aura(shard: &Standalone, fixture: &Fixture) {
             ("radius_yd", &RADIUS_YD),
             ("p0", &i32::from(STAT_STR)),
             ("p0_kind", &P_STAT_ID),
+        ],
+    );
+}
+
+/// A Warlock-style summon of a wolf pet at the caster's `pet_guid_for` guid.
+fn insert_summon_pet(shard: &Standalone) {
+    let name = "Area aura fixture summon";
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &SUMMON_PET),
+            ("name", &name),
+            ("range_yd", &0),
+            ("is_negative", &false),
+            ("gcd_ms", &0),
+            ("cooldown_ms", &0),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(SUMMON_PET, 0)),
+            ("spell_id", &SUMMON_PET),
+            ("kind", &E_SUMMON_PET),
+            ("target", &T_SELF),
+            ("p0", &TEST_WOLF_ENTRY),
+            ("p0_kind", &P_ENTRY),
         ],
     );
 }

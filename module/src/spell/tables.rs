@@ -677,7 +677,7 @@ impl Aura {
         }
         crate::skill::aura_changed(ctx, None, Some(&aura));
         crate::native::aura::changed(ctx, None, Some(&aura));
-        super::area_aura::inserted(ctx, &aura);
+        super::area_aura::record_source(ctx, &aura);
         if aura.releases_loot() {
             crate::native::loot::close_window(ctx, aura.target_guid);
         }

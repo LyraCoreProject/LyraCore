@@ -972,8 +972,9 @@ current. Each Aura pass, once a second, follows vmangos `AreaAura::Update`:
   refreshed. It goes when its unit leaves the radius or the Subgroup, or the caster stops being
   friendly to it. A party Aura's copy on the caster's owner or pet skips the Subgroup check.
   Deleting the source deletes its copies at once, and the pass removes a copy whose source is gone.
-- A source whose caster has left the world stops being a source; its copies go, and world entry
-  records it again. A Character Transfer moves the sources and leaves the copies behind.
+  A copy that finds the unit's Aura slots full is dropped without a cast failure.
+- A source whose caster has left the world stops being a source and its copies go. Any unit's world
+  entry, and a refresh of the Aura, records it again, so a resummoned pet's Blood Pact spreads. A Character Transfer moves the sources and leaves the copies behind.
 - A totem's own party Aura holds no amount, as vmangos gives it `SPELL_AURA_NONE`; its copies take
   the effect's base points.
 

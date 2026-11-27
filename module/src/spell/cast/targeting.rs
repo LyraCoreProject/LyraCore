@@ -857,6 +857,7 @@ pub(crate) fn aura_apply(
         points,
         source_item,
         expires,
+        relays_overflow: true,
     };
     if !place_aura(ctx, e, hdr, &placement) {
         return;
@@ -923,6 +924,8 @@ pub(crate) struct AuraPlacement {
     pub(crate) points: i32,
     pub(crate) source_item: u64,
     pub(crate) expires: Timestamp,
+    // vmangos drops an area Aura copy quietly when the unit's slots are full.
+    pub(crate) relays_overflow: bool,
 }
 
 /// Puts or refreshes one Aura; false when stacking or a full slot bar refuses it.
@@ -941,6 +944,7 @@ pub(crate) fn place_aura(
         points,
         source_item,
         expires,
+        relays_overflow,
     } = placement;
     let now = crate::time::now(ctx);
     // Channels without periodic effects still need the indexed cadence for range checks.
@@ -1059,7 +1063,8 @@ pub(crate) fn place_aura(
         a.proc_family_flags = proc.family_flags;
         a.proc_charges = proc.charges;
         a.proc_icd_ms = proc.icd_ms;
-        a.update(ctx);
+        let a = a.update(ctx);
+        crate::spell::area_aura::record_source(ctx, &a);
     } else {
         // Evictions must free aura slots before this insert chooses one.
         if !(source_item != 0 && hdr.equip_passive())
@@ -1100,23 +1105,25 @@ pub(crate) fn place_aura(
                 tracer_spell::AURA_SLOTS,
             )
         }) else {
-            log::info!(
-                "aura slot overflow: all {} slots on {target_guid} full — dropping spell {} (loud: relayed to caster {caster_guid})",
-                tracer_spell::AURA_SLOTS,
-                hdr.spell_id
-            );
-            crate::SpellCastEvent::insert(
-                ctx,
-                SpellCastEvent {
-                    is_interrupted: true,
-                    ..SpellCastEvent::signal(
-                        ctx,
-                        caster_guid,
-                        hdr.spell_id,
-                        SpellCastEventKind::Interrupt,
-                    )
-                },
-            );
+            if relays_overflow {
+                log::info!(
+                    "aura slot overflow: all {} slots on {target_guid} full — dropping spell {} (loud: relayed to caster {caster_guid})",
+                    tracer_spell::AURA_SLOTS,
+                    hdr.spell_id
+                );
+                crate::SpellCastEvent::insert(
+                    ctx,
+                    SpellCastEvent {
+                        is_interrupted: true,
+                        ..SpellCastEvent::signal(
+                            ctx,
+                            caster_guid,
+                            hdr.spell_id,
+                            SpellCastEventKind::Interrupt,
+                        )
+                    },
+                );
+            }
             return false;
         };
         Aura {

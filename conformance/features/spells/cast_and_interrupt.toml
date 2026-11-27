@@ -338,6 +338,11 @@ function = "a_character_transfer_moves_own_auras_and_leaves_copies_behind"
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/party_area_auras.rs"
+function = "a_resummoned_pets_aura_reaches_its_owner_again"
+rung = "durable_module"
+
+[[tests]]
 path = "importer/src/spell.rs"
 function = "area_aura_visibility_preserves_party_and_pet_effect_origins"
 rung = "unit"

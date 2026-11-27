@@ -71,8 +71,8 @@ fn holds_inert(ctx: &ReducerContext, spell: &Spell, caster_guid: u64) -> bool {
             .is_some_and(|caster| crate::combat::is_totem(ctx, &caster))
 }
 
-/// Records a caster's own area Aura as a source; every new Aura row passes through here.
-pub(crate) fn inserted(ctx: &ReducerContext, aura: &Aura) {
+/// Records a caster's own area Aura as a source; Aura inserts, refreshes and world entry call it.
+pub(crate) fn record_source(ctx: &ReducerContext, aura: &Aura) {
     let source = aura.caster_guid == aura.target_guid
         && ctx
             .db
@@ -105,7 +105,7 @@ pub(crate) fn is_copy(ctx: &ReducerContext, aura_id: u64) -> bool {
         .is_some()
 }
 
-/// Records the area Auras a unit holds of its own when it enters the world.
+/// Records the area Auras a unit holds of its own; every unit entering the world calls it.
 pub(crate) fn entered_world(ctx: &ReducerContext, unit_guid: u64) {
     let held: Vec<Aura> = ctx
         .db
@@ -115,7 +115,7 @@ pub(crate) fn entered_world(ctx: &ReducerContext, unit_guid: u64) {
         .filter(|aura| aura.caster_guid == unit_guid)
         .collect();
     for aura in &held {
-        inserted(ctx, aura);
+        record_source(ctx, aura);
     }
 }
 
@@ -129,7 +129,7 @@ pub(crate) fn record_existing_sources(ctx: &ReducerContext) -> u64 {
         .filter(|aura| aura.caster_guid == aura.target_guid)
         .collect();
     for aura in &held {
-        inserted(ctx, aura);
+        record_source(ctx, aura);
     }
     ctx.db.game_area_aura_source().count() - before
 }
@@ -193,7 +193,7 @@ impl Area {
     }
 }
 
-// A source whose caster left the world stops being one; `entered_world` records it again.
+// A source whose caster left the world stops being one until the caster enters it again.
 fn keep_in_step(ctx: &ReducerContext, source: &Aura) {
     let caster = ctx.db.game_world_entity().guid().find(source.caster_guid);
     let spell = ctx.db.game_spell().spell_id().find(source.spell_id);
@@ -393,6 +393,7 @@ fn give_copy(ctx: &ReducerContext, source: &Aura, spell: &Spell, reach: Reach, u
             points,
             source_item: 0,
             expires: source.expires_at,
+            relays_overflow: false,
         },
     );
     let copy = ctx

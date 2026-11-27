@@ -559,10 +559,10 @@ manifest, so update both Shards before moving active World Sessions.
 
 A plain Module publish adds the private `game_area_aura_source` and `game_area_aura_copy` tables,
 which start empty. Publish through a planned update; development reload requires an unchanged
-schema. Then run `debug_repair_after_publish`: it records the party and pet area Auras that casters
-in the world already hold as sources, so their copies reach the Subgroup at the next Aura pass. A
-Character who is offline is recorded at world entry. Until then, such an Aura stays on its caster
-alone.
+schema. Then run `debug_repair_after_publish`: it records every party and pet area Aura a unit holds
+of its own as a source, so its copies reach the Subgroup at the next Aura pass. That pass drops a
+source whose caster is not in the world, and the caster's world entry records it again. Until the
+repair, such an Aura stays on its caster alone.
 
 Reimport `spell` to set `CAST_FLAG_PET_AREA_AURA` (0x0100_0000) on the effect 119 spells, such as
 Spirit Bond, Soul Link and Master Demonologist. Until that reimport they carry only
