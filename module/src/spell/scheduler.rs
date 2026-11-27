@@ -9,7 +9,6 @@ use crate::{
     game_aura, game_ground_area, game_ground_area_schedule, game_pending_cast,
     game_resurrect_request, game_spell, game_spell_effect, Aura, AuraSchedule, GroundArea,
     GroundAreaSchedule, PendingCast, PendingSpellImpact, ResurrectRequest, SpellCastEvent,
-    SpellImpactEvent,
 };
 
 #[reducer]
@@ -69,72 +68,7 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
     if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    let entities = ctx.db.game_world_entity();
-    let Some(target) = entities.guid().find(sched.target_guid) else {
-        return;
-    };
-    // vmangos Spell::DoSpellHitOnUnit lands spell damage only on a living unit.
-    if target.dead
-        || entities
-            .guid()
-            .find(sched.caster_guid)
-            .is_some_and(|caster| !crate::combat::may_harm(ctx, &caster, &target))
-    {
-        return;
-    }
-    // vmangos Spell::CheckAtDelay tests evade again when the spell lands.
-    if crate::creatures::eventai::movement::returning_home(ctx, sched.target_guid) {
-        crate::native::combat::spell_log_miss(
-            ctx,
-            sched.caster_guid,
-            sched.target_guid,
-            sched.spell_id,
-            crate::spell::CAST_MISS_EVADE,
-        );
-        return;
-    }
-    // vmangos deals spell damage only when it is non-zero before block, absorb and resist.
-    let (dealt, absorbed) = if sched.after_resist > 0 || sched.resisted > 0 || sched.blocked > 0 {
-        crate::combat::deal_blocked_spell_damage(
-            ctx,
-            sched.caster_guid,
-            sched.target_guid,
-            sched.after_resist,
-            sched.blocked,
-            crate::combat::Hit::spell(
-                if sched.triggered {
-                    crate::combat::HitSource::Triggered
-                } else {
-                    crate::combat::HitSource::Spell
-                },
-                sched.spell_id,
-                sched.is_crit,
-            ),
-        )
-    } else {
-        (0, 0)
-    };
-    let (map_id, instance_id, grid_x, grid_y) = crate::helpers::grid_of(ctx, sched.caster_guid);
-    crate::SpellImpactEvent::insert(
-        ctx,
-        SpellImpactEvent {
-            id: 0,
-            caster_guid: sched.caster_guid,
-            target_guid: sched.target_guid,
-            spell_id: sched.spell_id,
-            created_at: crate::time::now(ctx),
-            damage: dealt,
-            school: sched.school_index,
-            is_crit: sched.is_crit,
-            resisted: sched.resisted,
-            absorbed,
-            map_id,
-            instance_id,
-            grid_x,
-            grid_y,
-            blocked: sched.blocked,
-        },
-    );
+    crate::spell::cast::land_spell_impact(ctx, &sched);
 }
 
 pub(crate) fn do_cast_spell(
@@ -882,6 +816,13 @@ pub fn debug_stage_virtual_spell_impact(
             after_resist: damage,
             triggered: false,
             blocked: 0,
+            carries_damage: true,
+            effect_mask: 0,
+            level: 0,
+            cast_target_guid: target_guid,
+            effect_0_points: 0,
+            effect_1_points: 0,
+            effect_2_points: 0,
         });
     Ok(())
 }

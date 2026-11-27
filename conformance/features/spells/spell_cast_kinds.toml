@@ -7,8 +7,13 @@ replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
-deliberate_deviations = []
 prerequisites = []
+
+[[deliberate_deviations]]
+id = "resist_and_block_at_launch"
+result = "A travelling Spell rolls its partial resist and, for a melee or ranged damage-class Spell such as Arcane Shot, its partial block when it launches, and stores them for the impact. A target that turns away, gains a block or gains a resistance while the spell travels keeps the launch result. The Reference Server rolls only the damage and its crit at launch, in Spell::HandleDelayedSpellLaunch, and the block and resist at impact in Unit::CalculateAbsorbResistBlock, called from Spell::DoAllEffectOnTarget (Spell.cpp:1415)."
+reason = "Rolling at launch keeps the draws of a travelling Spell in the Caster roll stream in cast order, so Roll Conformance stays stable whatever lands between launch and impact."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp"
 
 [vmangos]
 commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
@@ -79,16 +84,46 @@ symbol = "is_immune_to_mechanic"
 evidence = "Not measured and not read. Berserker Rage 18499 and Will of the Forsaken 7744 are aura 77 and covered by tests; no trinket spell was checked against the vmangos spell dump."
 
 [[known_gaps]]
-description = "School immunity is decided when a spell or ranged shot launches. A unit that becomes immune while the spell or shot travels still takes it; vmangos checks a spell with travel time again on impact and reports immune."
-path = "module/src/spell/scheduler.rs"
-symbol = "fire_spell_impact"
-evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit rechecks IsImmuneToDamage and IsImmuneToSpell for a spell with speed and sends SPELL_MISS_IMMUNE; fire_spell_impact and ranged_impact land the damage frozen at launch."
+description = "School immunity of a ranged shot is decided when it launches. A unit that becomes immune while an Auto Shot, wand Shoot or cast ranged Weapon Strike travels still takes its damage; vmangos checks a spell with travel time again on impact."
+path = "module/src/combat/swing.rs"
+symbol = "ranged_impact"
+evidence = "Source reading, not measured. At d9173eca, Spell::CheckAtDelay (Spell.cpp:983-1007) marks a unit immune to a delayed spell before DoAllEffectOnTarget; ranged_impact lands the damage frozen at launch. land_spell_impact rechecks a travelling spell's immunity."
 
 [[known_gaps]]
-description = "The partial block of a travelling melee or ranged damage-class Spell, such as Arcane Shot, is rolled when it launches. A target that turns away or gains a block while the spell travels keeps the launch result; vmangos rolls the block on impact."
-path = "module/src/spell/cast/targeting.rs"
-symbol = "apply_damage_effect"
-evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit calls Unit::CalculateAbsorbResistBlock, which calls IsSpellPartiallyBlocked, when a delayed spell hits (Spell.cpp:1415); apply_damage_effect rolls the block through mitigate_spell at launch and stores it in PendingSpellImpact.blocked."
+description = "A travelling spell lands on a unit that stealthed or turned invisible in flight. vmangos lets a delayed spell evade its explicit target when the caster can no longer see it."
+path = "module/src/spell/cast/impact.rs"
+symbol = "land_spell_impact"
+evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit (Spell.cpp:1636-1645) sends SPELL_MISS_EVADE when m_delayed and the explicit target is not IsVisibleForOrDetect; land_spell_impact has no visibility check."
+
+[[known_gaps]]
+description = "A travelling spell adds its table threat, flags its caster for PvP and runs its weapon-roll reacts at launch. vmangos adds the threat when the spell first reaches a unit, flags for PvP when it hits, and runs the reacts and procs of an avoided hit at impact."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "run_spell_effects"
+evidence = "Source reading, not measured. At d9173eca, Spell::handle_delayed calls _handle_immediate_phase, which calls HandleThreatSpells, on its first run; DoSpellHitOnUnit flags the caster through SetInCombatWithVictim and UpdatePvP; DoAllEffectOnTarget raises the avoided hit's procs. run_spell_effects calls add_table_threat, pvp::spell_targeted and CastTargets::answer in the cast."
+
+[[known_gaps]]
+description = "A creature that is returning home when a travelling spell reaches it gets SMSG_SPELLLOGMISS with SPELL_MISS_EVADE and no damage log. vmangos sends the spell's damage log and deals no damage."
+path = "module/src/spell/cast/impact.rs"
+symbol = "impact_refusal"
+evidence = "Source reading, not measured. At d9173eca, Spell::CheckAtDelay sets SPELL_MISS_EVADE for a creature in evade mode, and DoAllEffectOnTarget still sends SendSpellNonMeleeDamageLog before DealSpellDamage, which deals nothing to an evading creature; land_spell_impact sends the evade miss and lands nothing."
+
+[[known_gaps]]
+description = "A harmful travelling spell evades a unit it may no longer harm by may_harm, such as a Character on a taxi or one whose PvP flag dropped in flight. vmangos evades only a unit the caster is friendly to, so such a spell lands there."
+path = "module/src/spell/cast/impact.rs"
+symbol = "impact_refusal"
+evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit (Spell.cpp:1697-1702) sends SPELL_MISS_EVADE for a delayed negative spell only when !IsFriendlyTo is false; impact_refusal asks combat::may_harm, which also refuses a flying target and a Character not flagged for PvP."
+
+[[known_gaps]]
+description = "A travelling spell lands after its caster leaves the world. vmangos removes the caster's spell events with the caster, so nothing lands."
+path = "module/src/spell/cast/impact.rs"
+symbol = "land_spell_impact"
+evidence = "Source reading, not measured. At d9173eca, a delayed spell is a SpellEvent in the caster's m_Events, which Unit::CleanupsBeforeDelete kills; land_spell_impact lands an impact whose caster row is gone."
+
+[[known_gaps]]
+description = "An energize or power burn effect of a travelling spell sends no SMSG_SPELLENERGIZELOG when it lands. vmangos sends the log from the effect handler at impact."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "log_each"
+evidence = "Source reading, not measured. At d9173eca, Spell::EffectEnergize sends SendEnergizeSpellLog from DoSpellHitOnUnit; UnitLogs::log_each logs only damage and healing, and the ProcLog delivery in native/spell.rs sends no energize log."
 
 [[known_gaps]]
 description = "A Spell with SPELL_ATTR_EX3_COMPLETELY_BLOCKED, such as Hamstring, Wing Clip, Shield Bash or Kick, rolls the Attack Table but is never fully blocked. vmangos opens the block band for such a Spell, and a block refuses all its effects; 35 imported Spells carry the attribute."
@@ -251,6 +286,16 @@ description = "Furor's form-entry spell and Combustion's crit buff are Triggered
 path = "module/src/spell/proc.rs"
 symbol = "dummy_proc"
 evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp:2552 and :2558 cast 17099 and 17057 with the Furor Aura as triggeredByAura, and src/scripts/spells/spell_mage.cpp:167 casts the Combustion crit buff with triggeredByAura; form::cast_entry_chance_spell and dummy_proc use cast_triggered."
+
+[[tests]]
+path = "module/tests/spell_flight.rs"
+function = "a_travelling_spells_slow_lands_with_its_damage_not_at_launch"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/spell_flight.rs"
+function = "a_target_that_dies_while_the_spell_travels_gets_no_aura"
+rung = "durable_module"
 
 [[tests]]
 path = "module/tests/aura_charges.rs"

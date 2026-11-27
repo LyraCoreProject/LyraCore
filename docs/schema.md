@@ -1192,16 +1192,45 @@ A spell with a speed reaches each target other than its caster after
 `floor(max(distance, 5) / speed * 1000)` ms, as vmangos `Spell::AddUnitTarget` does. The distance is
 3D, from caster to target at launch. These paths travel:
 
-- An `E_DAMAGE` effect schedules its damage in `game_pending_spell_impact`; the cast's GO carries no
-  damage.
+- Each unit the spell reaches after a flight gets one `game_pending_spell_impact` row. Its
+  `E_DAMAGE` effects roll their damage and crit at launch, as vmangos `HandleDelayedSpellLaunch`
+  does, and the row carries the damage; the cast's GO carries none. They also roll their resist
+  and block at launch, which vmangos rolls at impact. This Deliberate Deviation keeps Roll
+  Conformance stable.
+  Every other effect except a Weapon Strike, Judgement or finisher strike also waits for the
+  impact: `effect_mask` sets bit `1 << effect_index` for each, and `effect_N_points` holds the
+  points it drew at launch. An effect with an index above 2 lands in the cast.
 - An Auto Shot or wand Shoot reads the speed of its auto-repeat Spell row (Auto Shot 75 at 40, Shoot
   5019 at 20), and a cast ranged Weapon Strike reads its own (Throw 20, Multi-Shot 30, Aimed Shot
-  40). Both land through `game_ranged_impact_schedule`.
+  40). Both land their damage through `game_ranged_impact_schedule`. A cast ranged Weapon Strike's
+  other effects, such as a stun, land through `game_pending_spell_impact` at the same moment.
 
-The default, 0, means no travel: an `E_DAMAGE` effect lands in its cast, as most melee abilities
-such as Bloodthirst and Execute do, and a shot lands in the next scheduler batch. Only the damage
-travels; the spell's other effects still apply in the cast. A row written before the reimport, a
-test fixture and a Package Delta that omit the field do not travel. Packages claim the column.
+The default, 0, means no travel: the spell lands in its cast, as most melee abilities such as
+Bloodthirst and Execute do, and a shot lands in the next scheduler batch. A row written before the
+reimport, a test fixture and a Package Delta that omit the field do not travel. Packages claim the
+column.
+
+An impact lands as vmangos `CheckAtDelay` and `DoAllEffectOnTarget` land a delayed spell:
+
+- A unit that is gone, or on another map or Instance than its caster, takes nothing.
+- A dead unit takes every effect except its Auras, healing and damage, as vmangos refuses those on
+  a dead unit. A target that dies in flight gets no Aura, and a travelling Resurrect still lands.
+- A creature returning home, and a unit a harmful spell may no longer harm, evade: the caster gets
+  `SMSG_SPELLLOGMISS` with `SPELL_MISS_EVADE` and nothing lands. vmangos sends that log for the
+  unit it may no longer harm; for a creature returning home it sends the damage log and deals no
+  damage.
+- A unit that became immune to the whole spell in flight takes no effect. An impact that carries
+  damage logs it as absorbed, all but the block, and a harmful spell runs the immune proc pass and
+  draws the unit into combat, as vmangos `DoAllEffectOnTarget` does for `SPELL_MISS_IMMUNE`. An
+  effect whose mechanic it became immune to is dropped.
+- Otherwise the effects apply first, then the damage, as vmangos `DoSpellHitOnUnit` runs before the
+  damage. The unit's creature AI then sees the hit, and the healing the effects did is logged as for
+  every other unit a cast reaches.
+
+The spell's table threat, PvP flag, weapon-roll reacts and Follow-up Casts happen at launch.
+
+A row stored before `carries_damage` and `effect_mask` were added reads `carries_damage` true and
+`effect_mask` 0, so it lands its damage alone.
 
 ### Combo finishers (`module/src/combo.rs`)
 

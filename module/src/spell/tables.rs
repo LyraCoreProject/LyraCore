@@ -1390,6 +1390,21 @@ pub struct PendingSpellImpact {
     pub triggered: bool,
     #[default(0u32)]
     pub blocked: u32,
+    // Read docs/schema.md#spell-travel for what an impact lands and what each column defaults to.
+    #[default(true)]
+    pub carries_damage: bool,
+    #[default(0u8)]
+    pub effect_mask: u8, // Bit `1 << effect_index` for each effect other than damage.
+    #[default(0u8)]
+    pub level: u8,
+    #[default(0u64)]
+    pub cast_target_guid: u64,
+    #[default(0i32)]
+    pub effect_0_points: i32,
+    #[default(0i32)]
+    pub effect_1_points: i32,
+    #[default(0i32)]
+    pub effect_2_points: i32,
 }
 
 #[table(
