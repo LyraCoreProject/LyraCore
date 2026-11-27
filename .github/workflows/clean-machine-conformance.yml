@@ -108,11 +108,6 @@ jobs:
           . "$RUNNER_TEMP/clean-machine/phase.sh"
           phase scenario ./conformance/run "$SCENARIO"
 
-      - name: Check whether the system Python reads the launcher
-        if: ${{ !cancelled() && runner.os == 'macOS' }}
-        continue-on-error: true
-        run: /usr/bin/python3 -c 'import sys, tomllib; print(sys.version)'
-
       - name: Write the phase times
         if: ${{ !cancelled() }}
         run: |
@@ -123,4 +118,4 @@ jobs:
             echo "| Phase | Seconds |"
             echo "| --- | ---: |"
             awk -F'\t' '{ printf "| %s | %d |\n", $1, $2; total += $2 } END { printf "| **total** | **%d** |\n", total }' "$phase_log"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
