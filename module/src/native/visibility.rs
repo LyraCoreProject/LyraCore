@@ -532,6 +532,17 @@ fn creature_template_values(old: &WorldEntity, new: &WorldEntity) -> Option<(u16
     Some(codec::build_values_update_raw(new.guid, &mask))
 }
 
+/// A Character's scale; a creature's rides in `creature_template_values`.
+fn player_scale_values(old: &WorldEntity, new: &WorldEntity) -> Option<(u16, Vec<u8>)> {
+    use lyracore_protocol::codec::update_mask::{idx, UpdateMaskValues};
+    if !new.is_player() || old.scale_x == new.scale_x {
+        return None;
+    }
+    let mut mask = UpdateMaskValues::new();
+    mask.set_f32(idx::OBJECT_SCALE_X, new.scale_x);
+    Some(codec::build_values_update_raw(new.guid, &mask))
+}
+
 fn values(update: SMSG_UPDATE_OBJECT) -> Update {
     Update::Shared(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(update)))
 }
@@ -562,6 +573,9 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<Update> {
         out.push(Update::Raw(opcode, body));
     }
     if let Some((opcode, body)) = creature_template_values(old, new) {
+        out.push(Update::Raw(opcode, body));
+    }
+    if let Some((opcode, body)) = player_scale_values(old, new) {
         out.push(Update::Raw(opcode, body));
     }
     // Mount display and TAXI_FLIGHT must reach the client in one mask.
@@ -736,6 +750,18 @@ mod tests {
             leveled
         })
         .is_none());
+    }
+
+    #[test]
+    fn a_character_whose_scale_changes_sends_only_the_scale() {
+        let mut cat = druid();
+        cat.scale_x = 0.8;
+        let (_, body) = player_scale_values(&druid(), &cat).unwrap();
+        let fields = lyracore_protocol::codec::values_mask::parse_values_updates(&body)
+            .remove(0)
+            .fields;
+        assert_eq!(fields, [(4, 0.8f32.to_bits())]);
+        assert!(player_scale_values(&druid(), &druid()).is_none());
     }
 
     #[test]

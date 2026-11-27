@@ -50,6 +50,12 @@ pub struct FormFact {
     pub entry_chance_spell: u32,
     /// The unit can neither mount nor take a taxi in the Form.
     pub blocks_mounting: bool,
+    /// The model a unit of the Alliance and a creature shows in the Form; zero keeps its own.
+    pub alliance_display_id: u32,
+    /// The model a Horde unit shows in the Form; zero keeps its own.
+    pub horde_display_id: u32,
+    /// The scale the Form's model shows at.
+    pub display_scale: f32,
 }
 
 const STANCE: FormFact = FormFact {
@@ -63,6 +69,9 @@ const STANCE: FormFact = FormFact {
     clears_snares: false,
     entry_chance_spell: 0,
     blocks_mounting: false,
+    alliance_display_id: 0,
+    horde_display_id: 0,
+    display_scale: 1.0,
 };
 
 // vmangos Furor: 17099 gives 40 energy and 17057 gives 10 rage.
@@ -92,7 +101,7 @@ const DRUID_OWN_POOL: FormFact = FormFact {
 // vmangos d9173eca: Aura::HandleAuraModShapeshift (power, Shapeshift Form Effect 9033 and Furor),
 // Aura::HandleShapeshiftBoosts (passives), Player::InitDataForForm (attack times, and the class's
 // own pool in every other Form), Unit::IsInDisallowedMountForm and Player::_LoadAuras (Battle
-// Stance 2457 for a warrior without a form).
+// Stance 2457 for a warrior without a form) and GetShapeshiftDisplayInfo (models and scales).
 pub const FORM_FACTS: &[FormFact] = &[
     FormFact {
         form_id: 1,
@@ -102,6 +111,9 @@ pub const FORM_FACTS: &[FormFact] = &[
         passives: &[3025],
         natural_attack_ms: 1000,
         entry_chance_spell: FUROR_ENERGY,
+        alliance_display_id: 892,
+        horde_display_id: 8571,
+        display_scale: 0.8,
         ..FERAL
     },
     FormFact {
@@ -109,6 +121,8 @@ pub const FORM_FACTS: &[FormFact] = &[
         spell_id: 5487,
         passives: &[1178, 21178],
         natural_attack_ms: 2500,
+        alliance_display_id: 2281,
+        horde_display_id: 2289,
         ..FERAL
     },
     FormFact {
@@ -116,6 +130,8 @@ pub const FORM_FACTS: &[FormFact] = &[
         spell_id: 9634,
         passives: &[9635, 21178],
         natural_attack_ms: 2500,
+        alliance_display_id: 2281,
+        horde_display_id: 2289,
         ..FERAL
     },
     FormFact {
@@ -141,24 +157,35 @@ pub const FORM_FACTS: &[FormFact] = &[
         form_id: 3,
         spell_id: 783,
         passives: &[5419],
+        alliance_display_id: 632,
+        horde_display_id: 632,
+        display_scale: 0.8,
         ..DRUID_OWN_POOL
     },
     FormFact {
         form_id: 4,
         spell_id: 1066,
         passives: &[5421],
+        alliance_display_id: 2428,
+        horde_display_id: 2428,
+        display_scale: 0.8,
         ..DRUID_OWN_POOL
     },
     FormFact {
         form_id: 31,
         spell_id: 24858,
         passives: &[24905],
+        alliance_display_id: 15374,
+        horde_display_id: 15375,
         ..DRUID_OWN_POOL
     },
     FormFact {
         form_id: 16,
         spell_id: 2645,
         blocks_mounting: true,
+        alliance_display_id: 4613,
+        horde_display_id: 4613,
+        display_scale: 0.8,
         ..OWN_POOL_FORM
     },
     FormFact {

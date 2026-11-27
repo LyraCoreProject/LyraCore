@@ -1147,6 +1147,28 @@ already aura 77 immunities with bit 0x100. A Shard without a spell import keeps 
 its `init` seeded, whose Recently Bandaged no longer refuses a bandage; recreate it to get the new
 seed. `debug_repair_after_publish` updates the shield fixture and Weakened Soul seeds.
 
+### Form model migration
+
+`game_form` gains the END-appended columns `alliance_display_id` and `horde_display_id` (default 0)
+and `display_scale` (default 1). A Form with model 0 for a unit's team keeps the unit's own model.
+A Package Delta written before this revision omits them, so its Forms show no model, as before.
+
+Until you reimport `spell` with `--dbc`, every imported Form keeps model 0, so no unit changes model.
+Before play resumes:
+
+1. Publish the Module through a planned additive update.
+2. Reimport `spell` with `--dbc`. It writes the models and scales of Cat (892 or 8571, 0.8), Bear and
+   Dire Bear (2281 or 2289, 1), Travel (632, 0.8), Aquatic (2428, 0.8), Moonkin (15374 or 15375, 1)
+   and Ghost Wolf (4613, 0.8). Stances, Shadowform and Stealth stay at model 0.
+3. Call `debug_repair_after_publish`. It projects each online Character, so a druid already in a
+   Form takes the Form's model and scale. Offline Characters take it on world entry. Creatures are
+   not projected.
+
+From the publish on, `form::project_form` recomputes the unit's model: a transform Aura wins over
+the Form's model, the Form's model wins over the unit's own, and a Character on the Horde side
+takes the Horde model while a creature takes the Alliance one. Players see a Form's model and scale
+change for every viewer, with one VALUES update for the display id and one for the scale.
+
 ### Cast item migration
 
 `game_pending_cast` gains the END-appended `cast_item_guid` (default 0), and an Item cast now uses

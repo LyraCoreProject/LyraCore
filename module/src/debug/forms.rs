@@ -180,6 +180,9 @@ fn seed_form(
         clears_snares: fact.clears_snares,
         entry_chance_spell: fact.entry_chance_spell,
         blocks_mounting: fact.blocks_mounting,
+        alliance_display_id: fact.alliance_display_id,
+        horde_display_id: fact.horde_display_id,
+        display_scale: fact.display_scale,
     });
     for &spell_id in fact.passives {
         let id = lyracore_package_delta::packed_form_spell_id(fact.form_id, spell_id);

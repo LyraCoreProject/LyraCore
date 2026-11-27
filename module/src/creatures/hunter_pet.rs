@@ -713,7 +713,11 @@ fn health_at_percent(max_health: u32, percent: u32) -> u32 {
         .clamp(1, u64::from(max_health.max(1))) as u32
 }
 
-fn model_scale(ctx: &ReducerContext, template: &CreatureTemplate, display_id: u32) -> f32 {
+pub(crate) fn model_scale(
+    ctx: &ReducerContext,
+    template: &CreatureTemplate,
+    display_id: u32,
+) -> f32 {
     ctx.db
         .game_creature_display()
         .by_entry()

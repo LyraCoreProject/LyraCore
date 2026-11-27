@@ -768,9 +768,11 @@ identifier must fit 24 bits.
   after.
 - **Form.** A Form's own id space, so a Form, its passives (`game_form_spell`) and its rows in
   spells' Form Sets (`game_spell_form`) are Package-owned exactly when the Form is. A Package may
-  tune an imported Form's columns but not add passives to it. A spell's DBC masks own its Form Set
-  rows for every other Form, so a `game_spell_form` claim always names a Package Form. After its
-  writes, the apply refuses the plan when:
+  tune an imported Form's columns but not add passives to it. `alliance_display_id`,
+  `horde_display_id` and `display_scale` set the Form's model: a Character of the Horde takes the
+  Horde model, every other unit the Alliance one, and 0 keeps the unit's own model. A spell's DBC
+  masks own its Form Set rows for every other Form, so a `game_spell_form` claim always names a
+  Package Form. After its writes, the apply refuses the plan when:
   - a Form's `spell_id` has no `A_SHAPESHIFT` effect for that Form, or its power rule or power
     type is unknown; power type 255 shows the unit's own pool;
   - a Form's `natural_attack_ms` is not zero and is under 500 ms;

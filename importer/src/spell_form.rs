@@ -93,7 +93,7 @@ pub(crate) struct ShapeshiftFormEntry {
     pub(crate) flags: i32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FormRow {
     pub(crate) form_id: u32,
     pub(crate) name: String,
@@ -108,12 +108,15 @@ pub(crate) struct FormRow {
     pub(crate) clears_snares: bool,
     pub(crate) entry_chance_spell: u32,
     pub(crate) blocks_mounting: bool,
+    pub(crate) alliance_display_id: u32,
+    pub(crate) horde_display_id: u32,
+    pub(crate) display_scale: f32,
 }
 
 impl FormRow {
     fn sql_values(&self) -> String {
         format!(
-            "({},{},{},{},{},{},{},{},{},{},{},{},{})",
+            "({},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:?})",
             self.form_id,
             sql_str(&self.name),
             self.spell_id,
@@ -126,7 +129,10 @@ impl FormRow {
             self.attack_power_from_agility,
             self.clears_snares,
             self.entry_chance_spell,
-            self.blocks_mounting
+            self.blocks_mounting,
+            self.alliance_display_id,
+            self.horde_display_id,
+            self.display_scale
         )
     }
 }
@@ -163,6 +169,9 @@ pub(crate) fn form_rows(dbc: &[ShapeshiftFormEntry]) -> FormRows {
             clears_snares: fact.clears_snares,
             entry_chance_spell: fact.entry_chance_spell,
             blocks_mounting: fact.blocks_mounting,
+            alliance_display_id: fact.alliance_display_id,
+            horde_display_id: fact.horde_display_id,
+            display_scale: fact.display_scale,
         });
         rows.passives
             .extend(fact.passives.iter().map(|&spell| (fact.form_id, spell)));
@@ -184,7 +193,7 @@ pub(crate) fn push_form_sql(stmts: &mut Vec<String>, rows: &FormRows) {
     push_insert(
         stmts,
         "game_form",
-        "form_id,name,spell_id,acts_as_shapeshifted,power_type,power_on_entry,default_for_class,client_form,natural_attack_ms,attack_power_from_agility,clears_snares,entry_chance_spell,blocks_mounting",
+        "form_id,name,spell_id,acts_as_shapeshifted,power_type,power_on_entry,default_for_class,client_form,natural_attack_ms,attack_power_from_agility,clears_snares,entry_chance_spell,blocks_mounting,alliance_display_id,horde_display_id,display_scale",
         &rows.forms.iter().map(FormRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
@@ -244,6 +253,9 @@ mod tests {
             clears_snares: false,
             entry_chance_spell: 0,
             blocks_mounting: false,
+            alliance_display_id: 0,
+            horde_display_id: 0,
+            display_scale: 1.0,
         }
     }
 
@@ -274,22 +286,30 @@ mod tests {
     #[test]
     fn the_three_feral_forms_fight_with_natural_attacks_and_clear_snares() {
         let rows = form_rows(&build_5875_rows());
-        let feral =
-            |form_id: u32, name: &str, spell_id, power, rule: PowerOnEntry, attack_ms| FormRow {
-                form_id,
-                name: String::from(name),
-                spell_id,
-                acts_as_shapeshifted: true,
-                power_type: power,
-                power_on_entry: rule as u8,
-                default_for_class: 0,
-                client_form: form_id as u8,
-                natural_attack_ms: attack_ms,
-                attack_power_from_agility: form_id == 1,
-                clears_snares: true,
-                entry_chance_spell: if form_id == 1 { 17099 } else { 17057 },
-                blocks_mounting: true,
-            };
+        let feral = |form_id: u32,
+                     name: &str,
+                     spell_id,
+                     power,
+                     rule: PowerOnEntry,
+                     attack_ms,
+                     models: (u32, u32, f32)| FormRow {
+            form_id,
+            name: String::from(name),
+            spell_id,
+            acts_as_shapeshifted: true,
+            power_type: power,
+            power_on_entry: rule as u8,
+            default_for_class: 0,
+            client_form: form_id as u8,
+            natural_attack_ms: attack_ms,
+            attack_power_from_agility: form_id == 1,
+            clears_snares: true,
+            entry_chance_spell: if form_id == 1 { 17099 } else { 17057 },
+            blocks_mounting: true,
+            alliance_display_id: models.0,
+            horde_display_id: models.1,
+            display_scale: models.2,
+        };
         assert_eq!(
             rows_for(&rows, &[1, 5, 8]),
             vec![
@@ -299,7 +319,8 @@ mod tests {
                     768,
                     power_type::ENERGY,
                     PowerOnEntry::Zero,
-                    1000
+                    1000,
+                    (892, 8571, 0.8)
                 ),
                 feral(
                     5,
@@ -307,7 +328,8 @@ mod tests {
                     5487,
                     power_type::RAGE,
                     PowerOnEntry::Keep,
-                    2500
+                    2500,
+                    (2281, 2289, 1.0)
                 ),
                 feral(
                     8,
@@ -315,7 +337,8 @@ mod tests {
                     9634,
                     power_type::RAGE,
                     PowerOnEntry::Keep,
-                    2500
+                    2500,
+                    (2281, 2289, 1.0)
                 ),
             ]
         );
@@ -327,31 +350,48 @@ mod tests {
     #[test]
     fn the_utility_forms_show_the_units_own_pool() {
         let rows = form_rows(&build_5875_rows());
-        let own_pool =
-            |form_id: u32, name: &str, spell_id, shifted, snares, blocks_mounting| FormRow {
-                form_id,
-                name: String::from(name),
-                spell_id,
-                acts_as_shapeshifted: shifted,
-                power_type: lyracore_shared::form::OWN_POOL,
-                power_on_entry: PowerOnEntry::Keep as u8,
-                default_for_class: 0,
-                client_form: form_id as u8,
-                natural_attack_ms: 0,
-                attack_power_from_agility: false,
-                clears_snares: snares,
-                entry_chance_spell: 0,
-                blocks_mounting,
-            };
+        let own_pool = |form_id: u32,
+                        name: &str,
+                        spell_id,
+                        shifted,
+                        snares,
+                        blocks_mounting,
+                        models: (u32, u32, f32)| FormRow {
+            form_id,
+            name: String::from(name),
+            spell_id,
+            acts_as_shapeshifted: shifted,
+            power_type: lyracore_shared::form::OWN_POOL,
+            power_on_entry: PowerOnEntry::Keep as u8,
+            default_for_class: 0,
+            client_form: form_id as u8,
+            natural_attack_ms: 0,
+            attack_power_from_agility: false,
+            clears_snares: snares,
+            entry_chance_spell: 0,
+            blocks_mounting,
+            alliance_display_id: models.0,
+            horde_display_id: models.1,
+            display_scale: models.2,
+        };
+        let no_model = (0, 0, 1.0);
         assert_eq!(
             rows_for(&rows, &[3, 4, 31, 16, 28, 30]),
             vec![
-                own_pool(3, "Travel Form", 783, true, true, true),
-                own_pool(4, "Aquatic Form", 1066, true, true, true),
-                own_pool(31, "Moonkin Form", 24858, false, true, true),
-                own_pool(16, "Ghost Wolf", 2645, true, false, true),
-                own_pool(28, "Shadowform", 15473, false, false, false),
-                own_pool(30, "Stealth", 1784, false, false, false),
+                own_pool(3, "Travel Form", 783, true, true, true, (632, 632, 0.8)),
+                own_pool(4, "Aquatic Form", 1066, true, true, true, (2428, 2428, 0.8)),
+                own_pool(
+                    31,
+                    "Moonkin Form",
+                    24858,
+                    false,
+                    true,
+                    true,
+                    (15374, 15375, 1.0)
+                ),
+                own_pool(16, "Ghost Wolf", 2645, true, false, true, (4613, 4613, 0.8)),
+                own_pool(28, "Shadowform", 15473, false, false, false, no_model),
+                own_pool(30, "Stealth", 1784, false, false, false, no_model),
             ]
         );
         for passive in [(3, 5419), (4, 5421), (31, 24905)] {
@@ -417,7 +457,7 @@ mod tests {
             vec![
                 "DELETE FROM game_form WHERE form_id = 17".to_string(),
                 "DELETE FROM game_form_spell WHERE form_id = 17".to_string(),
-                "INSERT INTO game_form (form_id,name,spell_id,acts_as_shapeshifted,power_type,power_on_entry,default_for_class,client_form,natural_attack_ms,attack_power_from_agility,clears_snares,entry_chance_spell,blocks_mounting) VALUES (17,'Battle Stance',2457,false,1,2,1,17,0,false,false,0,false)".to_string(),
+                "INSERT INTO game_form (form_id,name,spell_id,acts_as_shapeshifted,power_type,power_on_entry,default_for_class,client_form,natural_attack_ms,attack_power_from_agility,clears_snares,entry_chance_spell,blocks_mounting,alliance_display_id,horde_display_id,display_scale) VALUES (17,'Battle Stance',2457,false,1,2,1,17,0,false,false,0,false,0,0,1.0)".to_string(),
                 format!("INSERT INTO game_form_spell (id,form_id,spell_id) VALUES ({},17,21156)", (17u64 << 32) | 21156),
             ]
         );
