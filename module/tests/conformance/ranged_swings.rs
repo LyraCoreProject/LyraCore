@@ -18,9 +18,17 @@ use super::transport::{prepare_character, Delivery};
 const READY_SHOTS: u32 = 2;
 const READY_BATCHES: u32 = 12;
 
-/// One ranged swing's Tier 1 setup; each batch spans one weapon delay, longer than the flight.
+/// How a shooter keeps firing: one auto-repeat cast, or a cast for each shot.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Firing {
+    AutoRepeat,
+    EachShot,
+}
+
+/// One ranged shot's Tier 1 setup; each batch spans one shot, longer than its flight.
 struct Shooter {
     swing: &'static RangedSwing,
+    firing: Firing,
     class: &'static str,
     class_id: u8,
     account: &'static str,
@@ -34,6 +42,7 @@ struct Shooter {
 // A 300 ms gun delay outlasts Auto Shot's 250 ms flight over 10 yd at 40 yd/s.
 const AUTO_SHOT: Shooter = Shooter {
     swing: &spec::AUTO_SHOT,
+    firing: Firing::AutoRepeat,
     class: "warrior",
     class_id: 1,
     account: "AUTOSHOT",
@@ -47,6 +56,7 @@ const AUTO_SHOT: Shooter = Shooter {
 // A 400 ms wand delay outlasts Shoot's 300 ms flight over 6 yd at 20 yd/s.
 const WAND_SHOT: Shooter = Shooter {
     swing: &spec::WAND_SHOT,
+    firing: Firing::AutoRepeat,
     class: "priest",
     class_id: 5,
     account: "WANDSHOT",
@@ -57,6 +67,20 @@ const WAND_SHOT: Shooter = Shooter {
     ticks_per_shot: 8,
 };
 
+// A 550 ms batch outlasts an instant Throw's 500 ms flight over 10 yd at 20 yd/s.
+const THROW: Shooter = Shooter {
+    swing: &spec::THROW,
+    firing: Firing::EachShot,
+    class: "warrior",
+    class_id: 1,
+    account: "THROW",
+    prepare: "debug_prepare_throw_character",
+    items: &[(2947, 17)],
+    skill: 176,
+    distance: 10.0,
+    ticks_per_shot: 11,
+};
+
 struct Character {
     connection: ReducerConnection,
     guid: u64,
@@ -64,9 +88,37 @@ struct Character {
     delivery: Delivery,
     flight: Flight,
     counts: Counts,
+    /// Shots counted when the last cast went out; an each-shot shooter waits for it to count.
+    cast_at: Option<u32>,
 }
 
 impl Character {
+    fn cast(&mut self, shooter: &Shooter) -> Result<()> {
+        self.cast_at = Some(self.counts.trials());
+        self.connection
+            .call(
+                "native_world_receive",
+                json!([
+                    CMSG_CAST_SPELL,
+                    cast_request(shooter.swing.spell, self.target)
+                ]),
+            )
+            .map(|_| ())
+            .map_err(anyhow::Error::msg)
+    }
+
+    /// Casts an each-shot shooter's next shot once its last one is counted.
+    fn fire(&mut self, shooter: &Shooter, quota: u32) -> Result<()> {
+        let trials = self.counts.trials();
+        if shooter.firing == Firing::EachShot
+            && trials < quota
+            && self.cast_at.is_none_or(|cast_at| trials > cast_at)
+        {
+            self.cast(shooter)?;
+        }
+        Ok(())
+    }
+
     fn observe(&mut self, shooter: &Shooter, packets: &[Packet], quota: u32) -> Result<()> {
         shooter.swing.observe(
             &mut self.flight,
@@ -104,19 +156,15 @@ fn ready_shots(
     receiver: &mut ReducerConnection,
     characters: &mut [Character],
 ) -> Result<()> {
-    for character in characters.iter_mut() {
-        character
-            .connection
-            .call(
-                "native_world_receive",
-                json!([
-                    CMSG_CAST_SPELL,
-                    cast_request(shooter.swing.spell, character.target)
-                ]),
-            )
-            .map_err(anyhow::Error::msg)?;
+    if shooter.firing == Firing::AutoRepeat {
+        for character in characters.iter_mut() {
+            character.cast(shooter)?;
+        }
     }
     for _ in 0..READY_BATCHES {
+        for character in characters.iter_mut() {
+            character.fire(shooter, u32::MAX)?;
+        }
         let rows = advance_and_drain(receiver, shooter.ticks_per_shot)?;
         for character in characters.iter_mut() {
             let packets = own_packets(character, &rows)?;
@@ -127,7 +175,9 @@ fn ready_shots(
             .all(|character| character.counts.trials() >= READY_SHOTS)
         {
             for character in characters.iter_mut() {
+                let waiting = character.cast_at == Some(character.counts.trials());
                 character.counts = Counts::default();
+                character.cast_at = waiting.then_some(0);
             }
             return Ok(());
         }
@@ -240,6 +290,7 @@ fn prepare(
             target,
             flight: Flight::default(),
             counts: Counts::default(),
+            cast_at: None,
         });
     }
     let opening = advance_and_drain(&mut receiver, 1)?;
@@ -273,7 +324,7 @@ fn verify_context(
                     })
                 })
             }),
-        "each {} Character must hold only its ranged weapon and ammo: {items:?}",
+        "each {} Character must hold only its ranged weapon and any ammo: {items:?}",
         shooter.swing.context.label()
     );
     let participants: Vec<_> = characters
@@ -343,6 +394,15 @@ fn collect(
                 .keep_alive()
                 .map_err(anyhow::Error::msg)?;
         }
+        if let Some(refusal) = characters
+            .iter_mut()
+            .find_map(|character| character.fire(shooter, quota).err())
+        {
+            return Ok(Sample::Blocked {
+                counts: total(&characters),
+                reason: format!("batch {batch}: {label} was refused: {refusal:#}"),
+            });
+        }
         let rows = advance_and_drain(&mut receiver, shooter.ticks_per_shot)?;
         for character in &mut characters {
             let packets = own_packets(character, &rows)?;
@@ -372,7 +432,7 @@ fn collect(
     if shots.iter().any(|shots| *shots < quota) {
         return Ok(Sample::Blocked {
             counts: total(&characters),
-            reason: format!("the auto-repeat stopped after {shots:?} counted shots"),
+            reason: format!("shooting stopped after {shots:?} counted shots"),
         });
     }
     verify_context(shooter, shard, shard_name, &characters, level_index)?;
@@ -411,7 +471,20 @@ fn collect_wand_shot(
     collect(&WAND_SHOT, shard, shard_name, scenario, run, ready)
 }
 
-const MEASUREMENTS: [Measurement<4>; 2] = [
+fn collect_throw(
+    shard: &Standalone,
+    shard_name: &str,
+    scenario: &Scenario,
+    seed: u64,
+    level_index: usize,
+    part: usize,
+    ready: &Barrier,
+) -> Result<Sample<4>> {
+    let run = (seed, level_index, part);
+    collect(&THROW, shard, shard_name, scenario, run, ready)
+}
+
+const MEASUREMENTS: [Measurement<4>; 3] = [
     Measurement {
         context: &spec::AUTO_SHOT.context,
         shards: "autoshot",
@@ -421,6 +494,11 @@ const MEASUREMENTS: [Measurement<4>; 2] = [
         context: &spec::WAND_SHOT.context,
         shards: "wandshot",
         collect: collect_wand_shot,
+    },
+    Measurement {
+        context: &spec::THROW.context,
+        shards: "throw",
+        collect: collect_throw,
     },
 ];
 

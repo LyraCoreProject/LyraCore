@@ -1,6 +1,6 @@
 # 0007. Measure random rolls against source-derived probabilities
 
-Accepted design, 2026-11-05. Slices: white main-hand melee, direct-damage spells, the queued strike, the cast Weapon Strike, Auto Shot and wand Shoot at levels 60 and 63.
+Accepted design, 2026-11-05. Slices: white main-hand melee, direct-damage spells, the queued strike, the cast Weapon Strike, Auto Shot, wand Shoot and the cast ranged Weapon Strike at levels 60 and 63.
 
 [ADR 0005](0005-1-12-conformance.md) checks random fields' shape and range. A server that always
 crits can satisfy that contract. Roll Conformance compares delivered gameplay outcomes with fixed
@@ -550,8 +550,8 @@ or `weapon_strike_sample` with field `["outcomes"]`. The checkpoint is
 `weapon_strike_level_<level>_<seed slot>`, the stream `casts`, opcode `0x0132`. The merge seed
 measures it with white melee.
 
-No Reference Server recording exists for this context yet, and no harness scenario. Ranged Weapon
-Strikes, which roll only miss and crit, need their own context.
+No Reference Server recording exists for this context yet, and no harness scenario. A ranged
+Weapon Strike rolls only miss and crit; the seventh context measures it.
 
 ## Pinned fifth and sixth contexts: ranged swings
 
@@ -645,8 +645,7 @@ the same Spell.cpp:1415 branch, unless its spell has `SPELL_ATTR_NO_ACTIVE_DEFEN
 `launch_ranged_strike` from the Caster stream, after the cast's hit roll and the effect's points
 draw. The strike's own damage roll is `ctx.random`, not a Caster draw. The blocked amount goes to
 the impact. vmangos rolls the block at impact, LyraCore at launch, so a block that follows a launch
-state change differs. No Roll Conformance context measures a ranged cast strike; the cast Weapon
-Strike context is melee Mortal Strike.
+state change differs. The seventh context measures a ranged cast strike with Throw.
 
 A ranged hit is a Spell in vmangos, so `CreateProcExtendMask`
 ([Unit.cpp:8776–8830](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp))
@@ -683,5 +682,118 @@ false-failure bound across the six contexts is therefore 5e-6. The signatures jo
 `<context>_level_<level>_<seed slot>`, the stream `casts`, opcode `0x0132`. The merge seed measures
 both with white melee.
 
-No Reference Server recording exists for these contexts yet, and no harness scenario. Thrown
-weapons, bows and crossbows use the same table and remain unmeasured.
+No Reference Server recording exists for these contexts yet, and no harness scenario. Bows and
+crossbows use the gun's table, and the seventh context measures thrown weapons; it records why
+neither needs a context of its own.
+
+## Pinned seventh context: cast ranged Weapon Strike
+
+Added 2026-11-27 for issue #1227. The Auto Shot context's warrior casts Throw, spell 2764, with a
+thrown weapon instead of firing a gun. Throw is a cast ranged Weapon Strike, so it reaches the
+ranged table through the cast path rather than the auto-repeat. It is chosen over Aimed Shot and
+Multi-Shot. Warriors throw, so the first context's Character, crit rate and empty main hand stay.
+Throw has no power cost, cooldown or global cooldown to remove, and it measures the thrown weapon
+type at the same time. Aimed Shot is a hunter talent with a 3 s cast index and a 6 s category
+cooldown. Multi-Shot chains to three targets and has a 10 s category cooldown.
+
+The pinned database selects `spell_template` 2764 build 5086 (`mangos.sql:5882`) over builds 4878,
+4375 and 4222 (`mangos.sql:5884, 5886, 5888`): attributes `0x410012` (ranged slot, ability, not
+while shapeshifted, track target in cast), ex3 `0x8000` (normal ranged attack), ex, ex2 and ex4
+zero, damage class 3 (ranged), school 0, mechanic 0, category 76, range index 74, speed 20,
+cast-time index 1, no power cost, cooldown or start recovery, equipped item class 2 with subclass
+mask 65536 (thrown), custom flag `0x80` (face target), and one effect 58 (weapon damage) at the
+enemy target with base points 0 and a one-sided die. Build-5875 `SpellRange.dbc` (SHA-256
+`8e45482ad8d4c913304062c2de202cf36f2c0babb9a0d2bdb2064983424a3f9e`) gives range 74 as 8 to 30 yd.
+Neither the always-hit, cannot-crit, no-active-defense nor completely-blocked attribute is set.
+`item_template` 2947 (`mangos.sql:2696`), Small Throwing Knife, is a quality 1 thrown weapon
+(class 2, subclass 16, inventory type 25), damage 1 to 3, delay 2000, stack 200, no durability.
+The Character holds it in the ranged slot with thrown skill 176 at 300/300; the main hand stays
+empty with unarmed skill 162 at 300/300. The target is the Auto Shot context's passive creature,
+ten yards ahead. Every other input is the first context's.
+
+Source links use one-based lines at the pinned commit:
+
+- [SpellCaster.cpp:169–236](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  damage class 3 reaches `MeleeSpellHitResult` (lines 221–233) after evade, immunity and
+  reflection checks that do not apply.
+- [SpellCaster.cpp:732–749](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  damage class 3 takes the ranged attack type (lines 735–736), and the table's crit is the cast's
+  crit (lines 742–743). [Spell.cpp:910–923](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp) keeps it.
+- [SpellCaster.cpp:116–139](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp),
+  [Player.cpp:8487–8515](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp) and
+  [Item.cpp:698–720](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Item.cpp):
+  the ranged attack reads the ranged-slot weapon's proficiency skill, thrown 176 for subclass 16.
+- [SpellCaster.cpp:336–425](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  Throw lacks the always-hit attribute (line 341), and a spell skips the dual-wield penalty
+  (line 350). Thrown skill 300 against defense 300 and 315 gives miss 5% and 8%.
+- [SpellCaster.cpp:428–729](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  effect 58 can crit (line 437). Throw requires a weapon, so it uses the thrown skill (line 451).
+  It has no mechanic to resist (lines 486–488). A ranged attack rolls no dodge, parry, block,
+  glancing or crushing band (lines 532–541). Crit comes from `GetSpellCritChance` (lines 499–509).
+- [Unit.cpp:5212–5316](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp):
+  damage class 3 reads `GetUnitCriticalChance` (lines 5295–5302) with no school crit aura or
+  spell modifier. [Unit.cpp:2552–2595](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)
+  reads the ranged crit percentage and subtracts 0.2% per missing skill point against a
+  creature: 3% at level 63.
+- [StatSystem.cpp:531–587](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/StatSystem.cpp) and
+  [Player.cpp:5146–5150](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp):
+  a warrior's ranged crit is agility 100 over rate 20, with no class offset and no skill term at
+  300/300: 5%.
+
+The table is the Auto Shot table, a single `urand(0, 9999)` roll with only miss and crit bands:
+
+| Target level | Miss | Crit | Hit |
+| --- | ---: | ---: | ---: |
+| 60 | 5% | 5% | 90% |
+| 63 | 8% | 2% | 90% |
+
+A landed Throw then rolls partial block at impact.
+[Spell.cpp:1369–1429](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)
+calls [Unit.cpp:2205–2233](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)
+with the main-hand attack type (line 1415), and its ranged branch calls `IsSpellPartiallyBlocked`
+([Unit.cpp:2351–2395](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)).
+The target faces the Character, and a creature's block chance is 5%
+([Unit.cpp:2515–2550](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)).
+The skill term reads the empty main hand's unarmed skill, so the chance is 5% at level 60 and 6.5%
+capped to 5% at level 63. The overlapping block probabilities are `9500*214748365/(10000*2^32)` and
+`9200*214748365/(10000*2^32)`, as for Auto Shot. The fixture keeps the thrown and unarmed skills
+equal, so it cannot tell which skill a block reads.
+
+[Spell.cpp:4529–4561, 4625–4653](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)
+sends one `SMSG_SPELL_GO` at launch, with the landed target in the hit list or the missed target
+in the miss list with reason 1. A landed Throw sends `SMSG_SPELLNONMELEEDAMAGELOG` on impact
+(Spell.cpp:1429), with crit flag `0x02` and a positive blocked amount for a partial block. Throw is
+not a next-swing spell, so it sends no `SMSG_ATTACKERSTATEUPDATE` (Spell.cpp:1425). These are the
+Auto Shot packets, so the classifier in `conformance/support/ranged_swing_rolls.rs` counts both.
+[Spell.cpp:5145–5169](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)
+spends one knife from a stackable thrown weapon per Throw.
+
+### Bows, crossbows and thrown weapons
+
+The ranged table reads the weapon only through `GetWeaponSkillValue`, which maps the ranged-slot
+weapon's subclass to its proficiency skill (Item.cpp:698–720): bows 45, guns 46, thrown 176 and
+crossbows 226. The ranged crit percentage reads the same skill (StatSystem.cpp:574). No miss,
+crit or block line reads the subclass otherwise. At skill 300/300 a bow and a crossbow therefore
+derive exactly the gun's rates, so they share the Auto Shot context and get none of their own.
+A thrown weapon also derives the same rates; this context measures it because Throw is the only
+way to throw. A wrong subclass-to-skill mapping for a bow or crossbow stays unmeasured by Roll
+Conformance; a durable test or a context with a lower skill would catch it.
+
+Tier 1 enters through `CMSG_CAST_SPELL` for every Throw, ordinary cast admission and resolution,
+the ranged impact schedule and delivered packets, with the caster seam stream and the public seeds.
+Each Character's caster stream starts from the first context's per-stream state. Throw's 500 ms
+cast is cast-time index 1's zero plus 500 ms for a ranged-slot spell that does not repeat
+([SpellEntry.cpp:511–512](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEntry.cpp)).
+Tier 1 drops it, as the cast Weapon Strike context drops its cooldowns, and gives the knife a
+10,000 stack. The roll formulas read neither; the Reference Server keeps both. A Character casts
+again once its last Throw is counted. Each batch advances 550 ms, longer than the 500 ms flight
+over ten yards at speed 20. An unretained readiness check requires two counted Throws per
+Character. This context reserves its own family: 1e-6 over four checks, two levels and three
+seeds, 24 tests at `1e-6/24`. Each submission's false-failure bound across the seven contexts is
+therefore 6e-6. The signatures join `white_melee_outcomes`: rule
+`ranged_weapon_strike_distribution` with field `["outcomes", category]`, or
+`ranged_weapon_strike_sample` with field `["outcomes"]`. The checkpoint is
+`ranged_weapon_strike_level_<level>_<seed slot>`, the stream `casts`, opcode `0x0132`. The merge
+seed measures it with white melee.
+
+No Reference Server recording exists for this context yet, and no harness scenario.

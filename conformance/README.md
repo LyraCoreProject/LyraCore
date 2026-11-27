@@ -338,6 +338,8 @@ No packet text enters this result. The scoreboard consumes it.
 Its expected probabilities are independently derived from pinned vmangos attack-table source;
 its small Golden Trace checks that derivation in practice. It is a scoped exception to the
 recordings-only rate authority, and cannot establish attack cadence or all melee parity.
+The same Tier 1 test measures the queued strike, cast Weapon Strike, Auto Shot, wand Shoot and
+cast ranged Weapon Strike (Throw) contexts; their signatures join this scenario's baseline entry.
 
 The Tier 1 collector sends native attack and stop requests, advances ordinary scheduled callbacks
 in batches and classifies delivered combat bytes with the harness decoder. It counts only each

@@ -14,7 +14,7 @@ const CRIT: usize = 1;
 const HIT: usize = 2;
 pub type Counts = strike_rolls::Counts<4>;
 
-/// One auto-repeat ranged swing: its spell, the school its damage log names and its context.
+/// One ranged shot on the ranged attack table: its spell, its damage log's school and its context.
 pub struct RangedSwing {
     pub spell: u32,
     pub school: u64,
@@ -22,6 +22,22 @@ pub struct RangedSwing {
 }
 
 /// Miss, crit and hit are exclusive table outcomes; a partial block overlaps the landed two.
+/// A warrior's gun, bow, crossbow and thrown weapon share this table at weapon skill 300.
+const WARRIOR_RANGED_TABLE: [[(u64, u64); 4]; 2] = [
+    [
+        (500, 10_000),
+        (500, 10_000),
+        (9000, 10_000),
+        (9500 * BLOCK_DRAWS, 10_000 << 32),
+    ],
+    [
+        (800, 10_000),
+        (200, 10_000),
+        (9000, 10_000),
+        (9200 * BLOCK_DRAWS, 10_000 << 32),
+    ],
+];
+
 pub const AUTO_SHOT: RangedSwing = RangedSwing {
     spell: 75,
     school: 0,
@@ -30,20 +46,20 @@ pub const AUTO_SHOT: RangedSwing = RangedSwing {
         stream: "casts",
         opcode: SPELL_GO,
         categories: ["miss", "crit", "hit", "block"],
-        expected: [
-            [
-                (500, 10_000),
-                (500, 10_000),
-                (9000, 10_000),
-                (9500 * BLOCK_DRAWS, 10_000 << 32),
-            ],
-            [
-                (800, 10_000),
-                (200, 10_000),
-                (9000, 10_000),
-                (9200 * BLOCK_DRAWS, 10_000 << 32),
-            ],
-        ],
+        expected: WARRIOR_RANGED_TABLE,
+    },
+};
+
+/// Throw is a cast ranged Weapon Strike; it rolls the same table and block as Auto Shot.
+pub const THROW: RangedSwing = RangedSwing {
+    spell: 2764,
+    school: 0,
+    context: StrikeContext {
+        name: "ranged_weapon_strike",
+        stream: "casts",
+        opcode: SPELL_GO,
+        categories: ["miss", "crit", "hit", "block"],
+        expected: WARRIOR_RANGED_TABLE,
     },
 };
 
@@ -244,7 +260,7 @@ mod tests {
 
     #[test]
     fn the_derived_tables_sum_to_one_and_block_overlaps_them() {
-        for swing in [&AUTO_SHOT, &WAND_SHOT] {
+        for swing in [&AUTO_SHOT, &WAND_SHOT, &THROW] {
             for probabilities in swing.context.expected {
                 let table: u64 = probabilities[..swing.context.block()]
                     .iter()
@@ -322,6 +338,10 @@ mod tests {
         let differences = AUTO_SHOT.context.compare(&counts, 0, "merge")?;
         assert!(differences.iter().all(|d| AUTO_SHOT.context.accepts(d)));
         assert!(!differences.iter().any(|d| WAND_SHOT.context.accepts(d)));
+        assert!(!differences.iter().any(|d| THROW.context.accepts(d)));
+        let throws = THROW.context.compare(&counts, 1, "public_1")?;
+        assert!(throws.iter().all(|d| THROW.context.accepts(d)));
+        assert!(!throws.iter().any(|d| AUTO_SHOT.context.accepts(d)));
         assert!(differences
             .iter()
             .any(|d| d.field_path == ["outcomes", "block"]));
