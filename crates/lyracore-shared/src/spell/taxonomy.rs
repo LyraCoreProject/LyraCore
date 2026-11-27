@@ -174,6 +174,7 @@ pub const P_ENCHANT_ID: u8 = 10;
 pub const SPELLMOD_OP_DAMAGE: i32 = 0;
 pub const SPELLMOD_OP_CASTING_TIME: i32 = 10;
 pub const SPELLMOD_OP_COST: i32 = 14;
+pub const SPELLMOD_OP_MULTIPLE_VALUE: i32 = 27;
 pub const P_SPELLMOD_OP: u8 = 11;
 pub const P_PCT_MAX_POWER: u8 = 12;
 pub const P_GAMEOBJECT_ENTRY: u8 = 13;

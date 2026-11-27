@@ -146,6 +146,63 @@ pub(crate) fn drain_shields(shields: Vec<Aura>, incoming: u32) -> (Vec<Aura>, Ve
     (updated, deleted, remaining_damage)
 }
 
+pub(crate) struct ManaShield {
+    pub aura: Aura,
+    /// Mana per point absorbed, in hundredths.
+    pub cost_hundredths: u32,
+}
+
+pub(crate) struct ManaShieldDrain {
+    pub updated: Vec<Aura>,
+    pub deleted: Vec<u64>,
+    pub remaining_damage: u32,
+    pub mana_spent: u32,
+}
+
+/// vmangos `Unit::CalculateDamageAbsorbAndResist` Mana Shield pass: a shield absorbs no more than
+/// the mana left can pay at its cost, and its Aura is removed when its pool is spent. `shields`
+/// must be sorted by aura id, oldest first.
+pub(crate) fn drain_mana_shields(
+    shields: Vec<ManaShield>,
+    incoming: u32,
+    mana: u32,
+) -> ManaShieldDrain {
+    let mut drain = ManaShieldDrain {
+        updated: Vec::new(),
+        deleted: Vec::new(),
+        remaining_damage: incoming,
+        mana_spent: 0,
+    };
+    let mut mana_left = u64::from(mana);
+    for ManaShield {
+        mut aura,
+        cost_hundredths,
+    } in shields
+    {
+        if drain.remaining_damage == 0 {
+            break;
+        }
+        let pool = aura.amount_remaining.max(0) as u32;
+        let mut absorbed = pool.min(drain.remaining_damage);
+        let mut cost = 0;
+        if cost_hundredths > 0 {
+            let payable = mana_left * 100 / u64::from(cost_hundredths);
+            absorbed = absorbed.min(payable.min(u64::from(u32::MAX)) as u32);
+            cost = u64::from(absorbed) * u64::from(cost_hundredths) / 100;
+        }
+        mana_left -= cost;
+        drain.mana_spent += cost as u32;
+        drain.remaining_damage -= absorbed;
+        aura.amount_remaining = (pool - absorbed) as i32;
+        if aura.amount_remaining == 0 {
+            drain.deleted.push(aura.id);
+        } else if absorbed > 0 {
+            drain.updated.push(aura);
+        }
+    }
+    drain
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +325,51 @@ mod tests {
         assert_eq!(ids_and_pools(&updated), vec![(1, 10)]);
         assert!(deleted.is_empty());
         assert_eq!(remaining, 0);
+    }
+
+    fn mana_shield(id: u64, amount_remaining: i32, cost_hundredths: u32) -> ManaShield {
+        ManaShield {
+            aura: shield(id, amount_remaining),
+            cost_hundredths,
+        }
+    }
+
+    #[test]
+    fn a_mana_shield_costs_its_multiple_of_mana_per_point_absorbed() {
+        let drain = drain_mana_shields(vec![mana_shield(3, 500, 200)], 100, 1000);
+        assert_eq!(ids_and_pools(&drain.updated), vec![(3, 400)]);
+        assert!(drain.deleted.is_empty());
+        assert_eq!((drain.remaining_damage, drain.mana_spent), (0, 200));
+    }
+
+    #[test]
+    fn a_mana_shield_absorbs_no_more_than_the_mana_can_pay() {
+        let drain = drain_mana_shields(vec![mana_shield(3, 500, 200)], 100, 31);
+        assert_eq!(ids_and_pools(&drain.updated), vec![(3, 485)]);
+        assert_eq!((drain.remaining_damage, drain.mana_spent), (85, 30));
+    }
+
+    #[test]
+    fn a_mana_shield_with_no_mana_absorbs_nothing_and_stays() {
+        let drain = drain_mana_shields(vec![mana_shield(3, 500, 200)], 100, 0);
+        assert!(drain.updated.is_empty() && drain.deleted.is_empty());
+        assert_eq!((drain.remaining_damage, drain.mana_spent), (100, 0));
+    }
+
+    #[test]
+    fn a_spent_mana_shield_is_removed_and_the_next_one_takes_the_rest() {
+        let shields = vec![mana_shield(3, 40, 200), mana_shield(4, 500, 100)];
+        let drain = drain_mana_shields(shields, 100, 1000);
+        assert_eq!(drain.deleted, vec![3]);
+        assert_eq!(ids_and_pools(&drain.updated), vec![(4, 440)]);
+        assert_eq!((drain.remaining_damage, drain.mana_spent), (0, 140));
+    }
+
+    #[test]
+    fn a_mana_shield_without_a_multiple_absorbs_for_free() {
+        let drain = drain_mana_shields(vec![mana_shield(3, 500, 0)], 100, 0);
+        assert_eq!(ids_and_pools(&drain.updated), vec![(3, 400)]);
+        assert_eq!((drain.remaining_damage, drain.mana_spent), (0, 0));
     }
 
     #[test]

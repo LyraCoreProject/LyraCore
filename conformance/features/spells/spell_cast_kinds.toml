@@ -258,10 +258,16 @@ symbol = "tick_auras"
 evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp:5903-5917 Aura::PeriodicTick builds the periodic proc flags and calls ProcDamageAndSpell before DealDamage; module/src/spell/proc.rs defines no periodic proc flag and tick_auras runs no proc pass."
 
 [[known_gaps]]
-description = "An absorb Aura takes damage of every school. vmangos skips a SPELL_AURA_SCHOOL_ABSORB whose school mask misses the damage's school, so a Fire Ward takes no Shadow damage."
-path = "module/src/spell/effects.rs"
-symbol = "absorb_incoming"
-evidence = "Source reading, not measured. At d9173eca, Unit.cpp:1967 Unit::CalculateDamageAbsorbAndResist tests mod->m_miscvalue & schoolMask for each absorb; absorb_incoming drains every A_ABSORB Aura of the target in id order."
+description = "A melee swing folds its Seal's holy portion through absorbs as physical damage, so a Mana Shield takes it and a holy absorb does not. vmangos absorbs the Seal's holy damage as its own Spell hit."
+path = "module/src/combat/swing.rs"
+symbol = "fire_melee_swing"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::CalculateDamageAbsorbAndResist runs per damage instance with that instance's school; the Module adds the Seal portion to the swing's rolled damage before resolve_damage."
+
+[[known_gaps]]
+description = "A Mana Shield rounds its absorbable points and its mana cost down. vmangos rounds both with rand_dither, so with an odd mana pool it sometimes absorbs one point more."
+path = "module/src/spell/formulas.rs"
+symbol = "drain_mana_shields"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp HandleManaShield computes maxAbsorb = rand_dither(mana / multiplier) and manaReduction = rand_dither(currentAbsorb * multiplier)."
 
 [[known_gaps]]
 description = "A health leech tick, such as Drain Life, heals its caster nothing and reports in SMSG_PERIODICAURALOG. vmangos heals the caster for the damage dealt times the effect's multiple value and reports the tick in SMSG_SPELLNONMELEEDAMAGELOG."
@@ -665,6 +671,71 @@ rung = "durable_module"
 path = "module/tests/aura_tick.rs"
 function = "a_periodic_tick_larger_than_a_shield_spends_it_and_deals_the_rest"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_fire_ward_takes_a_fire_tick"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_fire_ward_takes_no_shadow_tick"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_mana_shield_costs_two_mana_per_point_of_physical_damage_it_absorbs"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_mana_shield_absorbs_no_more_than_the_mana_can_pay"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_mana_shield_ends_when_its_pool_is_spent"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_mana_shield_takes_no_spell_damage"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_tick.rs"
+function = "a_power_word_shield_takes_damage_before_an_older_mana_shield"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/spell/formulas.rs"
+function = "a_mana_shield_costs_its_multiple_of_mana_per_point_absorbed"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/formulas.rs"
+function = "a_mana_shield_absorbs_no_more_than_the_mana_can_pay"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/formulas.rs"
+function = "a_mana_shield_with_no_mana_absorbs_nothing_and_stays"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/formulas.rs"
+function = "a_spent_mana_shield_is_removed_and_the_next_one_takes_the_rest"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/formulas.rs"
+function = "a_mana_shield_without_a_multiple_absorbs_for_free"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "a_mana_shield_keeps_its_school_mask_and_mana_multiple_and_a_school_absorb_no_multiple"
+rung = "unit"
 
 [[tests]]
 path = "module/tests/aura_tick.rs"

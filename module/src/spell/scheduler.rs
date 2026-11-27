@@ -326,7 +326,12 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 );
                 // vmangos CalculateDamageAbsorbAndResist drains shields after the resist.
                 let incoming = after_resist.max(0) as u32;
-                let left = crate::spell::absorb_incoming(ctx, a.target_guid, incoming);
+                let left = crate::spell::absorb_incoming(
+                    ctx,
+                    a.target_guid,
+                    incoming,
+                    crate::spell::damage_school_mask(school),
+                );
                 let absorbed = incoming - left;
                 let amount = if target.godmode { 0 } else { left };
                 if enters_combat {

@@ -4,12 +4,15 @@ use crate::game_world_entity;
 
 use crate::game_melee_attack;
 
+use super::formulas::{drain_mana_shields, ManaShield};
 use super::{
-    add_flat_pool_bonus, bonuses, dispel_category_matches, drain_shields, rederive_pool,
-    shed_auras, should_arm_spell_retaliation, A_ABSORB, COMBAT_ATTACK_POWER, DISPEL_MAGIC,
-    DISPEL_POISON,
+    add_flat_pool_bonus, apply_spell_mod, bonuses, dispel_category_matches, drain_shields,
+    rederive_pool, shed_auras, should_arm_spell_retaliation, A_ABSORB, COMBAT_ATTACK_POWER,
+    DISPEL_MAGIC, DISPEL_POISON,
 };
 use crate::{game_aura, game_spell, Aura};
+use lyracore_shared::packing::power_type;
+use lyracore_shared::spell::taxonomy::SPELLMOD_OP_MULTIPLE_VALUE;
 
 pub(crate) fn arm_spell_retaliation(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
     crate::combat::engage_passive_creature(ctx, target_guid, caster_guid);
@@ -212,21 +215,59 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     e.update(ctx);
 }
 
-pub(crate) fn absorb_incoming(ctx: &ReducerContext, target_guid: u64, incoming: u32) -> u32 {
+/// Mana per point a Mana Shield absorbs, in hundredths, after the target's multiple-value mods.
+fn mana_shield_cost_hundredths(ctx: &ReducerContext, shield: &Aura) -> u32 {
+    let base = shield.eff_p1.max(0) as u32;
+    let Some(hdr) = ctx.db.game_spell().spell_id().find(shield.spell_id) else {
+        return base;
+    };
+    let (flat, pct) = super::spell_mod(ctx, shield.target_guid, SPELLMOD_OP_MULTIPLE_VALUE, &hdr);
+    apply_spell_mod(base, flat.saturating_mul(100), pct)
+}
+
+/// vmangos `Unit::CalculateDamageAbsorbAndResist`: school absorbs whose mask covers `school_mask`
+/// take damage first, then Mana Shields pay for it in mana. Returns the damage left.
+pub(crate) fn absorb_incoming(
+    ctx: &ReducerContext,
+    target_guid: u64,
+    incoming: u32,
+    school_mask: u8,
+) -> u32 {
     if incoming == 0 {
         return 0;
     }
-    let auras = ctx.db.game_aura();
-    let mut shields: Vec<Aura> = auras
+    let mut shields: Vec<Aura> = ctx
+        .db
+        .game_aura()
         .by_target()
         .filter(&target_guid)
-        .filter(|a| a.eff_kind == A_ABSORB)
+        .filter(|a| a.eff_kind == A_ABSORB && a.eff_p0 & i32::from(school_mask) != 0)
         .collect();
     if shields.is_empty() {
         return incoming;
     }
     shields.sort_by_key(|a| a.id);
-    let (updated, deleted, remaining_damage) = drain_shields(shields, incoming);
+    let (mana_shields, school_shields): (Vec<Aura>, Vec<Aura>) =
+        shields.into_iter().partition(|a| a.eff_p1 != 0);
+    let (mut updated, mut deleted, remaining_damage) = drain_shields(school_shields, incoming);
+    let mana_shields = mana_shields
+        .into_iter()
+        .map(|aura| ManaShield {
+            cost_hundredths: mana_shield_cost_hundredths(ctx, &aura),
+            aura,
+        })
+        .collect();
+    let target = ctx.db.game_world_entity().guid().find(target_guid);
+    let mana = target
+        .as_ref()
+        .map_or(0, |target| target.spendable_power(power_type::MANA));
+    let drain = drain_mana_shields(mana_shields, remaining_damage, mana);
+    if let Some(mut target) = target.filter(|_| drain.mana_spent > 0) {
+        target.spend_power(power_type::MANA, drain.mana_spent);
+        target.update(ctx);
+    }
+    updated.extend(drain.updated);
+    deleted.extend(drain.deleted);
     for shield in updated {
         shield.update(ctx);
     }
@@ -235,5 +276,5 @@ pub(crate) fn absorb_incoming(ctx: &ReducerContext, target_guid: u64, incoming: 
         .filter_map(|id| ctx.db.game_aura().id().find(id))
         .collect();
     shed_auras(ctx, depleted);
-    remaining_damage
+    drain.remaining_damage
 }

@@ -1,6 +1,6 @@
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration};
 
-use crate::spell::SpellCastEventKind;
+use crate::spell::{SpellCastEventKind, SCHOOL_MASK_PHYSICAL};
 use crate::{game_item_template, game_spell, game_world_entity, SpellCastEvent, WorldEntity};
 
 use super::reach::{in_melee_reach, MeleeBody};
@@ -175,7 +175,13 @@ fn resolve_offhand_swing(
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    let damage = resolve_damage(ctx, attacker_guid, target_guid, rolled);
+    let damage = resolve_damage(
+        ctx,
+        attacker_guid,
+        target_guid,
+        rolled,
+        SCHOOL_MASK_PHYSICAL,
+    );
     let killing_blow = is_killing_blow(ctx, attacker_guid, &target, damage.amount());
 
     CombatEvent::insert(
@@ -631,7 +637,13 @@ fn fire_melee_swing(
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    let damage = resolve_damage(ctx, attacker_guid, target_guid, rolled);
+    let damage = resolve_damage(
+        ctx,
+        attacker_guid,
+        target_guid,
+        rolled,
+        SCHOOL_MASK_PHYSICAL,
+    );
     let (projected_swing, projected_seal) = split_damage_projection(damage.amount(), seal_portion);
 
     // vmangos reports a queued strike before the damage lands, so a killing blow follows it.
@@ -825,7 +837,10 @@ fn land_chained_strike(
     if unit.hit_info == AttackOutcome::Dodge {
         arm_react(ctx, attacker.guid, ReactKind::Overpower);
     }
-    let damage = resolve_damage(ctx, attacker.guid, target_guid, unit.rolled);
+    let school_mask = strike.header.map_or(SCHOOL_MASK_PHYSICAL, |spell| {
+        crate::spell::damage_school_mask(spell.school_mask)
+    });
+    let damage = resolve_damage(ctx, attacker.guid, target_guid, unit.rolled, school_mask);
     SpellCastEvent::insert(
         ctx,
         SpellCastEvent {
@@ -1023,7 +1038,13 @@ fn fire_ranged_shot(
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    let damage = FrozenDamage::launch(ctx, attacker_guid, target_guid, roll.damage);
+    let damage = FrozenDamage::launch(
+        ctx,
+        attacker_guid,
+        target_guid,
+        roll.damage,
+        crate::spell::spell_school_mask(ctx, ranged_spell_id),
+    );
 
     let speed_yps = ctx
         .db
@@ -1089,7 +1110,13 @@ pub(crate) fn launch_ranged_strike(
         super::AttackType::Ranged,
         rolled,
     );
-    let damage = FrozenDamage::launch(ctx, attacker.guid, target.guid, rolled);
+    let damage = FrozenDamage::launch(
+        ctx,
+        attacker.guid,
+        target.guid,
+        rolled,
+        crate::spell::damage_school_mask(spell.school_mask),
+    );
     let (dx, dy, dz) = (
         target.x - attacker.x,
         target.y - attacker.y,

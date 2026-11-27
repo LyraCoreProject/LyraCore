@@ -311,7 +311,10 @@ fn synthetic_seal_effect(spell_id: u32, name: &str, used_index: u8) -> Option<Sp
     })
 }
 
-// Store EffectMultipleValue in hundredths: 0.5 becomes 50.
+const MANA_SHIELD_AURA: u32 = 97;
+
+// Store EffectMultipleValue in hundredths: 0.5 becomes 50. Mana Shield keeps its mana cost per
+// absorbed point this way in p1; a school absorb has p1 0.
 fn power_burn_ratio_bp(multiple: f32) -> i32 {
     (multiple * 100.0).round() as i32
 }
@@ -354,10 +357,7 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
         | A_MOD_RESISTANCE
         | A_MOD_HEALING => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         A_MOD_DAMAGE_TAKEN => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
-        A_ABSORB => match aura {
-            ManaShield => (0, P_NONE),
-            _ => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
-        },
+        A_ABSORB => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         A_MOD_COMBAT => {
             let field = match aura {
                 ModCritPercent => i32::from(COMBAT_CRIT),
@@ -1157,7 +1157,8 @@ fn push_spell_effect_rows(
             i32::from(s.effect_aura[i] == 98)
         } else if kind == E_SUMMON_HOSTILE {
             s.requires_spell_focus as i32
-        } else if kind == E_POWER_BURN {
+        } else if kind == E_POWER_BURN || (kind == A_ABSORB && s.effect_aura[i] == MANA_SHIELD_AURA)
+        {
             power_burn_ratio_bp(s.effect_multiple_values[i])
         } else if kind == A_SPELLMOD_FLAT || kind == A_SPELLMOD_PCT {
             // The Module's p1 mask holds 32 bits; wider source masks have a manifest finding.
@@ -3290,6 +3291,25 @@ mod tests {
     }
 
     #[test]
+    fn a_mana_shield_keeps_its_school_mask_and_mana_multiple_and_a_school_absorb_no_multiple() {
+        for (aura, multiple, expected) in [(97u32, 2.0f32, (1, 200)), (69, 2.0, (1, 0))] {
+            let mut bytes = source_spell_fixture();
+            for (column, value) in [(61, 6u32), (91, aura), (97, multiple.to_bits()), (106, 1)] {
+                bytes[20 + column * 4..24 + column * 4].copy_from_slice(&value.to_le_bytes());
+            }
+            let mut dbc = fixture_tables();
+            dbc.spells = read_spells(&bytes).unwrap();
+            let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+            let effect = &rows.effects[0];
+            assert_eq!(
+                (effect.kind, effect.p0_kind, (effect.p0, effect.p1)),
+                (A_ABSORB, P_SCHOOL_MASK, expected),
+                "aura {aura}"
+            );
+        }
+    }
+
+    #[test]
     fn a_flag_aura_keeps_its_source_aura_in_p1() {
         let mut bytes = source_spell_fixture();
         // Effect 0 applies SPELL_AURA_RESIST_PUSHBACK, as Concentration Aura does.
@@ -4880,9 +4900,12 @@ mod tests {
     }
 
     #[test]
-    fn absorb_params_split_mana_shield_from_school_absorb() {
+    fn absorb_params_keep_the_school_mask_of_both_absorb_auras() {
         use AuraMod::*;
-        assert_eq!(resolve_aura_params(A_ABSORB, ManaShield, 0x7F), (0, P_NONE));
+        assert_eq!(
+            resolve_aura_params(A_ABSORB, ManaShield, 0x01),
+            (0x01, P_SCHOOL_MASK)
+        );
         assert_eq!(
             resolve_aura_params(A_ABSORB, SchoolAbsorb, 0x7F),
             (0x7F, P_SCHOOL_MASK)

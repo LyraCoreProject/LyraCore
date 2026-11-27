@@ -125,7 +125,14 @@ pub fn debug_apply_lethal_damage_floor_fixture(
     if target.dead {
         return Err("fixture target is dead".to_string());
     }
-    resolve_damage(ctx, attacker_guid, target_guid, rolled).land(
+    resolve_damage(
+        ctx,
+        attacker_guid,
+        target_guid,
+        rolled,
+        crate::spell::SCHOOL_MASK_PHYSICAL,
+    )
+    .land(
         ctx,
         attacker_guid,
         target_guid,
