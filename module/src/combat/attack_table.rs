@@ -65,6 +65,8 @@ pub(crate) struct DeliveredSpell {
     pub(crate) always_hit: bool,
     pub(crate) cannot_crit: bool,
     pub(crate) no_active_defense: bool,
+    /// Neither combat range nor a weapon spell: it rolls with the level's maximum skill.
+    pub(crate) level_skill: bool,
     pub(crate) school_mask: u8,
 }
 
@@ -85,8 +87,26 @@ impl DeliveredSpell {
             cannot_crit: flags & crate::spell::CAST_FLAG_CANNOT_CRIT != 0,
             no_active_defense: spell
                 .is_some_and(|spell| spell.attributes & SPELL_ATTR_NO_ACTIVE_DEFENSE != 0),
+            level_skill: flags & crate::spell::CAST_FLAG_LEVEL_SKILL != 0,
             school_mask: spell.map_or(0, |spell| spell.school_mask),
         }
+    }
+
+    /// The spell as the attacker delivers it; a creature no player owns never crits with it.
+    fn cast_by(self, attacker: &WorldEntity) -> Self {
+        Self {
+            cannot_crit: self.cannot_crit || !attacker.crits_with_spells(),
+            ..self
+        }
+    }
+}
+
+/// vmangos `RollMeleeOutcomeAgainst`: Hammer of Wrath rolls the maximum skill for its level.
+fn rolled_skill(spell: Option<DeliveredSpell>, weapon: u32, maximum: u32) -> u32 {
+    if spell.is_some_and(|spell| spell.level_skill) {
+        maximum
+    } else {
+        weapon
     }
 }
 
@@ -272,6 +292,8 @@ pub(crate) fn attack_table_for(
     use crate::creatures::catalogue::game_creature_defense;
 
     let target_is_character = target.is_player();
+    let spell = spell.map(|spell| spell.cast_by(attacker));
+    let maximum = crate::skill::skill_cap_for_level(attacker.level);
     let (weapon, crit) = match attack_type {
         AttackType::Melee => (
             crate::skill::effective_weapon_skill(ctx, attacker),
@@ -287,13 +309,9 @@ pub(crate) fn attack_table_for(
         (None, AttackType::Ranged) => 1 << super::folds::ranged_school(ctx, attacker.guid),
         (None, AttackType::Melee) => 0,
     };
-    let crit = if spell.is_some() && !crits_with_spells(attacker) {
-        0
-    } else {
-        crit.saturating_add_signed(
-            (crate::spell::bonuses::school_crit(ctx, attacker.guid, school_mask) * 100.0) as i32,
-        )
-    };
+    let crit = crit.saturating_add_signed(
+        (crate::spell::bonuses::school_crit(ctx, attacker.guid, school_mask) * 100.0) as i32,
+    );
     let flags = (!target_is_character)
         .then(|| ctx.db.game_creature_defense().entry().find(target.entry))
         .flatten();
@@ -305,12 +323,12 @@ pub(crate) fn attack_table_for(
         && super::folds::equipped_offhand_weapon_damage(ctx, attacker.guid).is_some();
     attack_table(&AttackFacts {
         skills: Skills {
-            weapon: weapon as i32,
+            weapon: rolled_skill(spell, weapon, maximum) as i32,
             block_weapon: match attack_type {
                 AttackType::Melee => weapon,
                 AttackType::Ranged => crate::skill::effective_weapon_skill(ctx, attacker),
             } as i32,
-            maximum: crate::skill::skill_cap_for_level(attacker.level) as i32,
+            maximum: maximum as i32,
             defense: defense_skill(
                 ctx,
                 attacker,
@@ -361,11 +379,6 @@ pub(crate) fn attack_table_for(
         no_parry: flags.as_ref().is_some_and(|flags| flags.no_parry),
         no_block: flags.as_ref().is_some_and(|flags| flags.no_block),
     })
-}
-
-/// vmangos `GetSpellCritChance`: a creature crits with spells only when a player owns it.
-pub(crate) fn crits_with_spells(unit: &WorldEntity) -> bool {
-    unit.is_player() || (unit.owner_guid != 0 && unit.owner_guid >> 48 == 0)
 }
 
 fn character_controls(ctx: &ReducerContext, unit: &WorldEntity) -> bool {
@@ -467,6 +480,7 @@ mod tests {
         always_hit: false,
         cannot_crit: false,
         no_active_defense: false,
+        level_skill: false,
         school_mask: 1,
     };
     const CAST: DeliveredSpell = DeliveredSpell {
@@ -474,6 +488,7 @@ mod tests {
         always_hit: false,
         cannot_crit: false,
         no_active_defense: false,
+        level_skill: false,
         school_mask: 1,
     };
 
@@ -638,6 +653,33 @@ mod tests {
         });
         let table = attack_table(&cast);
         assert_eq!([table.miss, table.dodge, table.parry], [800, 0, 0]);
+    }
+
+    #[test]
+    fn a_spell_that_is_no_weapon_spell_rolls_the_maximum_skill_for_its_level() {
+        let hammer = Spell {
+            cast_flags: crate::spell::CAST_FLAG_LEVEL_SKILL,
+            ..Spell::blank(24239, "Hammer of Wrath")
+        };
+        let hammer = DeliveredSpell::cast(&hammer);
+        assert!(hammer.level_skill);
+        assert_eq!(rolled_skill(Some(hammer), 0, 300), 300);
+        assert_eq!(rolled_skill(Some(CAST), 250, 300), 250);
+        assert_eq!(rolled_skill(None, 250, 300), 250);
+    }
+
+    #[test]
+    fn a_creature_crits_with_a_spell_only_when_a_player_owns_it() {
+        let creature = WorldEntity::blank(2, 0, 0, [0.0; 4]);
+        assert!(CAST.cast_by(&creature).cannot_crit);
+        let pet = WorldEntity {
+            owner_guid: 1,
+            ..WorldEntity::blank(3, 0, 0, [0.0; 4])
+        };
+        assert!(!CAST.cast_by(&pet).cannot_crit);
+        let mut cast = level_63();
+        cast.spell = Some(CAST.cast_by(&creature));
+        assert_eq!(attack_table(&cast).crit, 0);
     }
 
     #[test]

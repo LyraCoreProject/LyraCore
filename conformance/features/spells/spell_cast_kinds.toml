@@ -91,10 +91,16 @@ symbol = "apply_damage_effect"
 evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit calls Unit::CalculateAbsorbResistBlock, which calls IsSpellPartiallyBlocked, when a delayed spell hits (Spell.cpp:1415); apply_damage_effect rolls the block through mitigate_spell at launch and stores it in PendingSpellImpact.blocked."
 
 [[known_gaps]]
-description = "A melee or ranged damage-class Spell rolls its miss with the caster's weapon skill even when it is neither melee range nor a weapon spell, such as Hammer of Wrath. vmangos uses the weapon skill only for a Spell with the combat range index or a required weapon class, and the maximum skill for the caster's level otherwise."
+description = "A Spell with SPELL_ATTR_EX3_COMPLETELY_BLOCKED, such as Hamstring, Wing Clip, Shield Bash or Kick, rolls the Attack Table but is never fully blocked. vmangos opens the block band for such a Spell, and a block refuses all its effects; 35 imported Spells carry the attribute."
 path = "module/src/combat/attack_table.rs"
-symbol = "attack_table_for"
-evidence = "Source reading, not measured. At d9173eca, SpellCaster::RollMeleeOutcomeAgainst (SpellCaster.cpp:449-452) picks GetWeaponSkillValue only for rangeIndex SPELL_RANGE_IDX_COMBAT or EquippedItemClass ITEM_CLASS_WEAPON; the Module stores range_yd but no range index."
+symbol = "attack_table"
+evidence = "Source reading, not measured. At d9173eca, SpellCaster::RollMeleeOutcomeAgainst (SpellCaster.cpp:546-547) sets canBlock only for a Spell with SPELL_ATTR_EX3_COMPLETELY_BLOCKED and returns MELEE_HIT_BLOCK at line 676; attack_table closes the block band for every Spell."
+
+[[known_gaps]]
+description = "A Spell with SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS keeps its whole cost when it is avoided. vmangos gives back 82% of an energy cost on a miss, dodge, parry or immune result, and 82% of a rage cost on a dodge or parry."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "run_spell_effects"
+evidence = "Source reading, not measured. At d9173eca, Spell::DoAllEffectOnTarget (Spell.cpp:1266-1286) calls ModifyPower with lroundf(m_powerCost * 0.82f); the Module has no refund."
 
 [[known_gaps]]
 description = "A melee or ranged damage-class Spell is never resisted by the target's mechanic resistance. vmangos rolls MELEE_HIT_RESIST right after the miss band from SPELL_AURA_MOD_MECHANIC_RESISTANCE for the Spell's mechanic."
@@ -669,4 +675,19 @@ rung = "unit"
 [[tests]]
 path = "module/src/combat/attack_table.rs"
 function = "a_spell_with_no_active_defense_is_never_dodged_or_parried"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/attack_table.rs"
+function = "a_spell_that_is_no_weapon_spell_rolls_the_maximum_skill_for_its_level"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/attack_table.rs"
+function = "a_creature_crits_with_a_spell_only_when_a_player_owns_it"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "a_melee_or_ranged_spell_without_combat_range_or_a_weapon_rolls_the_level_skill"
 rung = "unit"

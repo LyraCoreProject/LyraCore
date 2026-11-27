@@ -409,7 +409,8 @@ fn stage_sinister_strike(standalone: &Standalone) {
         (100, P_RAW),
     );
     standalone.assert_sql(&format!(
-        "UPDATE game_spell SET damage_class = {DAMAGE_CLASS_MELEE} WHERE spell_id = {SINISTER_STRIKE}"
+        "UPDATE game_spell SET damage_class = {DAMAGE_CLASS_MELEE} \
+         WHERE spell_id = {SINISTER_STRIKE}"
     ));
 }
 

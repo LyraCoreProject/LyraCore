@@ -489,6 +489,15 @@ whose `damage_class` is 3 (ranged) rolls a partial block for an Auto Shot or a c
 Strike, and not one with `SPELL_ATTR_NO_ACTIVE_DEFENSE` or `SPELL_ATTR_EX3_COMPLETELY_BLOCKED`, so a
 ranged shot with no imported Spell row never blocks.
 
+### Spell hit table migration
+
+No schema changes. The importer sets the new `CAST_FLAG_LEVEL_SKILL` (0x0040_0000) on a melee or
+ranged damage-class Spell that is neither combat range nor a weapon spell, such as Hammer of Wrath
+or Blind. Such a Spell now rolls the Attack Table, and the flag makes it roll with the maximum skill
+for the caster's level. Until you reimport the `spell` family, older rows have no flag, so these
+Spells roll with the caster's weapon skill: a Paladin with no ranged weapon misses Hammer of Wrath
+60% of the time. No repair is needed.
+
 ### Spell impact block migration
 
 `game_pending_spell_impact`, `game_spell_impact_event` and `game_spell_impact_event_live` gain

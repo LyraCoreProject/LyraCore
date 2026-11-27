@@ -730,18 +730,18 @@ _Avoid_: cast flags, event flags, signal flags
 **Cast Miss**:
 The primary target's outcome when a harmful spell's hit roll fails, recorded on the GO row. The
 roll runs once per target, before any effect runs, and a missed target takes none of the spell's
-effects. The spell's damage class picks the roll: a magic spell is resisted outright; a melee or
-ranged spell, Weapon Strikes among them, rolls the Attack Table, which also decides its crit, so
-its target can miss, dodge or parry it; a ranged one can only miss. Damage class 0 rolls none.
-A creature returning home evades every cast by another unit before any roll or immunity test, and
+effects. The spell's damage class picks the roll, whatever its effects: a magic spell is resisted
+outright; a melee or ranged spell rolls the Attack Table, which also decides its crit, so its
+target can miss, dodge or parry it; a ranged one can only miss. Damage class 0 rolls none. A
+creature returning home evades every cast by another unit before any roll or immunity test, and
 every swing too.
 _Avoid_: spell miss flag, resist flag
 
 **Attack Table**:
 The one roll that decides a weapon attack's outcome: miss, dodge, parry, glancing, block, crit,
-crushing or hit. White swings, queued strikes, ranged attacks and melee or ranged spells share it; the
-attack type and the delivered Spell's facts select which bands apply. A ranged attack rolls only
-miss and crit. Damage stays with the caller. See `module/src/combat/attack_table.rs`.
+crushing or hit. White swings, queued strikes, ranged attacks and melee or ranged spells share
+it; the attack type and the delivered Spell's facts select which bands apply. A ranged attack rolls
+only miss and crit. Damage stays with the caller. See `module/src/combat/attack_table.rs`.
 _Avoid_: combat table, swing table
 
 **Weapon Strike**:
