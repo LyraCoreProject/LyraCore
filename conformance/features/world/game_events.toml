@@ -70,6 +70,9 @@ tests = [
     { path = "module/src/creatures/eventai/loader.rs", function = "a_game_event_predicate_names_a_nonzero_event_alone_or_reversed", rung = "unit" },
     { path = "module/src/creatures/cycle/harness/eventai_profile.rs", function = "script_game_event_condition_checks_the_event_without_an_invoker", rung = "unit" },
     { path = "module/tests/game_events.rs", function = "an_eventai_rule_on_a_game_event_runs_only_while_the_event_runs", rung = "durable_module" },
+    { path = "module/src/game_events/mail.rs", function = "a_character_minted_after_the_start_is_not_mailed_but_one_from_another_range_may_be", rung = "unit" },
+    { path = "module/tests/game_events.rs", function = "an_event_start_mails_its_recipients_over_several_passes_each_once", rung = "durable_module" },
+    { path = "module/tests/game_events.rs", function = "a_stop_part_way_through_a_mailing_leaves_the_rest_of_its_letters_to_go", rung = "durable_module" },
 ]
 
 [vmangos]
@@ -127,6 +130,12 @@ id = "loot_condition_at_the_roll"
 result = "A loot row's Game Event condition is checked when the loot is rolled, so an item that dropped stays in the Loot Window when its event stops, and one that did not drop does not appear when its event starts. The Reference Server rolls the row and checks its condition each time a player views the loot (LootItem::AllowedForPlayer), so a dropped event item can vanish from a corpse and a hidden one appear."
 reason = "Loot a player saw drop should not disappear because a calendar boundary passed before they took it; deciding once at the roll gives one answer and needs no check per view."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/LootMgr.cpp"
+
+[[deliberate_deviations]]
+id = "event_mail_queue_is_durable_and_per_pass"
+result = "A Game Event start queues one mailing per mail row in a table and each minute pass sends at most 500 letters of the queue, oldest mailing first, to the recipients in guid order. The mailing copies its mail row's values, so a restart, a publish or an import of new mail rows leaves it as it was, and a recipient's race and quest reward are read when its letter's turn comes. The Reference Server's MassMailMgr sends MASS_MAILER_SEND_PER_TICK letters every world tick from a list in memory that a restart loses, and reads its recipients when the event starts. Both close the recipients at the start (a Character created later gets no letter) and let a stop leave the queued letters to go out."
+reason = "A start on a large Realm must not write every letter in one reducer; a queue in a table finishes after a restart instead of dropping the rest of the letters. The Reference Server's default MassMailer.SendPerTick is 10 letters per 50 ms tick, about 12,000 a minute, 24 times 500: 10,000 recipients take about 50 seconds there and about 20 minutes here."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Mail/MassMailMgr.cpp"
 
 [[known_gaps]]
 description = "A creature data row's model (display_id) is not applied, and an equipment entry with several item choices shows no equipment; the Compatibility Manifest counts them as events.creature-display and events.equipment-choice. The pinned World Source has neither."
@@ -207,13 +216,7 @@ symbol = "entry_for_spawn"
 evidence = "vmangos PoolManager::SpawnPoolInMaps at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
 [[known_gaps]]
-description = "Each Shard follows its own event starts, so a Character that changes Shard can get an event's start letter twice or not at all: a Transfer under way while the two Shards' passes see the start, or two Shards with different Operator holds, can mail it from both or neither. The Reference Server is one world server that mails each Character once per start."
+description = "Each Shard follows its own event starts, so a Character that changes Shard can get an event's start letter twice or not at all: a Transfer under way while the two Shards' passes see the start, a Transfer that ends while a mailing is queued, or two Shards with different Operator holds, can mail it from both or neither. The Reference Server is one world server that mails each Character once per start."
 path = "module/src/game_events/mail.rs"
-symbol = "follow"
+symbol = "held_characters"
 evidence = "vmangos GameEventMgr::ApplyNewEvent and MassMailMgr::AddMassMailTask at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
-
-[[known_gaps]]
-description = "An event start writes every letter it sends in the one Game Event pass that sees it start, with no limit; the Reference Server queues them and sends a configured number (CONFIG_UINT32_MASS_MAILER_SEND_PER_TICK) each world tick."
-path = "module/src/game_events/mail.rs"
-symbol = "send"
-evidence = "vmangos MassMailMgr::Update and CONFIG_UINT32_MASS_MAILER_SEND_PER_TICK at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
