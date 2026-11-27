@@ -10,12 +10,15 @@ import re
 import subprocess
 import sys
 import tomllib
+from urllib.parse import quote
 
 import check_ratchet
 import evidence_format as evidence
 
 
-MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+# The repository permission, not `author_association`: the workflow token sees a private
+# organisation member as CONTRIBUTOR.
+MAINTAINER_PERMISSIONS = frozenset({"admin", "write"})
 COMMENT_MARKER = "<!-- lyracore-contribution-check -->"
 COMMENT_AUTHOR = "github-actions[bot]"
 BASELINE = "conformance/tier1-baseline.json"
@@ -58,9 +61,9 @@ class FileVersions:
 
 @dataclass(frozen=True)
 class Facts:
-    """`association` is None when a maintainer asks to judge the PR as an outside one."""
+    """`author_permission` is None when a maintainer asks to judge the PR as an outside one."""
     pr_number: int
-    association: str | None
+    author_permission: str | None
     head: str
     merge_base: str
     body: str
@@ -224,8 +227,9 @@ def _slow_reasons(facts, document):
 
 def decide(facts):
     """Return the Verdict for `facts`; every value in it is untrusted until `render` escapes it."""
-    if facts.association in MAINTAINER_ASSOCIATIONS:
-        return Verdict(Lane.NOT_APPLICABLE, (Finding("maintainer_author", (facts.association,)),))
+    if facts.author_permission in MAINTAINER_PERMISSIONS:
+        return Verdict(Lane.NOT_APPLICABLE,
+                       (Finding("maintainer_author", (facts.author_permission,)),))
     if (facts.paths_complete and facts.changed_paths
             and all(path.lower().endswith(".md") for path in facts.changed_paths)):
         return Verdict(Lane.NOT_APPLICABLE, (Finding("markdown_only"),))
@@ -262,7 +266,9 @@ def _sentence(finding, pr_number):
     rerun = f"run `./conformance/evidence` with your `--test` and `--scenario` arguments and `--pr {pr_number}`"
     values = finding.values
     sentences = {
-        "maintainer_author": lambda: f"The author is {code(values[0])}, so this check does not apply.",
+        "maintainer_author": lambda: (
+            f"The author has {code(values[0])} permission on this repository, so this check does "
+            "not apply."),
         "markdown_only": lambda: "It changes only Markdown, so it needs no evidence.",
         "missing_evidence": lambda: (
             f"The description has no evidence section: run `./conformance/evidence --test PACKAGE "
@@ -335,6 +341,18 @@ def _blob(commit, path):
     return result.stdout if result.returncode == 0 else None
 
 
+def _author_permission(gh, repository, pull):
+    """Return the author's permission; an author GitHub cannot look up is judged as an outside one."""
+    login = (pull["user"] or {}).get("login")
+    if not login:
+        return "none"
+    try:
+        return gh("api", f"repos/{repository}/collaborators/{quote(login, safe='')}/permission",
+                  "--jq", ".permission").strip()
+    except subprocess.CalledProcessError:
+        return "none"
+
+
 def gather(gh, repository, pr_number, manual):
     pull = json.loads(gh("api", f"repos/{repository}/pulls/{pr_number}"))
     head, base = pull["head"]["sha"], pull["base"]["sha"]
@@ -358,7 +376,7 @@ def gather(gh, repository, pr_number, manual):
                                      else None for version in versions))
     return Facts(
         pr_number=pr_number,
-        association=None if manual else pull["author_association"],
+        author_permission=None if manual else _author_permission(gh, repository, pull),
         head=head,
         merge_base=merge_base,
         body=pull["body"] or "",

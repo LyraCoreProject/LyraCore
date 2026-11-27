@@ -64,7 +64,7 @@ class Contribution:
         self.head_baseline, self.scenario = fixed_baseline()
         self.document = evidence_document(self.head_baseline, self.scenario)
         self.raw_body = None
-        self.association = "CONTRIBUTOR"
+        self.author_permission = "read"
         self.paths_complete = True
         self.uninspected = ()
         self.files = {
@@ -84,7 +84,7 @@ class Contribution:
             BASELINE_TEXT, json.dumps(self.head_baseline))}
         paths = tuple(dict.fromkeys([*self.files, check.BASELINE, *self.extra_paths]))
         return check.Facts(
-            pr_number=PR, association=self.association, head=HEAD, merge_base=MERGE_BASE,
+            pr_number=PR, author_permission=self.author_permission, head=HEAD, merge_base=MERGE_BASE,
             body=self.raw_body if self.raw_body is not None else body(self.document),
             changed_paths=paths, paths_complete=self.paths_complete, files=files,
             uninspected_paths=self.uninspected,
@@ -100,20 +100,20 @@ def kinds(verdict):
 
 class ScopeTests(unittest.TestCase):
     def test_maintainer_authors_are_not_applicable_and_pass(self):
-        for association in ("OWNER", "MEMBER", "COLLABORATOR"):
-            with self.subTest(association=association):
+        for permission in ("admin", "write"):
+            with self.subTest(permission=permission):
                 contribution = Contribution()
-                contribution.association = association
+                contribution.author_permission = permission
                 contribution.raw_body = "no evidence at all"
                 verdict = contribution.verdict()
                 self.assertIs(verdict.lane, check.Lane.NOT_APPLICABLE)
                 self.assertTrue(verdict.passes)
 
     def test_other_authors_and_manual_runs_are_judged(self):
-        for association in ("CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE", None):
-            with self.subTest(association=association):
+        for permission in ("read", "none", "", None):
+            with self.subTest(permission=permission):
                 contribution = Contribution()
-                contribution.association = association
+                contribution.author_permission = permission
                 self.assertIs(contribution.verdict().lane, check.Lane.FAST)
 
 
@@ -568,13 +568,14 @@ class GatherTests(unittest.TestCase):
             checkout = Path(directory) / "checkout"
             self.git(directory, "clone", "-q", str(origin), str(checkout))
             pull = {"head": {"sha": head}, "base": {"sha": base}, "body": None,
-                    "author_association": "NONE", "changed_files": 5}
-            gh = FakeGithub([(("api",), json.dumps(pull))])
+                    "user": {"login": "some[bot]"}, "changed_files": 5}
+            permission = (("api", "repos/o/r/collaborators/some%5Bbot%5D/permission"), "read\n")
+            gh = FakeGithub([permission, (("api",), json.dumps(pull))])
             with contextlib.chdir(checkout):
                 facts = check.gather(gh, "o/r", PR, manual=False)
                 manual = check.gather(gh, "o/r", PR, manual=True)
                 incomplete = check.gather(
-                    FakeGithub([(("api",), json.dumps({**pull, "changed_files": 6}))]),
+                    FakeGithub([permission, (("api",), json.dumps({**pull, "changed_files": 6}))]),
                     "o/r", PR, manual=False)
         self.assertEqual((facts.head, facts.merge_base, facts.body), (head, merge_base, ""))
         self.assertEqual(sorted(facts.changed_paths),
@@ -585,9 +586,16 @@ class GatherTests(unittest.TestCase):
         self.assertEqual(facts.uninspected_paths, ("huge.rs",))
         self.assertEqual(facts.files[".github/x.yml"], check.FileVersions(None, "on: push\n"))
         self.assertNotIn("docs/new.md", facts.files)
-        self.assertEqual((facts.association, manual.association), ("NONE", None))
+        self.assertEqual((facts.author_permission, manual.author_permission), ("read", None))
         self.assertTrue(facts.paths_complete)
         self.assertFalse(incomplete.paths_complete)
+
+    def test_an_author_github_cannot_look_up_is_an_outside_one(self):
+        def refuses(*args, stdin=None):
+            raise subprocess.CalledProcessError(1, args)
+
+        self.assertEqual(check._author_permission(refuses, "o/r", {"user": {"login": "x"}}), "none")
+        self.assertEqual(check._author_permission(refuses, "o/r", {"user": None}), "none")
 
 
 if __name__ == "__main__":
