@@ -2332,7 +2332,7 @@ mod tests {
         assert_eq!((header.duration_ms, header.max_duration_ms), (6000, 21000));
         let header_sql = header.sql_values();
         let values: Vec<_> = header_sql.trim_matches(['(', ')']).split(',').collect();
-        assert_eq!(values.len(), 47);
+        assert_eq!(values.len(), 48);
         assert_eq!(values[42], "133");
         assert_eq!(&values[25..28], &["21000", "1024", "7"]);
         let effect = &rows.effects[0];
