@@ -134,14 +134,10 @@ fn landed_result(hit: &Hit, absorbed: u32) -> u32 {
     quality | block | absorb
 }
 
-fn is_melee_spell_strike(hit: &Hit) -> bool {
-    hit.source == HitSource::MeleeSpell || hit.is_queued_strike()
-}
-
 // vmangos Unit::CalculateMeleeDamage raises PROC_EX_BLOCK alone for a full block; a ranged hit is
 // a Spell and keeps its quality (CreateProcExtendMask), even when a block, an absorb or a resist
-// takes all of it, as does a cast or queued melee strike a block takes whole. An absorb that takes
-// the rest keeps the hit's quality and adds PROC_EX_ABSORB.
+// takes all of it, as does any other Spell a block takes whole. An absorb that takes the rest keeps
+// the hit's quality and adds PROC_EX_ABSORB.
 fn unlanded_result(outcome: AttackOutcome, hit: &Hit, dealt: u32, absorbed: u32) -> Option<u32> {
     match outcome {
         AttackOutcome::Miss => Some(PROC_EX_MISS),
@@ -155,7 +151,7 @@ fn unlanded_result(outcome: AttackOutcome, hit: &Hit, dealt: u32, absorbed: u32)
         | AttackOutcome::Crushing
         | AttackOutcome::Block => match (dealt, absorbed, hit.blocked) {
             (0, _, _) if hit.source == HitSource::Ranged => Some(landed_result(hit, absorbed)),
-            (0, _, true) if is_melee_spell_strike(hit) => Some(landed_result(hit, absorbed)),
+            (0, _, true) if hit.spell_id != 0 => Some(landed_result(hit, absorbed)),
             (0, 0, true) => Some(PROC_EX_BLOCK),
             (0, 1.., _) => Some(landed_result(hit, absorbed)),
             _ => None,
@@ -1507,11 +1503,16 @@ mod tests {
     }
 
     #[test]
-    fn a_fully_blocked_cast_melee_strike_keeps_its_quality_beside_the_block() {
+    fn a_fully_blocked_cast_spell_keeps_its_quality_beside_the_block() {
         let strike = Hit::spell(HitSource::MeleeSpell, 12294, false).with_block(10);
         let crit = Hit::spell(HitSource::MeleeSpell, 12294, true).with_block(10);
+        let bloodthirst = Hit::spell(HitSource::Spell, 23881, false).with_block(10);
         assert_eq!(
             unlanded_result(AttackOutcome::Normal, &strike, 0, 0),
+            Some(PROC_EX_NORMAL_HIT | PROC_EX_BLOCK)
+        );
+        assert_eq!(
+            unlanded_result(AttackOutcome::Normal, &bloodthirst, 0, 0),
             Some(PROC_EX_NORMAL_HIT | PROC_EX_BLOCK)
         );
         assert_eq!(

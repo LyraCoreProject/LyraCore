@@ -1448,8 +1448,11 @@ fn apply_damage_effect(
             } else {
                 scaled
             };
-            let (after_resist, resisted) =
-                source_behavior::mitigate_spell(ctx, hdr, caster_guid, target_guid, crit_scaled);
+            let source_behavior::SpellMitigation {
+                after_resist,
+                resisted,
+                blocked,
+            } = source_behavior::mitigate_spell(ctx, hdr, caster_guid, target_guid, crit_scaled);
 
             if e.kind == E_DAMAGE && hdr.range_yd > 0 && target_guid != caster_guid {
                 if let (Some(caster), Some(target)) = (
@@ -1477,6 +1480,7 @@ fn apply_damage_effect(
                                     resisted,
                                     after_resist,
                                     triggered,
+                                    blocked,
                                 });
                             // Impact emits the damage log; this GO must carry no damage.
                             return EffectHit::none();
@@ -1484,13 +1488,14 @@ fn apply_damage_effect(
                     }
                 }
             }
-            // vmangos deals spell damage only when it is non-zero before absorb and resist.
-            let (dealt, absorbed) = if after_resist > 0 || resisted > 0 {
-                crate::combat::deal_damage(
+            // vmangos deals spell damage only when it is non-zero before block, absorb and resist.
+            let (dealt, absorbed) = if after_resist > 0 || resisted > 0 || blocked > 0 {
+                crate::combat::deal_blocked_spell_damage(
                     ctx,
                     caster_guid,
                     target_guid,
                     after_resist,
+                    blocked,
                     hit_of(
                         hdr,
                         triggered,
@@ -1509,8 +1514,8 @@ fn apply_damage_effect(
                 dealt,
                 resisted,
                 absorbed,
+                blocked,
                 crit: is_crit,
-                healed: 0,
                 ..EffectHit::default()
             }
         }
@@ -1553,28 +1558,19 @@ fn apply_damage_effect(
                     dmg,
                 )
             };
-            let hit = hit_of(
-                hdr,
-                triggered,
-                crate::combat::HitSource::MeleeSpell,
-                strike_crit,
-            )
-            .with_block(blocked);
-            let (dealt, absorbed) =
-                crate::combat::deal_damage(ctx, caster_guid, target_guid, dmg as i32, hit);
-            if blocked > 0 {
-                crate::combat::arm_react(ctx, target_guid, crate::combat::ReactKind::Revenge);
-            }
-            if blocked > 0 && dmg == 0 && !triggered {
-                crate::spell::proc::run_unlanded_proc_pass(
-                    ctx,
-                    caster_guid,
-                    target_guid,
-                    &hit,
-                    crate::combat::AttackOutcome::Normal,
-                    (0, 0),
-                );
-            }
+            let (dealt, absorbed) = crate::combat::deal_blocked_spell_damage(
+                ctx,
+                caster_guid,
+                target_guid,
+                dmg as i32,
+                blocked,
+                hit_of(
+                    hdr,
+                    triggered,
+                    crate::combat::HitSource::MeleeSpell,
+                    strike_crit,
+                ),
+            );
             EffectHit {
                 blocked,
                 crit: strike_crit,

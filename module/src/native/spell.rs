@@ -185,7 +185,7 @@ pub(crate) fn spell_impact(ctx: &ReducerContext, event: &SpellImpactEvent) {
             event.is_crit,
             event.resisted,
             event.absorbed,
-            0,
+            event.blocked,
         ),
     )));
     deliver(ctx, event.caster_guid, EventAudience::Everyone, packet);

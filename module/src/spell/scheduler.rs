@@ -80,13 +80,14 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
         );
         return;
     }
-    // vmangos deals spell damage only when it is non-zero before absorb and resist.
-    let (dealt, absorbed) = if sched.after_resist > 0 || sched.resisted > 0 {
-        crate::combat::deal_damage(
+    // vmangos deals spell damage only when it is non-zero before block, absorb and resist.
+    let (dealt, absorbed) = if sched.after_resist > 0 || sched.resisted > 0 || sched.blocked > 0 {
+        crate::combat::deal_blocked_spell_damage(
             ctx,
             sched.caster_guid,
             sched.target_guid,
             sched.after_resist,
+            sched.blocked,
             crate::combat::Hit::spell(
                 if sched.triggered {
                     crate::combat::HitSource::Triggered
@@ -118,6 +119,7 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
             instance_id,
             grid_x,
             grid_y,
+            blocked: sched.blocked,
         },
     );
 }
@@ -866,6 +868,7 @@ pub fn debug_stage_virtual_spell_impact(
             resisted: 0,
             after_resist: damage,
             triggered: false,
+            blocked: 0,
         });
     Ok(())
 }
