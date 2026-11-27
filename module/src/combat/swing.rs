@@ -861,6 +861,9 @@ fn land_main_hand(
         .hit(hit_info == AttackOutcome::Crit)
         .with_block(blocked);
     let strike = swing.strike();
+    if let Some(header) = strike.and_then(|strike| strike.header) {
+        super::queued_strike::refund_avoided_cost(ctx, attacker_guid, header, hit_info);
+    }
     // vmangos adds a queued strike's table threat unless it was avoided or refused as immune.
     if let Some(strike) = strike.filter(|_| !hit_info.is_avoided()) {
         crate::threat::add_table_threat(

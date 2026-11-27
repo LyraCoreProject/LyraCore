@@ -250,6 +250,8 @@ pub const CAST_FLAG_NO_AURA_CANCEL: u32 = 0x0010_0000;
 pub const CAST_FLAG_LOCKS_FORM: u32 = 0x0020_0000;
 // Neither combat range nor a weapon spell: its Attack Table uses the level's maximum skill.
 pub const CAST_FLAG_LEVEL_SKILL: u32 = 0x0040_0000;
+// SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS: an avoided cast gives back part of its energy or rage.
+pub const CAST_FLAG_DISCOUNT_POWER_ON_MISS: u32 = 0x0080_0000;
 
 #[cfg(test)]
 mod tests {

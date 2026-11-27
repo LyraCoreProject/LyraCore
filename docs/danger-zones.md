@@ -585,6 +585,18 @@ From this revision every effect of a travelling spell other than a Weapon Strike
 finisher strike lands at impact ([spell travel](schema.md#spell-travel)), so Frostbolt's slow
 arrives with its damage.
 
+### Spell power refund migration
+
+No schema changes. The importer sets the new `CAST_FLAG_DISCOUNT_POWER_ON_MISS` (0x0080_0000) on a
+Spell with `SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS`, such as Sinister Strike, Kick, Heroic Strike or
+Mortal Strike. Such a Spell gives back 82% of its energy or rage cost when its target avoids it.
+Until you reimport the `spell` family, older rows have no flag and keep the whole cost. No repair is
+needed. A Package Delta emitted before this revision carries its new spells without the flag; emit
+it again with this importer before you apply it.
+
+The full block of a Spell with `SPELL_ATTR_EX3_COMPLETELY_BLOCKED` reads the stored
+`attributes_ex_3`, so it needs no reimport.
+
 ### Spell travel migration
 
 `game_spell.speed_yps` holds the source `speed`. It is END-appended with default 0, which means no

@@ -75,6 +75,25 @@ pub(crate) fn charge(
     true
 }
 
+/// Gives back part of the strike's cost to a Character whose victim avoided it.
+pub(crate) fn refund_avoided_cost(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    strike: &Spell,
+    outcome: super::AttackOutcome,
+) {
+    if ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(attacker_guid)
+        .is_some_and(|attacker| attacker.is_player())
+    {
+        let miss = crate::spell::cast::resolve::cast_miss(outcome, true);
+        crate::spell::refund_avoided_cost(ctx, attacker_guid, strike, miss);
+    }
+}
+
 const SPELL_ATTR_ON_NEXT_SWING_NO_DAMAGE: u32 = 0x4;
 
 /// vmangos Spell::SendMeleeAttackingStateUpdate hides the swing's damage behind this attribute.

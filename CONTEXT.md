@@ -734,8 +734,9 @@ roll runs once per target, before any effect runs, and a missed target takes non
 effects. The spell's damage class picks the roll, whatever its effects: a magic spell is resisted
 outright; a melee or ranged spell rolls the Attack Table, which also decides its crit, so its
 target can miss, dodge or parry it; a ranged one can only miss. A melee spell with
-SPELL_ATTR_EX3_COMPLETELY_BLOCKED, such as Kick or Shield Bash, can also be blocked whole. Damage
-class 0 rolls none. A
+SPELL_ATTR_EX3_COMPLETELY_BLOCKED, such as Kick or Shield Bash, can also be blocked whole. An
+avoided spell with SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS gives back 82% of an energy cost on a
+miss, dodge, parry or immunity, or of a rage cost on a dodge or parry. Damage class 0 rolls none. A
 creature returning home evades every cast by another unit before any roll or immunity test, and
 every swing too.
 _Avoid_: spell miss flag, resist flag

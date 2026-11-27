@@ -126,12 +126,6 @@ symbol = "log_each"
 evidence = "Source reading, not measured. At d9173eca, Spell::EffectEnergize sends SendEnergizeSpellLog from DoSpellHitOnUnit; UnitLogs::log_each logs only damage and healing, and the ProcLog delivery in native/spell.rs sends no energize log."
 
 [[known_gaps]]
-description = "A Spell with SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS keeps its whole cost when it is avoided. vmangos gives back 82% of an energy cost on a miss, dodge, parry or immune result, and 82% of a rage cost on a dodge or parry."
-path = "module/src/spell/cast/resolve.rs"
-symbol = "run_spell_effects"
-evidence = "Source reading, not measured. At d9173eca, Spell::DoAllEffectOnTarget (Spell.cpp:1266-1286) calls ModifyPower with lroundf(m_powerCost * 0.82f); the Module has no refund."
-
-[[known_gaps]]
 description = "A melee or ranged damage-class Spell is never resisted by the target's mechanic resistance. vmangos rolls MELEE_HIT_RESIST right after the miss band from SPELL_AURA_MOD_MECHANIC_RESISTANCE for the Spell's mechanic."
 path = "module/src/combat/attack_table.rs"
 symbol = "attack_table"

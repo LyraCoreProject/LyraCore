@@ -109,7 +109,7 @@ fn rolls_with_level_skill(s: &Spell) -> bool {
 fn roll_cast_flags(spell: &Spell) -> u32 {
     use lyracore_shared::spell::taxonomy::{
         CAST_FLAG_ALWAYS_HIT, CAST_FLAG_BINARY, CAST_FLAG_CANNOT_CRIT,
-        CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT,
+        CAST_FLAG_DISCOUNT_POWER_ON_MISS, CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT,
     };
     let binary = spell.damage_class == 1
         && spell.school != 0
@@ -135,6 +135,7 @@ fn roll_cast_flags(spell: &Spell) -> u32 {
         | (u32::from(spell.attributes_ex2 & 0x2000_0000 != 0) * CAST_FLAG_CANNOT_CRIT)
         | (u32::from(spell.attributes_ex3 & 0x0004_0000 != 0) * CAST_FLAG_ALWAYS_HIT)
         | (u32::from(spell.attributes_ex4 & 1 != 0) * CAST_FLAG_IGNORE_RESISTANCES)
+        | (u32::from(spell.attributes_ex1 & 0x0800_0000 != 0) * CAST_FLAG_DISCOUNT_POWER_ON_MISS)
 }
 
 // Overpower carries the finisher bit for its dodge window; passive talents are never cast.
@@ -5211,7 +5212,7 @@ mod roll_metadata_tests {
     use super::*;
     use lyracore_shared::spell::taxonomy::{
         CAST_FLAG_ALWAYS_HIT, CAST_FLAG_BINARY, CAST_FLAG_CANNOT_CRIT,
-        CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT,
+        CAST_FLAG_DISCOUNT_POWER_ON_MISS, CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT,
     };
 
     #[test]
@@ -5272,6 +5273,7 @@ mod roll_metadata_tests {
     #[test]
     fn source_roll_attributes_survive_import() {
         let spell = Spell {
+            attributes_ex1: 0x0800_0000,
             attributes_ex2: 0x2000_0000,
             attributes_ex3: 0x0004_0000,
             attributes_ex4: 1,
@@ -5279,7 +5281,10 @@ mod roll_metadata_tests {
         };
         assert_eq!(
             roll_cast_flags(&spell),
-            CAST_FLAG_CANNOT_CRIT | CAST_FLAG_ALWAYS_HIT | CAST_FLAG_IGNORE_RESISTANCES
+            CAST_FLAG_CANNOT_CRIT
+                | CAST_FLAG_ALWAYS_HIT
+                | CAST_FLAG_IGNORE_RESISTANCES
+                | CAST_FLAG_DISCOUNT_POWER_ON_MISS
         );
     }
 }
