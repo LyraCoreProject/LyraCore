@@ -36,6 +36,12 @@ symbol = "read"
 evidence = "Compatibility Manifest spells.modifier-high-mask; conformance/vmangos-port-census/spell.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
+description = "The importer reads neither the World Source's spell_mod nor its spell_effect_mod rows, which vmangos SpellModMgr::LoadSpellMods applies on top of spell_template, nor the hard-coded overrides that function sets. Hand overrides in importer/src/spell_overrides.rs cover a few of them, such as Holy Light's direct heal and Divine Favor's 0x80202000 mask; the other rows keep their spell_template values."
+path = "importer/src/spell_overrides.rs"
+symbol = "modifier_mask"
+evidence = "vmangos d9173eca src/game/Spells/SpellModMgr.cpp:72-287."
+
+[[known_gaps]]
 description = "spells.script: Selected source script names have no Module dispatcher."
 path = "importer/src/vmangos_spell.rs"
 symbol = "read"
@@ -54,10 +60,16 @@ symbol = "dummy_proc"
 evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::HandleDummyAuraProc case 12292 casts 12723 at a random unit near the victim and returns SPELL_AURA_PROC_FAILED, keeping the charge, when it finds none; dummy_proc returns Failed for 12292 and 18765."
 
 [[known_gaps]]
-description = "A crit chance spell modifier (SPELLMOD_CRITICAL_CHANCE) changes no crit roll. Cold Blood 14177 and Divine Favor 20216 carry only that modifier, so the next spell their family mask covers spends them and gets no crit bonus. Inner Focus and Elemental Mastery are spent through their cost modifier and also give no crit bonus."
+description = "A charged crit chance spell modifier, such as Cold Blood 14177, is spent by every cast whose crit roll would read it, even when the roll stops before it reads the modifier. vmangos keeps it when a weapon roll misses, is evaded or resisted, when the victim is a sitting Character, and when the cast reaches no unit target."
+path = "module/src/spell/spell_modifier.rs"
+symbol = "used_rows"
+evidence = "Source reading, not measured. At d9173eca, SpellCaster::RollMeleeOutcomeAgainst returns on an evade (SpellCaster.cpp:433), a miss (:479) or a mechanic resist (:494) before it reads Unit::GetSpellCritChance (:506); a dodge, parry or block spends it, as the Module does. Unit::GetSpellCritChance returns 100 for a sitting Character victim before Player::ApplySpellMod (Unit.cpp:5299), and only Spell::AddUnitTarget rolls a spell crit. Player::DropModCharge runs only inside ApplySpellMod."
+
+[[known_gaps]]
+description = "Holy Shock 20473, 20929 and 20930 do nothing. The importer keeps their dummy effect as an E_SCRIPTED effect with no script, so no Module code casts the damage spell (25912, 25911, 25902) at an enemy or the heal spell (25914, 25913, 25903) at a friend."
 path = "module/src/spell/cast/targeting.rs"
-symbol = "direct_spell_crit_chance"
-evidence = "Source reading, not measured. At d9173eca, Unit::GetSpellCritChance (Unit.cpp:5212) applies SPELLMOD_CRITICAL_CHANCE through Player::ApplySpellMod (Unit.cpp:5312); direct_spell_crit_chance and the heal crit read no spell modifier."
+symbol = "apply_delegating_effect"
+evidence = "Source reading, not measured. At d9173eca, src/scripts/spells/spell_paladin.cpp PaladinHolyShockScript::OnEffectExecute casts the heal at a friendly target and the damage spell otherwise; the World Source names the script spell_paladin_holy_shock, which is in the spells.script finding."
 
 [[known_gaps]]
 description = "A Trigger Child Cast uses and can spend a charged spell modifier that its parent cast already uses, because the parent spends its charges only after its effects. vmangos hides a charge that an in-flight cast took from every other cast."
@@ -338,6 +350,31 @@ function = "a_spell_outside_the_family_mask_spends_no_clearcasting"
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_crit_chance_modifier_is_kept_by_a_spell_that_cannot_crit_and_spent_by_the_crit_it_gives"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_crit_chance_modifier_makes_the_next_masked_heal_crit"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_crit_chance_modifier_makes_the_next_masked_weapon_strike_crit"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "divine_favor_makes_the_next_holy_light_or_flash_of_light_crit_and_ends_with_it"
+rung = "durable_module"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "divine_favor_and_improved_flash_of_light_cover_the_paladin_heals_vmangos_casts"
+rung = "unit"
+
+[[tests]]
 path = "module/tests/queued_strike.rs"
 function = "a_queued_strike_under_a_free_cost_modifier_is_free_and_spends_it_at_the_swing"
 rung = "durable_module"
@@ -360,6 +397,21 @@ rung = "unit"
 [[tests]]
 path = "module/src/spell/spell_modifier.rs"
 function = "natures_grace_is_kept_by_a_cast_natures_swiftness_made_instant"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/spell_modifier.rs"
+function = "a_crit_chance_modifier_adds_its_flat_percent_then_scales_by_its_percent"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/spell_modifier.rs"
+function = "a_crit_chance_modifier_is_used_only_by_a_cast_whose_crit_roll_reads_it"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/spell_modifier.rs"
+function = "a_spell_rolls_a_modified_crit_when_it_can_crit_with_a_damage_class_or_as_a_potion"
 rung = "unit"
 
 [[tests]]
@@ -855,6 +907,11 @@ rung = "unit"
 [[tests]]
 path = "module/src/combat/attack_table.rs"
 function = "a_creature_crits_with_a_spell_only_when_a_player_owns_it"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/attack_table.rs"
+function = "a_crit_chance_modifier_changes_a_spells_crit_band_after_the_skill_bonus"
 rung = "unit"
 
 [[tests]]

@@ -61,6 +61,7 @@ pub(crate) fn charge(
         crate::spell::ModifiedCast {
             began_at: crate::time::now(ctx),
             pays_cost: true,
+            rolls_crit: true,
         },
     );
     if payer.spendable_power(strike.power_type) < crate::spell::spell_cost(ctx, payer.guid, strike)

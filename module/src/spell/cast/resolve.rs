@@ -176,6 +176,7 @@ fn resolve_loaded_cast(
         crate::spell::ModifiedCast {
             began_at,
             pays_cost,
+            rolls_crit: crate::spell::rolls_modified_crit(hdr, effects),
         },
     );
 

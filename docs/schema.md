@@ -1258,8 +1258,13 @@ field. Packages claim the column.
 
 A spell modifier is an `A_SPELLMOD_FLAT` or `A_SPELLMOD_PCT` Aura row. `eff_p0` is the vmangos
 `SpellModOp` and `eff_p1` is the family mask. The row changes a spell of the same family that
-shares a bit of that mask, unless the spell has `SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS`. No crit
-roll reads the crit chance modifier (`SPELLMOD_CRITICAL_CHANCE`).
+shares a bit of that mask, unless the spell has `SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS`.
+
+A crit chance modifier (`SPELLMOD_CRITICAL_CHANCE`) changes the crit chance of a spell damage, heal
+or weapon roll in percent, as the last step of vmangos `Unit::GetSpellCritChance`: the chance plus
+the flat modifiers, scaled by the percent modifiers, and never below 0. A weapon roll applies it to
+the crit band after the weapon skill bonus and truncates the result to basis points. A Spell that
+cannot crit, or that has no damage class and is no potion, reads no crit chance modifier.
 
 The base value decides whether a modifier changes it, as vmangos `Player::ApplySpellMod` and
 `SpellEntry::GetCastTime` do:
@@ -1281,6 +1286,8 @@ spends its charges when its swing pays. The cast uses these rows:
   `game_pending_cast.began_at_micros` holds that time for a timed cast.
 - No flat cast-time row when a −100% cast-time modifier made the cast instant. In 1.11, Nature's
   Grace stopped being spent by a cast that Nature's Swiftness made instant.
+- A crit chance row, only when the Spell's crit roll reads it. A Spell whose effects deal or heal
+  nothing keeps it for the next Spell that can crit.
 
 ### Spell travel
 

@@ -20,6 +20,8 @@ pub struct NamedSpell {
     pub created_item: Option<i32>,
     pub ally_target_as_enemy: bool,
     pub direct_damage_target: Option<u8>,
+    /// The spell the vmangos script casts for the script effect this spell keeps as its own.
+    pub collapsed_child: Option<u32>,
 }
 
 const NAMED: NamedSpell = NamedSpell {
@@ -34,6 +36,7 @@ const NAMED: NamedSpell = NamedSpell {
     created_item: None,
     ally_target_as_enemy: false,
     direct_damage_target: None,
+    collapsed_child: None,
 };
 
 const fn script(name: &'static str, kind: u8) -> NamedSpell {
@@ -150,7 +153,13 @@ pub const NAMED_SPELLS: &[NamedSpell] = &[
         ..NAMED
     },
     script("Holy Light", E_HEAL),
-    script("Flash of Light", E_HEAL),
+    // vmangos Spell::EffectScriptEffect heals Flash of Light through 19993.
+    NamedSpell {
+        name: "Flash of Light",
+        script_kind: Some(E_HEAL),
+        collapsed_child: Some(19993),
+        ..NAMED
+    },
     script("Life Tap", E_CONVERT_RESOURCE),
     script("Charge", E_CHARGE),
     script("Blink", E_BLINK),
@@ -173,6 +182,17 @@ pub const NAMED_SPELLS: &[NamedSpell] = &[
 
 pub fn named(name: &str) -> Option<&'static NamedSpell> {
     NAMED_SPELLS.iter().find(|spell| spell.name == name)
+}
+
+// vmangos SpellModMgr::LoadSpellMods widens Divine Favor to Holy Light, which heals directly.
+const MODIFIER_MASKS: &[(u32, usize, u64)] = &[(20216, 0, 0x8020_2000)];
+
+/// The family mask vmangos gives a spell modifier effect in place of its source mask.
+pub fn modifier_mask(spell_id: u32, effect_index: usize) -> Option<u64> {
+    MODIFIER_MASKS
+        .iter()
+        .find(|&&(spell, index, _)| (spell, index) == (spell_id, effect_index))
+        .map(|&(_, _, mask)| mask)
 }
 
 /// The spell a vmangos spell script casts at each unit its spell hits, by script name.
