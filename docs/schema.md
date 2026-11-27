@@ -998,8 +998,9 @@ and `game_event_vendor_item` a vendor's item to the event its vmangos condition 
 `game_event_creature_data` holds a vmangos `game_event_creature_data` row: the template, the three
 virtual equipment item entries and the start and end spells a creature spawn's source guid takes
 for its event, each 0 when the row leaves it as it is. `game_event_mail` holds a vmangos
-`game_event_mail` row, and `game_event_started` each event this Shard has started and not yet
-stopped. No Package claims or reads these tables, so they stay out of the table catalogue.
+`game_event_mail` row, `game_event_started` each event this Shard has started and not yet
+stopped, and `game_event_mailing` the letters of one event start still to send. No Package claims
+or reads these tables, so they stay out of the table catalogue.
 
 An event is running while the Realm Clock is inside its start and end and within its length of the
 latest occurrence. A yearly event shorter than a year skips each 29 February since its start, so it
@@ -1073,10 +1074,16 @@ allowed explicit chances; a group with every member allowed rolls its stored cha
 rule whose event condition is `event.N` or `not-event.N` checks the event, whoever invoked it.
 
 Each pass first follows every event's start, as vmangos `ApplyNewEvent` does. An event that runs
-and is not in `game_event_started` is recorded there, and each of its `game_event_mail` rows sends
-a letter to every Character the Shard holds whose race is in the row's mask and, when the row
-names a quest, whose reward of that quest is recorded. The letter comes from the sender creature
-with the mail template's id, body and item, at once and marked returned so it cannot be returned,
+and is not in `game_event_started` is recorded there, and each of its `game_event_mail` rows is
+queued in `game_event_mailing`, which copies the row's values. A Character created after the start
+gets no letter: a guid in the Shard's own range counts only up to its guid high water at the start,
+and a guid from another range, which a Transfer brought, up to the highest guid the Shard held.
+Each pass sends at most `CHANGES_PER_PASS` letters of the queue, oldest mailing first, in guid
+order, to every Character the Shard holds whose race is in the row's mask and, when the row names
+a quest, whose reward of that quest is recorded; a mailing leaves the queue after its last
+Character, and a stop leaves queued letters to go out, as vmangos `MassMailMgr` does. The queue
+is a table, so a restart keeps it. The letter comes from the sender creature with the mail
+template's id, body and item, at once and marked returned so it cannot be returned,
 as vmangos `MassMailMgr` sends it. A missing mail template or item template sends nothing and logs
 the row. An event that stops, or that becomes disabled or zero length, leaves `game_event_started`,
 so its next start mails again, as vmangos `EnableEvent` stops an event it disables. A stop sends no
@@ -1085,8 +1092,7 @@ import has deleted and not yet written again, is not followed, so an import mail
 Each Shard mails the Characters it holds, except one still arriving by Transfer: the Shard it
 leaves sends that letter and mail routing takes it to the new home. On a split Realm a Character
 so gets one letter from its own World Shard; the known gaps in
-`conformance/features/world/game_events.toml` say when it can get two or none. One pass writes
-every letter of a start, with no limit per pass.
+`conformance/features/world/game_events.toml` say when it can get two or none.
 
 Before the `events` family is imported no link exists, and a creature population member's
 `event_ids` keep a member with a positive event out of its population's selection, as they did

@@ -18,6 +18,10 @@ pub(crate) mod character_owned_tripwire {
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
         (
+            &["game_event_mailing"],
+            "A Game Event mailing's next_guid and last_guid are a queue cursor and bound over Character guids, not a Character's rows; a deleted Character is no longer held, so the mailing skips it",
+        ),
+        (
             &["game_instance"],
             "A run's holder_guid outlives its holder: the Transfer cascade runs the delete sweeps when the holder leaves the Instance Shard, and a deleted holder's run routes nobody and is reaped when empty",
         ),

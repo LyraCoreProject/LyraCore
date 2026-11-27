@@ -1080,3 +1080,95 @@ fn an_equal_chance_member_takes_the_whole_rest_of_its_group_while_an_event_membe
         assert_eq!(loot_of_a_kill(&shard, wolf), [FIXTURE_BLADE]);
     }
 }
+
+/// A mail realm holding four Humans, the seeded Character first, and an Orc.
+fn crowded_festival_realm(name: &str) -> (Standalone, Vec<u64>) {
+    let (shard, offline_human) = festival_mail_realm(name);
+    let humans = vec![
+        CHARACTER,
+        offline_human,
+        offline_character(&shard, "Dancer", HUMAN),
+        offline_character(&shard, "Juggler", HUMAN),
+    ];
+    (shard, humans)
+}
+
+fn sorted(mut guids: Vec<u64>) -> Vec<u64> {
+    guids.sort_unstable();
+    guids
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_event_start_mails_its_recipients_over_several_passes_each_once() {
+    let (shard, humans) = crowded_festival_realm("game-event-mail-batches");
+    festival(&shard, VIRTUAL_START_SECS + 86_400, 1, Kind::Calendar);
+    shard.insert_row(
+        "game_event_override",
+        &[("event_entry", &FESTIVAL), ("running", &true)],
+    );
+
+    for sent in 1..=humans.len() {
+        shard.assert_call("debug_run_game_event_pass", &["1"]);
+        if sent == 1 {
+            offline_character(&shard, "Latecomer", HUMAN);
+        }
+        let mailed = festival_mail(&shard);
+        assert_eq!(
+            mailed.len(),
+            sent,
+            "a pass with room for one letter sends one"
+        );
+        let mut distinct = mailed.clone();
+        distinct.dedup();
+        assert_eq!(distinct, mailed, "no Character is mailed twice");
+    }
+    assert_eq!(
+        festival_mail(&shard),
+        sorted(humans.clone()),
+        "every Human of the start is mailed; the Orc and the Human created after it are not"
+    );
+
+    shard.assert_call("debug_run_game_event_pass", &["1"]);
+    assert_eq!(
+        festival_mail(&shard),
+        sorted(humans),
+        "a finished mailing sends nothing on the next pass"
+    );
+    assert!(
+        shard
+            .query_rows("SELECT mailing_id FROM game_event_mailing")
+            .is_empty(),
+        "a finished mailing leaves the queue"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_stop_part_way_through_a_mailing_leaves_the_rest_of_its_letters_to_go() {
+    let (shard, humans) = crowded_festival_realm("game-event-mail-stop");
+    festival(&shard, VIRTUAL_START_SECS + 30, 10, Kind::Calendar);
+    shard.assert_call("debug_clear_schedule", &["game_event_schedule"]);
+    shard.assert_call("debug_advance_roll_batch", &["1200"]);
+
+    shard.assert_call("debug_run_game_event_pass", &["1"]);
+    assert_eq!(festival_mail(&shard).len(), 1, "the start sends one letter");
+
+    shard.insert_row(
+        "game_event_override",
+        &[("event_entry", &FESTIVAL), ("running", &false)],
+    );
+    shard.assert_call("debug_run_game_event_pass", &["1"]);
+    assert_eq!(
+        festival_mail(&shard).len(),
+        2,
+        "the stop does not cancel the mailing"
+    );
+
+    shard.assert_call("debug_run_game_event_pass", &["500"]);
+    assert_eq!(
+        festival_mail(&shard),
+        sorted(humans),
+        "the rest of the Humans get their letter, once"
+    );
+}

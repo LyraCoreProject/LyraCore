@@ -355,6 +355,15 @@ writes none. An imported row for an event that is already running sends nothing 
 next start, as vmangos sends nothing for an event that resumes. A rerun writes the same rows and
 sends nothing.
 
+### Game event mailing migration
+
+The private `game_event_mailing` table is new and starts empty. No existing column or reducer
+argument changes, so no Package builds a changed row. An event already running at the publish has
+no mailing, and one that starts afterwards queues its mail. A publish or restart keeps a queued
+mailing, which carries on at its cursor on the next minute pass. A mailing copies the values of its
+`game_event_mail` row, so an import that replaces the mail rows leaves a queued mailing as it was,
+and the next start queues the new rows.
+
 ### Game event quest and vendor migration
 
 The private `game_event_quest` and `game_event_vendor_item` tables are new and start empty. No

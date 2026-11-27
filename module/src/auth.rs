@@ -551,6 +551,18 @@ pub(crate) fn require_guid_range(ctx: &ReducerContext) -> Result<(), String> {
     may_mint(range, mark.unwrap_or(0))
 }
 
+pub(crate) fn own_guid_range(ctx: &ReducerContext) -> Option<(u64, u64)> {
+    ctx.db
+        .game_guid_range()
+        .id()
+        .find(0)
+        .map(|row| (row.base, row.size))
+}
+
+pub(crate) fn guid_high_water(ctx: &ReducerContext) -> Option<u64> {
+    read_high_water(ctx).map(|row| row.high_water)
+}
+
 pub(crate) fn in_guid_range(range: Option<(u64, u64)>, guid: u64) -> bool {
     let Some((base, size)) = range else {
         return false;
