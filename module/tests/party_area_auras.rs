@@ -533,8 +533,8 @@ fn insert_area_aura(shard: &Standalone, fixture: &Fixture) {
             ("target", &T_SELF),
             ("base_points", &fixture.points),
             ("radius_yd", &RADIUS_YD),
-            ("p0", &i32::from(STAT_STR)),
-            ("p0_kind", &P_STAT_ID),
+            ("p_0", &i32::from(STAT_STR)),
+            ("p_0_kind", &P_STAT_ID),
         ],
     );
 }
@@ -560,8 +560,8 @@ fn insert_summon_pet(shard: &Standalone) {
             ("spell_id", &SUMMON_PET),
             ("kind", &E_SUMMON_PET),
             ("target", &T_SELF),
-            ("p0", &TEST_WOLF_ENTRY),
-            ("p0_kind", &P_ENTRY),
+            ("p_0", &TEST_WOLF_ENTRY),
+            ("p_0_kind", &P_ENTRY),
         ],
     );
 }
