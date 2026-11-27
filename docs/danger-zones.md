@@ -1029,6 +1029,14 @@ quest givers, bankers and auctioneers of a reputation faction refuse at Unfriend
 otherwise serve the Character, at war or not, as vmangos `CanInteractWithNPC` does. A quest giver
 hides its mark only at Hostile or below.
 
+### Resistance aura layer migration
+
+Reimport `spell`, then call `debug_repair_after_publish` before play resumes. `A_MOD_RESISTANCE`
+effects gain a layer in `p1`: 0 for flat resistance as before, 1 for source aura 83 and 2 for
+source aura 142. Until the reimport every layer is 0 and Bear, Dire Bear and Moonkin Form, Thick
+Hide, Toughness and Lay on Hands add flat armor instead of multiplying the armor from items.
+Repair copies the layer to stored Auras. No table schema changes.
+
 ### Global cooldown migration
 
 `game_spell.gcd_ms` now comes from the source `startRecoveryTime`. An older import set 1500 for

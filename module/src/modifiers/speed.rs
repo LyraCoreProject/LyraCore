@@ -97,18 +97,21 @@ mod tests {
                 parameter: i32::from(SPEED_MOVE),
                 amount: -30,
                 stacks: 4,
+                p1: 0,
             },
             AuraAmount {
                 kind: A_MOD_SPEED,
                 parameter: i32::from(SPEED_MOVE),
                 amount: 10,
                 stacks: 0,
+                p1: 0,
             },
             AuraAmount {
                 kind: A_MOD_SPEED,
                 parameter: i32::from(SPEED_SWING),
                 amount: 50,
                 stacks: 1,
+                p1: 0,
             },
         ];
         assert_eq!(speed_total(auras, SPEED_MOVE), -110);
@@ -151,18 +154,21 @@ mod tests {
             parameter: i32::from(SPEED_MOVE),
             amount: -30,
             stacks: 1,
+            p1: 0,
         };
         let mount = AuraAmount {
             kind: A_MOD_SPEED,
             parameter: i32::from(SPEED_MOUNTED),
             amount: 60,
             stacks: 1,
+            p1: 0,
         };
         let mounted = AuraAmount {
             kind: A_MOUNTED,
             parameter: 1147,
             amount: 0,
             stacks: 1,
+            p1: 0,
         };
         assert_eq!(run_speed(7.0, [movement, mount, mounted]), 9.1);
         assert_eq!(run_speed(7.0, [mount, mounted]), 11.2);
@@ -176,6 +182,7 @@ mod tests {
             parameter: i32::from(SPEED_MOVE),
             amount: 25,
             stacks: 1,
+            p1: 0,
         };
         let wisp = AuraAmount {
             amount: 50,
@@ -193,6 +200,7 @@ mod tests {
             parameter: i32::from(SPEED_MOVE),
             amount: 50,
             stacks: 1,
+            p1: 0,
         };
         let always = AuraAmount {
             parameter: i32::from(SPEED_MOVE_ALWAYS),
@@ -213,6 +221,7 @@ mod tests {
             parameter: i32::from(SPEED_MOVE_ALWAYS),
             amount: 10,
             stacks: 1,
+            p1: 0,
         };
         let not_stack = AuraAmount {
             parameter: i32::from(SPEED_MOVE_NOT_STACK),
@@ -234,6 +243,7 @@ mod tests {
             parameter: i32::from(SPEED_SWIM),
             amount: 25,
             stacks: 1,
+            p1: 0,
         };
         let wisp = AuraAmount {
             amount: 50,

@@ -33,7 +33,7 @@ use crate::spell_snapshot::{
 };
 use lyracore_importer::spell_kind::{
     aura_mod_to_kind, correct_script_effect_kind, dismount_effect_kind, equip_aura_supported,
-    instant_effect_to_kind,
+    instant_effect_to_kind, resistance_layer,
 };
 use lyracore_importer::spell_overrides::{self, NamedSpell};
 use std::path::Path;
@@ -1168,6 +1168,8 @@ fn push_spell_effect_rows(
             }
         } else if kind == A_MOD_SKILL {
             i32::from(s.effect_aura[i] == 98)
+        } else if kind == A_MOD_RESISTANCE {
+            AuraMod::from_int(s.effect_aura[i]).map_or(0, resistance_layer)
         } else if kind == E_SUMMON_HOSTILE {
             s.requires_spell_focus as i32
         } else if kind == E_POWER_BURN || (kind == A_ABSORB && s.effect_aura[i] == MANA_SHIELD_AURA)
@@ -3340,6 +3342,23 @@ mod tests {
         dbc.spells = read_spells(&bytes).unwrap();
         let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
         assert_eq!((rows.effects[0].kind, rows.effects[0].p1), (A_FLAG, 149));
+    }
+
+    #[test]
+    fn resistance_auras_keep_their_unit_modifier_layer_in_p1() {
+        let layers = |aura: u32| {
+            let mut bytes = source_spell_fixture();
+            for (column, value) in [(61, 6u32), (91, aura), (106, 1)] {
+                bytes[20 + column * 4..24 + column * 4].copy_from_slice(&value.to_le_bytes());
+            }
+            let mut dbc = fixture_tables();
+            dbc.spells = read_spells(&bytes).unwrap();
+            let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+            (rows.effects[0].kind, rows.effects[0].p0, rows.effects[0].p1)
+        };
+        assert_eq!(layers(22), (A_MOD_RESISTANCE, 1, 0));
+        assert_eq!(layers(83), (A_MOD_RESISTANCE, 1, 1));
+        assert_eq!(layers(142), (A_MOD_RESISTANCE, 1, 2));
     }
 
     #[test]

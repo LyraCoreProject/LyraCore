@@ -1318,6 +1318,76 @@ fn bear_form_shows_rage_and_its_passives_until_the_client_cancels_it() {
     assert!(!BEAR_PASSIVES.iter().any(|passive| held.contains(passive)));
 }
 
+const DIRE_BEAR_PASSIVE: u32 = 9635;
+
+fn add_armor_effect(shard: &Standalone, spell: u32, index: u8, amount: i32, layer: i32) {
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            (
+                "id",
+                &lyracore_package_delta::packed_spell_effect_id(spell, index),
+            ),
+            ("spell_id", &spell),
+            ("effect_index", &index),
+            ("kind", &A_MOD_RESISTANCE),
+            ("base_points", &amount),
+            ("target", &T_SELF),
+            ("p_0", &i32::from(RESIST_ARMOR)),
+            ("p_0_kind", &P_SCHOOL_MASK),
+            ("p_1", &layer),
+        ],
+    );
+}
+
+/// The druid's armor as a swing against it reads it.
+fn druid_armor(shard: &Standalone) -> u32 {
+    shard.assert_call("debug_compute_swing", &[DRUID_GUID, DRUID_GUID]);
+    let note = shard.query_rows("SELECT note FROM game_debug_readout WHERE key = 'swing'")[0]
+        ["note"]
+        .clone();
+    let armor = note
+        .split("(armor ")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next());
+    armor.and_then(|armor| armor.parse().ok()).unwrap()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn bear_and_dire_bear_forms_multiply_the_armor_from_items_and_nothing_else() {
+    let (shard, _wire) = feral_druid("forms-druid-armor");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET stat_armor = 100 WHERE entry = {RECRUITS_TUNIC}"
+    ));
+    shard.assert_call(
+        "debug_grant_item",
+        &[DRUID_GUID, &RECRUITS_TUNIC.to_string(), "1"],
+    );
+    let slot = shard.query_rows(&format!(
+        "SELECT slot FROM game_item_instance WHERE owner_guid = 1 AND entry = {RECRUITS_TUNIC}"
+    ))[0]["slot"]
+        .clone();
+    shard.assert_call("debug_equip_item", &[DRUID_GUID, &slot]);
+    shard.assert_sql("UPDATE game_world_entity SET armor = 40 WHERE guid = 1");
+    add_armor_effect(&shard, 1178, 1, 180, RESISTANCE_BASE_PCT);
+    add_armor_effect(&shard, 1178, 2, 30, RESISTANCE_TOTAL_VALUE);
+    add_armor_effect(&shard, DIRE_BEAR_PASSIVE, 1, 360, RESISTANCE_BASE_PCT);
+    add_armor_effect(&shard, DIRE_BEAR_PASSIVE, 2, 30, RESISTANCE_TOTAL_VALUE);
+    assert_eq!(
+        druid_armor(&shard),
+        140,
+        "40 agility armor and 100 template"
+    );
+
+    enter(&shard, BEAR_FORM);
+    assert_eq!(druid_armor(&shard), 40 + 100 * 28 / 10 + 30);
+    enter(&shard, DIRE_BEAR_FORM);
+    assert_eq!(druid_armor(&shard), 40 + 100 * 46 / 10 + 30);
+    leave(&shard, DIRE_BEAR_FORM);
+    assert_eq!(druid_armor(&shard), 140);
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_client_cancels_one_feral_form_before_casting_the_next() {
