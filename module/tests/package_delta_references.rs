@@ -962,6 +962,14 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
             "under the 500 ms floor",
         ),
         (
+            with_form_field(r#""display_scale":{"type":"f32","value":0.0}"#),
+            "display scale 0, which is not finite and positive",
+        ),
+        (
+            with_form_field(r#""display_scale":{"type":"f32","value":-0.8}"#),
+            "display scale -0.8, which is not finite and positive",
+        ),
+        (
             with_form_field(&format!(
                 r#""entry_chance_spell":{{"type":"u32","value":{MISSING_SPELL}}}"#
             )),

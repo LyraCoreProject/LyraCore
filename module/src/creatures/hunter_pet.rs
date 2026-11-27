@@ -1,7 +1,6 @@
 use lyracore_shared::spell::taxonomy::E_REVIVE_PET;
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
-use super::catalogue::game_creature_display;
 use super::pet::game_pet_command;
 use crate::{
     game_creature_family, game_creature_spawn, game_creature_template, game_spell_effect,
@@ -676,7 +675,7 @@ fn materialize(
     } else {
         live.display_id = pet.display_id;
         live.native_display_id = pet.display_id;
-        live.scale_x = model_scale(ctx, template, pet.display_id);
+        live.scale_x = super::catalogue::native_scale(ctx, template, pet.display_id);
     }
     live.faction_template = owner.faction_template;
     let pet_guid = live.guid;
@@ -711,19 +710,6 @@ fn restored_vitals(
 fn health_at_percent(max_health: u32, percent: u32) -> u32 {
     ((u64::from(max_health) * u64::from(percent.min(100))) / 100)
         .clamp(1, u64::from(max_health.max(1))) as u32
-}
-
-pub(crate) fn model_scale(
-    ctx: &ReducerContext,
-    template: &CreatureTemplate,
-    display_id: u32,
-) -> f32 {
-    ctx.db
-        .game_creature_display()
-        .by_entry()
-        .filter(template.entry)
-        .find(|display| display.display_id == display_id)
-        .map_or(template.scale, |display| display.scale)
 }
 
 fn unix_seconds(at: Timestamp) -> u32 {

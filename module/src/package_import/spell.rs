@@ -134,6 +134,14 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                         form.natural_attack_ms
                     ));
                 }
+                if !form.display_scale.is_finite() || form.display_scale <= 0.0 {
+                    return Err(format!(
+                        "`game_form` row {} claims display scale {}, which is not finite and \
+                         positive",
+                        row.key(),
+                        form.display_scale
+                    ));
+                }
                 if !enters_form(form.spell_id, form_id) {
                     return Err(format!(
                         "`game_form` row {} names spell {}, which does not enter the Form",

@@ -1703,6 +1703,7 @@ const TAUREN: u8 = 6;
 const WOLF_MODEL_TEMPLATE: u32 = 12861;
 const WOLF_MODEL: u32 = 1825;
 const WOLF_TRANSFORM: u32 = 5090001;
+const WOLF_SCALE: f32 = 1.5;
 
 /// A level 20 druid of `race` who can enter the feral Forms.
 fn druid_of_race(name: &str, race: u8) -> Standalone {
@@ -1787,8 +1788,8 @@ fn a_stance_keeps_the_units_own_model() {
 fn a_transform_during_a_form_wins_and_the_form_model_returns_when_it_ends() {
     let shard = druid_of_race("forms-transform-model", NIGHT_ELF);
     shard.assert_sql(&format!(
-        "UPDATE game_creature_template SET entry = {WOLF_MODEL_TEMPLATE}, display_id = {WOLF_MODEL} \
-         WHERE entry = {}",
+        "UPDATE game_creature_template SET entry = {WOLF_MODEL_TEMPLATE}, display_id = {WOLF_MODEL}, \
+         scale = {WOLF_SCALE} WHERE entry = {}",
         lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY
     ));
     insert_spell(
@@ -1801,11 +1802,9 @@ fn a_transform_during_a_form_wins_and_the_form_model_returns_when_it_ends() {
     enter(&shard, CAT_FORM);
     assert_eq!(model(&shard).0, 892);
     cast(&shard, WOLF_TRANSFORM);
-    assert_eq!(
-        model(&shard).0,
-        WOLF_MODEL,
-        "the transform wins over Cat Form"
-    );
+    let (shown, _, scale) = model(&shard);
+    assert_eq!(shown, WOLF_MODEL, "the transform wins over Cat Form");
+    assert_scale(scale, WOLF_SCALE);
     shard.assert_call(
         "debug_shed_spell_auras",
         &[WARRIOR, &WOLF_TRANSFORM.to_string()],

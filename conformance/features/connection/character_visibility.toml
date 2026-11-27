@@ -287,12 +287,32 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/src/native/visibility.rs"
-function = "a_character_whose_scale_changes_sends_only_the_scale"
+function = "a_character_whose_model_changes_sends_scale_and_display_id_in_one_mask"
 rung = "unit"
 
 [[tests]]
 path = "importer/src/spell_form.rs"
 function = "the_utility_forms_show_the_units_own_pool"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell_form.rs"
+function = "the_three_feral_forms_fight_with_natural_attacks_and_clear_snares"
+rung = "unit"
+
+[[tests]]
+path = "module/src/creatures/catalogue.rs"
+function = "a_native_scale_without_matching_display_rows_is_the_templates"
+rung = "unit"
+
+[[tests]]
+path = "module/src/creatures/catalogue.rs"
+function = "a_native_scale_with_display_rows_is_the_scale_of_its_model"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/reach.rs"
+function = "a_character_in_a_form_reaches_by_the_form_scale_over_the_form_models_scale"
 rung = "unit"
 
 [vmangos]
@@ -380,3 +400,9 @@ description = "A reserved rage or energy pool neither decays nor regenerates; on
 path = "module/src/combat/regeneration.rs"
 symbol = "regenerate_characters"
 evidence = "Source reading, not measured. At d9173eca, Player.cpp Player::RegenerateAll regenerates rage, energy and mana whatever the shown power type."
+
+[[known_gaps]]
+description = "A Character's base scale is always 1, where vmangos gives it its native display's scale, so a Character's scale_x, and the Form scale on top of it, differ from vmangos for a race whose native display scale is not 1, such as a tauren."
+path = "module/src/world/character_entity.rs"
+symbol = "build_player_entity"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::InitPlayerDisplayIds sets the object scale from GetScaleForDisplayId at line 9405, and Unit::SetTransformScale multiplies the current scale by the Form's scale over the previous override at lines 10967-10976."

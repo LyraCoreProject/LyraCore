@@ -776,6 +776,7 @@ identifier must fit 24 bits.
   - a Form's `spell_id` has no `A_SHAPESHIFT` effect for that Form, or its power rule or power
     type is unknown; power type 255 shows the unit's own pool;
   - a Form's `natural_attack_ms` is not zero and is under 500 ms;
+  - a Form's `display_scale` is not finite and positive;
   - a Form in the plan, or any Form whose `entry_chance_spell` is a Package spell, names an
     `entry_chance_spell` that does not exist after the plan;
   - a plan row gives a spell an `A_FORM_ENTRY_CHANCE` effect while the spell lacks

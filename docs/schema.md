@@ -572,8 +572,10 @@ leaves it, its passives and its Form Set rows in place.
 - **Model.** `alliance_display_id`, `horde_display_id` and `display_scale` give the unit's model
   and scale in the Form, as vmangos `GetShapeshiftDisplayInfo` does: a Character of the Horde takes
   the Horde model, every other unit the Alliance one, and a model of 0 keeps the unit's own. A
-  transform Aura wins over the Form's model and the Form's model returns when it ends; leaving the
-  Form restores the unit's native model and scale. The stances, Shadowform and Stealth have no model.
+  transform Aura wins over the Form's model and shows at its creature's scale, and the Form's model
+  and scale return when it ends; leaving the Form restores the unit's native model and scale. A
+  Character's base scale is 1 and a creature's is its template's, and a model's scale multiplies it.
+  Combat reach follows the shown scale, as vmangos `Unit::UpdateModelData` does. The stances, Shadowform and Stealth have no model.
 - **1.12 client presentation.** `client_form` is the form byte the 1.12 client reads from
   `UNIT_FIELD_BYTES_1`. It is a projection, never the Form's identity, so a Form a client does not
   know can name a byte it does. A Package Form's byte is its fallback on the 1.12 client, and the

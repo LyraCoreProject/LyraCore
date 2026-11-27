@@ -1,6 +1,6 @@
 use spacetimedb::ReducerContext;
 
-use crate::creatures::catalogue::game_display_combat_reach;
+use crate::creatures::catalogue::{game_display_combat_reach, DisplayCombatReach};
 use crate::WorldEntity;
 
 // vmangos DEFAULT_COMBAT_REACH, BASE_MELEERANGE_OFFSET, ATTACK_DISTANCE and LEEWAY_BONUS_RANGE.
@@ -48,12 +48,22 @@ pub(crate) fn combat_reach(ctx: &ReducerContext, unit: &WorldEntity) -> f32 {
     let Some(display) = reaches.display_id().find(unit.display_id) else {
         return DEFAULT_COMBAT_REACH_YD;
     };
-    // vmangos `Unit::InitPlayerDisplayIds` gives a Character its native display's scale.
+    let native_scale = reaches
+        .display_id()
+        .find(unit.native_display_id)
+        .map(|native| native.display_scale);
+    scaled_reach(&display, native_scale, unit)
+}
+
+fn scaled_reach(
+    display: &DisplayCombatReach,
+    native_display_scale: Option<f32>,
+    unit: &WorldEntity,
+) -> f32 {
+    // vmangos `Unit::InitPlayerDisplayIds` gives a Character its native display's scale, and a Form
+    // or transform multiplies it; `scale_x` holds only that multiplier for a Character.
     let unit_scale = if unit.is_player() {
-        reaches
-            .display_id()
-            .find(unit.native_display_id)
-            .map_or(1.0, |native| native.display_scale)
+        native_display_scale.unwrap_or(1.0) * unit.scale_x
     } else if unit.scale_x > 0.0 {
         unit.scale_x
     } else {
@@ -114,6 +124,28 @@ mod tests {
             moving: true,
             ..body
         }
+    }
+
+    fn reach_row(combat_reach: f32, display_scale: f32) -> DisplayCombatReach {
+        DisplayCombatReach {
+            display_id: 1,
+            combat_reach,
+            display_scale,
+        }
+    }
+
+    #[test]
+    fn a_character_in_a_form_reaches_by_the_form_scale_over_the_form_models_scale() {
+        let mut cat = crate::helpers::tests::entity(1, 0, 0, 0, 0);
+        cat.type_mask = lyracore_shared::constants::type_mask::PLAYER_BIT;
+        let cat_model = reach_row(2.0, 1.0);
+        assert_eq!(scaled_reach(&cat_model, Some(1.25), &cat), 2.5, "no Form");
+        cat.scale_x = 0.8;
+        let reach = scaled_reach(&cat_model, Some(1.25), &cat);
+        assert!(
+            (reach - 2.0).abs() < 1e-6,
+            "Cat Form scales the native scale: {reach}"
+        );
     }
 
     #[test]
