@@ -3,7 +3,7 @@ mod support;
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use std::collections::BTreeMap;
 
-use support::Standalone;
+use support::{actor, Standalone};
 
 fn chances(shard: &Standalone, attacker: &str, target: &str) -> [u32; 5] {
     shard.assert_call("debug_compute_swing", &[attacker, target]);
@@ -108,6 +108,56 @@ fn white_melee_chances_follow_catalogue_skills_and_defender_eligibility() {
     assert_eq!([incoming[0], incoming[4]], [440, 560]);
     let pvp = chances(&shard, "1", "1");
     assert_eq!([pvp[0], pvp[4]], [500, 500]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_crits_a_sitting_character_with_every_swing_but_not_a_sitting_creature() {
+    let mut shard = Standalone::start("white-melee-sitting");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    shard.assert_sql("UPDATE game_character SET class = 1, level = 60 WHERE guid = 1");
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    shard.assert_sql("UPDATE game_world_entity SET simulation_indexed = false, level = 60, x = 0, y = 0, orientation = 0 WHERE guid = 1");
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
+    );
+    let target = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ))[0]["guid"]
+        .clone();
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET simulation_indexed = false, level = 60, x = 2, y = 0, orientation = 3.1415927 WHERE guid = {target}"
+    ));
+    let standing = chances(&shard, &target, "1");
+    assert!(standing[0] > 0 && standing[4] < 10_000, "{standing:?}");
+
+    for (state, name) in [("1", "sitting"), ("3", "sleeping"), ("8", "kneeling")] {
+        shard.assert_call("gw_set_stand_state", &[&actor(1), state]);
+        assert_eq!(
+            chances(&shard, &target, "1"),
+            [0, 0, 0, 0, 10_000],
+            "vmangos always crits a {name} Character"
+        );
+    }
+    shard.assert_call("gw_set_stand_state", &[&actor(1), "0"]);
+    assert_eq!(chances(&shard, &target, "1"), standing);
+
+    let wolf_bytes: u32 = shard.query_rows(&format!(
+        "SELECT unit_bytes_1 FROM game_world_entity WHERE guid = {target}"
+    ))[0]["unit_bytes_1"]
+        .parse()
+        .unwrap();
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_bytes_1 = {} WHERE guid = {target}",
+        (wolf_bytes & !0xFF) | 1
+    ));
+    let sitting_wolf = chances(&shard, "1", &target);
+    assert_eq!(sitting_wolf[0], 0, "a sitting target is never missed");
+    assert!(sitting_wolf[4] < 10_000, "{sitting_wolf:?}");
 }
 
 const DISARM: u32 = 5_090_411;

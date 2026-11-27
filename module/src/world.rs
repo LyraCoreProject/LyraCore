@@ -384,6 +384,12 @@ impl WorldEntity {
         self.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0
     }
 
+    /// vmangos `Unit::IsStandingUp`: the unit stands, or lies dead.
+    pub(crate) fn is_standing_up(&self) -> bool {
+        let state = self.unit_bytes_1 & STAND_STATE_MASK;
+        state == STAND_STATE_STAND || state == STAND_STATE_DEAD
+    }
+
     /// vmangos `GetSpellCritChance`: a creature crits with spells only when a player owns it.
     pub(crate) fn crits_with_spells(&self) -> bool {
         self.is_player()
@@ -931,8 +937,8 @@ pub(crate) fn apply_set_sheathed(
 const PLAYER_STAND_STATES: [u8; 4] = [0, 1, 3, 8];
 
 /// The stand state is the low byte of `unit_bytes_1`.
-pub(crate) const STAND_STATE_MASK: u32 = 0xFF;
-pub(crate) const STAND_STATE_STAND: u32 = 0;
+const STAND_STATE_MASK: u32 = 0xFF;
+const STAND_STATE_STAND: u32 = 0;
 const STAND_STATE_DEAD: u32 = 7;
 
 // No alive check: the client sits a released ghost.
@@ -959,12 +965,7 @@ pub(crate) fn stand_up_on_damage(ctx: &ReducerContext, target_guid: u64) {
     let Some(mut target) = entities.guid().find(target_guid) else {
         return;
     };
-    let state = target.unit_bytes_1 & STAND_STATE_MASK;
-    if !target.is_player()
-        || target.mount_display_id != 0
-        || state == STAND_STATE_STAND
-        || state == STAND_STATE_DEAD
-    {
+    if !target.is_player() || target.mount_display_id != 0 || target.is_standing_up() {
         return;
     }
     target.unit_bytes_1 &= !STAND_STATE_MASK;
