@@ -378,6 +378,7 @@ mod fixture {
         spell.equipped_item_class = 2;
         spell.equipped_item_subclass_mask = 262156;
         spell.damage_class = 3;
+        spell.speed_yps = 40.0;
         spell.cast_flags = lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
         arm_ranged_spell(ctx, character_guid, spell, vec![], 46)
     }
@@ -442,6 +443,7 @@ mod fixture {
         spell.equipped_item_class = 2;
         spell.equipped_item_subclass_mask = 524288;
         spell.damage_class = 1;
+        spell.speed_yps = 20.0;
         spell.cast_flags = lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
         arm_ranged_spell(ctx, character_guid, spell, vec![], 228)
     }
@@ -500,6 +502,7 @@ mod fixture {
         spell.equipped_item_class = 2;
         spell.equipped_item_subclass_mask = 65536;
         spell.damage_class = 3;
+        spell.speed_yps = 20.0;
         let mut strike = crate::SpellEffect::blank(2764, 0);
         strike.kind = crate::spell::E_WEAPON_STRIKE;
         strike.base_points = 0;

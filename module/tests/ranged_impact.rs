@@ -34,6 +34,10 @@ const RESIST_SEED_STATE: u32 = 6;
 const SHOT_TICKS: &str = "4";
 // 20 ticks of 50 ms pass the longest flight in these tests.
 const FLIGHT_TICKS: &str = "20";
+// Throw's Spell.dbc Speed carries it the 15 yards in 750 ms.
+const THROW_SPEED_YPS: f32 = 20.0;
+const BEFORE_THROW_LANDS_TICKS: &str = "14";
+const PAST_THROW_LANDING_TICKS: &str = "2";
 const STRIKE: u32 = 5_121_201;
 const PROC_WATCH: u32 = 5_121_202;
 const ABSORB_SHIELD: u32 = 5_121_203;
@@ -223,6 +227,29 @@ fn a_cast_ranged_strike_is_partly_blocked_by_a_facing_creature_and_reports_it() 
         health(&standalone, wolf),
         WOLF_HEALTH - number(blocked, "damage") - number(unblocked, "damage")
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_cast_ranged_strike_lands_when_its_own_speed_carries_it_to_the_target() {
+    let mut standalone = Standalone::start("ranged-impact-strike-travel");
+    let wolf = stage(&mut standalone);
+    stage_strike(&standalone, 40);
+    face_each_other(&standalone, wolf);
+    seed_caster(&standalone, wolf, CLEAR_CASTER_STATE);
+
+    standalone.assert_call(
+        "debug_cast_at",
+        &[&PLAYER.to_string(), &STRIKE.to_string(), &wolf.to_string()],
+    );
+    standalone.assert_call("debug_advance_roll_batch", &[BEFORE_THROW_LANDS_TICKS]);
+    assert_eq!(
+        health(&standalone, wolf),
+        WOLF_HEALTH,
+        "the strike is still in flight after 700 ms"
+    );
+    standalone.assert_call("debug_advance_roll_batch", &[PAST_THROW_LANDING_TICKS]);
+    assert!(health(&standalone, wolf) < WOLF_HEALTH, "the strike lands");
 }
 
 #[test]
@@ -420,6 +447,7 @@ fn stage_strike(standalone: &Standalone, weapon_damage: u32) {
             ("spell_id", &STRIKE),
             ("name", &"Ranged strike fixture"),
             ("range_yd", &30),
+            ("speed_yps", &THROW_SPEED_YPS),
             ("school_mask", &PHYSICAL),
             ("attributes", &STRIKE_ATTRIBUTES),
             ("damage_class", &DAMAGE_CLASS_RANGED),

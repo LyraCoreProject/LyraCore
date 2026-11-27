@@ -622,7 +622,7 @@ fn insert_area_spell(shard: &Standalone, spell_id: u32, duration_ms: u32, channe
     );
 }
 
-// A zero range skips the range check and the projectile flight, so a direct hit lands in its cast.
+// A zero range skips the range check, and without a speed a direct hit lands in its cast.
 fn insert_spell(shard: &Standalone, spell_id: u32, spell: &[Field], effect: &[Field]) {
     let name = format!("Channelled ground area fixture {spell_id}");
     let mut spell_row: Vec<Field> = vec![

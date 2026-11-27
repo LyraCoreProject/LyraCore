@@ -787,6 +787,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         range_yd: 30,
         school_mask: 4,
         damage_class: 1,
+        speed_yps: 24.0,
         ..Spell::blank(133, "Fireball")
     });
     effect(133, 0, 0x01, 20, 0, 1, 0, 0);

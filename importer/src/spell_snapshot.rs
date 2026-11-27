@@ -55,6 +55,7 @@ pub(crate) struct SpellHeaderRow {
     pub(crate) channel_interrupt_flags: u32,
     pub(crate) prevention_type: u8,
     pub(crate) max_affected_targets: u32,
+    pub(crate) speed_yps: f32,
 }
 
 impl SpellHeaderRow {
@@ -124,6 +125,7 @@ impl SpellHeaderRow {
                 "max_affected_targets",
                 FieldValue::U32(self.max_affected_targets),
             ),
+            ("speed_yps", FieldValue::F32(self.speed_yps)),
         ]
     }
 
@@ -403,6 +405,7 @@ mod tests {
             channel_interrupt_flags: 0,
             prevention_type: 1,
             max_affected_targets: 5,
+            speed_yps: 24.0,
         }
     }
 
@@ -466,7 +469,7 @@ mod tests {
         assert!(sql.contains(",18446744073709551615,"), "{sql}");
         assert!(
             sql.ends_with(
-                ",true,0,0,3,18446744073709551615,0,0,0,8000,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,133,15,0,1,5)"
+                ",true,0,0,3,18446744073709551615,0,0,0,8000,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,133,15,0,1,5,24.0)"
             ),
             "{sql}"
         );
@@ -481,7 +484,7 @@ mod tests {
         spell.single_target_key = 99;
         assert!(spell
             .sql_values()
-            .ends_with(",13000,64,12,99,0,0,0,0,0,0,0,-1,0,0,0,0,0,133,15,0,1,5)"));
+            .ends_with(",13000,64,12,99,0,0,0,0,0,0,0,-1,0,0,0,0,0,133,15,0,1,5,24.0)"));
 
         let mut effect = effect(133, 0);
         effect.points_per_combo = 3.5;

@@ -70,6 +70,7 @@ game_spell interrupt_flags 2
 game_spell channel_interrupt_flags 4
 game_spell prevention_type 1
 game_spell max_affected_targets 0
+game_spell speed_yps 0.0
 game_item_template damage_school 0
 game_item_template lock_id 0
 game_item_template money_min 0

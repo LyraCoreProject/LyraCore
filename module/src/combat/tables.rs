@@ -4,9 +4,6 @@ use crate::WorldEntity;
 pub(crate) const MELEE_RANGE_SQ: f32 = 25.0;
 pub(crate) const RANGED_RANGE_SQ: f32 = 1225.0;
 pub(crate) const RANGED_INITIAL_SHOT_MS: u32 = 500;
-// Projectile speeds are in yd/s from Spell.dbc.
-pub(crate) const AUTO_SHOT_PROJECTILE_SPEED: f32 = 40.0;
-pub(crate) const WAND_PROJECTILE_SPEED: f32 = 20.0;
 pub(crate) const fn is_translating(movement_flags: u32) -> bool {
     movement_flags & lyracore_shared::movement_flags::MOVING != 0
 }

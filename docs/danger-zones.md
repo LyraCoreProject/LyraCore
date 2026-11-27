@@ -527,6 +527,22 @@ so no repair or reimport is needed. Only a Spell row whose `damage_class` is 2 (
 layouts do not change. An SDK client that subscribes to `game_spell_impact_event_live` needs
 regenerated bindings to decode the new column.
 
+### Spell travel migration
+
+`game_spell.speed_yps` holds the source `speed`. It is END-appended with default 0, which means no
+travel, so no repair is needed. Publish through a planned update; development reload requires an
+unchanged schema.
+
+Travel time now comes only from this column ([spell travel](schema.md#spell-travel)). At publish,
+a melee ability with a range, such as Bloodthirst or Execute, stops travelling and lands in its
+cast. Until you reimport `spell`, every row has speed 0: a travelling damage spell such as Fireball
+also lands in its cast, and an Auto Shot, wand Shoot or cast ranged Weapon Strike such as Throw
+lands in the next scheduler batch with no flight. Reimport `spell` from this revision before play
+resumes.
+
+A Package Delta written before this revision has no `speed_yps`, so its new spells do not travel.
+Emit the Package again from a Base Snapshot of this revision, or set the field, before you apply it.
+
 ### Summoning ritual migration
 
 The imported `game_gameobject_ritual` table and the private `game_summoning_ritual`,

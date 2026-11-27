@@ -3,11 +3,12 @@ pub(crate) fn distance_3d(ax: f32, ay: f32, az: f32, bx: f32, by: f32, bz: f32) 
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
+// vmangos Spell::AddUnitTarget: a travelling spell covers at least 5 yd; the time is floored.
 pub(crate) fn projectile_travel_ms(distance_yd: f32, speed_yps: f32) -> u32 {
-    if speed_yps <= 0.0 || distance_yd <= 0.0 {
+    if speed_yps <= 0.0 {
         return 0;
     }
-    ((distance_yd / speed_yps) * 1000.0).round().max(0.0) as u32
+    (distance_yd.max(5.0) / speed_yps * 1000.0).floor() as u32
 }
 
 // Orientation is radians from +X, increasing counterclockwise toward +Y.
@@ -53,10 +54,16 @@ mod tests {
     #[test]
     fn projectile_travel_ms_scales_distance_over_speed() {
         assert_eq!(projectile_travel_ms(21.0, 21.0), 1000);
-        assert_eq!(projectile_travel_ms(10.5, 21.0), 500);
-        assert_eq!(projectile_travel_ms(0.0, 21.0), 0);
+        assert_eq!(projectile_travel_ms(10.0, 20.0), 500);
         assert_eq!(projectile_travel_ms(30.0, 0.0), 0);
         assert_eq!(projectile_travel_ms(30.0, -1.0), 0);
+    }
+
+    #[test]
+    fn projectile_travel_ms_floors_and_never_covers_less_than_5_yards() {
+        assert_eq!(projectile_travel_ms(10.0, 24.0), 416);
+        assert_eq!(projectile_travel_ms(3.0, 40.0), 125);
+        assert_eq!(projectile_travel_ms(0.0, 20.0), 250);
     }
 }
 
