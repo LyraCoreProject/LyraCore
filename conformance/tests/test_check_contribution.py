@@ -309,6 +309,28 @@ class LaneTests(unittest.TestCase):
         contribution.change("module/src/loot.rs", None, "fn roll_loot_table() {}\n")
         self.assertIs(contribution.verdict().lane, check.Lane.FAST)
 
+    def test_changing_or_deleting_an_existing_test_is_slow(self):
+        for head in ("#[test]\nfn weather_is_fine() {}\n", None):
+            with self.subTest(head=head):
+                contribution = Contribution()
+                contribution.change("module/tests/seasons.rs", "#[test]\nfn winter_is_cold() {}\n", head)
+                verdict = contribution.verdict()
+                self.assertIs(verdict.lane, check.Lane.SLOW)
+                self.assertEqual([finding.kind for finding in verdict.findings], ["existing_test"])
+
+    def test_a_markdown_only_pull_request_needs_no_evidence(self):
+        facts = dataclasses.replace(Contribution().facts(), body="A typo.",
+                                    changed_paths=("docs/quickstart.md", "README.MD"), files={})
+        verdict = check.decide(facts)
+        self.assertIs(verdict.lane, check.Lane.NOT_APPLICABLE)
+        self.assertEqual([finding.kind for finding in verdict.findings], ["markdown_only"])
+        for changed in (("docs/quickstart.md", "module/src/weather.rs"), ()):
+            with self.subTest(changed=changed):
+                mixed = dataclasses.replace(facts, changed_paths=changed)
+                self.assertIs(check.decide(mixed).lane, check.Lane.FAILED)
+        incomplete = dataclasses.replace(facts, paths_complete=False)
+        self.assertIs(check.decide(incomplete).lane, check.Lane.FAILED)
+
     def test_dependency_manifests_are_slow(self):
         for path in ("Cargo.toml", "Cargo.lock", "module/Cargo.toml", "crates/x/Cargo.toml",
                      "datascripts/package.json", "datascripts/bun.lock"):

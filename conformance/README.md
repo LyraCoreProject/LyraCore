@@ -437,7 +437,8 @@ applies the test file rule above.
 ## Contribution check
 
 The `Contribution check` workflow judges a pull request whose author is not an owner, member or
-collaborator. For other authors it reports "not applicable" and passes. A maintainer can run it
+collaborator. For other authors, and for a pull request that changes only Markdown, it reports
+"not applicable" and passes. A maintainer can run it
 by hand with a pull request number: it then judges that pull request as an outside one and writes
 only the job summary. Otherwise it writes the job summary and one pull request comment, which it
 updates in place on later runs. It runs again on every push and description edit.
@@ -457,6 +458,7 @@ listed, when one of these holds; otherwise it is in the fast lane:
 | Maintainer-only path | A changed path matches `MAINTAINER_ONLY_PATHS` in `check_contribution.py`, ignoring case, and not `CONTRIBUTOR_PATHS` |
 | Deliberate Deviation | A changed `features/**/*.toml` adds or changes a `deliberate_deviations` entry, in any TOML form, or does not parse |
 | Table or row struct | A changed file other than Markdown or the Feature Ledger holds `SpacetimeType`, `table as` or `table` inside an attribute, at the merge-base or the head |
+| Existing test | A changed or deleted [test file](#pull-request-evidence) exists at the merge-base |
 | Dependency | A changed `Cargo.toml`, `Cargo.lock`, `package.json` or `bun.lock` anywhere |
 | Nothing shown failing | No test is `shown` with base `failed`; `did_not_compile` alone does not show the behavior |
 | Test not shown | Any test is `not_shown` |

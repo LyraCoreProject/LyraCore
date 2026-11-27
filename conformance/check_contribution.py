@@ -203,6 +203,10 @@ def _slow_reasons(facts, document):
                    and any(map(_declares_schema, (facts.files[path].base, facts.files[path].head))))
     if schema:
         reasons.append(Finding("schema", schema))
+    existing_tests = tuple(path for path in paths if evidence.is_test_file(path)
+                           and path in facts.files and facts.files[path].base is not None)
+    if existing_tests:
+        reasons.append(Finding("existing_test", existing_tests))
     dependencies = tuple(path for path in paths
                          if PurePosixPath(path).name.lower() in DEPENDENCY_FILES)
     if dependencies:
@@ -222,6 +226,9 @@ def decide(facts):
     """Return the Verdict for `facts`; every value in it is untrusted until `render` escapes it."""
     if facts.association in MAINTAINER_ASSOCIATIONS:
         return Verdict(Lane.NOT_APPLICABLE, (Finding("maintainer_author", (facts.association,)),))
+    if (facts.paths_complete and facts.changed_paths
+            and all(path.lower().endswith(".md") for path in facts.changed_paths)):
+        return Verdict(Lane.NOT_APPLICABLE, (Finding("markdown_only"),))
     try:
         document = evidence.extract(facts.body)
     except evidence.EvidenceError as error:
@@ -256,6 +263,7 @@ def _sentence(finding, pr_number):
     values = finding.values
     sentences = {
         "maintainer_author": lambda: f"The author is {code(values[0])}, so this check does not apply.",
+        "markdown_only": lambda: "It changes only Markdown, so it needs no evidence.",
         "missing_evidence": lambda: (
             f"The description has no evidence section: run `./conformance/evidence --test PACKAGE "
             f"TARGET NAME --pr {pr_number}`, with `--scenario ID` for each scenario the fix changes."),
@@ -287,6 +295,8 @@ def _sentence(finding, pr_number):
         "unreadable_ledger": lambda: f"These Feature Ledger files do not parse: {listing(values)}.",
         "schema": lambda: (
             f"It changes files that declare a table or row struct: {listing(values)}."),
+        "existing_test": lambda: (
+            f"It changes or deletes tests that exist at the merge-base: {listing(values)}."),
         "dependency": lambda: f"It changes dependency manifests: {listing(values)}.",
         "no_failing_test": lambda: "No test in the evidence fails at the merge-base and passes at the head.",
         "test_not_shown": lambda: f"These tests are not shown failing at the merge-base: {listing(values)}.",
