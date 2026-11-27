@@ -284,11 +284,11 @@ fn give_up(ctx: &ReducerContext, away: &NativeAway) {
         away.account_id
     );
     crate::meeting_stone::remove_solo_seeker(ctx, away.character_guid);
-    super::realm_guild::away_ended(ctx, away);
     ctx.db
         .game_native_away()
         .account_id()
         .delete(away.account_id);
+    super::realm_guild::away_ended(ctx, away);
     ctx.db
         .game_world_session_end_retry()
         .account_id()

@@ -596,10 +596,11 @@ A Transfer's source reports the Character to the Group stream but not to the gui
 row stays online, so the departure sends no sign-off and no logout time, and the destination's
 online report finds the row unchanged and sends no sign-on and no MOTD. The roster and the invite by
 name count a member online while its World Session lives on any World Shard, the rule
-[Groups across World Shards](#groups-across-world-shards) gives. A crossing that ends
-without arrival, or a member that disconnects after the move, signs the member off when the Realm
-drops its away record: the Realm reports it offline at that moment, and a later offline report of
-the same connection changes nothing.
+[Groups across World Shards](#groups-across-world-shards) gives. Guild event delivery and the
+petition offer use the same rule. A member that disconnects after the move is usually signed off
+by the offline report of its destination. When a crossing ends without arrival, or that report
+does not come, the Realm signs the member off when it drops the away record: it reports the member
+offline at that moment, and a later offline report of the same connection changes nothing.
 
 Guild snapshots and individual memberships have separate revision records. A guild snapshot never
 implicitly removes its former members: each membership change carries its own revision and a
