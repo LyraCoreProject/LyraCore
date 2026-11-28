@@ -15,7 +15,18 @@ pub struct TrainerSpellView {
     pub learn_skill_line: u32,
     pub required_skill: u32,
     pub required_skill_value: u32,
+    pub previous_spell: u32,
+    pub required_spell: u32,
     pub gates: OfferingGates,
+}
+
+// The client wants a second required spell only after a first, so a required spell comes first.
+fn required_spells(view: &TrainerSpellView) -> [u32; 3] {
+    if view.required_spell != 0 {
+        [view.required_spell, view.previous_spell, 0]
+    } else {
+        [view.previous_spell, 0, 0]
+    }
 }
 
 pub fn build_trainer_list(
@@ -53,6 +64,7 @@ pub fn build_trainer_list(
                 OfferingState::Known => TrainerSpellState::Gray,
                 OfferingState::LevelTooLow
                 | OfferingState::PreviousRankMissing
+                | OfferingState::RequiredSpellMissing
                 | OfferingState::SkillTooLow => TrainerSpellState::Red,
                 OfferingState::PrimaryProfessionLimit | OfferingState::Available => {
                     TrainerSpellState::Green
@@ -68,7 +80,7 @@ pub fn build_trainer_list(
                 required_level: s.required_level,
                 required_skill: Skill::try_from(s.required_skill).unwrap_or_default(),
                 required_skill_value: s.required_skill_value,
-                required_spells: [0, 0, 0],
+                required_spells: required_spells(s),
             }
         })
         .collect();
@@ -242,6 +254,13 @@ mod tests {
                         ..Default::default()
                     },
                 ),
+                offer(
+                    4,
+                    OfferingGates {
+                        required_spell_missing: true,
+                        ..Default::default()
+                    },
+                ),
             ],
             "",
         );
@@ -251,6 +270,7 @@ mod tests {
             [
                 TrainerSpellState::Green,
                 TrainerSpellState::Red,
+                TrainerSpellState::Red,
                 TrainerSpellState::Red
             ]
         );
@@ -259,6 +279,37 @@ mod tests {
             .iter()
             .all(|spell| spell.required_skill == Skill::Tailoring
                 && spell.required_skill_value == 50));
+    }
+
+    #[test]
+    fn a_trainer_list_sends_the_required_spell_before_the_previous_rank() {
+        let offer = |previous_spell, required_spell| TrainerSpellView {
+            spell_id: 5230,
+            required_level: 1,
+            player_level: 10,
+            previous_spell,
+            required_spell,
+            ..Default::default()
+        };
+        let msg = build_trainer_list(
+            42,
+            &[
+                offer(0, 0),
+                offer(16689, 0),
+                offer(16689, 1062),
+                offer(0, 1062),
+            ],
+            "",
+        );
+        let required: Vec<_> = msg
+            .spells
+            .iter()
+            .map(|spell| spell.required_spells)
+            .collect();
+        assert_eq!(
+            required,
+            [[0, 0, 0], [16689, 0, 0], [1062, 16689, 0], [1062, 0, 0]]
+        );
     }
 
     #[test]
