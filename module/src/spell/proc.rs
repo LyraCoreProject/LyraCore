@@ -5,8 +5,8 @@ use crate::game_world_entity;
 use crate::combat::{AttackOutcome, Hit, HitSource};
 use lyracore_shared::spell::taxonomy::{
     A_FLAG, A_IMMUNITY, A_INERT, A_MOD_DAMAGE_DONE_FLAT, A_MOD_RESISTANCE, A_MOD_SPEED,
-    A_PROC_DAMAGE, A_PROC_TRIGGER, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, P_MECHANIC, SPEED_CAST,
-    SPEED_SWING,
+    A_PROC_DAMAGE, A_PROC_TRIGGER, A_RETALIATE, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, P_MECHANIC,
+    SPEED_CAST, SPEED_SWING,
 };
 
 // vmangos SpellDefines.h SpellModOp SPELLMOD_CHARGES.
@@ -637,6 +637,7 @@ fn aura_proc(
             }
         }
         A_FLAG => dummy_proc(ctx, row, charges, hit),
+        A_RETALIATE => retaliation_proc(ctx, row, counterparty_guid),
         _ => effect_proc(row, spell, charges, hit),
     }
 }
@@ -724,6 +725,50 @@ fn dummy_proc(ctx: &ReducerContext, row: &Aura, charges: u8, hit: &ProcHit) -> A
         AuraProc::Fired
     } else {
         AuraProc::Failed
+    }
+}
+
+const RETALIATION_STRIKE: u32 = 22858;
+
+// vmangos HandleDummyAuraProc case 20230 fails, without spending, for an attacker outside the
+// warrior's arc or a warrior that cannot react, and TriggerProccedSpell for a dead attacker.
+fn retaliation_proc(ctx: &ReducerContext, row: &Aura, attacker_guid: u64) -> AuraProc {
+    let entities = ctx.db.game_world_entity();
+    let (Some(warrior), Some(attacker)) = (
+        entities.guid().find(row.target_guid),
+        entities.guid().find(attacker_guid),
+    ) else {
+        return AuraProc::Failed;
+    };
+    if attacker.dead
+        || !crate::geometry::is_facing(
+            warrior.x,
+            warrior.y,
+            warrior.orientation,
+            attacker.x,
+            attacker.y,
+        )
+        || super::control::is_action_blocked(ctx, warrior.guid)
+    {
+        return AuraProc::Failed;
+    }
+    // The strike spends the charge whatever its result, as TriggerProccedSpell ignores it.
+    match crate::spell::cast_aura_triggered(
+        ctx,
+        row.spell_id,
+        warrior.guid,
+        RETALIATION_STRIKE,
+        row.level,
+        attacker_guid,
+    ) {
+        Ok(()) => AuraProc::Fired,
+        Err(err) => {
+            log::info!(
+                "proc: Retaliation on {} could not strike {attacker_guid}: {err}",
+                warrior.guid
+            );
+            AuraProc::Failed
+        }
     }
 }
 

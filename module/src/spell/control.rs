@@ -251,7 +251,7 @@ pub(crate) fn break_auras_on_move(ctx: &ReducerContext, mover_guid: u64) {
     });
 }
 
-// attacker_guid is zero for direct spells and periodic damage, which cannot trigger Retaliation.
+// attacker_guid is zero for direct spells and periodic damage.
 pub(crate) fn break_auras_on_damage(
     ctx: &ReducerContext,
     target_guid: u64,
@@ -294,9 +294,6 @@ fn react_to_damage(
     crate::world::stand_up_on_damage(ctx, target_guid);
     break_flagged_auras(ctx, target_guid, breaks);
     super::break_stealth(ctx, target_guid);
-    if attacker_guid != 0 {
-        crate::combat::retaliate_on_hit(ctx, target_guid, attacker_guid);
-    }
 }
 
 // vmangos SharedDefines.h MECHANIC_SILENCE.

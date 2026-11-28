@@ -60,9 +60,9 @@ pub(crate) use folds::{
     deal_blocked_spell_damage, effective_crit_bp, effective_ranged_crit_bp, effective_swing_time,
     equipped_offhand_weapon_damage, equipped_ranged_weapon, find_ammo, melee_attack_power,
     melee_attack_power_multiplier, off_hand_attack_time, ranged_attack_power_multiplier,
-    ranged_projectile, ranged_values, react_window_active, retaliate_on_hit, roll_money,
-    roll_ranged_swing, roll_swing, roll_swing_with_range, seal_holy_on_swing, spend_ranged_ammo,
-    swing_range_ctx, weapon_strike_spell_damage, ReactKind, WeaponStrike,
+    ranged_projectile, ranged_values, react_window_active, roll_money, roll_ranged_swing,
+    roll_swing, roll_swing_with_range, seal_holy_on_swing, spend_ranged_ammo, swing_range_ctx,
+    weapon_strike_spell_damage, ReactKind, WeaponStrike,
 };
 
 pub(crate) use energy::regenerate_energy;
