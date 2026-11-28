@@ -80,6 +80,7 @@ pub(super) fn cast_result(reason: CastRefusalReason) -> u8 {
         // vmangos Spell::CheckItems: the 1.12 client shows nothing for SPELL_FAILED_REAGENTS.
         R::MissingReagent => code::ITEM_NOT_READY,
         R::AlreadyHaveSummon => code::ALREADY_HAVE_SUMMON,
+        R::NoPet => code::NO_PET,
     }
 }
 
@@ -402,6 +403,7 @@ mod tests {
             (R::TargetNotInInstance, 0x7F),
             (R::MissingReagent, 0x28),
             (R::AlreadyHaveSummon, 0x05),
+            (R::NoPet, 0x4C),
         ] {
             assert_eq!(cast_result(reason), code, "{reason:?}");
         }

@@ -331,11 +331,10 @@ fn dismiss_pet_dismisses_the_live_pet_as_the_pet_bar_does_and_call_pet_brings_it
     make_tame_dismiss_pet(&shard);
     cast_at_self(&shard);
     assert!(live_pet(&shard).is_none(), "Dismiss Pet removes the pet");
-    for (table, key) in [
-        ("game_live_pet_kind", "pet_guid"),
-        ("game_pet_command", "owner_guid"),
+    for (table, key, value) in [
+        ("game_live_pet_kind", "pet_guid", HUNTER_PET),
+        ("game_pet_command", "owner_guid", 1),
     ] {
-        let value = if key == "pet_guid" { HUNTER_PET } else { 1 };
         assert!(
             shard
                 .query_rows(&format!("SELECT * FROM {table} WHERE {key} = {value}"))
@@ -354,7 +353,7 @@ fn dismiss_pet_dismisses_the_live_pet_as_the_pet_bar_does_and_call_pet_brings_it
         identities
     );
 
-    cast_at_self(&shard);
+    assert_cast_refused(&shard, "no live pet");
     assert!(live_pet(&shard).is_none());
     assert_eq!(presence(&shard), DISMISSED);
     assert_eq!(saved_vitals(&shard).0, saved_health);
@@ -583,7 +582,8 @@ struct NativeHunter {
     owner: String,
 }
 
-/// A level 60 Hunter in the world on a native connection, who knows the instant fixture spell.
+/// A level 60 Hunter in the world on a native connection who knows the fixture spell, a 10 s
+/// channel until `rewrite_tame` makes it an instant cast.
 fn native_hunter(name: &str) -> NativeHunter {
     let mut shard = Standalone::start(name);
     shard.publish_module();
@@ -644,6 +644,11 @@ const SMSG_PET_TAME_FAILURE: u16 = 0x0173;
 // 1.12.1 SpellCastResult and PetTameFailureReason values from vmangos.
 const SPELL_FAILED_ALREADY_HAVE_SUMMON: u8 = 0x05;
 const SPELL_FAILED_DONT_REPORT: u8 = 0x17;
+const SPELL_FAILED_NO_PET: u8 = 0x4C;
+/// SMSG_SPELL_FAILED_OTHER, which the Interrupt of a refused completion sends before the result.
+const SMSG_SPELL_FAILED_OTHER: u16 = 0x02A6;
+/// `SPELL_ATTR_EX2_NO_ACTIVE_PETS`, which Tame Beast (1515) carries.
+const NO_ACTIVE_PETS: u32 = 0x1_0000;
 const PETTAME_INVALIDCREATURE: u8 = 0x01;
 const PETTAME_ANOTHERSUMMONACTIVE: u8 = 0x05;
 const PETTAME_NOTDEAD: u8 = 0x0B;
@@ -737,15 +742,24 @@ fn call_pet_with_a_pet_out_is_refused_already_have_summon_and_a_refused_tame_sen
     wire.cast().expect("Call Pet with the pet dismissed");
     assert_eq!(wire.presence(), OUT);
 
-    rewrite_tame(
-        &wire.shard,
-        lyracore_shared::spell::taxonomy::E_TAME_CREATURE,
-        0,
-    );
+    use lyracore_shared::spell::taxonomy::{E_DISMISS_PET, E_SCRIPTED, E_TAME_CREATURE};
+
     let both = [
         tame_failure(PETTAME_ANOTHERSUMMONACTIVE),
         failed_cast_result(SPELL_FAILED_DONT_REPORT),
     ];
+    wire.shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes_ex_2 = {NO_ACTIVE_PETS} WHERE spell_id = {TAME}"
+    ));
+    rewrite_tame(&wire.shard, E_SCRIPTED, 0);
+    let refused = wire.cast().expect_err("a spell that forbids an active pet");
+    assert_eq!(refused_tail(&refused, 2), both);
+    wire.shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes_ex_2 = 0 WHERE spell_id = {TAME}"
+    ));
+    wire.cast().expect("the same spell without the attribute");
+
+    rewrite_tame(&wire.shard, E_TAME_CREATURE, 0);
     let refused = wire.cast().expect_err("a tame with the pet out");
     assert_eq!(refused_tail(&refused, 2), both);
     wire.dismiss();
@@ -763,6 +777,19 @@ fn call_pet_with_a_pet_out_is_refused_already_have_summon_and_a_refused_tame_sen
             tame_failure(PETTAME_INVALIDCREATURE),
             failed_cast_result(SPELL_FAILED_DONT_REPORT)
         ]
+    );
+
+    rewrite_tame(&wire.shard, E_DISMISS_PET, 0);
+    let refused = wire.cast().expect_err("Dismiss Pet with no pet");
+    assert_eq!(
+        refused_tail(&refused, 1),
+        [failed_cast_result(SPELL_FAILED_NO_PET)]
+    );
+    assert!(
+        !refused
+            .iter()
+            .any(|(opcode, _)| *opcode == SMSG_PET_TAME_FAILURE),
+        "{refused:?}"
     );
 }
 
@@ -806,10 +833,11 @@ fn a_revive_pet_refused_at_completion_sends_its_tame_failure_before_the_cast_res
         .iter()
         .position(|packet| *packet == refusal)
         .unwrap();
+    assert_eq!(packets[at - 1].0, SMSG_SPELL_FAILED_OTHER, "{packets:?}");
     assert_eq!(
-        packets[at - 1],
+        packets[at - 2],
         tame_failure(PETTAME_NOTDEAD),
-        "{packets:?}"
+        "vmangos sends the tame failure, then the teardown, then the cast result: {packets:?}"
     );
     assert_eq!(wire.presence(), OUT);
 }

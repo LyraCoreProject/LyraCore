@@ -161,6 +161,7 @@ pub mod cast_failure {
     pub const NO_CHARGES_REMAIN: u8 = 0x44;
     pub const NO_COMBO_POINTS: u8 = 0x46;
     pub const NO_DUELING: u8 = 0x47;
+    pub const NO_PET: u8 = 0x4C;
     pub const NO_POWER: u8 = 0x4D;
     pub const ONLY_ABOVEWATER: u8 = 0x50;
     pub const ONLY_OUTDOORS: u8 = 0x55;

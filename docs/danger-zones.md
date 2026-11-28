@@ -465,8 +465,9 @@ virtual items, so a viewer no longer receives them as a separate values update a
 
 Spell effect 102 (Dismiss Pet) now imports as `E_DISMISS_PET` (code 0x2F). Reimport the `spell`
 family straight after the publish. Until then Dismiss Pet (2641) stays a scripted no-op and only the
-pet bar dismisses a pet. `CastRefusalReason` gains `AlreadyHaveSummon` (code 35), which the cast
-result reports as `SPELL_FAILED_ALREADY_HAVE_SUMMON`. No table changes.
+pet bar dismisses a pet. `CastRefusalReason` gains `AlreadyHaveSummon` (code 35) and `NoPet`
+(code 36), which the cast result reports as `SPELL_FAILED_ALREADY_HAVE_SUMMON` and
+`SPELL_FAILED_NO_PET`. No table changes.
 
 ### Drunk value migration
 

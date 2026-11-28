@@ -1,7 +1,7 @@
 schema_version = 1
 id = "hunter_pet_lifecycle"
 system = "pets"
-scope = "A Hunter tames an eligible creature and commands, dismisses or abandons the pet with the corresponding ownership and persistence rules. Taming is refused while the Hunter has a pet, live or durable, and every refusal of the taming check sends its SMSG_PET_TAME_FAILURE reason before SPELL_FAILED_DONT_REPORT, at the start of the cast and at its completion. Abandon removes the live Hunter pet and its durable identity for good, so the Hunter can tame again. Dismiss Pet dismisses a live pet as the pet bar does, so Call Pet brings it back with the state it left with. Call Pet brings a dismissed pet back with its level, loyalty, happiness, name, model, spells and the health and power it left with, refuses with a tame failure when the Hunter has no pet or the pet is dead, and is refused with SPELL_FAILED_ALREADY_HAVE_SUMMON while a pet is out. Revive Pet brings a dead pet back beside the Hunter with the effect's percent of its maximum health, and is refused with a tame failure when the Hunter has a pet out, has no pet or the pet is not dead. A pet that was out at logout is out again at world entry. Stables and action-bar editing are separate Behaviors."
+scope = "A Hunter tames an eligible creature and commands, dismisses or abandons the pet with the corresponding ownership and persistence rules. Taming is refused while the Hunter has a pet, live or durable. A cast of a spell with a tame effect that the Gate refuses sends the SMSG_PET_TAME_FAILURE reason of the taming check before SPELL_FAILED_DONT_REPORT, at the start of the cast and at its completion, and a spell that forbids an active pet is refused the same way while a pet is out. Abandon removes the live Hunter pet and its durable identity for good, so the Hunter can tame again. A spell with a Dismiss Pet effect dismisses the live pet through the pet bar's dismiss path, so Call Pet brings it back with the state it left with, and is refused with SPELL_FAILED_NO_PET when no pet is out. Call Pet brings a dismissed pet back with its level, loyalty, happiness, name, model, spells and the health and power it left with, refuses with a tame failure when the Hunter has no pet or the pet is dead, and is refused with SPELL_FAILED_ALREADY_HAVE_SUMMON while a pet is out. Revive Pet brings a dead pet back beside the Hunter with the effect's percent of its maximum health, and is refused with a tame failure when the Hunter has a pet out, has no pet or the pet is not dead. A pet that was out at logout is out again at world entry. Stables and action-bar editing are separate Behaviors."
 requests = ["0x012E", "0x0175", "0x0176"]
 replies = ["0x0173", "0x0179"]
 dependencies = []
@@ -28,6 +28,30 @@ description = "A dead pet cannot be abandoned: LyraCore removes the pet at death
 path = "module/src/creatures/hunter_pet.rs"
 symbol = "abandon_pet"
 evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/PetHandler.cpp WorldSession::HandlePetAbandon"
+
+[[known_gaps]]
+description = "Dismiss Pet (2641) has a second effect, SPELL_EFFECT_POWER_DRAIN of 50000 happiness on the pet, which imports as E_SCRIPTED. The pet comes back from Call Pet without the happiness loss."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "apply_effect"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEffects.cpp Spell::EffectPowerDrain"
+
+[[known_gaps]]
+description = "The pet bar's dismiss command dismisses a Hunter pet at once. vmangos does nothing for a Hunter pet, which is dismissed only by the Dismiss Pet spell with its cast time."
+path = "module/src/creatures/pet.rs"
+symbol = "apply_pet_command"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp Unit::HandlePetCommand COMMAND_DISMISS"
+
+[[known_gaps]]
+description = "Tame Beast (1515) never reaches the tame Gate: it has no effect 55, and its periodic trigger 13535, which casts 13481 on the channel target, is not handled. Only a spell that carries E_TAME_CREATURE is tamed."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "check_cast_gates"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEffects.cpp Spell::EffectDummy case 13535"
+
+[[known_gaps]]
+description = "A spell whose effect aims at the caster's pet (implicit target 5), other than Dismiss Pet, resolves with no pet. vmangos refuses it with SPELL_FAILED_NO_PET, or SPELL_FAILED_TARGETS_DEAD for a corpse."
+path = "importer/src/spell.rs"
+symbol = "resolve_effect_target"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp Spell::CheckCast TARGET_UNIT_CASTER_PET"
 
 [[tests]]
 path = "module/tests/hunter_pet.rs"

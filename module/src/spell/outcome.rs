@@ -101,6 +101,7 @@ cast_refusal_reasons! {
     TargetNotInInstance = 33,
     MissingReagent = 34,
     AlreadyHaveSummon = 35,
+    NoPet = 36,
 }
 
 impl CastRefusalReason {

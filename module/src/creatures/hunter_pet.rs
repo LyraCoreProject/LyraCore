@@ -1,4 +1,6 @@
-use lyracore_shared::spell::taxonomy::{E_REVIVE_PET, E_SUMMON_PET};
+use lyracore_shared::spell::taxonomy::{
+    E_DISMISS_PET, E_REVIVE_PET, E_SUMMON_PET, E_TAME_CREATURE,
+};
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
 use super::pet::game_pet_command;
@@ -280,12 +282,11 @@ struct TameEligibility {
 }
 
 impl TameEligibility {
-    /// The Gates of vmangos `Spell::CheckCast` before `CheckTamingSpell` refuse without a reason.
+    /// The first failing check of vmangos `Spell::CheckCast` and `CheckTamingSpell`; a
+    /// `CheckTamingSpell` reason carries its tame failure and the other refusals carry none.
     fn validate(&self) -> Result<(), CastGateRefusal> {
-        use PetSummonRefusal as Reported;
-        let unreported = |reason, message: &str| CastGateRefusal::other(reason, message);
         if !self.caster_is_player {
-            return Err(unreported(
+            return Err(CastGateRefusal::other(
                 CastRefusalReason::BadTargets,
                 "only a Character can tame a creature",
             ));
@@ -299,30 +300,27 @@ impl TameEligibility {
             return Err("a dead Hunter cannot tame a creature".to_string().into());
         }
         if self.target_exists && self.target_dead {
-            return Err(unreported(
+            return Err(CastGateRefusal::other(
                 CastRefusalReason::TargetDead,
                 "a dead creature cannot be tamed",
             ));
         }
-        if self.caster_class != CLASS_HUNTER {
-            return Err(Reported::UnitsCantTame.into());
-        }
-        if self.has_pet {
-            return Err(Reported::AnotherPetOut.into());
-        }
-        if !self.target_exists || self.target_is_player {
-            return Err(Reported::InvalidCreature.into());
-        }
-        if self.target_owned {
-            return Err(Reported::CreatureAlreadyOwned.into());
-        }
-        if self.target_level > self.owner_level {
-            return Err(Reported::TooHighLevel.into());
-        }
-        if !self.family_present || !self.family_tameable {
-            return Err(Reported::NotTameable.into());
-        }
-        Ok(())
+        let reason = if self.caster_class != CLASS_HUNTER {
+            PetSummonRefusal::UnitsCantTame
+        } else if self.has_pet {
+            PetSummonRefusal::AnotherPetOut
+        } else if !self.target_exists || self.target_is_player {
+            PetSummonRefusal::InvalidCreature
+        } else if self.target_owned {
+            PetSummonRefusal::CreatureAlreadyOwned
+        } else if self.target_level > self.owner_level {
+            PetSummonRefusal::TooHighLevel
+        } else if !self.family_present || !self.family_tameable {
+            PetSummonRefusal::NotTameable
+        } else {
+            return Ok(());
+        };
+        Err(reason.into())
     }
 }
 
@@ -405,7 +403,7 @@ fn forget_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
 }
 
 /// The tame Gate; vmangos `Spell::CheckTamingSpell` reports its reason before the cast result.
-pub(crate) fn validate_tame(
+fn validate_tame(
     ctx: &ReducerContext,
     caster: &WorldEntity,
     target_guid: u64,
@@ -550,16 +548,63 @@ fn owner_pets(ctx: &ReducerContext, owner_guid: u64) -> (bool, Option<HunterPet>
     )
 }
 
+// vmangos `SPELL_ATTR_EX2_NO_ACTIVE_PETS`, 0x10000, which Tame Beast (1515) carries.
+const SPELL_ATTR_EX2_NO_ACTIVE_PETS: u32 = 0x0001_0000;
+
+/// The pet Gates of a cast, in vmangos `Spell::CheckCast` order: a spell that forbids an active
+/// pet, then each pet effect it holds.
+pub(crate) fn check_pet_gates(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    attributes_ex_2: u32,
+    effects: &[SpellEffect],
+    target_guid: u64,
+) -> Result<(), CastGateRefusal> {
+    let has_effect = |kind| effects.iter().any(|effect| effect.kind == kind);
+    if attributes_ex_2 & SPELL_ATTR_EX2_NO_ACTIVE_PETS != 0
+        && caster.is_player()
+        && super::pet_of(ctx, caster.guid).is_some()
+    {
+        return Err(PetSummonRefusal::AnotherPetOut.into());
+    }
+    if has_effect(E_TAME_CREATURE) {
+        validate_tame(ctx, caster, target_guid)?;
+    }
+    if has_effect(E_REVIVE_PET) {
+        validate_revive_pet(ctx, caster)?;
+    }
+    if effects.iter().any(is_call_pet) {
+        validate_call_pet(ctx, caster)?;
+    }
+    if has_effect(E_DISMISS_PET) {
+        validate_dismiss_pet(ctx, caster)?;
+    }
+    Ok(())
+}
+
+/// Dismiss Pet aims at the caster's pet; vmangos `Spell::CheckCast` refuses it with no live pet,
+/// and a pet corpse reports a dead target.
+fn validate_dismiss_pet(ctx: &ReducerContext, caster: &WorldEntity) -> Result<(), CastGateRefusal> {
+    if super::pet_of(ctx, caster.guid).is_some() {
+        return Ok(());
+    }
+    let dead = hunter_pet_for_owner(ctx, caster.guid)
+        .is_some_and(|pet| PetPresence::of(pet.presence) == PetPresence::Dead);
+    let reason = if dead {
+        CastRefusalReason::TargetDead
+    } else {
+        CastRefusalReason::NoPet
+    };
+    Err(CastGateRefusal::other(reason, "the caster has no live pet"))
+}
+
 /// Call Pet is SPELL_EFFECT_SUMMON_PET with no creature entry.
-pub(crate) fn is_call_pet(effect: &SpellEffect) -> bool {
+fn is_call_pet(effect: &SpellEffect) -> bool {
     effect.kind == E_SUMMON_PET && effect.p0 <= 0
 }
 
 /// The Call Pet Gate; vmangos `Unit::UnsummonOldPetBeforeNewSummon` refuses while any pet is out.
-pub(crate) fn validate_call_pet(
-    ctx: &ReducerContext,
-    caster: &WorldEntity,
-) -> Result<(), CastGateRefusal> {
+fn validate_call_pet(ctx: &ReducerContext, caster: &WorldEntity) -> Result<(), CastGateRefusal> {
     if super::pet_of(ctx, caster.guid).is_some() {
         return Err(CastGateRefusal::other(
             CastRefusalReason::AlreadyHaveSummon,
@@ -595,10 +640,7 @@ pub(crate) fn call_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
 }
 
 /// The Revive Pet Gate: the caster's durable Hunter pet must exist, be dead and not be out.
-pub(crate) fn validate_revive_pet(
-    ctx: &ReducerContext,
-    caster: &WorldEntity,
-) -> Result<(), PetSummonRefusal> {
+fn validate_revive_pet(ctx: &ReducerContext, caster: &WorldEntity) -> Result<(), PetSummonRefusal> {
     if !caster.is_player() {
         return Err(PetSummonRefusal::NoPet);
     }
@@ -991,6 +1033,13 @@ mod tests {
                     v.target_owned = true;
                 }),
                 AnotherPetOut,
+            ),
+            (
+                Box::new(|v| {
+                    v.target_owned = true;
+                    v.target_level = v.owner_level + 1;
+                }),
+                CreatureAlreadyOwned,
             ),
             (
                 Box::new(|v| {
