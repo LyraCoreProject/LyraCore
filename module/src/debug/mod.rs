@@ -1065,7 +1065,7 @@ pub fn debug_accept_quest(
 ) -> Result<(), String> {
     // Commits a refusal that ends a Quest Share, as the native accept does.
     crate::actor::accept_quest(ctx, character_guid, giver_guid, quest_entry).or_else(|refusal| {
-        crate::quest::share::end_after_refused_accept(ctx, character_guid, quest_entry)
+        crate::quest::share::end_after_refused_accept(ctx, character_guid)
             .then_some(())
             .ok_or(refusal)
     })

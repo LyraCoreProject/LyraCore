@@ -8,8 +8,8 @@ pub(crate) enum Online {
     // Group invites and leader changes: a World Session here or a live world entity, so a
     // sessionless Character counts.
     SessionOrBody,
-    // Meeting Stone Seekers: the Realm party facts on a Realm Shard, otherwise a World Session
-    // here or a live Account Claim.
+    // Meeting Stone Seekers and Quest Share pushes: the Realm party facts on a Realm Shard,
+    // otherwise a World Session here or a live Account Claim.
     SessionOrClaim,
 }
 
