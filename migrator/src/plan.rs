@@ -636,23 +636,7 @@ fn migrated_character(
             max_rank: skill.max,
         })
         .collect(),
-        reputations: kept(
-            &character.reputations,
-            &catalogue.reputation_factions,
-            |reputation| reputation.faction,
-            subject,
-            "factions",
-            report,
-        )
-        .into_iter()
-        // vmangos saves every faction; LyraCore stores only factions the Character has seen.
-        .filter(|reputation| reputation.flags & VISIBLE_FLAG != 0 || reputation.standing != 0)
-        .map(|reputation| MigratedReputation {
-            faction_id: reputation.faction,
-            earned_standing: reputation.standing,
-            at_war: reputation.flags & AT_WAR_FLAG != 0,
-        })
-        .collect(),
+        reputations: reputations(catalogue, character, subject, report),
         actions: {
             let buttons: Vec<u32> = character
                 .actions
@@ -738,6 +722,31 @@ fn migrated_character(
     };
     fits_one_call(&migration)?;
     Ok(migration)
+}
+
+fn reputations(
+    catalogue: &Catalogue,
+    character: &LegacyCharacter,
+    subject: &str,
+    report: &mut Findings,
+) -> Vec<MigratedReputation> {
+    kept(
+        &character.reputations,
+        &catalogue.reputation_factions,
+        |reputation| reputation.faction,
+        subject,
+        "factions",
+        report,
+    )
+    .into_iter()
+    // vmangos saves every faction; LyraCore stores only factions the Character has seen.
+    .filter(|reputation| reputation.flags & VISIBLE_FLAG != 0 || reputation.standing != 0)
+    .map(|reputation| MigratedReputation {
+        faction_id: reputation.faction,
+        earned_standing: reputation.standing,
+        at_war: reputation.flags & AT_WAR_FLAG != 0,
+    })
+    .collect()
 }
 
 fn fits_one_call(argument: &impl Serialize) -> Result<()> {
