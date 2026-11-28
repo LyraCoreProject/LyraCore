@@ -15,8 +15,11 @@ const CHARGES: u8 = 30;
 const RETALIATION: u32 = 20_230;
 const RETALIATION_STRIKE: u32 = 22_858;
 const WOLF_STUN: u32 = 5_231_000;
-// vmangos ProcFlags PROC_FLAG_TAKE_MELEE_SWING, SpellDamageClass melee, and SpellMissInfo Immune.
+const WOLF_STRIKE: u32 = 5_231_001;
+// vmangos ProcFlags: Retaliation 20230 procs on a melee hit and a melee ability hit taken (0x28).
+// SpellDamageClass melee, and SpellMissInfo Immune.
 const TAKE_MELEE_SWING: u32 = 0x8;
+const TAKE_MELEE_ABILITY: u32 = 0x20;
 const DAMAGE_CLASS_MELEE: u8 = 2;
 const MISS_IMMUNE: &str = "7";
 const MECHANIC_STUN: u8 = 12;
@@ -120,6 +123,50 @@ fn retaliation_spends_a_charge_on_an_attacker_immune_to_physical_damage_and_repo
     assert_eq!(charges(&standalone), Some(CHARGES - 1));
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn retaliation_strikes_back_at_a_melee_ability_hit() {
+    let mut standalone = Standalone::start("retaliation-melee-ability");
+    let wolf = stage(&mut standalone, WolfAt::InFront);
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &WOLF_STRIKE),
+            ("name", &"Fixture Wolf Strike"),
+            ("school_mask", &PHYSICAL),
+            ("range_yd", &30),
+            ("is_negative", &true),
+            ("damage_class", &DAMAGE_CLASS_MELEE),
+            ("attributes", &ATTR_NO_ACTIVE_DEFENSE),
+            ("cast_flags", &CAST_FLAG_ALWAYS_HIT),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(WOLF_STRIKE, 0)),
+            ("spell_id", &WOLF_STRIKE),
+            ("kind", &E_WEAPON_STRIKE),
+            ("base_points", &100),
+            ("target", &T_TARGET_ENEMY),
+            ("p_0", &100),
+            ("p_0_kind", &P_RAW),
+        ],
+    );
+    standalone.assert_call(
+        "debug_cast_at",
+        &[
+            &wolf.to_string(),
+            &WOLF_STRIKE.to_string(),
+            &PLAYER.to_string(),
+        ],
+    );
+    advance(&standalone);
+
+    assert!(health(&standalone, wolf) < WOLF_HEALTH, "the strike lands");
+    assert_eq!(charges(&standalone), Some(CHARGES - 1));
+}
+
 enum WolfAt {
     InFront,
     Behind,
@@ -173,7 +220,7 @@ fn insert_retaliation(standalone: &Standalone) {
             ("school_mask", &PHYSICAL),
             ("duration_ms", &DURATION_MS),
             ("spell_level", &1),
-            ("proc_flags", &TAKE_MELEE_SWING),
+            ("proc_flags", &(TAKE_MELEE_SWING | TAKE_MELEE_ABILITY)),
             ("proc_chance", &100),
             ("proc_charges", &CHARGES),
         ],
@@ -187,6 +234,8 @@ fn insert_retaliation(standalone: &Standalone) {
             ("target", &T_SELF),
         ],
     );
+    // The imported 22858 rolls the melee table. This fixture always hits, so a dodge, a parry or
+    // a miss cannot decide a test; its effect and target match the real spell's.
     standalone.insert_row(
         "game_spell",
         &[

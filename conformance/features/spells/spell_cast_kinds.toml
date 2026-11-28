@@ -1090,3 +1090,8 @@ rung = "durable_module"
 path = "module/tests/retaliation.rs"
 function = "retaliation_spends_a_charge_on_an_attacker_immune_to_physical_damage_and_reports_immune"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/retaliation.rs"
+function = "retaliation_strikes_back_at_a_melee_ability_hit"
+rung = "durable_module"

@@ -731,7 +731,8 @@ fn dummy_proc(ctx: &ReducerContext, row: &Aura, charges: u8, hit: &ProcHit) -> A
 const RETALIATION_STRIKE: u32 = 22858;
 
 // vmangos HandleDummyAuraProc case 20230 fails, without spending, for an attacker outside the
-// warrior's arc or a warrior that cannot react, and TriggerProccedSpell for a dead attacker.
+// warrior's arc or a warrior that cannot react; TriggerProccedSpell fails it for a dead attacker
+// or a missing strike spell, and otherwise spends whatever the cast result.
 fn retaliation_proc(ctx: &ReducerContext, row: &Aura, attacker_guid: u64) -> AuraProc {
     let entities = ctx.db.game_world_entity();
     let (Some(warrior), Some(attacker)) = (
@@ -748,12 +749,17 @@ fn retaliation_proc(ctx: &ReducerContext, row: &Aura, attacker_guid: u64) -> Aur
             attacker.x,
             attacker.y,
         )
-        || super::control::is_action_blocked(ctx, warrior.guid)
+        || super::control::cannot_react(ctx, warrior.guid)
+        || ctx
+            .db
+            .game_spell()
+            .spell_id()
+            .find(RETALIATION_STRIKE)
+            .is_none()
     {
         return AuraProc::Failed;
     }
-    // The strike spends the charge whatever its result, as TriggerProccedSpell ignores it.
-    match crate::spell::cast_aura_triggered(
+    if let Err(err) = crate::spell::cast_aura_triggered(
         ctx,
         row.spell_id,
         warrior.guid,
@@ -761,15 +767,12 @@ fn retaliation_proc(ctx: &ReducerContext, row: &Aura, attacker_guid: u64) -> Aur
         row.level,
         attacker_guid,
     ) {
-        Ok(()) => AuraProc::Fired,
-        Err(err) => {
-            log::info!(
-                "proc: Retaliation on {} could not strike {attacker_guid}: {err}",
-                warrior.guid
-            );
-            AuraProc::Failed
-        }
+        log::info!(
+            "proc: Retaliation on {} could not strike {attacker_guid}: {err}",
+            warrior.guid
+        );
     }
+    AuraProc::Fired
 }
 
 // vmangos fails, without spending, a Proc granting Extra Attacks while the Carrier holds some.

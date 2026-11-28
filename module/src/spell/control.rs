@@ -169,6 +169,21 @@ pub(crate) fn is_disarmed(ctx: &ReducerContext, unit_guid: u64) -> bool {
     auras_on(ctx, unit_guid).any(|a| a.eff_kind == A_DISARM)
 }
 
+// vmangos SpellAuraDefines.h SPELL_AURA_MOD_CONFUSE, which A_CONTROL keeps in p1.
+const AURA_MOD_CONFUSE: i32 = 5;
+
+/// vmangos UNIT_STATE_CAN_NOT_REACT: stunned, confused or fleeing. LyraCore has no Feign Death.
+/// Charm, possession and pacify share Polymorph's mechanic but leave a unit able to react.
+pub(crate) fn cannot_react(ctx: &ReducerContext, unit_guid: u64) -> bool {
+    is_stunned(ctx, unit_guid)
+        || is_feared(ctx, unit_guid)
+        || auras_on(ctx, unit_guid).any(|a| {
+            a.eff_kind == A_CONTROL
+                && a.eff_p0 == M_POLY
+                && a.eff_p1 & SOURCE_AURA_MASK == AURA_MOD_CONFUSE
+        })
+}
+
 pub(crate) fn is_rooted(ctx: &ReducerContext, unit_guid: u64) -> bool {
     has_control_mechanic(ctx, unit_guid, M_ROOT)
 }
