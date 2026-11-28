@@ -144,8 +144,9 @@ pub(super) fn require_quest_share(
         .ok_or_else(|| "no party member shared that quest".to_string())
 }
 
-/// vmangos accept step for a Quest Share of this quest, whoever the giver is: ACCEPT_QUEST or
-/// TOO_FAR to the sharer, nothing when it is on another map. Leaves the share held.
+/// vmangos accept step for a Quest Share of this quest, whoever the giver is. Sends the sharer
+/// ACCEPT_QUEST, or TOO_FAR and refuses at 14 yards or more; refuses sending nothing when the
+/// sharer is not on the receiver's map. Leaves the share held.
 pub(super) fn reach_sharer(
     ctx: &ReducerContext,
     receiver: &crate::WorldEntity,
@@ -181,7 +182,7 @@ pub(super) fn settle_on_accept(ctx: &ReducerContext, receiver_guid: u64) {
     take(ctx, receiver_guid);
 }
 
-/// Ends a Quest Share after a refused accept; true: commit, since the sharer may have heard.
+/// Ends a Quest Share after a refused accept that changed no quest log or bags; true: commit.
 pub(crate) fn end_after_refused_accept(ctx: &ReducerContext, receiver_guid: u64) -> bool {
     take(ctx, receiver_guid).is_some()
 }

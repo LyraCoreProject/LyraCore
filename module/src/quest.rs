@@ -738,7 +738,7 @@ fn validate_giver(
 ) -> Result<GiverKind, ActionRefusal> {
     if let Some(giver) = ctx.db.game_world_entity().guid().find(giver_guid) {
         if giver.is_player() {
-            return validate_party_giver(ctx, player, giver_guid);
+            return validate_party_giver(ctx, player, giver_guid, &giver);
         }
         let giver = crate::npc_interaction::serving_npc(
             ctx,
@@ -798,6 +798,7 @@ fn validate_party_giver(
     ctx: &ReducerContext,
     player: &crate::WorldEntity,
     giver_guid: u64,
+    giver: &crate::WorldEntity,
 ) -> Result<GiverKind, ActionRefusal> {
     let same_group = match (
         crate::group::group_of(ctx, player.guid),
@@ -808,6 +809,12 @@ fn validate_party_giver(
     };
     if !same_group {
         return Err("target is not a quest giver".to_string().into());
+    }
+    if giver.dead {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            "quest giver is dead",
+        ));
     }
     Ok(GiverKind::Party(giver_guid))
 }

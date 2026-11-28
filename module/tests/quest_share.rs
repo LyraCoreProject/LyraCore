@@ -685,3 +685,20 @@ fn an_npc_accept_of_the_shared_quest_beyond_14_yards_of_the_sharer_sends_too_far
         [share_result::SHARING_QUEST, share_result::TOO_FAR]
     );
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_dead_sharer_is_refused_and_hears_nothing() {
+    let realm = start("quest-share-dead-sharer");
+    assert!(push(&realm, SHARED).status.success());
+    realm.assert_sql(&format!(
+        "UPDATE game_world_entity SET dead = true WHERE guid = {SHARER}"
+    ));
+    assert!(
+        accept_from_sharer(&realm, SHARED).status.success(),
+        "a refused accept that ends a share commits"
+    );
+    assert!(receiver_quests(&realm).is_empty());
+    assert!(quest_shares(&realm).is_empty());
+    assert_eq!(push_results(&realm), [share_result::SHARING_QUEST]);
+}
