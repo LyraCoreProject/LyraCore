@@ -198,7 +198,7 @@ fn free_primary_professions(packets: &[(u16, Vec<u8>)], guid: u64) -> Option<u64
                 }
             })
         })
-        .last()
+        .next_back()
 }
 
 fn removed_spells(packets: &[(u16, Vec<u8>)]) -> Vec<u16> {
