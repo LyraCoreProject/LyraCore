@@ -4301,7 +4301,7 @@ def check_inventory(host):
     assert not any(opcode in (0x12b, 0xa9) for opcode, _ in refused)
     host.restore('game_trainer_spell', 'id >= 5091100 AND id <= 5091103')
     host.restore('game_spell_chain', 'spell_id = 5091104')
-    host.sql('INSERT INTO game_spell_chain (spell_id,prev_spell,first_spell,rank,req_spell) VALUES (5091104,0,5091104,1,5091105)')
+    host.sql('INSERT INTO game_spell_chain (spell_id,prev_spell,first_spell,rank,req_spell) VALUES (5091104,5091103,5091103,2,5091105)')
     for row_id, spell, line, cap, skill, value in [(5091100, 5091101, 0, 75, 197, 50), (5091101, 5091102, 171, 75, 0, 0), (5091102, 5091103, 185, 75, 0, 0), (5091103, 5091104, 0, 75, 0, 0)]:
         host.sql(f'INSERT INTO game_trainer_spell (id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap,required_skill,required_skill_value) VALUES ({row_id},51001,{spell},10,1,{line},{cap},{skill},{value})')
     green, red = 0, 1
@@ -4311,6 +4311,12 @@ def check_inventory(host):
         body = next(body for opcode, body in client.collect() if opcode == 0x1b1)
         offers = (struct.unpack_from('<IBIIIBII', body, 16 + 38 * index) for index in range(struct.unpack_from('<I', body, 12)[0]))
         return {offer[0]: offer[1:] for offer in offers}
+
+    def required_spells(spell):
+        client.send(0x1b0, struct.pack('<Q', trainer))
+        body = next(body for opcode, body in client.collect() if opcode == 0x1b1)
+        entries = (body[16 + 38 * index:16 + 38 * (index + 1)] for index in range(struct.unpack_from('<I', body, 12)[0]))
+        return next(struct.unpack_from('<III', entry, 26) for entry in entries if struct.unpack_from('<I', entry)[0] == spell)
 
     def refused_as_not_enough_skill(spell):
         client.send(0x1b2, struct.pack('<QI', trainer, spell))
@@ -4339,6 +4345,8 @@ def check_inventory(host):
     assert host.rows(f'SELECT spell_id FROM game_player_spell WHERE character_guid = {guid} AND spell_id = 5091101') == [[5091101]]
     assert host.rows(f'SELECT skill_line FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 185') == [[185]]
     assert trainer_offers()[5091104] == (red, 10, 0, 0, 1, 0, 0)
+    assert required_spells(5091104) == (5091105, 5091103, 0)
+    assert required_spells(5091103) == (0, 0, 0)
     refused_as_not_enough_skill(5091104)
     host.call('debug_learn_spell', [guid, 5091105])
     client.collect()

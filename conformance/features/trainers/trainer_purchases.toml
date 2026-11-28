@@ -11,6 +11,7 @@ deliberate_deviations = []
 prerequisites = []
 tests = [
     { path = "crates/lyracore-protocol/src/codec/trainer.rs", function = "a_trainer_list_marks_unmet_gates_red_and_sends_the_skill_requirement", rung = "codec" },
+    { path = "crates/lyracore-protocol/src/codec/trainer.rs", function = "a_trainer_list_sends_the_required_spell_before_the_previous_rank", rung = "codec" },
     { path = "crates/lyracore-protocol/src/codec/trainer.rs", function = "a_primary_first_rank_is_green_with_a_free_slot_and_green_without_the_learn_button", rung = "codec" },
     { path = "module/tests/trainer_professions.rs", function = "a_recipe_is_refused_below_its_skill_requirement_and_learnable_at_it", rung = "durable_module" },
     { path = "module/tests/trainer_professions.rs", function = "a_permanent_skill_bonus_counts_toward_a_required_skill", rung = "durable_module" },

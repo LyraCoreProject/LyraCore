@@ -40,6 +40,8 @@ pub(super) fn list(
                 learn_skill_line: row.learn_skill_line,
                 required_skill: row.required_skill,
                 required_skill_value: row.required_skill_value,
+                previous_spell: assessment.previous_spell,
+                required_spell: assessment.required_spell,
                 gates: assessment.gates,
             }
         })

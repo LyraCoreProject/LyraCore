@@ -906,10 +906,13 @@ count. A Character holds at most two primary professions
 (`lyracore_shared::trainer::PRIMARY_PROFESSION_LINES`). The first rank of a primary profession is
 the offer with `learn_skill_cap` 75. The list sends it green with no learn button, and the buy is
 refused, once two primary skill rows exist. The count is derived from `game_player_skill`;
-`PLAYER_CHARACTER_POINTS2` carries the free count to the client. An offer whose learned spell has a
-`game_spell_chain.req_spell` is red, and its buy refused, until the Character knows that exact spell;
-a higher rank of it does not stand in. Every state but green, a gray offer the Character already
-knows included, is sent as `TrainingFailureReason::NotEnoughSkill`, as vmangos does; only a buy
+`PLAYER_CHARACTER_POINTS2` carries the free count to the client. An offer with no skill line,
+whose learned spell has a `game_spell_chain.req_spell`, is red, and its buy refused, until the
+Character knows that exact spell; a higher rank of it does not stand in. vmangos reads the chain
+for every offer, but a skill-line offer buys with `spell_id` and lists with
+`resolve_learn_target`, so widening the check needs those lined up first. The list sends `[req_spell, prev_spell, 0]` as the required spells, or
+`[prev_spell, 0, 0]` when there is no `req_spell`. Every gate refusal, the primary profession limit
+and an already known offer included, is sent as `NotEnoughSkill`, as vmangos does; only a buy
 without the money answers `NotEnoughMoney`.
 
 ### Proc data (`module/src/spell/tables.rs`)

@@ -53,6 +53,8 @@ pub(crate) fn prerequisite_met(required_spell: u32, knows_required: bool) -> boo
 
 pub(crate) struct Assessment {
     pub known: bool,
+    pub previous_spell: u32,
+    pub required_spell: u32,
     pub gates: OfferingGates,
 }
 
@@ -122,6 +124,8 @@ impl Trainee {
             .count();
         Assessment {
             known,
+            previous_spell: chain.as_ref().map_or(0, |chain| chain.prev_spell),
+            required_spell: chain.as_ref().map_or(0, |chain| chain.req_spell),
             gates: OfferingGates {
                 previous_rank_missing,
                 required_spell_missing,
