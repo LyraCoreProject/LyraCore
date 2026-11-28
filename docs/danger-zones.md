@@ -1084,6 +1084,17 @@ from items, and Inspiration, Recklessness and Resurrection Sickness add or remov
 instead of a percent.
 Repair copies the layer to stored Auras. No table schema changes.
 
+### Exclusive resistance aura migration
+
+Reimport `spell`, then call `debug_repair_after_publish` before play resumes. Source aura 143
+(`SPELL_AURA_MOD_RESISTANCE_EXCLUSIVE`) now imports as `A_MOD_RESISTANCE` layer 4, where it was
+`A_INERT`, and aura 182 imports as layer 5, where it was layer 0. Until the reimport, Mark of the
+Wild, Gift of the Wild, Shadow, Fire, Frost and Nature Resistance, the Paladin Resistance Auras,
+Aspect of the Wild and Prayer of Shadow Protection give no resistance, and Arcane Resilience adds
+its amount as flat armor instead of that percent of Intellect. Repair corrects a stored Arcane
+Resilience Aura. A stored Mark of the Wild or other exclusive buff never held its resistance Aura,
+so a Character gets the resistance when the buff is cast again. No table schema changes.
+
 ### Global cooldown migration
 
 `game_spell.gcd_ms` now comes from the source `startRecoveryTime`. An older import set 1500 for

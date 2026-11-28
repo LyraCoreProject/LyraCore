@@ -78,6 +78,7 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | ModBaseResistance
         | ModResistancePct
         | ModBaseResistancePct
+        | ModResistanceExclusive
         | ModResistanceOfStatPercent => A_MOD_RESISTANCE,
 
         SchoolAbsorb | ManaShield => A_ABSORB,
@@ -179,6 +180,8 @@ pub fn resistance_layer(aura: AuraMod) -> i32 {
         AuraMod::ModBaseResistance => RESISTANCE_BASE_VALUE,
         AuraMod::ModBaseResistancePct => RESISTANCE_BASE_PCT,
         AuraMod::ModResistancePct => RESISTANCE_TOTAL_PCT,
+        AuraMod::ModResistanceExclusive => RESISTANCE_EXCLUSIVE,
+        AuraMod::ModResistanceOfStatPercent => RESISTANCE_INTELLECT_PCT,
         _ => RESISTANCE_TOTAL_VALUE,
     }
 }
@@ -263,6 +266,8 @@ mod tests {
         assert!(supported_effect("Other", &slot(5, 0, 9, 0)));
         assert!(supported_effect("Other", &slot(108, 0, 0, 21)));
         assert!(supported_effect("Stealth", &slot(6, 16, 0, 0)));
+        assert!(supported_effect("Other", &slot(6, 143, 0, 126)));
+        assert!(supported_effect("Other", &slot(6, 182, 0, 1)));
         assert!(!supported_effect("Stealth", &slot(3, 0, 0, 0)));
         assert!(!supported_effect("Other", &slot(6, 999, 0, 0)));
         assert!(!supported_effect("Other", &slot(108, 0, 0, 1)));
