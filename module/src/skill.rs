@@ -9,6 +9,9 @@ use crate::{
     game_aura, game_item_template, game_player_spell, game_world_entity, Aura, WorldEntity,
 };
 
+mod unlearn;
+pub(crate) use unlearn::unlearn_skill;
+
 pub const SKILL_PER_LEVEL: u32 = 5;
 // vmangos ABILITY_LEARNED_ON_GET_RACE_OR_CLASS_SKILL: knowing the spell grants its skill line.
 const ACQUIRED_WITH_RACE_OR_CLASS_SKILL: i32 = 2;

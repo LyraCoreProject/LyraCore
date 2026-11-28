@@ -1925,8 +1925,11 @@ fn destroy_quest_bonded_required_items(ctx: &ReducerContext, player_guid: u64, q
     }
 }
 
-fn remove_from_log(ctx: &ReducerContext, mut cq: CharacterQuest) -> Result<(), crate::Refusal> {
-    let (player_guid, quest_entry) = (cq.character_guid, cq.quest_entry);
+fn take_source_item(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    quest_entry: u32,
+) -> Result<(), crate::Refusal> {
     if let Some(tmpl) = ctx.db.game_quest_template().entry().find(quest_entry) {
         if tmpl.src_item != 0 {
             let available = crate::items::item_count(ctx, player_guid, tmpl.src_item);
@@ -1934,6 +1937,42 @@ fn remove_from_log(ctx: &ReducerContext, mut cq: CharacterQuest) -> Result<(), c
             crate::items::remove_items(ctx, player_guid, tmpl.src_item, count)?;
         }
     }
+    Ok(())
+}
+
+/// vmangos `Player::SetSkill` on a lost skill: every quest of the Character that requires the
+/// skill, rewarded or not, leaves the log and reads as not started. A quest still in the log gives
+/// up its source item.
+pub(crate) fn forget_quests_requiring_skill(ctx: &ReducerContext, guid: u64, skill_line: u32) {
+    let requiring: Vec<CharacterQuest> = ctx
+        .db
+        .game_character_quest()
+        .by_character()
+        .filter(guid)
+        .filter(|row| {
+            ctx.db
+                .game_quest_template()
+                .entry()
+                .find(row.quest_entry)
+                .is_some_and(|tmpl| tmpl.required_skill == skill_line)
+        })
+        .collect();
+    for row in requiring {
+        if !row.rewarded {
+            if let Err(refusal) = take_source_item(ctx, guid, row.quest_entry) {
+                spacetimedb::log::warn!(
+                    "quest {} kept its source item for character {guid}: {refusal}",
+                    row.quest_entry
+                );
+            }
+        }
+        CharacterQuest::delete(ctx, row.id);
+    }
+}
+
+fn remove_from_log(ctx: &ReducerContext, mut cq: CharacterQuest) -> Result<(), crate::Refusal> {
+    let (player_guid, quest_entry) = (cq.character_guid, cq.quest_entry);
+    take_source_item(ctx, player_guid, quest_entry)?;
     destroy_quest_bonded_required_items(ctx, player_guid, quest_entry);
     if CharacterQuestRetake::clear(ctx, player_guid, quest_entry) {
         cq.rewarded = true;

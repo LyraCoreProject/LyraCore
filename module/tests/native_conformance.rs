@@ -50,6 +50,8 @@ mod repair;
 mod reputation;
 #[path = "conformance/rolls.rs"]
 mod rolls;
+#[path = "conformance/skill_unlearning.rs"]
+mod skill_unlearning;
 #[path = "conformance/skills.rs"]
 mod skills;
 #[path = "conformance/spell_rolls.rs"]

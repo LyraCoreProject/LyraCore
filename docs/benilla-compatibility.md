@@ -196,7 +196,7 @@ A Refusal or an empty reply does not establish a working gameplay feature.
 | Readable pages | A terminal page naming the unavailable text service |
 | Tutorial resets and action-bar display preferences | One unavailable notice per feature per World Session |
 | Tutorial mark-seen requests | No reply; login already reports every tutorial seen |
-| Ammunition, skill unlearning and honor queries | Specific System Messages |
+| Ammunition and honor queries | Specific System Messages |
 | Remote cameras, LFG preferences and quest-share confirmations | Specific System Messages |
 | Raid lockout queries | An empty lockout list; instance bindings end with their Instance |
 

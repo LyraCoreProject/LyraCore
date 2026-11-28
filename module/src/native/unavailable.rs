@@ -135,7 +135,6 @@ pub(super) fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<V
                 unavailable("Pet spell casts"),
             ]);
         }
-        ClientOpcodeMessage::CMSG_UNLEARN_SKILL(_) => unavailable("Skill unlearning requests"),
         ClientOpcodeMessage::CMSG_SET_AMMO(_) => unavailable("Ammunition selections"),
         ClientOpcodeMessage::CMSG_MOUNTSPECIAL_ANIM => unavailable("Mount flourishes"),
         ClientOpcodeMessage::CMSG_FAR_SIGHT(_) => unavailable("Remote camera requests"),
