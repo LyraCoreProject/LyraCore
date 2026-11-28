@@ -228,10 +228,10 @@ symbol = "fire_ranged_shot"
 evidence = "Source reading, not measured. At d9173eca, Unit::ProcDamageAndSpell runs for an avoided ranged attack with PROC_EX_MISS or PROC_EX_DODGE; fire_ranged_shot schedules an impact only for damage, and ranged_impact returns before the pass when the shot's damage is zero."
 
 [[known_gaps]]
-description = "A school-mask power cost Aura (SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT and SPELL_AURA_MOD_POWER_COST_SCHOOL, aura types 72 and 73) is not imported, so Insight lowers no spell cost, and its charge rule keys on spell 18820 instead of the aura type."
-path = "importer/src/spell_kind.rs"
-symbol = "aura_mod_to_kind"
-evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp applies aura types 72 and 73 with Aura::HandleModPowerCostPCT and Aura::HandleModPowerCost, and UnitAuraProcHandler.cpp counts their charges with HandleModPowerCostSchoolAuraProc; aura_mod_to_kind maps both to A_INERT, and effect_proc names INSIGHT (18820)."
+description = "A school power cost Aura (aura types 72 and 73) changes what the Module charges, but the Module sends no UNIT_FIELD_POWER_COST_MODIFIER or UNIT_FIELD_POWER_COST_MULTIPLIER, so the client's tooltip and its own power check still use the unmodified cost."
+path = "module/src/native/aura.rs"
+symbol = "changed"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleModPowerCost and Aura::HandleModPowerCostPCT write those per-school unit fields; no LyraCore codec writes fields 173 to 186."
 
 [[known_gaps]]
 description = "Tame Beast sends its SMSG_SPELL_START with the channel duration as a cast time, and sends its SMSG_SPELL_GO only when the channel completes. vmangos sends START, then the GO and MSG_CHANNEL_START when the channel begins."
@@ -455,8 +455,33 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/aura_charges.rs"
-function = "insight_is_kept_by_a_free_spell_and_spent_by_one_that_costs_power"
+function = "insight_makes_one_costly_magic_spell_free_and_that_spell_spends_it"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "school_power_cost_auras_change_the_cost_of_a_spell_by_its_first_school"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/spell/spell_modifier.rs"
+function = "the_school_cost_multiplier_scales_the_cost_and_truncates"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/spell_modifier.rs"
+function = "a_school_flat_cost_below_the_base_leaves_the_spell_free"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
+function = "a_school_power_cost_charge_is_spent_only_by_a_costly_spell_of_its_schools"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "school_power_cost_auras_import_with_their_school_mask"
+rung = "unit"
 
 [[tests]]
 path = "module/tests/aura_charges.rs"

@@ -6,13 +6,13 @@ use lyracore_package_delta::fixture_ids::{
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
-    A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE, A_PROC_TRIGGER, A_SPELLMOD_FLAT,
-    A_SPELLMOD_PCT, CAST_FLAG_ALWAYS_HIT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES,
-    COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_SPELL_CRIT, E_DAMAGE, E_HEAL, E_INTERRUPT, E_TRIGGER,
-    E_WEAPON_STRIKE, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD, P_MECHANIC, P_NONE, P_RAW,
-    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST, SPEED_MOVE, SPEED_SWING,
-    SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST, SPELLMOD_OP_CRITICAL_CHANCE, T_SELF, T_TARGET_ALLY,
-    T_TARGET_ANY, T_TARGET_ENEMY,
+    A_MOD_POWER_COST_FLAT, A_MOD_POWER_COST_PCT, A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE,
+    A_PROC_TRIGGER, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, CAST_FLAG_ALWAYS_HIT, CAST_FLAG_CANNOT_CRIT,
+    CAST_FLAG_IGNORE_RESISTANCES, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_SPELL_CRIT, E_DAMAGE,
+    E_HEAL, E_INTERRUPT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD,
+    P_MECHANIC, P_NONE, P_RAW, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR,
+    SPEED_CAST, SPEED_MOVE, SPEED_SWING, SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST,
+    SPELLMOD_OP_CRITICAL_CHANCE, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
@@ -25,6 +25,7 @@ const PHYSICAL: u8 = 0x01;
 const HOLY: u8 = 0x02;
 const FIRE: u8 = 0x04;
 const NATURE: u8 = 0x08;
+const ARCANE: u8 = 0x40;
 // vmangos SpellDamageClass; class 0 rolls no hit.
 const DAMAGE_CLASS_NONE: u8 = 0;
 const DAMAGE_CLASS_MAGIC: u8 = 1;
@@ -67,10 +68,9 @@ const HIT_INFO_AVOIDED: [&str; 3] = ["2", "3", "4"];
 const ATTEMPTS: usize = 20;
 const BLOCK_ATTEMPTS: usize = 120;
 
-// Spell ids the Module names, as vmangos spell_mage.cpp and HandleModPowerCostSchoolAuraProc do.
+// Spell ids the Module names, as vmangos spell_mage.cpp does.
 const COMBUSTION: u32 = 11129;
 const COMBUSTION_CRIT_BUFF: u32 = 28682;
-const INSIGHT: u32 = 18820;
 
 const FLURRY: u32 = 5_091_100;
 const INNER_FIRE: u32 = 5_091_101;
@@ -132,6 +132,11 @@ const COLD_BLOOD_FIXTURE: u32 = 5_091_148;
 const UNCRITTABLE_MAGE_BOLT: u32 = 5_091_149;
 const MAGE_HEAL: u32 = 5_091_150;
 const MAGE_STRIKE: u32 = 5_091_151;
+const SCHOOL_COST_FIXTURE: u32 = 5_091_152;
+// Insight: aura 73 at -500 on every school but physical.
+const INSIGHT: u32 = 18820;
+const INSIGHT_COST: i32 = -500;
+const INSIGHT_SCHOOLS: u8 = 0x7E;
 // Cold Blood 14177 and Divine Favor 20216: a flat +100% crit chance modifier with one charge.
 const CERTAIN_CRIT_PERCENT: i32 = 100;
 const DIVINE_FAVOR: u32 = 20216;
@@ -1382,23 +1387,28 @@ fn focus_is_kept_by_an_instant_spell_and_spent_by_one_with_a_cast_time() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn insight_is_kept_by_a_free_spell_and_spent_by_one_that_costs_power() {
+fn insight_makes_one_costly_magic_spell_free_and_that_spell_spends_it() {
     let mut standalone = Standalone::start("aura-charges-insight");
     let wolf = stage(&mut standalone);
     aura_spell(
         &standalone,
         Charged {
             spell_id: INSIGHT,
-            school_mask: PHYSICAL,
+            school_mask: ARCANE,
             target: T_SELF,
             proc_flags: DEAL_HARMFUL_SPELL,
             charges: 1,
         },
-        &[(A_INERT, 0, 0, P_NONE)],
+        &[(
+            A_MOD_POWER_COST_FLAT,
+            INSIGHT_COST,
+            i32::from(INSIGHT_SCHOOLS),
+            P_SCHOOL_MASK,
+        )],
     );
     bolt(&standalone, FIRE_BOLT, FIRE, 0);
     bolt(&standalone, COSTLY_BOLT, FIRE, 0);
-    set_spell(&standalone, COSTLY_BOLT, "cost = 10");
+    set_spell(&standalone, COSTLY_BOLT, &format!("cost = {BOLT_COST}"));
     use_mana(&standalone);
     standalone.assert_call("debug_force_cast", &["1", &INSIGHT.to_string()]);
     advance(&standalone);
@@ -1410,7 +1420,49 @@ fn insight_is_kept_by_a_free_spell_and_spent_by_one_that_costs_power() {
         "vmangos HandleModPowerCostSchoolAuraProc skips a spell with no cost"
     );
     cast(&standalone, COSTLY_BOLT, wolf);
+    assert_eq!(
+        mana(&standalone),
+        MANA,
+        "Insight's -500 makes the spell free"
+    );
     assert_eq!(charges(&standalone, PLAYER, INSIGHT), None);
+    cast(&standalone, COSTLY_BOLT, wolf);
+    assert_eq!(mana(&standalone), MANA - BOLT_COST);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn school_power_cost_auras_change_the_cost_of_a_spell_by_its_first_school() {
+    let mut standalone = Standalone::start("aura-charges-school-power-cost");
+    let wolf = stage(&mut standalone);
+    // As Fire Focus 5837 (-2), Lucifron's Curse 19703 (+100%) and a -100% frost cost Aura.
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: SCHOOL_COST_FIXTURE,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[
+            (A_MOD_POWER_COST_FLAT, -2, i32::from(FIRE), P_SCHOOL_MASK),
+            (A_MOD_POWER_COST_PCT, 100, i32::from(FIRE), P_SCHOOL_MASK),
+            (A_MOD_POWER_COST_PCT, -100, i32::from(FROST), P_SCHOOL_MASK),
+        ],
+    );
+    bolt(&standalone, COSTLY_BOLT, FIRE | FROST, 0);
+    set_spell(&standalone, COSTLY_BOLT, &format!("cost = {BOLT_COST}"));
+    use_mana(&standalone);
+    standalone.assert_call("debug_force_cast", &["1", &SCHOOL_COST_FIXTURE.to_string()]);
+    advance(&standalone);
+
+    cast(&standalone, COSTLY_BOLT, wolf);
+    assert_eq!(
+        mana(&standalone),
+        MANA - (BOLT_COST - 2) * 2,
+        "vmangos CalculatePowerCost reads the first school, adds the flat cost, then multiplies"
+    );
 }
 
 #[test]

@@ -1,12 +1,13 @@
 use lyracore_shared::spell::taxonomy::{
-    A_SPELLMOD_FLAT, A_SPELLMOD_PCT, SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST,
-    SPELLMOD_OP_CRITICAL_CHANCE, SPELL_FAMILY_POTION,
+    A_MOD_POWER_COST_FLAT, A_MOD_POWER_COST_PCT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT,
+    SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST, SPELLMOD_OP_CRITICAL_CHANCE, SPELL_FAMILY_POTION,
 };
 use spacetimedb::{ReducerContext, Timestamp};
 
 use super::proc::{DAMAGE_CLASS_MAGIC, DAMAGE_CLASS_MELEE, DAMAGE_CLASS_RANGED};
+use super::school_immunity::SCHOOL_MASK_PHYSICAL;
 use super::tables::SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS;
-use super::{apply_spell_mod, auras_on, can_crit, shed_auras};
+use super::{apply_signed_spell_mod, auras_on, can_crit, shed_auras};
 use crate::modifiers::AuraAmount;
 use crate::{game_spell, Aura, Spell, SpellEffect};
 
@@ -70,12 +71,30 @@ fn makes_instant(row: &Aura) -> bool {
 }
 
 // Read docs/schema.md#spell-modifiers for the base-value rules.
-fn changes(row: &Aura, base: u32) -> bool {
+fn changes(row: &Aura, base: i64) -> bool {
     if row.eff_p0 == SPELLMOD_OP_CASTING_TIME && base == 0 {
         return false;
     }
     row.eff_kind == A_SPELLMOD_FLAT
-        || (base != 0 && !(makes_instant(row) && base >= INSTANT_CAST_LIMIT_MS))
+        || (base != 0 && !(makes_instant(row) && base >= i64::from(INSTANT_CAST_LIMIT_MS)))
+}
+
+fn signed_modified_value(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    op: i32,
+    hdr: &Spell,
+    base: i64,
+) -> i64 {
+    let rows: Vec<Aura> = affecting(ctx, caster_guid, hdr)
+        .into_iter()
+        .filter(|row| row.eff_p0 == op && changes(row, base))
+        .collect();
+    if rows.iter().any(makes_instant) {
+        return 0;
+    }
+    let (flat, pct) = sums(&rows);
+    apply_signed_spell_mod(base, flat, pct)
 }
 
 /// vmangos Player::ApplySpellMod: `base` under the caster's `op` modifiers that affect `hdr`.
@@ -86,20 +105,44 @@ pub(crate) fn spell_modified_value(
     hdr: &Spell,
     base: u32,
 ) -> u32 {
-    let rows: Vec<Aura> = affecting(ctx, caster_guid, hdr)
-        .into_iter()
-        .filter(|row| row.eff_p0 == op && changes(row, base))
-        .collect();
-    if rows.iter().any(makes_instant) {
-        return 0;
-    }
-    let (flat, pct) = sums(&rows);
-    apply_spell_mod(base, flat, pct)
+    let value = signed_modified_value(ctx, caster_guid, op, hdr, i64::from(base));
+    value.clamp(0, i64::from(u32::MAX)) as u32
 }
 
-/// The power `hdr` costs the caster after its cost modifiers.
+/// The summed flat and percent school power cost Auras of the caster on its spell's first school.
+fn school_cost_modifiers(ctx: &ReducerContext, caster_guid: u64, school_mask: u8) -> (i32, i32) {
+    // vmangos GetFirstSchoolInMask, which reads an empty mask as physical.
+    let first_school = match school_mask & school_mask.wrapping_neg() {
+        0 => SCHOOL_MASK_PHYSICAL,
+        school => school,
+    };
+    auras_on(ctx, caster_guid)
+        .filter(|row| row.eff_p0 & i32::from(first_school) != 0)
+        .fold((0, 0), |(flat, pct), row| match row.eff_kind {
+            A_MOD_POWER_COST_FLAT => (flat + AuraAmount::from(&row).total(), pct),
+            A_MOD_POWER_COST_PCT => (flat, pct + AuraAmount::from(&row).total()),
+            _ => (flat, pct),
+        })
+}
+
+/// `cost` under the school cost multiplier, which vmangos Spell::CalculatePowerCost applies last.
+fn power_cost(cost: i64, school_pct: i32) -> u32 {
+    let cost = if school_pct == 0 {
+        cost
+    } else {
+        // vmangos int32(powerCost * (1.0f + multiplier)) in single precision.
+        (cost as f32 * (1.0 + school_pct as f32 / 100.0)) as i64
+    };
+    cost.clamp(0, i64::from(u32::MAX)) as u32
+}
+
+/// The power `hdr` costs the caster: the school flat cost, the cost modifiers, then the school
+/// multiplier, as vmangos Spell::CalculatePowerCost orders them.
 pub(crate) fn spell_cost(ctx: &ReducerContext, caster_guid: u64, hdr: &Spell) -> u32 {
-    spell_modified_value(ctx, caster_guid, SPELLMOD_OP_COST, hdr, hdr.cost)
+    let (school_flat, school_pct) = school_cost_modifiers(ctx, caster_guid, hdr.school_mask);
+    let base = i64::from(hdr.cost) + i64::from(school_flat);
+    let modified = signed_modified_value(ctx, caster_guid, SPELLMOD_OP_COST, hdr, base);
+    power_cost(modified, school_pct)
 }
 
 /// vmangos Player::ApplySpellMod on a crit `chance` in percent; percent modifiers skip a 0 chance.
@@ -212,10 +255,10 @@ fn used_rows(rows: Vec<Aura>, hdr: &Spell, cast: ModifiedCast) -> Vec<Aura> {
                 && match row.eff_p0 {
                     SPELLMOD_OP_CASTING_TIME => {
                         fixed_cast_time(row)
-                            && changes(row, hdr.cast_time_ms)
+                            && changes(row, i64::from(hdr.cast_time_ms))
                             && !(instant && row.eff_kind == A_SPELLMOD_FLAT)
                     }
-                    SPELLMOD_OP_COST => cast.pays_cost && changes(row, hdr.cost),
+                    SPELLMOD_OP_COST => cast.pays_cost && changes(row, i64::from(hdr.cost)),
                     SPELLMOD_OP_CRITICAL_CHANCE => cast.rolls_crit,
                     _ => true,
                 }
@@ -384,5 +427,23 @@ mod tests {
         ];
         let used = used_rows(rows, &spell(0, 2000), cast());
         assert_eq!(used.iter().map(|row| row.spell_id).collect::<Vec<_>>(), [1]);
+    }
+
+    #[test]
+    fn the_school_cost_multiplier_scales_the_cost_and_truncates() {
+        assert_eq!(power_cost(250, 0), 250);
+        // Lucifron's Curse 19703: +100%.
+        assert_eq!(power_cost(250, 100), 500);
+        // Shadow Cost Reduction 23553: -15%; 333 * 0.85 = 283.05.
+        assert_eq!(power_cost(333, -15), 283);
+        // Spirit of Redemption 27792: -100%.
+        assert_eq!(power_cost(500, -100), 0);
+    }
+
+    #[test]
+    fn a_school_flat_cost_below_the_base_leaves_the_spell_free() {
+        // Insight 18820 takes 500 from a 100 cost before a +50 cost modifier adds to it.
+        assert_eq!(power_cost(apply_signed_spell_mod(100 - 500, 50, 0), 0), 0);
+        assert_eq!(power_cost(apply_signed_spell_mod(100 - 500, 0, 0), 100), 0);
     }
 }

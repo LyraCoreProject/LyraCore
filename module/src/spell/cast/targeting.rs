@@ -1396,6 +1396,8 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraModSchoolCrit
         | EffectKind::AuraModDamageDonePct
         | EffectKind::AuraModHealingTaken
+        | EffectKind::AuraModPowerCostFlat
+        | EffectKind::AuraModPowerCostPct
         | EffectKind::AuraInert
         | EffectKind::AuraModSkill
         | EffectKind::AuraModHealing

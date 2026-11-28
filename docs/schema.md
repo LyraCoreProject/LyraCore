@@ -1326,6 +1326,22 @@ spends its charges when its swing pays. The cast uses these rows:
 - A crit chance row, only when the Spell's crit roll reads it. A Spell whose effects deal or heal
   nothing keeps it for the next Spell that can crit.
 
+### School power cost Auras
+
+`A_MOD_POWER_COST_FLAT` (0xD8, aura 73) and `A_MOD_POWER_COST_PCT` (0xD9, aura 72) change what a
+spell costs its caster in any power type. `eff_p0` is the source school mask. A spell reads only
+the rows whose mask holds the first school of its own mask, as vmangos `GetFirstSchoolInMask`, so
+a fire and frost spell uses its fire rows. vmangos `Spell::CalculatePowerCost` sets the order: the
+summed flat amounts add to the base cost, the cost spell modifiers apply to that sum, and the
+summed percent amounts then scale it in single precision, truncated and never below 0. A flat
+amount larger than the cost makes the spell free whatever the spell modifiers add.
+
+A charged row, as on Insight, is spent by the proc pass, not by the cost: vmangos
+`HandleModPowerCostSchoolAuraProc` counts a spell with a nonzero base cost whose mask meets the
+row's mask. Equipment applies both kinds; Spirit of Aquementas and Choker of Enlightenment carry
+Spell Focus. The client still shows the unmodified cost, because the Module sends neither per-school
+cost field.
+
 ### Spell travel
 
 `game_spell.speed_yps` is the source `speed` (Spell.dbc Speed) in yards per second, kept verbatim.

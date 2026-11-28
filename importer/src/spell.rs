@@ -45,31 +45,32 @@ use lyracore_shared::spell::taxonomy::{
     A_IMMUNITY, A_INERT, A_MANA_REGEN_INTERRUPT, A_MOD_COMBAT, A_MOD_DAMAGE_DONE_FLAT,
     A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN, A_MOD_DAMAGE_TAKEN_FLAT, A_MOD_HEALING,
     A_MOD_HEALING_TAKEN, A_MOD_HEALTH_POWER, A_MOD_HEALTH_REGEN, A_MOD_HEALTH_REGEN_PCT,
-    A_MOD_POWER_REGEN, A_MOD_POWER_REGEN_PCT, A_MOD_REGEN, A_MOD_RESISTANCE, A_MOD_SCHOOL_CRIT,
-    A_MOD_SKILL, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE,
-    A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER,
-    A_SEAL, A_SELF_RESURRECT, A_SHAPESHIFT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM,
-    CAST_FLAG_AREA_AURA, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER, CAST_FLAG_ITEM_TARGET,
-    CAST_FLAG_LEVEL_SKILL, CAST_FLAG_LOCKS_FORM, CAST_FLAG_NO_AURA_CANCEL, CAST_FLAG_PET_AREA_AURA,
-    CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST, CAST_FLAG_RIGHTEOUSNESS,
-    CAST_FLAG_WEAPON_PROCS, COMBAT_ATTACK_POWER, COMBAT_ATTACK_POWER_PCT, COMBAT_CRIT,
-    COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER_PCT,
-    COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK,
-    E_CAST_FRIEND_OR_FOE, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISMISS_PET,
-    E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET,
-    E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INEBRIATE, E_INTERRUPT, E_JUDGEMENT,
-    E_LEARN_SPELL, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN,
-    E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_REVIVE_PET, E_SCRIPTED, E_SELF_RESURRECT,
-    E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_OBJECT, E_SUMMON_PET,
-    E_SUMMON_PLAYER, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT,
-    M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG,
-    P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MANA_SHIELD_MASK, P_MECHANIC, P_NONE,
-    P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID,
-    P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM,
-    SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE,
-    STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CASTER_PET, T_CHAIN_ALLY,
-    T_CHAIN_ENEMY, T_PARTY_AREA, T_RAID_AREA, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY,
-    T_TARGET_ENEMY, T_TARGET_GROUP_CLASS, T_TARGET_SUBGROUP,
+    A_MOD_POWER_COST_FLAT, A_MOD_POWER_COST_PCT, A_MOD_POWER_REGEN, A_MOD_POWER_REGEN_PCT,
+    A_MOD_REGEN, A_MOD_RESISTANCE, A_MOD_SCHOOL_CRIT, A_MOD_SKILL, A_MOD_SPEED, A_MOD_STAT,
+    A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
+    A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SHAPESHIFT,
+    A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM, CAST_FLAG_AREA_AURA, CAST_FLAG_CHANNELED,
+    CAST_FLAG_COMBO_FINISHER, CAST_FLAG_ITEM_TARGET, CAST_FLAG_LEVEL_SKILL, CAST_FLAG_LOCKS_FORM,
+    CAST_FLAG_NO_AURA_CANCEL, CAST_FLAG_PET_AREA_AURA, CAST_FLAG_RANGED_AUTO_REPEAT,
+    CAST_FLAG_REFUSES_SELF_CAST, CAST_FLAG_RIGHTEOUSNESS, CAST_FLAG_WEAPON_PROCS,
+    COMBAT_ATTACK_POWER, COMBAT_ATTACK_POWER_PCT, COMBAT_CRIT, COMBAT_DODGE, COMBAT_HIT,
+    COMBAT_RANGED_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER_PCT, COMBAT_SPELL_CRIT, COMBAT_THREAT,
+    E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CAST_FRIEND_OR_FOE, E_CHARGE, E_CONVERT_RESOURCE,
+    E_CREATE_ITEM, E_DAMAGE, E_DISMISS_PET, E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY,
+    E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INEBRIATE,
+    E_INTERRUPT, E_JUDGEMENT, E_LEARN_SPELL, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_REVIVE_PET,
+    E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE,
+    E_SUMMON_OBJECT, E_SUMMON_PET, E_SUMMON_PLAYER, E_TAME_CREATURE, E_TAUNT, E_TRIGGER,
+    E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT,
+    P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY,
+    P_ITEM_ENTRY, P_MANA_SHIELD_MASK, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
+    P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
+    SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
+    T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CASTER_PET, T_CHAIN_ALLY, T_CHAIN_ENEMY, T_PARTY_AREA,
+    T_RAID_AREA, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    T_TARGET_GROUP_CLASS, T_TARGET_SUBGROUP,
 };
 
 // AttributesEx1 bits 0x04 and 0x40 both mark a channeled spell.
@@ -371,6 +372,8 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
         | A_MOD_SCHOOL_CRIT
         | A_MOD_DAMAGE_DONE_PCT
         | A_MOD_HEALING_TAKEN
+        | A_MOD_POWER_COST_FLAT
+        | A_MOD_POWER_COST_PCT
         | A_MOD_RESISTANCE
         | A_MOD_HEALING => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         A_MOD_DAMAGE_TAKEN => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
@@ -1853,6 +1856,8 @@ fn kind_name(kind: u8) -> &'static str {
         A_MOD_SCHOOL_CRIT => "A_MOD_SCHOOL_CRIT",
         A_MOD_DAMAGE_DONE_PCT => "A_MOD_DAMAGE_DONE_PCT",
         A_MOD_HEALING_TAKEN => "A_MOD_HEALING_TAKEN",
+        A_MOD_POWER_COST_FLAT => "A_MOD_POWER_COST_FLAT",
+        A_MOD_POWER_COST_PCT => "A_MOD_POWER_COST_PCT",
         A_SHAPESHIFT => "A_SHAPESHIFT",
         A_FORM_POWER_RETAINED => "A_FORM_POWER_RETAINED",
         A_FORM_ENTRY_CHANCE => "A_FORM_ENTRY_CHANCE",
@@ -4196,6 +4201,7 @@ mod tests {
             (58, 8747, 14, 0, (6, 1, 0), false),
             (64, 19307, 99, 0, (6, 1, 0), false),
             (71, 18382, 1, 126, (6, 1, 0), true),
+            (73, 12854, -26, 126, (6, 1, 0), true),
             (77, 7219, -1, 3, (6, 1, 0), false),
             (82, 11789, -1, 0, (6, 1, 0), false),
             (85, 18378, 7, 0, (6, 1, 0), true),
@@ -4231,6 +4237,66 @@ mod tests {
         }
         assert!(!equip_aura_supported(52, 0, [2, 0, 0]));
         assert!(!equip_aura_supported(85, 3, [u32::MAX, 0, 0]));
+    }
+
+    #[test]
+    fn school_power_cost_auras_import_with_their_school_mask() {
+        // Insight 18820 (aura 73) and Lucifron's Curse 19703 (aura 72).
+        for (spell, aura, raw_points, misc, kind, amount) in [
+            (18820, 73, -501, 0x7E, A_MOD_POWER_COST_FLAT, -500),
+            (19703, 72, 99, 0x7F, A_MOD_POWER_COST_PCT, 100),
+        ] {
+            let row = equip_review_effect(spell, aura, raw_points, misc, (6, 1, 0));
+            assert_eq!(
+                (row.kind, row.p0, row.p0_kind, row.base_points),
+                (kind, misc as i32, P_SCHOOL_MASK, amount)
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_TEST_DBC"]
+    fn every_imported_school_power_cost_aura_keeps_its_kind_and_school_mask() {
+        let path = std::env::var("LYRACORE_VMANGOS_SQLITE").unwrap();
+        let dbc = std::env::var("LYRACORE_TEST_DBC").unwrap();
+        let source = crate::world_source::WorldSource::open(Path::new(&path)).unwrap();
+        let (spells, _) = crate::vmangos_spell::read(&source).unwrap();
+        let expected: Vec<(u32, u8, i32)> = spells
+            .iter()
+            .flat_map(|s| {
+                (0..3).filter_map(move |i| {
+                    let kind = match s.effect_aura[i] {
+                        72 => A_MOD_POWER_COST_PCT,
+                        73 => A_MOD_POWER_COST_FLAT,
+                        _ => return None,
+                    };
+                    Some((s.id, kind, (s.effect_misc_value[i] & 0x7F) as i32))
+                })
+            })
+            .collect();
+        let (rows, _, _) = derive_spell_rows(
+            &open_spell_tables(Path::new(&dbc), spells).unwrap(),
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert!(expected.iter().any(|(spell_id, ..)| *spell_id == 18820));
+        for (spell_id, kind, mask) in expected {
+            if rows
+                .headers
+                .iter()
+                .all(|header| header.spell_id != spell_id)
+            {
+                continue;
+            }
+            assert!(
+                rows.effects.iter().any(|effect| {
+                    (effect.spell_id, effect.kind, effect.p0, effect.p0_kind)
+                        == (spell_id, kind, mask, P_SCHOOL_MASK)
+                }),
+                "spell {spell_id}"
+            );
+        }
     }
 
     #[test]

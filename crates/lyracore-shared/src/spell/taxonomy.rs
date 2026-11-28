@@ -116,6 +116,10 @@ effect_kinds! {
     A_FORM_POWER_RETAINED => AuraFormPowerRetained = 0xD6,
     // Amount: percent chance that entering a Form in the spell's Form Set casts its entry spell.
     A_FORM_ENTRY_CHANCE => AuraFormEntryChance = 0xD7,
+    // p0 is a school mask; the amount adds to the cost of a spell whose first school it holds.
+    A_MOD_POWER_COST_FLAT => AuraModPowerCostFlat = 0xD8,
+    // p0 is a school mask; the amount is the percent it adds to that spell's cost, applied last.
+    A_MOD_POWER_COST_PCT => AuraModPowerCostPct = 0xD9,
     E_SUMMON_GUARDIANS => SummonGuardians = 0x27,
     E_ADD_EXTRA_ATTACKS => AddExtraAttacks = 0x28,
     // Effect points are the duration in seconds; p0 is the enchantment id.
@@ -322,6 +326,8 @@ mod tests {
         assert_eq!(A_SHAPESHIFT, 0xD5);
         assert_eq!(A_FORM_POWER_RETAINED, 0xD6);
         assert_eq!(A_FORM_ENTRY_CHANCE, 0xD7);
+        assert_eq!(A_MOD_POWER_COST_FLAT, 0xD8);
+        assert_eq!(A_MOD_POWER_COST_PCT, 0xD9);
         for k in [
             E_DAMAGE, E_HEAL, E_ENERGIZE, E_DISPEL, E_TRIGGER, E_SCRIPTED,
         ] {

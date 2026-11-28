@@ -4,9 +4,9 @@ use crate::game_world_entity;
 
 use crate::combat::{AttackOutcome, Hit, HitSource};
 use lyracore_shared::spell::taxonomy::{
-    A_FLAG, A_IMMUNITY, A_INERT, A_MOD_DAMAGE_DONE_FLAT, A_MOD_RESISTANCE, A_MOD_SPEED,
-    A_PROC_DAMAGE, A_PROC_TRIGGER, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, P_MECHANIC, SPEED_CAST,
-    SPEED_SWING,
+    A_FLAG, A_IMMUNITY, A_MOD_DAMAGE_DONE_FLAT, A_MOD_POWER_COST_FLAT, A_MOD_POWER_COST_PCT,
+    A_MOD_RESISTANCE, A_MOD_SPEED, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SPELLMOD_FLAT, A_SPELLMOD_PCT,
+    P_MECHANIC, SPEED_CAST, SPEED_SWING,
 };
 
 // vmangos SpellDefines.h SpellModOp SPELLMOD_CHARGES.
@@ -513,7 +513,6 @@ enum AuraProc {
 /// The carried spell's fields that the aura-type handlers read.
 #[derive(Clone, Copy, Debug, Default)]
 struct HolderSpell {
-    spell_id: u32,
     family_name: u8,
     family_flags: u64,
     attributes: u32,
@@ -527,7 +526,6 @@ impl HolderSpell {
             .spell_id()
             .find(spell_id)
             .map_or(Self::default(), |hdr| Self {
-                spell_id,
                 family_name: hdr.family_name,
                 family_flags: hdr.family_flags,
                 attributes: hdr.attributes,
@@ -646,10 +644,6 @@ const SPELL_FAMILY_PRIEST: u8 = 6;
 const FAMILY_FLAG_PRIEST_INNER_FIRE: u64 = 0x2;
 // vmangos Unit::HandleHasteAuraProc names Flurry by SpellIconID 108 and SpellVisual 2759.
 const FLURRY_VISUAL: u32 = 2759;
-// The importer keeps Insight's aura 73, SPELL_AURA_MOD_POWER_COST_SCHOOL, as A_INERT.
-const INSIGHT: u32 = 18820;
-// Insight's EffectMiscValue: every school but physical.
-const INSIGHT_SCHOOLS: u8 = 0x7E;
 
 /// The vmangos aura-type handler of a non-Proc effect; `Failed` keeps the charge.
 fn effect_proc(row: &Aura, spell: &HolderSpell, charges: u8, hit: &ProcHit) -> AuraProc {
@@ -680,10 +674,10 @@ fn effect_proc(row: &Aura, spell: &HolderSpell, charges: u8, hit: &ProcHit) -> A
             hit.spell
                 .is_some_and(|spell| i32::from(spell.mechanic) == row.eff_p0)
         }
-        // HandleModPowerCostSchoolAuraProc: only a spell of the school that costs power.
-        A_INERT if spell.spell_id == INSIGHT => hit
+        // HandleModPowerCostSchoolAuraProc: only a spell of the Aura's schools that costs power.
+        A_MOD_POWER_COST_FLAT | A_MOD_POWER_COST_PCT => hit
             .spell
-            .is_some_and(|spell| spell.cost > 0 && spell.school_mask & INSIGHT_SCHOOLS != 0),
+            .is_some_and(|spell| spell.cost > 0 && i32::from(spell.school_mask) & row.eff_p0 != 0),
         _ => true,
     };
     if admitted {
@@ -1426,12 +1420,13 @@ mod tests {
     }
 
     #[test]
-    fn insight_is_spent_only_by_a_magic_spell_that_costs_power() {
-        let insight = HolderSpell {
-            spell_id: INSIGHT,
-            ..HolderSpell::default()
-        };
-        let row = aura(INSIGHT, A_INERT, 1);
+    fn a_school_power_cost_charge_is_spent_only_by_a_costly_spell_of_its_schools() {
+        // Insight 18820: aura 73 with every school but physical.
+        let mut insight = aura(18820, A_MOD_POWER_COST_FLAT, 1);
+        insight.eff_p0 = 0x7E;
+        let mut holy_only = aura(1, A_MOD_POWER_COST_PCT, 1);
+        holy_only.eff_p0 = 0x2;
+        let spell = HolderSpell::default();
         let costly = |school_mask| {
             spell_hit(
                 TriggeringSpell {
@@ -1450,14 +1445,18 @@ mod tests {
             PROC_EX_NORMAL_HIT,
         );
         assert_eq!(
-            effect_proc(&row, &insight, 1, &costly(0x4)),
+            effect_proc(&insight, &spell, 1, &costly(0x4)),
             AuraProc::Fired
         );
         assert_eq!(
-            effect_proc(&row, &insight, 1, &costly(SCHOOL_MASK_PHYSICAL)),
+            effect_proc(&insight, &spell, 1, &costly(SCHOOL_MASK_PHYSICAL)),
             AuraProc::Failed
         );
-        assert_eq!(effect_proc(&row, &insight, 1, &free), AuraProc::Failed);
+        assert_eq!(effect_proc(&insight, &spell, 1, &free), AuraProc::Failed);
+        assert_eq!(
+            effect_proc(&holy_only, &spell, 1, &costly(0x4)),
+            AuraProc::Failed
+        );
     }
 
     #[test]
