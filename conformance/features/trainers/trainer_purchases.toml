@@ -30,3 +30,9 @@ symbol = "WorldSession::HandleTrainerListOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "An offer with a skill line, such as a profession or weapon rank, reads no game_spell_chain row: its list entry sends no required spells and its buy skips the req_spell check. vmangos reads the chain node of the trigger spell for every offer. Widening it needs the buy's spell_id and the list's resolve_learn_target to name the same spell first."
+path = "module/src/trainer.rs"
+symbol = "assess"
+evidence = "vmangos Player::GetTrainerSpellState, Player.cpp:4260-4269, and WorldSession::SendTrainerSpellHelper, NPCHandler.cpp:123-137, at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
