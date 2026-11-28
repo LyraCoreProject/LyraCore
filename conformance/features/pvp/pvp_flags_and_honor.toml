@@ -86,6 +86,12 @@ symbol = "spell_targeted"
 evidence = "At d9173eca, Spell.cpp Spell::DoSpellHitOnUnit calls SetInCombatWithAssisted only when the spell lacks SPELL_ATTR_EX_NO_THREAT."
 
 [[known_gaps]]
+description = "A PvP countdown that ends while its Character is on a far teleport's loading screen finds no entity and deletes its timer, so the arrival arms a fresh 300 s countdown. vmangos updates no Player outside the world, so its countdown pauses there and resumes on arrival."
+path = "module/src/pvp.rs"
+symbol = "enter_world"
+evidence = "At d9173eca, Player.cpp Player::Update runs UpdatePvPFlagTimer only for a Player in the world; Player::TeleportTo removes the Player from its map until WorldSession::HandleMoveWorldportAckOpcode."
+
+[[known_gaps]]
 description = "A Transfer restarts the PvP countdown at 300 s; vmangos keeps the running countdown across a far teleport, including a dungeon entry that a split Realm runs as a Transfer."
 path = "module/src/pvp.rs"
 symbol = "enter_world"
