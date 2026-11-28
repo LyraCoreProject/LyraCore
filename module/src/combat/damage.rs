@@ -475,7 +475,7 @@ pub(crate) fn apply_hit(
         reward_taken_rage(&mut target, attacker_guid, before);
         target.update(ctx);
         // vmangos `Unit::DealDamage` breaks the loser's Auras and pushes back its cast and channel
-        // before the Duel ends. No attacker: a Retaliation would proc only after the Duel ended.
+        // before the Duel ends.
         crate::spell::break_auras_on_damage(ctx, target_guid, 0, periodic);
         if !periodic {
             crate::spell::pushback_on_damage(ctx, target_guid, attacker_guid);

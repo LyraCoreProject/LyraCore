@@ -2,10 +2,14 @@ use lyracore_shared::quest::{share_event_kind, share_result, ShareCandidate};
 use spacetimedb::{table, ReducerContext, Table};
 
 use super::{
-    accept_gates, character_quest_row, game_quest_flags, game_quest_template, quest_slots_used,
-    QuestTemplate, MAX_QUEST_LOG_SIZE, PARTY_SHARE_RANGE_SQ,
+    accept_gates, character_quest_row, game_quest_flags, game_quest_template, quest_is_complete,
+    quest_slots_used, QuestTemplate, MAX_QUEST_LOG_SIZE,
 };
 use crate::game_world_entity;
+use crate::online::{is_online, Online};
+
+/// vmangos `QUEST_SHARE_DISTANCE`, in yards between positions, with no bounding radii.
+const QUEST_SHARE_DISTANCE: f32 = 14.0;
 
 /// One Quest Share per receiving Character.
 #[table(
@@ -52,10 +56,15 @@ pub(crate) fn apply_push_quest_to_party(
         if receiver_guid == sender_guid {
             continue;
         }
-        let Some(receiver) = ctx.db.game_world_entity().guid().find(receiver_guid) else {
+        let receiver = ctx.db.game_world_entity().guid().find(receiver_guid);
+        if receiver.is_none() && !is_online(ctx, receiver_guid, Online::SessionOrClaim) {
+            continue;
+        }
+        push_result(ctx, sender_guid, receiver_guid, share_result::SHARING_QUEST);
+        let Some(receiver) = receiver else {
+            push_result(ctx, sender_guid, receiver_guid, share_result::TOO_FAR);
             continue;
         };
-        push_result(ctx, sender_guid, receiver_guid, share_result::SHARING_QUEST);
         let result = evaluate_share(ctx, &sender_entity, &tmpl, &receiver);
         if result != share_result::SHARING_QUEST {
             push_result(ctx, sender_guid, receiver_guid, result);
@@ -86,20 +95,27 @@ fn evaluate_share(
     member: &crate::WorldEntity,
 ) -> u8 {
     let existing = character_quest_row(ctx, member.guid, tmpl.entry);
+    let on_quest = existing.as_ref().is_some_and(|q| q.is_active());
     lyracore_shared::quest::share_result(ShareCandidate {
-        same_partition: member.map_id == sender.map_id && member.instance_id == sender.instance_id,
-        in_range: within_share_range(member, sender),
-        on_quest: existing.as_ref().is_some_and(|q| q.is_active()),
-        finished: existing.as_ref().is_some_and(|q| q.rewarded) && !tmpl.repeatable,
+        same_partition: same_partition(member, sender),
+        in_range: within_share_distance(member, sender),
+        on_quest,
+        finished: existing.as_ref().is_some_and(|q| {
+            (q.rewarded && !tmpl.repeatable) || (q.is_active() && quest_is_complete(ctx, q))
+        }),
         log_full: quest_slots_used(ctx, member.guid) >= MAX_QUEST_LOG_SIZE,
         gates_ok: accept_gates(ctx, member, tmpl).is_ok(),
         holds_quest_share: held_share(ctx, member.guid).is_some(),
     })
 }
 
-fn within_share_range(a: &crate::WorldEntity, b: &crate::WorldEntity) -> bool {
+fn same_partition(a: &crate::WorldEntity, b: &crate::WorldEntity) -> bool {
+    a.map_id == b.map_id && a.instance_id == b.instance_id
+}
+
+fn within_share_distance(a: &crate::WorldEntity, b: &crate::WorldEntity) -> bool {
     let (dx, dy, dz) = (a.x - b.x, a.y - b.y, a.z - b.z);
-    dx * dx + dy * dy + dz * dz <= PARTY_SHARE_RANGE_SQ
+    dx * dx + dy * dy + dz * dz < QUEST_SHARE_DISTANCE * QUEST_SHARE_DISTANCE
 }
 
 /// vmangos `Player::CanShareQuest`: a shareable quest the sharer is on.
@@ -128,42 +144,47 @@ pub(super) fn require_quest_share(
         .ok_or_else(|| "no party member shared that quest".to_string())
 }
 
-/// Ends the receiver's Quest Share after an accept; its sharer hears when it was for this quest.
-pub(super) fn settle_on_accept(ctx: &ReducerContext, receiver_guid: u64, quest_entry: u32) {
-    let Some(share) = take(ctx, receiver_guid) else {
-        return;
+/// vmangos accept step for a Quest Share of this quest, whoever the giver is. Sends the sharer
+/// ACCEPT_QUEST, or TOO_FAR and refuses at 14 yards or more; refuses sending nothing when the
+/// sharer is not on the receiver's map. Leaves the share held.
+pub(super) fn reach_sharer(
+    ctx: &ReducerContext,
+    receiver: &crate::WorldEntity,
+    quest_entry: u32,
+) -> Result<(), String> {
+    let Some(share) =
+        held_share(ctx, receiver.guid).filter(|share| share.quest_entry == quest_entry)
+    else {
+        return Ok(());
     };
-    if share.quest_entry == quest_entry {
-        push_result(
-            ctx,
-            share.sharer_guid,
-            receiver_guid,
-            share_result::ACCEPT_QUEST,
-        );
+    let sharer = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(share.sharer_guid)
+        .filter(|sharer| same_partition(receiver, sharer))
+        .ok_or("the party member who shared that quest is not here")?;
+    if !within_share_distance(receiver, &sharer) {
+        push_result(ctx, share.sharer_guid, receiver.guid, share_result::TOO_FAR);
+        return Err("the party member who shared that quest is too far away".to_string());
     }
+    push_result(
+        ctx,
+        share.sharer_guid,
+        receiver.guid,
+        share_result::ACCEPT_QUEST,
+    );
+    Ok(())
 }
 
-/// Ends a Quest Share after a refused accept left quest log and bags unchanged; true: commit.
-pub(crate) fn end_after_refused_accept(
-    ctx: &ReducerContext,
-    receiver_guid: u64,
-    quest_entry: u32,
-) -> bool {
-    let Some(share) = take(ctx, receiver_guid) else {
-        return false;
-    };
-    let entity = |guid: u64| ctx.db.game_world_entity().guid().find(guid);
-    let apart = entity(receiver_guid)
-        .zip(entity(share.sharer_guid))
-        .is_some_and(|(receiver, sharer)| {
-            receiver.map_id != sharer.map_id
-                || receiver.instance_id != sharer.instance_id
-                || !within_share_range(&receiver, &sharer)
-        });
-    if share.quest_entry == quest_entry && apart {
-        push_result(ctx, share.sharer_guid, receiver_guid, share_result::TOO_FAR);
-    }
-    true
+/// Ends the receiver's Quest Share after an accept.
+pub(super) fn settle_on_accept(ctx: &ReducerContext, receiver_guid: u64) {
+    take(ctx, receiver_guid);
+}
+
+/// Ends a Quest Share after a refused accept that changed no quest log or bags; true: commit.
+pub(crate) fn end_after_refused_accept(ctx: &ReducerContext, receiver_guid: u64) -> bool {
+    take(ctx, receiver_guid).is_some()
 }
 
 /// vmangos `WorldSession::HandleQuestPushResult`: relays the receiver's answer to its sharer.

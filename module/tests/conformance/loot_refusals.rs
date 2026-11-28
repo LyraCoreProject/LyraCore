@@ -455,7 +455,7 @@ fn loot_error(target: u64, error: u8) -> (u16, Vec<u8>) {
 }
 
 fn assert_loot_error(packets: &[(u16, Vec<u8>)], target: u64, error: u8) {
-    assert_eq!(packets, [loot_error(target, error)]);
+    assert_eq!(loot_replies(packets.to_vec()), [loot_error(target, error)]);
 }
 
 fn release_response(target: u64) -> (u16, Vec<u8>) {

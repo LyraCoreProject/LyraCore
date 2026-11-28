@@ -39,17 +39,18 @@ pub struct ShareCandidate {
     pub holds_quest_share: bool,
 }
 
+/// vmangos `HandlePushQuestToParty`: the first failing check, in its order.
 pub fn share_result(member: ShareCandidate) -> u8 {
     if !member.same_partition || !member.in_range {
         share_result::TOO_FAR
-    } else if member.on_quest {
-        share_result::HAVE_QUEST
     } else if member.finished {
         share_result::FINISH_QUEST
-    } else if member.log_full {
-        share_result::LOG_FULL
+    } else if member.on_quest {
+        share_result::HAVE_QUEST
     } else if !member.gates_ok {
         share_result::CANT_TAKE_QUEST
+    } else if member.log_full {
+        share_result::LOG_FULL
     } else if member.holds_quest_share {
         share_result::BUSY
     } else {
@@ -153,24 +154,24 @@ mod tests {
         ] {
             assert_eq!(share_result(far), share_result::TOO_FAR);
         }
-        assert_eq!(share_result(blocked), share_result::HAVE_QUEST);
-        let blocked = ShareCandidate {
-            on_quest: false,
-            ..blocked
-        };
         assert_eq!(share_result(blocked), share_result::FINISH_QUEST);
         let blocked = ShareCandidate {
             finished: false,
             ..blocked
         };
-        assert_eq!(share_result(blocked), share_result::LOG_FULL);
+        assert_eq!(share_result(blocked), share_result::HAVE_QUEST);
         let blocked = ShareCandidate {
-            log_full: false,
+            on_quest: false,
             ..blocked
         };
         assert_eq!(share_result(blocked), share_result::CANT_TAKE_QUEST);
         let blocked = ShareCandidate {
             gates_ok: true,
+            ..blocked
+        };
+        assert_eq!(share_result(blocked), share_result::LOG_FULL);
+        let blocked = ShareCandidate {
+            log_full: false,
             ..blocked
         };
         assert_eq!(share_result(blocked), share_result::BUSY);

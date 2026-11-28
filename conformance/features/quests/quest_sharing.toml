@@ -18,6 +18,17 @@ tests = [
     { path = "module/tests/quest_share.rs", function = "a_decline_or_the_sharer_leaving_the_group_ends_the_share", rung = "durable_module" },
     { path = "module/tests/quest_share.rs", function = "a_package_quest_is_shared_only_when_its_package_marks_it_shareable", rung = "durable_module" },
     { path = "module/tests/quest_share.rs", function = "a_package_replays_its_quest_flags_after_the_importer_refills_the_flags_table", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "a_push_offers_the_quest_to_a_member_within_14_yards", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "a_push_tells_the_sharer_too_far_for_a_member_beyond_14_yards", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "a_push_tells_the_sharer_too_far_for_a_member_on_another_map", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "a_member_whose_quest_is_complete_hears_finish_quest", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "a_member_whose_quest_is_unfinished_hears_have_quest", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "an_accept_beyond_14_yards_tells_the_sharer_too_far_and_takes_nothing", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "a_sharer_on_another_map_hears_nothing_when_the_accept_is_refused", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "an_accept_the_take_check_refuses_sends_the_sharer_nothing_even_when_apart", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "the_sharer_hears_accept_quest_before_the_log_check_refuses_the_accept", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "a_dead_sharer_is_refused_and_hears_nothing", rung = "durable_module" },
+    { path = "module/tests/quest_share.rs", function = "an_npc_accept_of_the_shared_quest_beyond_14_yards_of_the_sharer_sends_too_far", rung = "durable_module" },
 ]
 
 [vmangos]
@@ -40,14 +51,20 @@ result = "A push of a quest without QUEST_FLAGS_SHARABLE is refused and nobody h
 reason = "The stock client disables the share button for such a quest, and refusing the push keeps a Quest Share that no accept can use out of the receiver's way."
 source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/QuestHandler.cpp"
 
+[[deliberate_deviations]]
+id = "push_other_map_too_far"
+result = "A push to a member on another map answers TOO_FAR. The Reference Server compares positions without the map, so a member on another map at nearby coordinates is offered the quest."
+reason = "The Reference Server's offer to a member on another map can never be accepted, because the accept looks for the sharer on the receiver's map, so TOO_FAR is better in effect."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/QuestHandler.cpp"
+
+[[deliberate_deviations]]
+id = "push_failed_quest_retake"
+result = "A push to a member whose log holds a failed copy of the quest is offered, and the accept reuses that slot; the Reference Server answers HAVE_QUEST. When that member's log is full, the push says LOG_FULL though the accept would reuse the slot."
+reason = "This follows the failed_quest_retry deviation in quest_progress.toml: LyraCore lets a Character take a failed quest again without abandoning it."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/QuestHandler.cpp"
+
 [[known_gaps]]
 description = "The Module returns an unavailable response for CMSG_QUEST_CONFIRM_ACCEPT, and accepting a QUEST_FLAGS_PARTY_ACCEPT quest offers it to no party member."
 path = "module/src/native/unavailable.rs"
 symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
-
-[[known_gaps]]
-description = "A push reaches members within the group XP range of 74 yards; the Reference Server's QUEST_SHARE_DISTANCE is 14 yards. Push results follow LyraCore's own check order for a member on, finished with or unable to take the quest. A member on another World Shard hears nothing; the Reference Server answers TOO_FAR for an online member on another map. At accept the Reference Server sends TOO_FAR only after the take check passes, sends ACCEPT_QUEST before the log and source item checks, and refuses an NPC accept of the shared quest more than 14 yards from the sharer; LyraCore sends TOO_FAR on any refusal of the shared quest when the two are apart, sends ACCEPT_QUEST only on success, and lets that NPC accept through."
-path = "module/src/quest/share.rs"
-symbol = "evaluate_share"
-evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.h; src/game/Handlers/QuestHandler.cpp WorldSession::HandlePushQuestToParty"

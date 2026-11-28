@@ -563,7 +563,7 @@ pub(super) fn receive(
                 Ok(()) => vec![packet(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE)?],
                 Err(refusal) => {
                     let packets = accept_refusal(&refusal);
-                    if !share::end_after_refused_accept(ctx, guid, q.quest_id) {
+                    if !share::end_after_refused_accept(ctx, guid) {
                         return Err(Rollback::replies(packets, ActionRefusal::from(refusal)).into());
                     }
                     packets

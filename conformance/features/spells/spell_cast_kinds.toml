@@ -156,12 +156,6 @@ symbol = "direct_spell_crit_chance"
 evidence = "Source reading, not measured. At d9173eca, Unit::GetSpellCritChance (Unit.cpp:5242-5243) returns 0 for SPELL_DAMAGE_CLASS_NONE."
 
 [[known_gaps]]
-description = "Retaliation strikes back at an attacker immune to physical damage and deals its damage. vmangos casts the Retaliation strike as a spell, so the attacker's immunity refuses it and the strike reports immune."
-path = "module/src/combat/folds.rs"
-symbol = "retaliate_on_hit"
-evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp casts spell 22858 for the Retaliation proc, and Spell::SpellHitResult which returns SPELL_MISS_IMMUNE; retaliate_on_hit calls weapon_strike_damage and deal_damage without an immunity test."
-
-[[known_gaps]]
 description = "The holy portion that Seal of Righteousness adds to a landed white swing ignores a target immune to holy damage. vmangos deals that portion as a separate holy spell, which a holy immunity refuses."
 path = "module/src/combat/folds.rs"
 symbol = "seal_holy_on_swing"
@@ -214,12 +208,6 @@ description = "A fear that lands deals no damage, so it runs no proc pass and do
 path = "module/src/spell/cast/resolve.rs"
 symbol = "run_spell_effects"
 evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::DoSpellHitOnUnit runs ProcDamageAndSpell for a landed aura spell, and IsTriggeredAtSpellProcEvent returns SPELL_PROC_TRIGGER_OK for 6346 on a spell of mechanic fear."
-
-[[known_gaps]]
-description = "Retaliation strikes back, and spends a charge, on a hit from behind and while its warrior is stunned. vmangos neither strikes nor spends then."
-path = "module/src/combat/folds.rs"
-symbol = "retaliate_on_hit"
-evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::HandleDummyAuraProc case 20230 returns SPELL_AURA_PROC_FAILED unless HasInArc(pVictim) and the warrior can react; retaliate_on_hit checks neither."
 
 [[known_gaps]]
 description = "An Auto Shot that misses or is dodged runs no proc pass, so a ranged Aura with PROC_EX_TRIGGER_ALWAYS or a named avoidance result does not count it."
@@ -1126,4 +1114,29 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/holy_shock.rs"
 function = "divine_favor_makes_the_damage_holy_shock_casts_crit_and_ends_with_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/retaliation.rs"
+function = "retaliation_strikes_an_attacker_in_front_and_spends_a_charge"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/retaliation.rs"
+function = "retaliation_neither_strikes_nor_spends_on_a_hit_from_behind"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/retaliation.rs"
+function = "retaliation_neither_strikes_nor_spends_while_its_warrior_is_stunned"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/retaliation.rs"
+function = "retaliation_spends_a_charge_on_an_attacker_immune_to_physical_damage_and_reports_immune"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/retaliation.rs"
+function = "retaliation_strikes_back_at_a_melee_ability_hit"
 rung = "durable_module"
