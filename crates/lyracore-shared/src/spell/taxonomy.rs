@@ -132,6 +132,8 @@ effect_kinds! {
     E_REVIVE_PET => RevivePet = 0x2E,
     // Dismisses the caster's live pet as the pet bar's dismiss command does.
     E_DISMISS_PET => DismissPet = 0x2F,
+    // Casts `trigger_spell` at a friendly target and the spell in p0 (`P_SPELL_ID`) at any other.
+    E_CAST_FRIEND_OR_FOE => CastFriendOrFoe = 0x30,
 }
 
 pub const KIND_AURA_BIT: u8 = 0x80;
@@ -299,6 +301,7 @@ mod tests {
         assert_eq!(E_LEARN_SPELL, 0x2D);
         assert_eq!(E_REVIVE_PET, 0x2E);
         assert_eq!(E_DISMISS_PET, 0x2F);
+        assert_eq!(E_CAST_FRIEND_OR_FOE, 0x30);
         assert_eq!(A_PERIODIC_DAMAGE, 0x90);
         assert_eq!(A_PERIODIC_HEAL, 0x91);
         assert_eq!(A_ABSORB, 0xA2);

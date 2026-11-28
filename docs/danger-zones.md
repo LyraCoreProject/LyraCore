@@ -531,6 +531,14 @@ move a Character. No repair is needed. Package Deltas do not read these columns.
 `migrate_character` takes a new last argument, `hide_equipment_flags`, so use the Character Migration
 tool from the same revision as the Module; a plan file written before it still reads.
 
+### Friend or foe cast migration
+
+The spell import writes the dummy effect of Holy Shock (20473, 20929, 20930) as
+`E_CAST_FRIEND_OR_FOE` (code 0x30) with target `T_TARGET_ANY`: `trigger_spell` is the heal spell
+for a friend and `p0` (`P_SPELL_ID`) the damage spell for any other target. Reimport the `spell`
+family straight after the publish. Until then those effects stay scripted no-ops and Holy Shock
+casts nothing. The spells.script finding no longer lists these three spells. No table changes.
+
 ### Group join reset migration
 
 The private `game_group_join_reset` table is new and starts empty. It is a Character-owned table

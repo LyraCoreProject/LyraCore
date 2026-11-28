@@ -337,7 +337,10 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
                 spell.custom_flags & lyracore_shared::spell_custom::UNSUPPORTED
             ));
         }
-        if spell.follow_up_spell.is_none() && !script_name.is_empty() {
+        if spell.follow_up_spell.is_none()
+            && !script_name.is_empty()
+            && lyracore_importer::spell_overrides::friend_or_foe_cast(spell.id).is_none()
+        {
             scripts.push(spell.id);
         }
         for (index, value) in spell.effect_item_type.iter().enumerate() {
@@ -430,6 +433,29 @@ mod tests {
                 .unwrap()["source_ids"],
             serde_json::json!([])
         );
+    }
+
+    #[test]
+    fn the_holy_shock_script_is_no_script_finding_and_another_script_on_its_spell_is() {
+        let finding = |entry: u32| {
+            let source = fixture();
+            source
+                .fixture_connection()
+                .execute_batch(&format!(
+                    "UPDATE spell_template SET entry={entry}, script_name='spell_paladin_holy_shock'"
+                ))
+                .unwrap();
+            let (_, manifest) = read(&source).unwrap();
+            manifest["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|finding| finding["code"] == "spells.script")
+                .unwrap()["source_ids"]
+                .clone()
+        };
+        assert_eq!(finding(20473), serde_json::json!([]));
+        assert_eq!(finding(20474), serde_json::json!([20474]));
     }
 
     #[test]

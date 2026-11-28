@@ -1315,6 +1315,10 @@ pub(crate) fn apply_effect(
         EffectKind::Trigger | EffectKind::Scripted => {
             apply_delegating_effect(ctx, e, caster_guid, target_guid, level)
         }
+        EffectKind::CastFriendOrFoe => {
+            super::friend_or_foe::apply(ctx, e, caster_guid, target_guid, level);
+            EffectHit::none()
+        }
         EffectKind::SelfResurrect => {
             log::info!(
                 "spell {} self-resurrect effect has no cast path (no-op)",

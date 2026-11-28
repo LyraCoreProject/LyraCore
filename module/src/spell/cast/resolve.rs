@@ -2174,7 +2174,13 @@ impl GateCheck<'_> {
         match self.target {
             Some(target)
                 if caster.is_player()
-                    && self.spell.header.custom_flags & custom::FACE_TARGET != 0
+                    && (self.spell.header.custom_flags & custom::FACE_TARGET != 0
+                        || super::friend_or_foe::needs_facing(
+                            self.ctx,
+                            caster,
+                            target,
+                            &self.spell.effects,
+                        ))
                     && !is_facing(caster.x, caster.y, caster.orientation, target.x, target.y) =>
             {
                 Err(CastGateRefusal::other(

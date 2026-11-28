@@ -1,4 +1,5 @@
 mod depth;
+mod friend_or_foe;
 mod impact;
 pub(crate) mod resolve;
 mod targeting;
