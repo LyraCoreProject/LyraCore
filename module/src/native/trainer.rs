@@ -113,12 +113,48 @@ pub(super) fn receive(
 fn failure_reason(refusal: TrainerRefusal) -> TrainingFailureReason {
     match refusal {
         TrainerRefusal::NotEnoughMoney => TrainingFailureReason::NotEnoughMoney,
-        TrainerRefusal::LevelTooLow
+        TrainerRefusal::AlreadyKnown
+        | TrainerRefusal::LevelTooLow
         | TrainerRefusal::PreviousRankMissing
+        | TrainerRefusal::RequiredSpellMissing
         | TrainerRefusal::SkillTooLow
         | TrainerRefusal::PrimaryProfessionLimit => TrainingFailureReason::NotEnoughSkill,
-        TrainerRefusal::Unavailable | TrainerRefusal::NotOffered | TrainerRefusal::AlreadyKnown => {
+        TrainerRefusal::Unavailable | TrainerRefusal::NotOffered => {
             TrainingFailureReason::Unavailable
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_refusal_but_money_and_admission_answers_not_enough_skill() {
+        for refusal in [
+            TrainerRefusal::AlreadyKnown,
+            TrainerRefusal::LevelTooLow,
+            TrainerRefusal::PreviousRankMissing,
+            TrainerRefusal::RequiredSpellMissing,
+            TrainerRefusal::SkillTooLow,
+            TrainerRefusal::PrimaryProfessionLimit,
+        ] {
+            assert_eq!(
+                failure_reason(refusal),
+                TrainingFailureReason::NotEnoughSkill,
+                "{refusal:?}"
+            );
+        }
+        assert_eq!(
+            failure_reason(TrainerRefusal::NotEnoughMoney),
+            TrainingFailureReason::NotEnoughMoney
+        );
+        for refusal in [TrainerRefusal::Unavailable, TrainerRefusal::NotOffered] {
+            assert_eq!(
+                failure_reason(refusal),
+                TrainingFailureReason::Unavailable,
+                "{refusal:?}"
+            );
         }
     }
 }

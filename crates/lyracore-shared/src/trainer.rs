@@ -15,6 +15,7 @@ pub enum TrainerRefusal {
     AlreadyKnown,
     LevelTooLow,
     PreviousRankMissing,
+    RequiredSpellMissing,
     SkillTooLow,
     PrimaryProfessionLimit,
     NotEnoughMoney,
@@ -28,6 +29,7 @@ impl TrainerRefusal {
             Self::AlreadyKnown => "trainer:already_known",
             Self::LevelTooLow => "trainer:level_too_low",
             Self::PreviousRankMissing => "trainer:previous_rank_missing",
+            Self::RequiredSpellMissing => "trainer:required_spell_missing",
             Self::SkillTooLow => "trainer:skill_too_low",
             Self::PrimaryProfessionLimit => "trainer:primary_profession_limit",
             Self::NotEnoughMoney => "trainer:not_enough_money",
@@ -189,6 +191,7 @@ pub enum OfferingState {
     Known,
     LevelTooLow,
     PreviousRankMissing,
+    RequiredSpellMissing,
     SkillTooLow,
     PrimaryProfessionLimit,
     Available,
@@ -197,6 +200,7 @@ pub enum OfferingState {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OfferingGates {
     pub previous_rank_missing: bool,
+    pub required_spell_missing: bool,
     pub skill_requirement_unmet: bool,
     pub primary_first_rank: bool,
     pub primary_slot_free: bool,
@@ -215,6 +219,8 @@ pub fn offering_state(
         OfferingState::LevelTooLow
     } else if gates.previous_rank_missing {
         OfferingState::PreviousRankMissing
+    } else if gates.required_spell_missing {
+        OfferingState::RequiredSpellMissing
     } else if gates.skill_requirement_unmet {
         OfferingState::SkillTooLow
     } else if gates.primary_first_rank && !gates.primary_slot_free {
@@ -377,6 +383,7 @@ mod rule_tests {
     fn offering_gates_apply_in_vmangos_order() {
         let all = OfferingGates {
             previous_rank_missing: true,
+            required_spell_missing: true,
             skill_requirement_unmet: true,
             primary_first_rank: true,
             primary_slot_free: false,
@@ -389,6 +396,14 @@ mod rule_tests {
         );
         let all = OfferingGates {
             previous_rank_missing: false,
+            ..all
+        };
+        assert_eq!(
+            offering_state(false, 9, 9, all),
+            OfferingState::RequiredSpellMissing
+        );
+        let all = OfferingGates {
+            required_spell_missing: false,
             ..all
         };
         assert_eq!(offering_state(false, 9, 9, all), OfferingState::SkillTooLow);

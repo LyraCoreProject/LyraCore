@@ -294,6 +294,38 @@ fn a_higher_rank_is_refused_until_the_previous_rank_is_known() {
 
 #[test]
 #[ignore = "requires the local SpacetimeDB 2.14.0 CLI and debug Module"]
+fn an_offer_is_refused_until_its_required_additional_spell_is_known() {
+    use lyracore_shared::trainer::TrainerRefusal;
+    const GREATER: u32 = 5_091_501;
+    const LESSER: u32 = 5_091_502;
+    let (shard, npc) = fixture("trainer-required-spell");
+    offer(&shard, 5_091_501, GREATER, 0, 75);
+    shard.insert_row(
+        "game_spell_chain",
+        &[
+            ("spell_id", &GREATER),
+            ("prev_spell", &0),
+            ("first_spell", &GREATER),
+            ("rank", &1),
+            ("req_spell", &LESSER),
+        ],
+    );
+
+    refused_buy(
+        &shard,
+        &npc,
+        GREATER,
+        TrainerRefusal::RequiredSpellMissing.as_tag(),
+    );
+    assert!(!knows(&shard, GREATER));
+
+    shard.assert_call("debug_learn_spell", &["1", &LESSER.to_string()]);
+    buy(&shard, &npc, GREATER);
+    assert!(knows(&shard, GREATER));
+}
+
+#[test]
+#[ignore = "requires the local SpacetimeDB 2.14.0 CLI and debug Module"]
 fn a_pet_learn_wrapper_is_refused_without_charging_or_teaching_the_character() {
     use lyracore_shared::spell::taxonomy::{E_SCRIPTED, T_CASTER_PET};
     use lyracore_shared::trainer::TrainerRefusal;

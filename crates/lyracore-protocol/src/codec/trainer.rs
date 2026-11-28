@@ -53,6 +53,7 @@ pub fn build_trainer_list(
                 OfferingState::Known => TrainerSpellState::Gray,
                 OfferingState::LevelTooLow
                 | OfferingState::PreviousRankMissing
+                | OfferingState::RequiredSpellMissing
                 | OfferingState::SkillTooLow => TrainerSpellState::Red,
                 OfferingState::PrimaryProfessionLimit | OfferingState::Available => {
                     TrainerSpellState::Green
@@ -242,6 +243,13 @@ mod tests {
                         ..Default::default()
                     },
                 ),
+                offer(
+                    4,
+                    OfferingGates {
+                        required_spell_missing: true,
+                        ..Default::default()
+                    },
+                ),
             ],
             "",
         );
@@ -250,6 +258,7 @@ mod tests {
             states,
             [
                 TrainerSpellState::Green,
+                TrainerSpellState::Red,
                 TrainerSpellState::Red,
                 TrainerSpellState::Red
             ]

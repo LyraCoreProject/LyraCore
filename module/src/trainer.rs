@@ -47,8 +47,8 @@ pub(crate) enum BuyGrant {
     Spell(u32),
 }
 
-pub(crate) fn rank_prereq_met(prev_spell: u32, knows_prev: bool) -> bool {
-    prev_spell == 0 || knows_prev
+pub(crate) fn prerequisite_met(required_spell: u32, knows_required: bool) -> bool {
+    required_spell == 0 || knows_required
 }
 
 pub(crate) struct Assessment {
@@ -101,15 +101,12 @@ impl Trainee {
             self.skills.get(&line).map(|&(_, max_rank)| max_rank),
             self.learned.contains(&learn_target),
         );
-        let previous_rank_missing = line == 0
-            && ctx
-                .db
-                .game_spell_chain()
-                .spell_id()
-                .find(learn_target)
-                .is_some_and(|chain| {
-                    !rank_prereq_met(chain.prev_spell, self.learned.contains(&chain.prev_spell))
-                });
+        let chain = (line == 0)
+            .then(|| ctx.db.game_spell_chain().spell_id().find(learn_target))
+            .flatten();
+        let lacks = |spell: u32| !prerequisite_met(spell, self.learned.contains(&spell));
+        let previous_rank_missing = chain.as_ref().is_some_and(|chain| lacks(chain.prev_spell));
+        let required_spell_missing = chain.as_ref().is_some_and(|chain| lacks(chain.req_spell));
         let base_required_skill =
             self.skills
                 .get(&offered.required_skill)
@@ -127,6 +124,7 @@ impl Trainee {
             known,
             gates: OfferingGates {
                 previous_rank_missing,
+                required_spell_missing,
                 skill_requirement_unmet: offered.required_skill != 0
                     && base_required_skill < offered.required_skill_value,
                 primary_first_rank: is_primary_first_rank(line, offered.learn_skill_cap),
@@ -147,6 +145,7 @@ pub(crate) fn trainer_buy_check(
         OfferingState::Known => return Err(TrainerRefusal::AlreadyKnown),
         OfferingState::LevelTooLow => return Err(TrainerRefusal::LevelTooLow),
         OfferingState::PreviousRankMissing => return Err(TrainerRefusal::PreviousRankMissing),
+        OfferingState::RequiredSpellMissing => return Err(TrainerRefusal::RequiredSpellMissing),
         OfferingState::SkillTooLow => return Err(TrainerRefusal::SkillTooLow),
         OfferingState::PrimaryProfessionLimit => {
             return Err(TrainerRefusal::PrimaryProfessionLimit)
@@ -563,6 +562,7 @@ pub(crate) fn apply_trainer_buy(
             TrainerRefusal::AlreadyKnown => "already known".to_string(),
             TrainerRefusal::LevelTooLow => format!("requires level {}", offered.required_level),
             TrainerRefusal::PreviousRankMissing => "requires the previous rank".to_string(),
+            TrainerRefusal::RequiredSpellMissing => "requires an additional spell".to_string(),
             TrainerRefusal::SkillTooLow => format!(
                 "requires skill {} at {}",
                 offered.required_skill, offered.required_skill_value
@@ -630,6 +630,10 @@ mod tests {
             (
                 OfferingState::PreviousRankMissing,
                 TrainerRefusal::PreviousRankMissing,
+            ),
+            (
+                OfferingState::RequiredSpellMissing,
+                TrainerRefusal::RequiredSpellMissing,
             ),
             (OfferingState::SkillTooLow, TrainerRefusal::SkillTooLow),
             (
