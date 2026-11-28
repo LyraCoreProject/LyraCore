@@ -1059,7 +1059,8 @@ fn selling_equipped_gear_relays_client_armor_and_every_resistance() {
         .call("debug_equip_item", json!([guid, 23]))
         .unwrap();
     let equipped = values(&delivered(&mut connection), guid);
-    for (index, expected) in [base + 100, 11, 12, 13, 14, 15, 16].into_iter().enumerate() {
+    // vmangos Player::UpdateResistances keeps the Holy field at 0 whatever the gear names.
+    for (index, expected) in [base + 100, 0, 12, 13, 14, 15, 16].into_iter().enumerate() {
         assert_eq!(equipped.get(&(155 + index as u16)), Some(&expected));
     }
     let sold = values(&sell(&mut connection, vendor, item, 0), guid);

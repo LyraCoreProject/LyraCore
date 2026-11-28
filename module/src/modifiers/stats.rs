@@ -111,6 +111,10 @@ pub(crate) fn sheet_stat_bonus(ctx: &ReducerContext, unit: &WorldEntity, stat: u
     )
 }
 
+pub(super) fn moves_intellect(kind: u8, parameter: i32) -> bool {
+    moves_stat(kind, parameter, STAT_INT)
+}
+
 pub(crate) fn moves_vitals(kind: u8, parameter: i32) -> bool {
     VITALS_STATS
         .into_iter()

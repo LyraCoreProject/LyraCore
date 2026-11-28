@@ -1,13 +1,15 @@
 use lyracore_shared::item_property as stat;
 use lyracore_shared::spell::taxonomy::{
-    A_MOD_RESISTANCE, RESISTANCE_BASE_PCT, RESISTANCE_BASE_VALUE, RESISTANCE_TOTAL_PCT,
-    RESISTANCE_TOTAL_VALUE, RESIST_ARMOR,
+    A_MOD_RESISTANCE, RESISTANCE_BASE_PCT, RESISTANCE_BASE_VALUE, RESISTANCE_EXCLUSIVE,
+    RESISTANCE_INTELLECT_PCT, RESISTANCE_TOTAL_PCT, RESISTANCE_TOTAL_VALUE, RESIST_ARMOR, STAT_INT,
 };
 use spacetimedb::ReducerContext;
 
 use super::{aura_amounts, AuraAmount};
-use crate::WorldEntity;
+use crate::{Aura, WorldEntity};
 
+// vmangos UpdateResistances sets the Holy resistance field to 0 whatever Auras name it.
+const RESIST_HOLY: u8 = 2;
 const SCHOOL_BITS: [u8; 7] = [1, 2, 4, 8, 16, 32, 64];
 const STAT_KINDS: [u8; 7] = [
     stat::ARMOR,
@@ -29,13 +31,18 @@ pub(crate) struct ResistanceItem {
     pub(crate) property_enchants: [u32; 3],
 }
 
-/// vmangos Unit::GetTotalResistanceValue: (((create + base) * base_pct) + total) * total_pct, in f32.
+/// vmangos GetTotalResistanceValue: (((create + base) * base_pct) + total) * total_pct, in f32.
+/// Exclusive and Intellect terms: docs/schema.md#resistance-auras.
 #[derive(Clone, Copy, Debug)]
 struct ResistanceTerms {
     base: i32,
     base_pct: f32,
     total: i32,
     total_pct: f32,
+    exclusive_bonus: i32,
+    exclusive_malus: i32,
+    intellect_pct: i32,
+    intellect: u32,
 }
 
 /// What `game_world_entity.armor` adds to armor: a Character stores its agility armor, a flat
@@ -69,10 +76,24 @@ impl ResistanceTerms {
                 RESISTANCE_BASE_VALUE => self.base = self.base.saturating_add(aura.total()),
                 RESISTANCE_BASE_PCT => self.base_pct *= percent_factor(aura.total()),
                 RESISTANCE_TOTAL_PCT => self.total_pct *= percent_factor(aura.total()),
+                RESISTANCE_EXCLUSIVE => {
+                    self.exclusive_bonus = self.exclusive_bonus.max(aura.total());
+                    self.exclusive_malus = self.exclusive_malus.min(aura.total());
+                }
+                RESISTANCE_INTELLECT_PCT => {
+                    self.intellect_pct = self.intellect_pct.saturating_add(aura.total());
+                }
                 _ => self.total = self.total.saturating_add(aura.total()),
             }
         }
         self
+    }
+
+    fn resolve_school(self, school_mask: u8, entity_armor: EntityArmor) -> i32 {
+        if school_mask == RESIST_HOLY {
+            return 0;
+        }
+        self.resolve(entity_armor)
     }
 
     fn resolve(self, entity_armor: EntityArmor) -> i32 {
@@ -82,8 +103,12 @@ impl ResistanceTerms {
             EntityArmor::None => (0, 0),
         };
         let base = create as f32 + self.base as f32;
-        let total = i64::from(self.total) + i64::from(agility);
-        ((base * self.base_pct + total as f32) * self.total_pct) as i32
+        let total = i64::from(self.total)
+            + i64::from(agility)
+            + i64::from(self.exclusive_bonus)
+            + i64::from(self.exclusive_malus);
+        let intellect_armor = self.intellect as f32 * (self.intellect_pct as f32 * 0.01);
+        ((base * self.base_pct + total as f32 + intellect_armor) * self.total_pct) as i32
     }
 }
 
@@ -107,6 +132,10 @@ fn gear_terms(
         base_pct: 1.0,
         total: 0,
         total_pct: 1.0,
+        exclusive_bonus: 0,
+        exclusive_malus: 0,
+        intellect_pct: 0,
+        intellect: 0,
     };
     let Some(index) = school_index(school_mask) else {
         return terms;
@@ -151,7 +180,17 @@ fn unit_gear_terms(ctx: &ReducerContext, unit_guid: u64, school_mask: u8) -> Res
 pub(crate) fn resistance_bonus(ctx: &ReducerContext, unit_guid: u64, school_mask: u8) -> i32 {
     unit_gear_terms(ctx, unit_guid, school_mask)
         .with_auras(school_mask, aura_amounts(ctx, unit_guid))
-        .resolve(EntityArmor::None)
+        .resolve_school(school_mask, EntityArmor::None)
+}
+
+/// Whether a change to `changed` moves the armor a Character shows: an armor Aura, or an
+/// Intellect Aura while an Intellect-armor Aura is held.
+pub(crate) fn moves_armor(changed: &Aura, held: &[Aura]) -> bool {
+    (changed.eff_kind == A_MOD_RESISTANCE && changed.eff_p0 & 0x7f != 0)
+        || (super::stats::moves_intellect(changed.eff_kind, changed.eff_p0)
+            && held.iter().any(|aura| {
+                aura.eff_kind == A_MOD_RESISTANCE && aura.eff_p1 == RESISTANCE_INTELLECT_PCT
+            }))
 }
 
 pub(crate) fn effective_armor(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
@@ -164,9 +203,13 @@ pub(crate) fn effective_resistance(
     unit: &WorldEntity,
     school_mask: u8,
 ) -> u32 {
-    unit_gear_terms(ctx, unit.guid, school_mask)
-        .with_auras(school_mask, aura_amounts(ctx, unit.guid))
-        .resolve(EntityArmor::of(unit, school_mask))
+    let mut terms = unit_gear_terms(ctx, unit.guid, school_mask)
+        .with_auras(school_mask, aura_amounts(ctx, unit.guid));
+    if terms.intellect_pct != 0 && school_mask == RESIST_ARMOR && unit.is_player() {
+        terms.intellect = super::effective_stat(ctx, unit, STAT_INT);
+    }
+    terms
+        .resolve_school(school_mask, EntityArmor::of(unit, school_mask))
         .max(0) as u32
 }
 
@@ -401,6 +444,75 @@ mod tests {
         );
         let erased = [aura(1, -100, 1, RESISTANCE_TOTAL_PCT)];
         assert_eq!(resistance(1, erased, [item]).resolve(EntityArmor::None), 0);
+    }
+
+    #[test]
+    fn exclusive_auras_count_only_the_strongest_bonus_and_malus_of_each_school() {
+        let fire_resistance = [
+            aura(4, 30, 1, RESISTANCE_EXCLUSIVE),
+            aura(4, 50, 1, RESISTANCE_EXCLUSIVE),
+            aura(4, -10, 1, RESISTANCE_EXCLUSIVE),
+            aura(4, -20, 1, RESISTANCE_EXCLUSIVE),
+            aura(4, 10, 1, RESISTANCE_TOTAL_VALUE),
+            aura(8, 70, 1, RESISTANCE_EXCLUSIVE),
+        ];
+        let fire = resistance(4, fire_resistance, [chest()]);
+        assert_eq!(fire.resolve(EntityArmor::None), 2 + 9 + 50 - 20 + 10);
+        let nature = resistance(8, fire_resistance, [chest()]);
+        assert_eq!(nature.resolve(EntityArmor::None), 3 + 70);
+        let all_schools = [aura(126, 25, 1, RESISTANCE_EXCLUSIVE)];
+        assert_eq!(
+            resistance(4, all_schools, [chest()]).resolve(EntityArmor::None),
+            2 + 9 + 25
+        );
+        assert_eq!(positive(&fire_resistance), 0);
+    }
+
+    #[test]
+    fn holy_resistance_is_zero_whatever_auras_and_items_name_it() {
+        let auras = [
+            aura(126, 25, 1, RESISTANCE_EXCLUSIVE),
+            aura(2, 10, 1, RESISTANCE_TOTAL_VALUE),
+        ];
+        let holy = resistance(2, auras, [chest()]);
+        assert_eq!(holy.resolve(EntityArmor::None), 36);
+        assert_eq!(holy.resolve_school(2, EntityArmor::None), 0);
+        let fire = resistance(4, auras, [chest()]);
+        assert_eq!(fire.resolve_school(4, EntityArmor::None), 2 + 9 + 25);
+    }
+
+    #[test]
+    fn an_exclusive_aura_is_a_total_value_that_a_total_percent_multiplies() {
+        let auras = [
+            aura(4, 40, 1, RESISTANCE_EXCLUSIVE),
+            aura(4, 100, 1, RESISTANCE_BASE_PCT),
+            aura(4, 50, 1, RESISTANCE_TOTAL_PCT),
+        ];
+        assert_eq!(
+            resistance(4, auras, [chest()]).resolve(EntityArmor::None),
+            79
+        );
+    }
+
+    #[test]
+    fn intellect_armor_is_a_flat_term_of_a_character_that_no_base_percent_multiplies() {
+        let arcane_resilience = [aura(1, 50, 1, RESISTANCE_INTELLECT_PCT)];
+        let mut terms = resistance(1, arcane_resilience, [chest()]);
+        assert_eq!(terms.resolve(EntityArmor::AgilityArmor(40)), 120 + 16 + 40);
+        terms.intellect = 90;
+        assert_eq!(
+            terms.resolve(EntityArmor::AgilityArmor(40)),
+            120 + 16 + 40 + 45
+        );
+        let doubled = [
+            aura(1, 50, 1, RESISTANCE_INTELLECT_PCT),
+            aura(1, 100, 1, RESISTANCE_BASE_PCT),
+            aura(1, 10, 1, RESISTANCE_TOTAL_PCT),
+        ];
+        let mut terms = resistance(1, doubled, [chest()]);
+        terms.intellect = 90;
+        assert_eq!(terms.resolve(EntityArmor::AgilityArmor(40)), 375);
+        assert_eq!(positive(&arcane_resilience), 0);
     }
 
     #[test]

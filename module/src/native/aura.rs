@@ -381,7 +381,7 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
         }
         if changed
             .iter()
-            .any(|aura| aura.eff_kind == A_MOD_RESISTANCE && aura.eff_p0 & 0x7f != 0)
+            .any(|aura| crate::modifiers::moves_armor(aura, &auras))
         {
             packets.extend(armor(ctx, row.target_guid, &auras));
         }

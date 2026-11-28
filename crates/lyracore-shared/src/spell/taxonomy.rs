@@ -242,6 +242,8 @@ pub const RESISTANCE_TOTAL_VALUE: i32 = 0;
 pub const RESISTANCE_BASE_VALUE: i32 = 1;
 pub const RESISTANCE_BASE_PCT: i32 = 2;
 pub const RESISTANCE_TOTAL_PCT: i32 = 3;
+pub const RESISTANCE_EXCLUSIVE: i32 = 4;
+pub const RESISTANCE_INTELLECT_PCT: i32 = 5;
 pub const CAST_FLAG_CHANNELED: u32 = 0x0080;
 pub const CAST_FLAG_RANGED_AUTO_REPEAT: u32 = 0x0200;
 // vmangos SpellEntry::CanTriggerWeaponProcs: the hit rolls the main-hand weapon's Chance on Hit.
