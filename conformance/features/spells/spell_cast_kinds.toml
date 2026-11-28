@@ -66,12 +66,6 @@ symbol = "used_rows"
 evidence = "Source reading, not measured. At d9173eca, SpellCaster::RollMeleeOutcomeAgainst returns on an evade (SpellCaster.cpp:433), a miss (:479) or a mechanic resist (:494) before it reads Unit::GetSpellCritChance (:506); a dodge, parry or block spends it, as the Module does. Unit::GetSpellCritChance returns 100 for a sitting Character victim before Player::ApplySpellMod (Unit.cpp:5299), and only Spell::AddUnitTarget rolls a spell crit. Player::DropModCharge runs only inside ApplySpellMod."
 
 [[known_gaps]]
-description = "Holy Shock 20473, 20929 and 20930 do nothing. The importer keeps their dummy effect as an E_SCRIPTED effect with no script, so no Module code casts the damage spell (25912, 25911, 25902) at an enemy or the heal spell (25914, 25913, 25903) at a friend."
-path = "module/src/spell/cast/targeting.rs"
-symbol = "apply_delegating_effect"
-evidence = "Source reading, not measured. At d9173eca, src/scripts/spells/spell_paladin.cpp PaladinHolyShockScript::OnEffectExecute casts the heal at a friendly target and the damage spell otherwise; the World Source names the script spell_paladin_holy_shock, which is in the spells.script finding."
-
-[[known_gaps]]
 description = "A Trigger Child Cast uses and can spend a charged spell modifier that its parent cast already uses, because the parent spends its charges only after its effects. vmangos hides a charge that an in-flight cast took from every other cast."
 path = "module/src/spell/spell_modifier.rs"
 symbol = "ModifierCharges::used_by"
@@ -1037,4 +1031,54 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/immunity_purge.rs"
 function = "a_feared_character_cannot_cast_an_immunity_that_does_not_cover_fear"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/holy_shock.rs"
+function = "holy_shock_heals_a_friend_and_leaves_the_damage_spell_uncast"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/holy_shock.rs"
+function = "holy_shock_damages_an_enemy_and_leaves_the_heal_uncast"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/holy_shock.rs"
+function = "holy_shock_on_the_caster_heals_the_caster"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/holy_shock.rs"
+function = "an_enemy_behind_the_caster_refuses_holy_shock_and_a_friend_behind_does_not"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/holy_shock.rs"
+function = "divine_favor_makes_the_heal_holy_shock_casts_crit_and_ends_with_it"
+rung = "durable_module"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "each_holy_shock_rank_casts_its_heal_at_a_friend_and_its_damage_spell_at_a_foe"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "a_dummy_effect_of_another_spell_stays_scripted"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/vmangos_spell.rs"
+function = "the_holy_shock_script_is_no_script_finding_and_another_script_on_its_spell_is"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/holy_shock.rs"
+function = "an_unflagged_character_of_the_other_faction_behind_the_caster_refuses_holy_shock_and_spends_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/holy_shock.rs"
+function = "divine_favor_makes_the_damage_holy_shock_casts_crit_and_ends_with_it"
 rung = "durable_module"

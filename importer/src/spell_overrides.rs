@@ -209,6 +209,44 @@ pub fn script_follow_up(script_name: &str) -> Option<u32> {
         .map(|&(_, spell)| spell)
 }
 
+/// A spell whose vmangos script casts one spell at a friendly target and another at any other.
+pub struct FriendOrFoeCast {
+    pub spell: u32,
+    pub friend: u32,
+    pub foe: u32,
+}
+
+const FRIEND_OR_FOE_SCRIPT: &str = "spell_paladin_holy_shock";
+
+pub fn is_friend_or_foe_script(script_name: &str) -> bool {
+    script_name == FRIEND_OR_FOE_SCRIPT
+}
+
+/// Holy Shock heals a friend and hurts an enemy.
+const FRIEND_OR_FOE_CASTS: &[FriendOrFoeCast] = &[
+    FriendOrFoeCast {
+        spell: 20473,
+        friend: 25914,
+        foe: 25912,
+    },
+    FriendOrFoeCast {
+        spell: 20929,
+        friend: 25913,
+        foe: 25911,
+    },
+    FriendOrFoeCast {
+        spell: 20930,
+        friend: 25903,
+        foe: 25902,
+    },
+];
+
+pub fn friend_or_foe_cast(spell_id: u32) -> Option<&'static FriendOrFoeCast> {
+    FRIEND_OR_FOE_CASTS
+        .iter()
+        .find(|cast| cast.spell == spell_id)
+}
+
 pub struct SpellIdOverride {
     pub ids: &'static [u32],
     pub name: &'static str,

@@ -1,7 +1,9 @@
 use crate::spell::proc::DAMAGE_CLASS_MAGIC;
 use crate::spell::source_behavior;
 use lyracore_shared::constants::tracer_spell;
-use lyracore_shared::spell::taxonomy::{E_DISMISS_PET, E_REVIVE_PET, SPELL_FAMILY_POTION};
+use lyracore_shared::spell::taxonomy::{
+    E_CAST_FRIEND_OR_FOE, E_DISMISS_PET, E_REVIVE_PET, SPELL_FAMILY_POTION,
+};
 use lyracore_shared::spell_custom as custom;
 
 use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
@@ -1338,7 +1340,7 @@ pub(crate) fn apply_effect(
             apply_character_effect(ctx, e, caster_guid, target_guid, points)
         }
         EffectKind::SetStance => EffectHit::none(),
-        EffectKind::Trigger | EffectKind::Scripted => {
+        EffectKind::Trigger | EffectKind::Scripted | EffectKind::CastFriendOrFoe => {
             apply_delegating_effect(ctx, e, caster_guid, target_guid, level)
         }
         EffectKind::SelfResurrect => {
@@ -2026,6 +2028,10 @@ fn apply_delegating_effect(
                     }
                 }
             }
+            EffectHit::none()
+        }
+        E_CAST_FRIEND_OR_FOE => {
+            super::friend_or_foe::apply(ctx, e, caster_guid, target_guid, level);
             EffectHit::none()
         }
         _ => EffectHit::none(),

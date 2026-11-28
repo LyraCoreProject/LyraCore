@@ -1900,6 +1900,17 @@ A stun, fear or polymorph refuses every cast, except a Spell with the attribute 
 or dispel immunity covers each Aura that causes the state, as vmangos `Spell::CheckCasterAuras` does.
 So a feared Undead can cast Will of the Forsaken, and a stunned one cannot.
 
+### Friend or foe casts
+
+An `E_CAST_FRIEND_OR_FOE` effect (0x30) makes a Trigger Child Cast of `trigger_spell` when its
+selected target is the caster or a unit the caster may not harm, and of the spell in `p0`
+(`P_SPELL_ID`) at any other target, as vmangos `PaladinHolyShockScript::OnEffectExecute` does. Its
+target is `T_TARGET_ANY`. A spell with the effect needs its target in front of the caster unless
+the target is a friend. Holy Shock's three ranks import this way; the spell import reads their
+heal and damage spells from `FRIEND_OR_FOE_CASTS` (`importer/src/spell_overrides.rs`), and such a
+spell is no `spells.script` finding. Each child cast resolves its own hit roll, crit, log and
+spell modifier charges, so Divine Favor crits the child and not the parent.
+
 ### Follow-up casts
 
 `game_spell_follow_up` names, for a spell, the spell its caster casts as a Follow-up Cast at each

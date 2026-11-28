@@ -54,22 +54,22 @@ use lyracore_shared::spell::taxonomy::{
     CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST, CAST_FLAG_RIGHTEOUSNESS,
     CAST_FLAG_WEAPON_PROCS, COMBAT_ATTACK_POWER, COMBAT_ATTACK_POWER_PCT, COMBAT_CRIT,
     COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER_PCT,
-    COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE,
-    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISMISS_PET, E_DISPEL, E_DISTRACT, E_DUEL,
-    E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
-    E_HEAL_MAX_HEALTH, E_INEBRIATE, E_INTERRUPT, E_JUDGEMENT, E_LEARN_SPELL, E_NEXT_SWING,
-    E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT,
-    E_RESURRECT, E_REVIVE_PET, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS,
-    E_SUMMON_HOSTILE, E_SUMMON_OBJECT, E_SUMMON_PET, E_SUMMON_PLAYER, E_TAME_CREATURE, E_TAUNT,
-    E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT,
-    P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY,
-    P_ITEM_ENTRY, P_MANA_SHIELD_MASK, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
-    P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
-    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
-    SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
-    T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CASTER_PET, T_CHAIN_ALLY, T_CHAIN_ENEMY, T_PARTY_AREA,
-    T_RAID_AREA, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
-    T_TARGET_GROUP_CLASS, T_TARGET_SUBGROUP,
+    COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK,
+    E_CAST_FRIEND_OR_FOE, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISMISS_PET,
+    E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET,
+    E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INEBRIATE, E_INTERRUPT, E_JUDGEMENT,
+    E_LEARN_SPELL, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN,
+    E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_REVIVE_PET, E_SCRIPTED, E_SELF_RESURRECT,
+    E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_OBJECT, E_SUMMON_PET,
+    E_SUMMON_PLAYER, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT,
+    M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG,
+    P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MANA_SHIELD_MASK, P_MECHANIC, P_NONE,
+    P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID,
+    P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM,
+    SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE,
+    STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY, T_AREA_NOT_HOSTILE, T_CASTER_PET, T_CHAIN_ALLY,
+    T_CHAIN_ENEMY, T_PARTY_AREA, T_RAID_AREA, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY,
+    T_TARGET_ENEMY, T_TARGET_GROUP_CLASS, T_TARGET_SUBGROUP,
 };
 
 // AttributesEx1 bits 0x04 and 0x40 both mark a channeled spell.
@@ -1150,7 +1150,9 @@ fn push_spell_effect_rows(
         let chain_targets = s.effect_chain_target[i].clamp(0, 255) as u8;
         let trigger_spell = match crate::spell_form::shapeshift_return_spell(spell_id) {
             Some(next) if kind == A_SHAPESHIFT => next,
-            _ => s.effect_trigger_spell[i],
+            _ => spell_overrides::friend_or_foe_cast(spell_id)
+                .filter(|_| kind == E_CAST_FRIEND_OR_FOE)
+                .map_or(s.effect_trigger_spell[i], |cast| cast.friend),
         };
         let learn_kind = lyracore_shared::trainer::learn_kind(kind, target);
         if lyracore_shared::trainer::learn_target_trigger(learn_kind, trigger_spell).is_some() {
@@ -1422,7 +1424,7 @@ fn resolve_effect_kind(
         } else {
             instant_effect_to_kind(effect_id)
         };
-        if k == E_SCRIPTED {
+        if k == E_SCRIPTED && spell_overrides::friend_or_foe_cast(s.id).is_none() {
             *cov.unmapped_effect.entry(effect_id).or_default() += 1;
         }
         (
@@ -1431,6 +1433,12 @@ fn resolve_effect_kind(
         )
     };
     let kind = correct_script_effect_kind(name, kind, aura);
+    let friend_or_foe = spell_overrides::friend_or_foe_cast(s.id).filter(|_| kind == E_SCRIPTED);
+    let kind = if friend_or_foe.is_some() {
+        E_CAST_FRIEND_OR_FOE
+    } else {
+        kind
+    };
     let kind = if kind == A_SEAL && s.family_name == 10 && s.icon_id == 25 && i != 0 {
         A_FLAG
     } else {
@@ -1457,6 +1465,11 @@ fn resolve_effect_kind(
     let (p0, p0_kind) = match created_item {
         Some(entry) if kind == E_CREATE_ITEM => (entry, P_ITEM_ENTRY),
         _ => (p0, p0_kind),
+    };
+
+    let (p0, p0_kind) = match friend_or_foe {
+        Some(cast) => (cast.foe as i32, P_SPELL_ID),
+        None => (p0, p0_kind),
     };
 
     let (p0, p0_kind) = if kind == A_SELF_RESURRECT {
@@ -1541,7 +1554,7 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         | E_RECALL_HOME
         | E_ENCHANT_ITEM_TEMPORARY
         | E_SUMMON_OBJECT => T_SELF,
-        E_DUEL => T_TARGET_ANY,
+        E_DUEL | E_CAST_FRIEND_OR_FOE => T_TARGET_ANY,
         _ => target,
     };
     let overrides = header.overrides;
@@ -1809,6 +1822,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_LEARN_SPELL => "E_LEARN_SPELL",
         E_REVIVE_PET => "E_REVIVE_PET",
         E_DISMISS_PET => "E_DISMISS_PET",
+        E_CAST_FRIEND_OR_FOE => "E_CAST_FRIEND_OR_FOE",
         E_SUMMON_HOSTILE => "E_SUMMON_HOSTILE",
         E_DISTRACT => "E_DISTRACT",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
@@ -4411,6 +4425,57 @@ mod tests {
                 .collect::<Vec<_>>(),
             [A_PERIODIC_HEAL]
         );
+    }
+
+    #[test]
+    fn each_holy_shock_rank_casts_its_heal_at_a_friend_and_its_damage_spell_at_a_foe() {
+        let mut dbc = fixture_tables();
+        let holy_shock = |id| Spell {
+            id,
+            name: "Holy Shock".into(),
+            family_name: 10,
+            effect: [3, 0, 0],
+            implicit_target_a: [25, 0, 0],
+            ..Default::default()
+        };
+        dbc.spells = vec![holy_shock(20473), holy_shock(20929), holy_shock(20930)];
+
+        let (rows, coverage, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        assert!(coverage.unmapped_effect.is_empty());
+        for (spell_id, friend, foe) in [
+            (20473, 25914, 25912),
+            (20929, 25913, 25911),
+            (20930, 25903, 25902),
+        ] {
+            let effect = first_effect(&rows, spell_id);
+            assert_eq!(
+                (
+                    effect.kind,
+                    effect.target,
+                    effect.trigger_spell,
+                    effect.p0,
+                    effect.p0_kind
+                ),
+                (E_CAST_FRIEND_OR_FOE, T_TARGET_ANY, friend, foe, P_SPELL_ID),
+                "rank spell {spell_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dummy_effect_of_another_spell_stays_scripted() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            id: 20474,
+            name: "Holy Shock".into(),
+            effect: [3, 0, 0],
+            implicit_target_a: [25, 0, 0],
+            ..Default::default()
+        }];
+
+        let (rows, coverage, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        assert_eq!(first_effect(&rows, 20474).kind, E_SCRIPTED);
+        assert_eq!(coverage.unmapped_effect.get(&3), Some(&1));
     }
 
     #[test]
