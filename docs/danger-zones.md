@@ -652,6 +652,15 @@ money: vmangos casts a wrapper whose SpellVisual is not 222 from the trainer NPC
 so the cast fails. The refusal needs the `spell` reimport: a row imported before #1222 stores the
 wrapper as `E_SCRIPTED` with `T_SCRIPTED`, which looks like an ordinary learn row.
 
+### PvP Flag persistence migration
+
+`game_character` gains the END-appended columns `pvp_flagged` and `pvp_desired`, default false. A
+Character online at the publish keeps its live PvP Flag and `PVP_DESIRED`, and its next save records
+them. A Character offline at the publish logs in unflagged, as before. A Character Transfer row from
+a Shard before the publish arrives unflagged, and an older destination refuses the longer row, so
+update both Shards before you move a Character. No repair or reimport is needed. Package Deltas do
+not read these columns, and Character Migration writes both as false.
+
 ### Queued strike report migration
 
 `game_spell_cast_event` and `game_spell_cast_event_live` gain `blocked_amount` and

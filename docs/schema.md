@@ -644,6 +644,12 @@ flags and `CORPSE_FIELD_ITEM` (display id, with the inventory type in the top by
 equipment slots) into the CREATE, as vmangos `Player::CreateCorpse` does. Bones keep the guild and
 drop the flags and items, as `Map::RemoveCorpses` does.
 
+`game_character.pvp_flagged` and `pvp_desired` keep the PvP Flag and `PVP_DESIRED` across logout and
+Transfer, as vmangos `CHARACTER_FLAG_PVP_ENABLED` and `CHARACTER_FLAG_PVP_DESIRED` do. Login and an
+arrival from another Shard restore both and start a fresh 5-minute countdown, as vmangos
+`Player::LoadFromDB` calls `UpdatePvP(true)`; a map change on one Shard keeps the running countdown.
+A taxi take-off drops the flag and its countdown unless `PVP_DESIRED` is set.
+
 #### Drunk value
 
 A Character's live Drunk Value is bits 1 to 15 of `player_bytes_3` on its `game_world_entity` row;

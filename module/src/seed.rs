@@ -274,6 +274,8 @@ fn seed_production_core(ctx: &ReducerContext) {
         rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
         drunk_value: 0,
         hide_equipment_flags: 0,
+        pvp_flagged: false,
+        pvp_desired: false,
     });
     crate::creatures::seed_on_aggro_fixtures(ctx);
 }

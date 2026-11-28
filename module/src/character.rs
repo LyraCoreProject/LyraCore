@@ -97,6 +97,11 @@ pub struct Character {
     // PLAYER_FLAGS_HIDE_HELM and PLAYER_FLAGS_HIDE_CLOAK, as the Character last chose them.
     #[default(0u32)]
     pub hide_equipment_flags: u32,
+    // The PvP Flag and PVP_DESIRED at the last save, as vmangos CHARACTER_FLAG_PVP_* keeps them.
+    #[default(false)]
+    pub pvp_flagged: bool,
+    #[default(false)]
+    pub pvp_desired: bool,
 }
 
 // The 5875 client refuses a Character list longer than this limit.
@@ -301,6 +306,8 @@ pub(crate) fn insert_new_character(
         rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
         drunk_value: 0,
         hide_equipment_flags: 0,
+        pvp_flagged: false,
+        pvp_desired: false,
     };
 
     if chars.try_insert(row).is_err() {
@@ -566,10 +573,8 @@ pub(crate) fn apply_player_login(
         entity.unit_bytes_1 = unit_bytes_1;
     }
     crate::away::at_world_entry(ctx, &mut entity, entry);
-    if let (WorldEntry::WorldPort, Some(replaced)) = (entry, &replaced) {
-        crate::pvp::keep_across_map_change(replaced, &mut entity);
-    }
-    crate::pvp::enter_world(ctx, &mut entity);
+    let map_change = entry == WorldEntry::WorldPort && replaced.is_some();
+    crate::pvp::enter_world(ctx, &character, &mut entity, map_change);
     entity.insert(ctx);
     if entry == WorldEntry::Login {
         crate::drunk::sweep_delete_game_drunk_sobering(ctx, character_guid);
@@ -772,6 +777,7 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         c.drunk_value = crate::drunk::drunk_value(entity);
         c.hide_equipment_flags =
             entity.player_flags & lyracore_shared::constants::player_flags::HIDE_EQUIPMENT;
+        crate::pvp::save(entity, &mut c);
 
         c.pending_instance_id = entity.instance_id;
         c.pending_ghost = persisted_pending_ghost(entity.dead, entity.player_flags);

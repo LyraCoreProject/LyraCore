@@ -827,6 +827,8 @@ fn insert_character(
         drunk_value: 0,
         hide_equipment_flags: migration.hide_equipment_flags
             & lyracore_shared::constants::player_flags::HIDE_EQUIPMENT,
+        pvp_flagged: false,
+        pvp_desired: false,
     });
     Ok(guid)
 }

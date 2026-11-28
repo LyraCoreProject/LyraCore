@@ -1,6 +1,7 @@
 mod support;
 
 use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::constants::{player_flags, unit_flags};
 use lyracore_shared::spell::taxonomy::{A_CONTROL, A_INERT, M_STUN, P_MECHANIC, T_SELF};
 use lyracore_test_support::NativePacket;
 use serde_json::json;
@@ -18,6 +19,7 @@ const MISSING_MASTER: u64 = 0xf130_00ff_ffff_ffff;
 const ACTIVATE_TAXI: u32 = 0x1ad;
 const ACTIVATE_TAXI_EXPRESS: u32 = 0x312;
 const ACTIVATE_TAXI_REPLY: u16 = 0x1ae;
+const TOGGLE_PVP: u32 = 0x253;
 const TAXI_NODE_STATUS_QUERY: u32 = 0x1aa;
 const TAXI_NODE_STATUS: u16 = 0x1ab;
 const REVERSE_PATH: u32 = 5_090_306;
@@ -257,6 +259,25 @@ fn flights(shard: &Standalone) -> usize {
         .len()
 }
 
+fn toggle_pvp(wire: &mut support::ReducerConnection, body: &[u8]) {
+    wire.call("native_world_receive", json!([TOGGLE_PVP, body]))
+        .unwrap();
+}
+
+/// The Character's PvP Flag, its `PVP_DESIRED` and whether a countdown runs.
+fn pvp_state(shard: &Standalone) -> (bool, bool, bool) {
+    let row = &shard
+        .query_rows("SELECT unit_flags, player_flags FROM game_world_entity WHERE guid = 1")[0];
+    let countdown = !shard
+        .query_rows("SELECT scheduled_id FROM game_pvp_flag_timer WHERE character_guid = 1")
+        .is_empty();
+    (
+        number::<u32>(row, "unit_flags") & unit_flags::PVP != 0,
+        number::<u32>(row, "player_flags") & player_flags::PVP_DESIRED != 0,
+        countdown,
+    )
+}
+
 fn assert_unchanged(shard: &Standalone, what: &str) {
     assert_eq!((flights(shard), money(shard)), (0, 1000), "{what}");
 }
@@ -274,6 +295,32 @@ fn a_flying_character_gets_no_reply_and_no_second_charge() {
 
     assert!(replies(&activate(&mut wire, &master)).is_empty());
     assert_eq!((flights(&shard), money(&shard)), (1, 1000 - FARE));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_take_off_drops_a_pvp_flag_the_character_does_not_want() {
+    let (shard, mut wire, master) = stage("taxi-activation-pvp-drop", 1000);
+    toggle_pvp(&mut wire, &[]);
+    toggle_pvp(&mut wire, &[0]);
+    assert_eq!(pvp_state(&shard), (true, false, true));
+
+    assert_eq!(replies(&activate(&mut wire, &master)), [status(0)]);
+    assert_eq!(
+        pvp_state(&shard),
+        (false, false, false),
+        "vmangos ActivateTaxiPathTo calls UpdatePvP(false, true)"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_take_off_keeps_the_pvp_flag_of_a_character_that_wants_pvp() {
+    let (shard, mut wire, master) = stage("taxi-activation-pvp-keep", 1000);
+    toggle_pvp(&mut wire, &[]);
+
+    assert_eq!(replies(&activate(&mut wire, &master)), [status(0)]);
+    assert_eq!(pvp_state(&shard), (true, true, true));
 }
 
 #[test]

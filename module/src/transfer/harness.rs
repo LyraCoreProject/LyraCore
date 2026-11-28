@@ -506,6 +506,8 @@ fn fixture_character(guid: u64, name: &str) -> crate::character::Character {
         rest_state: lyracore_shared::packing::REST_STATE_RESTED,
         drunk_value: 12_800,
         hide_equipment_flags: 0x0C00,
+        pvp_flagged: true,
+        pvp_desired: true,
     }
 }
 
@@ -668,7 +670,7 @@ fn watched_faction_selection_and_clear_cross_with_the_character() {
 fn escrow_from_before_the_watched_column_imports_with_no_selection() {
     let src = FakeDb::populated(GUID);
     let mut blob = export(&src, GUID, XFER, DEST);
-    blob.character_row.truncate(blob.character_row.len() - 11);
+    blob.character_row.truncate(blob.character_row.len() - 13);
     let mut dst = FakeDb::new();
     apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
     assert_eq!(dst.with_char(GUID, |c| c.watched_faction_index), -1);
@@ -683,7 +685,7 @@ fn escrow_from_before_the_watched_column_imports_with_no_selection() {
 fn escrow_from_before_the_rest_state_column_imports_with_zero_state() {
     let src = FakeDb::populated(GUID);
     let mut blob = export(&src, GUID, XFER, DEST);
-    blob.character_row.truncate(blob.character_row.len() - 7);
+    blob.character_row.truncate(blob.character_row.len() - 9);
     let mut dst = FakeDb::new();
     apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
     assert_eq!(dst.with_char(GUID, |c| c.rest_state), 0);
@@ -696,7 +698,7 @@ fn escrow_from_before_the_rest_state_column_imports_with_zero_state() {
 fn escrow_from_before_the_drunk_value_column_imports_sober() {
     let src = FakeDb::populated(GUID);
     let mut blob = export(&src, GUID, XFER, DEST);
-    blob.character_row.truncate(blob.character_row.len() - 6);
+    blob.character_row.truncate(blob.character_row.len() - 8);
     let mut dst = FakeDb::new();
     apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
     assert_eq!(dst.with_char(GUID, |c| c.drunk_value), 0);
@@ -712,7 +714,7 @@ fn escrow_from_before_the_drunk_value_column_imports_sober() {
 fn escrow_from_before_the_hide_equipment_column_imports_with_everything_shown() {
     let src = FakeDb::populated(GUID);
     let mut blob = export(&src, GUID, XFER, DEST);
-    blob.character_row.truncate(blob.character_row.len() - 4);
+    blob.character_row.truncate(blob.character_row.len() - 6);
     let mut dst = FakeDb::new();
     apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
     assert_eq!(dst.with_char(GUID, |c| c.hide_equipment_flags), 0);
@@ -730,6 +732,33 @@ fn the_hidden_helm_and_cloak_cross_with_the_character() {
 }
 
 #[test]
+fn escrow_from_before_the_pvp_columns_imports_unflagged() {
+    let src = FakeDb::populated(GUID);
+    let mut blob = export(&src, GUID, XFER, DEST);
+    blob.character_row.truncate(blob.character_row.len() - 2);
+    let mut dst = FakeDb::new();
+    apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
+    assert_eq!(
+        dst.with_char(GUID, |c| (c.pvp_flagged, c.pvp_desired)),
+        (false, false)
+    );
+    assert_eq!(dst.with_char(GUID, |c| c.hide_equipment_flags), 0x0C00);
+    assert!(dst.has_in_row(XFER));
+}
+
+#[test]
+fn the_pvp_flag_and_pvp_desired_cross_with_the_character() {
+    let src = FakeDb::populated(GUID);
+    let blob = export(&src, GUID, XFER, DEST);
+    let mut dst = FakeDb::new();
+    apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
+    assert_eq!(
+        dst.with_char(GUID, |c| (c.pvp_flagged, c.pvp_desired)),
+        (true, true)
+    );
+}
+
+#[test]
 fn the_drunk_value_crosses_with_the_character() {
     let src = FakeDb::populated(GUID);
     let blob = export(&src, GUID, XFER, DEST);
@@ -740,7 +769,7 @@ fn the_drunk_value_crosses_with_the_character() {
 
 #[test]
 fn partial_suffix_columns_and_unknown_trailing_columns_refuse_before_import() {
-    for partial_bytes in [1, 2, 3, 5, 8, 10] {
+    for partial_bytes in [3, 4, 5, 7, 10, 12] {
         let src = FakeDb::populated(GUID);
         let mut blob = export(&src, GUID, XFER, DEST);
         blob.character_row

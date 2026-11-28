@@ -1549,7 +1549,8 @@ Duel lets the two harm each other, and nobody else may help either of them.
 **PvP Flag**:
 `UNIT_FLAG_PVP` on a Character's `WorldEntity`. Another Character may harm it only while the flag is
 set, or in a started Duel. The `/pvp` toggle, a PvP-enforced zone and PvP combat set it. It drops 5
-minutes after the last of them ends.
+minutes after the last of them ends, or at a taxi take-off without the `/pvp` toggle. It survives
+logout and Transfer.
 _Avoid_: PvP mode, PvP status
 
 ## Retired terms
