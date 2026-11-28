@@ -2061,7 +2061,8 @@ fn leader_of_the_pack_comes_with_each_feral_form_for_a_druid_who_knows_it() {
     }
 }
 
-/// A Character of the fixture Account standing five yards from the druid, in its Group.
+/// A Character of the fixture Account standing five yards from the druid, in its Group, both of
+/// one friendly faction.
 fn party_member(shard: &Standalone) -> u64 {
     shard.assert_call(
         "create_character",
@@ -2080,10 +2081,23 @@ fn party_member(shard: &Standalone) -> u64 {
         druid["z"]
     ));
     shard.assert_call("debug_spawn_player_entity", &[&member.to_string()]);
-    shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET faction_template = {} WHERE guid = {member}",
-        druid["faction_template"]
-    ));
+    // The fixture imports no faction templates, and an area Aura reaches only a friendly member.
+    const PARTY_FACTION: u32 = 24_933;
+    shard.insert_row(
+        "game_faction_template",
+        &[
+            ("id", &PARTY_FACTION),
+            ("faction", &PARTY_FACTION),
+            ("faction_group", &1),
+            ("friend_group", &1),
+            ("enemy_group", &2),
+        ],
+    );
+    for guid in [1, member] {
+        shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET faction_template = {PARTY_FACTION} WHERE guid = {guid}"
+        ));
+    }
     const GROUP: u64 = 24_932;
     shard.insert_row(
         "game_group",
