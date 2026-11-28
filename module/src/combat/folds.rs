@@ -1,8 +1,8 @@
 use spacetimedb::ReducerContext;
 
 use crate::{
-    game_aura, game_creature_template, game_item_instance, game_item_template, game_spell,
-    game_spell_effect, game_world_entity, ItemInstance, WorldEntity,
+    game_creature_template, game_item_instance, game_item_template, game_spell, game_spell_effect,
+    game_world_entity, ItemInstance, WorldEntity,
 };
 
 use super::queued_strike::{QueuedStrike, QueuedStrikeDamage};
@@ -690,56 +690,6 @@ pub(crate) fn ranged_projectile(ctx: &ReducerContext, player_guid: u64) -> Optio
     }
     let ammo = templates.entry().find(find_ammo(ctx, player_guid)?.entry)?;
     Some((ammo.display_id, u32::from(ammo.inventory_type)))
-}
-
-pub(crate) fn weapon_strike_damage(
-    ctx: &ReducerContext,
-    caster: &WorldEntity,
-    target: &WorldEntity,
-    flat_bonus: i32,
-    (mod_flat, mod_pct): (i32, i32),
-) -> (u32, bool) {
-    let (min, max) = swing_range_ctx(ctx, caster);
-    let base = min + ctx.random::<u32>() % (max - min + 1);
-    let total = (base as i32 + flat_bonus).max(1) as u32;
-    let total = crate::spell::apply_spell_mod(total, mod_flat, mod_pct).max(1);
-    let crit = (ctx.random::<u32>() % 10_000) < effective_crit_bp(ctx, caster);
-    let total = crate::spell::bonuses::weapon_damage_taken(ctx, target.guid, total);
-    let pre_mit = if crit { total * CRIT_MULT } else { total };
-    let mit_pct =
-        armor_mitigation_pct(crate::modifiers::effective_armor(ctx, target), caster.level);
-    (armor_mitigated(pre_mit, mit_pct), crit)
-}
-
-pub(crate) fn retaliate_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_guid: u64) {
-    let carries_retaliate = ctx
-        .db
-        .game_aura()
-        .by_target()
-        .filter(&victim_guid)
-        .any(|a| a.eff_kind == crate::spell::A_RETALIATE);
-    if !carries_retaliate {
-        return;
-    }
-    let entities = ctx.db.game_world_entity();
-    let (Some(victim), Some(attacker)) = (
-        entities.guid().find(victim_guid),
-        entities.guid().find(attacker_guid),
-    ) else {
-        return;
-    };
-    if victim.dead || attacker.dead {
-        return;
-    }
-    let (dmg, _crit) = weapon_strike_damage(ctx, &victim, &attacker, 0, (0, 0));
-    deal_damage(
-        ctx,
-        victim_guid,
-        attacker_guid,
-        dmg as i32,
-        SCHOOL_MASK_PHYSICAL,
-        Hit::triggered(),
-    );
 }
 
 // `strike` is a firing queued strike; `None` rolls a white swing.
