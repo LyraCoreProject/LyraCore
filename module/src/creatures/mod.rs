@@ -15,6 +15,7 @@ mod pet_progression;
 pub(crate) mod population;
 pub(crate) mod presentation;
 pub(crate) mod spawn;
+pub(crate) mod stable;
 
 pub(crate) mod tick;
 
@@ -92,5 +93,7 @@ pub(crate) use hunter_pet::{
 };
 
 pub(crate) use pet::{sweep_delete_game_pet_command, sweep_transfer_game_pet_command};
+
+pub(crate) use stable::{sweep_delete_game_character_stable, sweep_transfer_game_character_stable};
 
 pub(crate) use spawn::cast_condition;

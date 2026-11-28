@@ -762,7 +762,7 @@ fn hunter_pet(
             )
         } else if Some(pet) != active {
             format!(
-                "pet {} does not migrate, because LyraCore has no stable",
+                "pet {} does not migrate, because only the active pet migrates",
                 pet.name
             )
         } else if !catalogue.beasts.contains(&pet.entry) {
@@ -1799,7 +1799,9 @@ mod tests {
         assert_eq!(active.level, 20);
         assert!(!active.rename_allowed);
         let details: Vec<_> = plan.findings.iter().map(|f| f.detail.as_str()).collect();
-        assert!(details.contains(&"pet Pet 1 does not migrate, because LyraCore has no stable"));
+        assert!(
+            details.contains(&"pet Pet 1 does not migrate, because only the active pet migrates")
+        );
         assert!(details.contains(&"2 spells of pet Pet 2"));
     }
 

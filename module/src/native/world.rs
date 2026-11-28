@@ -482,6 +482,9 @@ pub(super) fn receive(
             unhandled.offer(|message| super::economy::receive(ctx, id, guid, message))
         })
         .or_else(|unhandled| {
+            unhandled.offer(|message| super::stable::receive(ctx, id, guid, message))
+        })
+        .or_else(|unhandled| {
             unhandled.offer(|message| super::inventory::receive(ctx, id, guid, message))
         })
         .or_else(|unhandled| {

@@ -7,7 +7,7 @@ use crate::{
     game_world_entity, CreatureTemplate, WorldEntity,
 };
 
-const CLASS_HUNTER: u8 = 3;
+pub(super) const CLASS_HUNTER: u8 = 3;
 const INITIAL_HAPPINESS: u32 = 166_500;
 const REVIVE_PET_SPELL: u32 = 982;
 // In 1.12, Rename Pet eligibility uses UNIT_FIELD_FLAGS rather than UNIT_FIELD_BYTES_2.
@@ -64,9 +64,15 @@ pub struct HunterPet {
     /// Power saved with `saved_health`; read only when `saved_health` is not zero.
     #[default(0u32)]
     pub saved_power: u32,
+    /// `CURRENT_PET` for the owner's Current Pet, otherwise the stable slot that holds it.
+    #[default(0u8)]
+    pub stable_slot: u8,
 }
 
-/// vmangos: an out pet holds the current slot, a dismissed one no slot, a dead one zero health.
+/// vmangos `PET_SAVE_AS_CURRENT`; stable slots are 1 and 2.
+pub(crate) const CURRENT_PET: u8 = 0;
+
+/// Current Pet state; vmangos keeps an out pet in the current slot and a dead one at 0 health.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PetPresence {
     Dismissed,
@@ -83,7 +89,7 @@ impl PetPresence {
         }
     }
 
-    fn of(code: u8) -> Self {
+    pub(super) fn of(code: u8) -> Self {
         match code {
             1 => Self::Out,
             2 => Self::Dead,
@@ -114,8 +120,15 @@ pub struct HunterPetProtocol {
 }
 
 crate::character_owned!(delete, fn sweep_delete_game_hunter_pet(ctx, character_guid) {
-    if let Some(row) = ctx.db.game_hunter_pet().by_owner().filter(&character_guid).next() {
-        ctx.db.game_hunter_pet().pet_id().delete(row.pet_id);
+    let pets: Vec<u64> = ctx
+        .db
+        .game_hunter_pet()
+        .by_owner()
+        .filter(&character_guid)
+        .map(|row| row.pet_id)
+        .collect();
+    for pet_id in pets {
+        ctx.db.game_hunter_pet().pet_id().delete(pet_id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_hunter_pet(ctx, character_guid, io) {
@@ -124,8 +137,15 @@ crate::character_owned!(transfer, fn sweep_transfer_game_hunter_pet(ctx, charact
     keep_key,
 });
 crate::character_owned!(delete, fn sweep_delete_game_hunter_pet_protocol(ctx, character_guid) {
-    if let Some(row) = ctx.db.game_hunter_pet_protocol().by_owner().filter(&character_guid).next() {
-        ctx.db.game_hunter_pet_protocol().pet_id().delete(row.pet_id);
+    let pets: Vec<u64> = ctx
+        .db
+        .game_hunter_pet_protocol()
+        .by_owner()
+        .filter(&character_guid)
+        .map(|row| row.pet_id)
+        .collect();
+    for pet_id in pets {
+        ctx.db.game_hunter_pet_protocol().pet_id().delete(pet_id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_hunter_pet_protocol(ctx, character_guid, io) {
@@ -154,12 +174,13 @@ fn classify_pet_kind(hunter_pet_id: Option<u64>) -> PetKind {
     }
 }
 
+/// The owner's Current Pet: out, dismissed or dead, but not in a stable slot.
 pub(crate) fn hunter_pet_for_owner(ctx: &ReducerContext, owner_guid: u64) -> Option<HunterPet> {
     ctx.db
         .game_hunter_pet()
         .by_owner()
         .filter(&owner_guid)
-        .next()
+        .find(|pet| pet.stable_slot == CURRENT_PET)
 }
 
 pub(crate) fn publish_hunter_pet_protocol(
@@ -304,13 +325,7 @@ fn eligibility(
     let template = target.and_then(|row| ctx.db.game_creature_template().entry().find(row.entry));
     let family = template
         .as_ref()
-        .filter(|row| row.creature_family != 0)
-        .and_then(|row| {
-            ctx.db
-                .game_creature_family()
-                .family_id()
-                .find(row.creature_family as u32)
-        });
+        .and_then(|template| creature_family(ctx, template));
     TameEligibility {
         caster_is_player: caster.is_player(),
         caster_owned: crate::helpers::character_by_guid(ctx, caster.guid)
@@ -330,6 +345,30 @@ fn eligibility(
     }
 }
 
+fn creature_family(
+    ctx: &ReducerContext,
+    template: &CreatureTemplate,
+) -> Option<super::spawn::CreatureFamily> {
+    (template.creature_family != 0)
+        .then(|| {
+            ctx.db
+                .game_creature_family()
+                .family_id()
+                .find(template.creature_family as u32)
+        })
+        .flatten()
+}
+
+/// Whether the entry's family is tameable (`pet_talent_type >= 0`), as the tame Gate decides.
+pub(crate) fn is_tameable(ctx: &ReducerContext, creature_entry: u32) -> bool {
+    ctx.db
+        .game_creature_template()
+        .entry()
+        .find(creature_entry)
+        .and_then(|template| creature_family(ctx, &template))
+        .is_some_and(|family| family.pet_talent_type >= 0)
+}
+
 // Until a `spell` reimport writes Revive Pet as E_REVIVE_PET, a tame replaces a dead pet.
 fn tame_replaces(ctx: &ReducerContext, pet: &HunterPet) -> bool {
     PetPresence::of(pet.presence) == PetPresence::Dead && !revive_pet_imported(ctx)
@@ -344,7 +383,7 @@ fn revive_pet_imported(ctx: &ReducerContext) -> bool {
         .is_some_and(|effect| effect.kind == E_REVIVE_PET)
 }
 
-/// Deletes the owner's Hunter pet identity and every row keyed to it; the live pet must be gone.
+/// Deletes the owner's Current Pet and every row keyed to it; the live pet must be gone.
 fn forget_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     if let Some(pet) = hunter_pet_for_owner(ctx, owner_guid) {
         ctx.db.game_hunter_pet().pet_id().delete(pet.pet_id);
@@ -382,6 +421,8 @@ pub(crate) fn tame_creature(
         .find(target_guid)
         .ok_or_else(|| "tame target is not in world".to_string())?;
     validate_tame(ctx, &caster, target_guid)?;
+    // Stabled pets keep their numbers, so a new pet takes one the GUID Range has not issued.
+    let pet_id = *crate::auth::reserve_guids(ctx, 1, u64::MAX)?.start();
 
     let template = ctx
         .db
@@ -409,7 +450,7 @@ pub(crate) fn tame_creature(
     forget_hunter_pet(ctx, caster.guid);
     let now = crate::time::now(ctx);
     let hunter_pet = ctx.db.game_hunter_pet().insert(HunterPet {
-        pet_id: caster.guid,
+        pet_id,
         owner_guid: caster.guid,
         creature_entry: target.entry,
         creature_family: template.creature_family as u32,
@@ -428,6 +469,7 @@ pub(crate) fn tame_creature(
         display_id: target.display_id,
         saved_health: 0,
         saved_power: 0,
+        stable_slot: CURRENT_PET,
     });
     materialize(
         ctx,
@@ -625,7 +667,7 @@ fn delete_live_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     forget_hunter_pet(ctx, owner_guid);
 }
 
-fn materialize_beside(
+pub(super) fn materialize_beside(
     ctx: &ReducerContext,
     owner: &WorldEntity,
     pet: HunterPet,

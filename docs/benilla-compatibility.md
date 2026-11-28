@@ -191,7 +191,6 @@ A Refusal or an empty reply does not establish a working gameplay feature.
 | --- | --- |
 | Battlegrounds | Empty instance lists, queue slots, scoreboards and positions; join requests report unavailability |
 | GM tickets | Disabled service, absent ticket, refused creation and updates |
-| Pet stables | Failure code 6 |
 | Pet bar editing, autocast and pet spell requests | Specific System Messages, with a cast-failed packet for a pet spell |
 | Item wrapping | Inventory Refusal |
 | Readable pages | A terminal page naming the unavailable text service |

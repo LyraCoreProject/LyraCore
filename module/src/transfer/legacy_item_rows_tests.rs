@@ -511,14 +511,51 @@ fn game_hunter_pet_has_the_shape_its_transfer_tag_names() {
         .iter()
         .find(|(table, _)| *table == "game_hunter_pet")
         .map(|(_, tag)| *tag);
-    let previous = field_names::<LegacyHunterPet>();
-    let mut current = previous.clone();
-    current.extend(["presence", "display_id", "saved_health", "saved_power"].map(String::from));
+    let mut presence = field_names::<LegacyHunterPet>();
+    presence.extend(["presence", "display_id", "saved_health", "saved_power"].map(String::from));
+    assert_eq!(field_names::<PresenceHunterPet>(), presence);
+    let mut current = presence;
+    current.push("stable_slot".to_owned());
     assert_eq!(
         (tag, field_names::<HunterPet>()),
-        (Some("game_hunter_pet@presence-1"), current),
+        (Some("game_hunter_pet@stable-slot-1"), current),
         "game_hunter_pet changed shape; add a FORMATS tag that decodes the old shape, then update this pin"
     );
+}
+
+#[test]
+fn a_hunter_pet_that_travelled_before_stables_arrives_as_the_current_pet() {
+    let at = Timestamp::from_micros_since_unix_epoch(1234);
+    let arrived: Vec<HunterPet> = arrive(entry(
+        "game_hunter_pet@presence-1",
+        vec![PresenceHunterPet {
+            pet_id: 73,
+            owner_guid: 73,
+            creature_entry: 51008,
+            creature_family: 5,
+            name: "Fang".to_owned(),
+            rename_allowed: false,
+            level: 12,
+            pet_xp: 40,
+            loyalty_level: 3,
+            loyalty_progress: 900,
+            happiness: 700_000,
+            created_at: at,
+            care_updated_at: at,
+            loyalty_updated_at: at,
+            name_timestamp: 99,
+            presence: 2,
+            display_id: 903,
+            saved_health: 0,
+            saved_power: 0,
+        }],
+    ));
+    let row = &arrived[0];
+    assert_eq!(
+        (row.pet_id, &*row.name, row.presence, row.display_id),
+        (73, "Fang", 2, 903)
+    );
+    assert_eq!(row.stable_slot, crate::creatures::hunter_pet::CURRENT_PET);
 }
 
 #[test]
@@ -561,9 +598,10 @@ fn a_hunter_pet_that_travelled_before_presence_arrives_dismissed_with_its_identi
             row.presence,
             row.display_id,
             row.saved_health,
-            row.saved_power
+            row.saved_power,
+            row.stable_slot
         ),
-        (0, 0, 0, 0)
+        (0, 0, 0, 0, 0)
     );
 }
 

@@ -85,14 +85,6 @@ pub(super) fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<V
         ClientOpcodeMessage::CMSG_GMTICKET_DELETETICKET => {
             word(SMSG_GMTICKET_DELETETICKET_OPCODE, 9)
         }
-        ClientOpcodeMessage::MSG_LIST_STABLED_PETS(_)
-        | ClientOpcodeMessage::CMSG_STABLE_PET(_)
-        | ClientOpcodeMessage::CMSG_UNSTABLE_PET(_)
-        | ClientOpcodeMessage::CMSG_BUY_STABLE_SLOT(_)
-        | ClientOpcodeMessage::CMSG_STABLE_SWAP_PET(_) => Packet {
-            opcode: SMSG_STABLE_RESULT_OPCODE,
-            body: vec![6],
-        },
         ClientOpcodeMessage::CMSG_WRAP_ITEM(_) => {
             message(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
                 Box::new(codec::build_inventory_refusal(

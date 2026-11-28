@@ -19,6 +19,7 @@ pub(crate) enum NpcService {
     Gossip,
     GuildEmblem,
     GuildCharter,
+    StableMaster,
 }
 
 impl NpcService {
@@ -34,6 +35,7 @@ impl NpcService {
             Self::Gossip => return flags != 0,
             Self::GuildEmblem => npc_flags::TABARDDESIGNER,
             Self::GuildCharter => npc_flags::PETITIONER | npc_flags::TABARDDESIGNER,
+            Self::StableMaster => npc_flags::STABLEMASTER,
         };
         flags & required == required
     }
@@ -49,6 +51,7 @@ impl NpcService {
             Self::QuestGiver => "quest giver",
             Self::Gossip => "gossip creature",
             Self::GuildEmblem | Self::GuildCharter => "guild NPC",
+            Self::StableMaster => "stable master",
         }
     }
 
@@ -63,6 +66,7 @@ impl NpcService {
             Self::QuestGiver => "talk to a quest giver",
             Self::Gossip => "use gossip",
             Self::GuildEmblem | Self::GuildCharter => "pay a guild fee",
+            Self::StableMaster => "use the stable",
         }
     }
 
@@ -77,6 +81,7 @@ impl NpcService {
             Self::QuestGiver => "target is not a quest giver",
             Self::Gossip => "target has no gossip",
             Self::GuildEmblem | Self::GuildCharter => "target does not serve guild fees",
+            Self::StableMaster => "target is not a stable master",
         }
     }
 }

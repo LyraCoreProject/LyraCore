@@ -2242,8 +2242,9 @@ def check_pets(host):
     assert not any(opcode == 0x179 for opcode, _ in observed)
     summon = values(owned, owner_guid)
     assert summon[8] | summon[9] << 32 == pet
+    pet_number = host.rows(f'SELECT pet_id FROM game_hunter_pet WHERE owner_guid = {owner_guid}')[0][0] & 0xFFFFFFFF
     owner_values, observer_values = values(owned, pet), values(observed, pet)
-    assert owner_values[139] == observer_values[139] == owner_guid
+    assert owner_values[139] == observer_values[139] == pet_number
     assert owner_values[140] == observer_values[140]
     assert owner_values[27] > 0 and owner_values[33] == 1000000 and owner_values[141] == 0
     assert all(field not in observer_values for field in (27, 33, 141, 142))
@@ -2264,8 +2265,8 @@ def check_pets(host):
     assert values(renamed, pet)[140] == values(observed, pet)[140] == current[2]
     assert not values(renamed, pet)[46] & 0x10
     assert all(field not in values(observed, pet) for field in (27, 33, 141, 142))
-    observer.send(0x52, struct.pack('<IQ', owner_guid, pet))
-    assert (0x53, struct.pack('<I', owner_guid) + b'Fang\0' + struct.pack('<I', current[2])) in observer.collect()
+    observer.send(0x52, struct.pack('<IQ', pet_number, pet))
+    assert (0x53, struct.pack('<I', pet_number) + b'Fang\0' + struct.pack('<I', current[2])) in observer.collect()
     assert (0x178, b'') not in rename(owner, 'F1')
     assert host.rows(f'SELECT name FROM game_hunter_pet WHERE owner_guid = {owner_guid}') == [['Fang']]
 
