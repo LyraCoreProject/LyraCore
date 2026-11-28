@@ -1,10 +1,11 @@
-use lyracore_shared::spell::taxonomy::E_REVIVE_PET;
+use lyracore_shared::spell::taxonomy::{E_REVIVE_PET, E_SUMMON_PET};
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
 use super::pet::game_pet_command;
+use crate::spell::{CastGateRefusal, CastRefusalReason};
 use crate::{
     game_creature_family, game_creature_spawn, game_creature_template, game_spell_effect,
-    game_world_entity, CreatureTemplate, WorldEntity,
+    game_world_entity, CreatureTemplate, SpellEffect, WorldEntity,
 };
 
 pub(super) const CLASS_HUNTER: u8 = 3;
@@ -279,39 +280,47 @@ struct TameEligibility {
 }
 
 impl TameEligibility {
-    fn validate(&self) -> Result<(), &'static str> {
-        if !self.caster_is_player || self.caster_class != CLASS_HUNTER {
-            return Err("only a Hunter can tame a creature");
+    /// The Gates of vmangos `Spell::CheckCast` before `CheckTamingSpell` refuse without a reason.
+    fn validate(&self) -> Result<(), CastGateRefusal> {
+        use PetSummonRefusal as Reported;
+        let unreported = |reason, message: &str| CastGateRefusal::other(reason, message);
+        if !self.caster_is_player {
+            return Err(unreported(
+                CastRefusalReason::BadTargets,
+                "only a Character can tame a creature",
+            ));
         }
         if !self.caster_owned {
-            return Err("the Hunter has no matching durable owner");
+            return Err("the Hunter has no matching durable owner"
+                .to_string()
+                .into());
         }
         if self.caster_dead {
-            return Err("a dead Hunter cannot tame a creature");
+            return Err("a dead Hunter cannot tame a creature".to_string().into());
         }
-        if !self.target_exists {
-            return Err("tame target is not in world");
+        if self.target_exists && self.target_dead {
+            return Err(unreported(
+                CastRefusalReason::TargetDead,
+                "a dead creature cannot be tamed",
+            ));
         }
-        if self.target_is_player {
-            return Err("players cannot be tamed");
-        }
-        if self.target_dead {
-            return Err("a dead creature cannot be tamed");
-        }
-        if self.target_owned {
-            return Err("an owned or charmed creature cannot be tamed");
-        }
-        if self.target_level > self.owner_level {
-            return Err("the creature is higher level than the Hunter");
+        if self.caster_class != CLASS_HUNTER {
+            return Err(Reported::UnitsCantTame.into());
         }
         if self.has_pet {
-            return Err("the Hunter already has a pet");
+            return Err(Reported::AnotherPetOut.into());
         }
-        if !self.family_present {
-            return Err("the creature has no pet family");
+        if !self.target_exists || self.target_is_player {
+            return Err(Reported::InvalidCreature.into());
         }
-        if !self.family_tameable {
-            return Err("the creature family is not tameable");
+        if self.target_owned {
+            return Err(Reported::CreatureAlreadyOwned.into());
+        }
+        if self.target_level > self.owner_level {
+            return Err(Reported::TooHighLevel.into());
+        }
+        if !self.family_present || !self.family_tameable {
+            return Err(Reported::NotTameable.into());
         }
         Ok(())
     }
@@ -395,15 +404,14 @@ fn forget_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     ctx.db.game_pet_command().owner_guid().delete(owner_guid);
 }
 
+/// The tame Gate; vmangos `Spell::CheckTamingSpell` reports its reason before the cast result.
 pub(crate) fn validate_tame(
     ctx: &ReducerContext,
     caster: &WorldEntity,
     target_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), CastGateRefusal> {
     let target = ctx.db.game_world_entity().guid().find(target_guid);
-    eligibility(ctx, caster, target.as_ref())
-        .validate()
-        .map_err(str::to_string)
+    eligibility(ctx, caster, target.as_ref()).validate()
 }
 
 pub(crate) fn tame_creature(
@@ -482,22 +490,32 @@ pub(crate) fn tame_creature(
     Ok(())
 }
 
-/// Why Call Pet or Revive Pet brings no pet; vmangos `Spell::CheckCast` and `EffectSummonPet`.
+/// Why a tame, Call Pet or Revive Pet brings no pet; the reason vmangos sends as a tame failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PetSummonRefusal {
     AnotherPetOut,
     NoPet,
     Dead,
     NotDead,
+    UnitsCantTame,
+    InvalidCreature,
+    CreatureAlreadyOwned,
+    TooHighLevel,
+    NotTameable,
 }
 
 impl std::fmt::Display for PetSummonRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::AnotherPetOut => "the Hunter already has a pet out",
+            Self::AnotherPetOut => "the Hunter already has a pet",
             Self::NoPet => "the Hunter has no pet",
             Self::Dead => "the Hunter's pet is dead",
             Self::NotDead => "the Hunter's pet is not dead",
+            Self::UnitsCantTame => "only a Hunter can tame a creature",
+            Self::InvalidCreature => "the tame target is not a creature in the world",
+            Self::CreatureAlreadyOwned => "an owned or charmed creature cannot be tamed",
+            Self::TooHighLevel => "the creature is higher level than the Hunter",
+            Self::NotTameable => "the creature has no tameable pet family",
         })
     }
 }
@@ -532,6 +550,25 @@ fn owner_pets(ctx: &ReducerContext, owner_guid: u64) -> (bool, Option<HunterPet>
     )
 }
 
+/// Call Pet is SPELL_EFFECT_SUMMON_PET with no creature entry.
+pub(crate) fn is_call_pet(effect: &SpellEffect) -> bool {
+    effect.kind == E_SUMMON_PET && effect.p0 <= 0
+}
+
+/// The Call Pet Gate; vmangos `Unit::UnsummonOldPetBeforeNewSummon` refuses while any pet is out.
+pub(crate) fn validate_call_pet(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+) -> Result<(), CastGateRefusal> {
+    if super::pet_of(ctx, caster.guid).is_some() {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::AlreadyHaveSummon,
+            PetSummonRefusal::AnotherPetOut.to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Call Pet: builds the owner's durable Hunter pet beside it; a dead or missing pet is reported.
 pub(crate) fn call_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     let Some(owner) = ctx
@@ -550,7 +587,7 @@ pub(crate) fn call_hunter_pet(ctx: &ReducerContext, owner_guid: u64) {
     );
     match (checked, durable) {
         (Ok(()), Some(pet)) => materialize_beside(ctx, &owner, pet, None),
-        // vmangos refuses this in `Spell::CheckCast` with a cast result, not a tame failure.
+        // The Call Pet Gate refuses this cast before its effect runs.
         (Err(PetSummonRefusal::AnotherPetOut), _) => {}
         (Err(refusal), _) => crate::native::pet::pet_refused(ctx, owner_guid, refusal),
         (Ok(()), None) => {}
@@ -901,16 +938,16 @@ mod tests {
     #[test]
     fn every_tame_gate_rejects_independently() {
         let cases: Vec<BreakGate> = vec![
-            Box::new(|v| v.caster_class = 9),
             Box::new(|v| v.caster_is_player = false),
             Box::new(|v| v.caster_owned = false),
             Box::new(|v| v.caster_dead = true),
+            Box::new(|v| v.target_dead = true),
+            Box::new(|v| v.caster_class = 9),
+            Box::new(|v| v.has_pet = true),
             Box::new(|v| v.target_exists = false),
             Box::new(|v| v.target_is_player = true),
-            Box::new(|v| v.target_dead = true),
             Box::new(|v| v.target_owned = true),
             Box::new(|v| v.target_level = v.owner_level + 1),
-            Box::new(|v| v.has_pet = true),
             Box::new(|v| v.family_present = false),
             Box::new(|v| v.family_tameable = false),
         ];
@@ -921,6 +958,79 @@ mod tests {
                 value.validate().is_err(),
                 "invalid tame unexpectedly passed: {value:?}"
             );
+        }
+    }
+
+    #[test]
+    fn a_refused_tame_reports_the_check_taming_spell_reason_and_the_first_failing_check_wins() {
+        use PetSummonRefusal::*;
+        let cases: Vec<(BreakGate, PetSummonRefusal)> = vec![
+            (Box::new(|v| v.caster_class = 9), UnitsCantTame),
+            (Box::new(|v| v.has_pet = true), AnotherPetOut),
+            (Box::new(|v| v.target_exists = false), InvalidCreature),
+            (Box::new(|v| v.target_is_player = true), InvalidCreature),
+            (Box::new(|v| v.target_owned = true), CreatureAlreadyOwned),
+            (
+                Box::new(|v| v.target_level = v.owner_level + 1),
+                TooHighLevel,
+            ),
+            (Box::new(|v| v.family_present = false), NotTameable),
+            (Box::new(|v| v.family_tameable = false), NotTameable),
+            (
+                Box::new(|v| {
+                    v.caster_class = 9;
+                    v.has_pet = true;
+                    v.target_owned = true;
+                    v.family_tameable = false;
+                }),
+                UnitsCantTame,
+            ),
+            (
+                Box::new(|v| {
+                    v.has_pet = true;
+                    v.target_owned = true;
+                }),
+                AnotherPetOut,
+            ),
+            (
+                Box::new(|v| {
+                    v.target_level = v.owner_level + 1;
+                    v.family_tameable = false;
+                }),
+                TooHighLevel,
+            ),
+        ];
+        for (mutate, reason) in cases {
+            let mut value = eligible();
+            mutate(&mut value);
+            let refusal = value.validate().expect_err("the tame must be refused");
+            assert_eq!(refusal.pet_refusal, Some(reason), "{value:?}");
+            assert_eq!(refusal.reason, CastRefusalReason::Unreported);
+        }
+    }
+
+    #[test]
+    fn a_tame_refused_before_the_taming_check_reports_no_tame_failure() {
+        let cases: Vec<(BreakGate, CastRefusalReason)> = vec![
+            (
+                Box::new(|v| v.caster_is_player = false),
+                CastRefusalReason::BadTargets,
+            ),
+            (
+                Box::new(|v| v.target_dead = true),
+                CastRefusalReason::TargetDead,
+            ),
+            (
+                Box::new(|v| v.caster_dead = true),
+                CastRefusalReason::Unreported,
+            ),
+        ];
+        for (mutate, reason) in cases {
+            let mut value = eligible();
+            mutate(&mut value);
+            let refusal = value.validate().expect_err("the tame must be refused");
+            assert_eq!(refusal.pet_refusal, None, "{value:?}");
+            assert_eq!(refusal.reason, reason);
         }
     }
 

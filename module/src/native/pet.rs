@@ -42,6 +42,11 @@ fn tame_failure(refusal: PetSummonRefusal) -> ServerOpcodeMessage {
         PetSummonRefusal::NoPet => PetTameFailureReason::NoPetAvailable,
         PetSummonRefusal::Dead => PetTameFailureReason::Dead,
         PetSummonRefusal::NotDead => PetTameFailureReason::NotDead,
+        PetSummonRefusal::UnitsCantTame => PetTameFailureReason::UnitsCantTame,
+        PetSummonRefusal::InvalidCreature => PetTameFailureReason::InvalidCreature,
+        PetSummonRefusal::CreatureAlreadyOwned => PetTameFailureReason::CreatureAlreadyOwned,
+        PetSummonRefusal::TooHighLevel => PetTameFailureReason::TooHighLevel,
+        PetSummonRefusal::NotTameable => PetTameFailureReason::NotTameable,
     };
     ServerOpcodeMessage::SMSG_PET_TAME_FAILURE(SMSG_PET_TAME_FAILURE { reason })
 }
@@ -201,6 +206,11 @@ mod tests {
             (PetSummonRefusal::NoPet, 0x07),
             (PetSummonRefusal::Dead, 0x0A),
             (PetSummonRefusal::NotDead, 0x0B),
+            (PetSummonRefusal::UnitsCantTame, 0x06),
+            (PetSummonRefusal::InvalidCreature, 0x01),
+            (PetSummonRefusal::CreatureAlreadyOwned, 0x03),
+            (PetSummonRefusal::TooHighLevel, 0x09),
+            (PetSummonRefusal::NotTameable, 0x04),
         ] {
             let packet = tame_failure_packet(refusal);
             assert_eq!((packet.opcode, packet.body), (0x0173, vec![body]));

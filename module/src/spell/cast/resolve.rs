@@ -2099,6 +2099,9 @@ impl GateCheck<'_> {
                 if has_effect(E_REVIVE_PET) {
                     crate::creatures::validate_revive_pet(ctx, caster)?;
                 }
+                if effects.iter().any(crate::creatures::is_call_pet) {
+                    crate::creatures::validate_call_pet(ctx, caster)?;
+                }
                 Ok(())
             }
             CastGate::Guardian => effects

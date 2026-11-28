@@ -189,6 +189,13 @@ pub(crate) fn despawn_pets(ctx: &ReducerContext, owner_guid: u64) {
     super::hunter_pet::dismiss_hunter_pet(ctx, owner_guid);
 }
 
+/// Dismiss Pet (SPELL_EFFECT_DISMISS_PET): the pet bar's dismiss, for a caster with a live pet.
+pub(crate) fn dismiss_live_pet(ctx: &ReducerContext, owner_guid: u64) {
+    if pet_of(ctx, owner_guid).is_some() {
+        despawn_pets(ctx, owner_guid);
+    }
+}
+
 /// Removes the live pet without dismissing it: a Hunter pet left marked out returns at world entry.
 pub(crate) fn despawn_pets_on_departure(ctx: &ReducerContext, owner_guid: u64) {
     if let Some(pet) = pet_of(ctx, owner_guid) {
