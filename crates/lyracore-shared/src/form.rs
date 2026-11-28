@@ -62,10 +62,9 @@ pub struct FormFact {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FormPassive {
     pub spell_id: u32,
-    /// The unit holds the passive only while it knows this spell or a later rank; zero is none.
+    /// Nonzero: the unit must know this spell or a later rank.
     pub required_spell: u32,
-    /// Nonzero: the passive's first effect takes the amount of the unit's Aura of this spell or a
-    /// later rank, and a unit with no such Aura gets no passive.
+    /// Nonzero: the first effect takes the amount of the unit's Aura of this rank line.
     pub amount_spell: u32,
 }
 
@@ -77,8 +76,7 @@ const fn passive(spell_id: u32) -> FormPassive {
     }
 }
 
-// vmangos HandleShapeshiftBoosts casts Leader of the Pack 24932 on a druid who knows 17007, in each
-// Form its Stances name, and a Heart of the Wild effect at the talent rank's Intellect Aura amount.
+// vmangos HandleShapeshiftBoosts: Leader of the Pack needs 17007, Heart of the Wild 17003's amount.
 const LEADER_OF_THE_PACK: FormPassive = FormPassive {
     required_spell: 17007,
     ..passive(24932)

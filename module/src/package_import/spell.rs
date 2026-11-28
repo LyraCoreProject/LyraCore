@@ -156,15 +156,6 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                     .spell_id()
                     .find(spell_id)
                     .ok_or_else(|| missing_reference(row, "spell", spell_id))?;
-                if spell.attributes & SPELL_ATTR_PASSIVE == 0
-                    || shapeshifts(spell_id).next().is_some()
-                {
-                    return Err(format!(
-                        "`game_form_spell` row {} names spell {spell_id}, which is not a passive \
-                         spell or which shapeshifts",
-                        row.key()
-                    ));
-                }
                 let passive = ctx
                     .db
                     .game_form_spell()
@@ -173,6 +164,18 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                     .ok_or_else(|| {
                         format!("`game_form_spell` row {} vanished mid-apply", row.key())
                     })?;
+                let conditioned = passive.required_spell != 0 || passive.amount_spell != 0;
+                let permanent = matches!(spell.duration_ms, 0 | u32::MAX);
+                let held_for_the_form =
+                    spell.attributes & SPELL_ATTR_PASSIVE != 0 || (conditioned && permanent);
+                if !held_for_the_form || shapeshifts(spell_id).next().is_some() {
+                    return Err(format!(
+                        "`game_form_spell` row {} names spell {spell_id}, which shapeshifts, or \
+                         which is not a passive spell and not a permanent spell of a passive \
+                         with a condition",
+                        row.key()
+                    ));
+                }
                 for condition in [passive.required_spell, passive.amount_spell] {
                     if condition != 0 && spells.spell_id().find(condition).is_none() {
                         return Err(missing_reference(row, "spell", condition));

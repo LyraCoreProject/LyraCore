@@ -784,7 +784,9 @@ identifier must fit 24 bits.
   - a plan row gives a spell an `A_FORM_ENTRY_CHANCE` effect while the spell lacks
     `SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED` in `attributes_ex_2`, since its passive would end
     with the Form and miss the next entry;
-  - a passive is not a passive spell, or carries `A_SHAPESHIFT`;
+  - a passive carries `A_SHAPESHIFT`, or is not a passive spell. A passive with a
+    `required_spell` or `amount_spell` may instead name a permanent spell (duration 0 or -1), as
+    Leader of the Pack 24932 and the Heart of the Wild effects are;
   - a plan row writes an `A_SHAPESHIFT` effect, on any spell, that names a Form with no `game_form`
     row;
   - a plan row that updates any spell's effect leaves a Form's `spell_id` spell with no

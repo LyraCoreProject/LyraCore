@@ -629,7 +629,17 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/forms.rs"
-function = "heart_of_the_wild_keeps_its_amount_across_world_entry_in_cat_form"
+function = "world_entry_in_cat_form_recasts_heart_of_the_wild_at_the_current_rank"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "a_druid_holding_another_druids_leader_of_the_pack_takes_its_own_in_cat_form"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "a_package_form_passive_that_requires_a_known_spell_comes_once_the_unit_knows_it"
 rung = "durable_module"
 
 [[tests]]

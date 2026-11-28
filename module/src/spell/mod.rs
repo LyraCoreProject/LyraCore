@@ -38,7 +38,7 @@ mod tests;
 pub(crate) use cast::blink_forward;
 pub(crate) use cast::{
     apply_direct_heal, apply_effect, apply_item_auras, apply_spell_auras,
-    apply_spell_auras_with_points, aura_apply, begin_cast, begin_loaded_cast, cast_aura_triggered,
+    apply_spell_auras_with_amount, aura_apply, begin_cast, begin_loaded_cast, cast_aura_triggered,
     cast_triggered, charge_spell_cost, check_cast_start_gates, clear_dead_callback_cast_admission,
     complete_cast, faction_target_violation, helps_units, place_ground_area, queued_strike_chain,
     recipe_reagents, record_spell_cooldown, refund_avoided_cost, resolve_cast, revive_amount,

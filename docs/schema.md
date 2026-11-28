@@ -543,15 +543,18 @@ A new Form needs rows, not Rust: a Package adds one through its Package Delta, a
 Package Form Range (`docs/package-api.md`).
 
 A `game_form_spell` row can put two conditions on its passive, as vmangos
-`HandleShapeshiftBoosts` does for the feral Forms. A nonzero `required_spell` gives the passive only
-to a unit that knows that spell or a later rank of the talent or spell chain it starts: Cat, Bear
-and Dire Bear Form give Leader of the Pack 24932 to a druid who knows 17007, and its party Aura
-reaches the druid's Subgroup through the [area Aura](#area-auras) pass. A nonzero `amount_spell`
-gives the passive only to a unit holding an Aura of that spell or a later rank, and the passive's
-first effect takes the amount of that Aura's lowest effect: Cat Form gives Heart of the Wild 24900
-and the bear Forms 24899 at the amount of the druid's Heart of the Wild rank (17003 to 24894, 4 to
-20 percent). Zero is no condition. A held passive keeps its amount until the unit leaves the Form,
-so a talent rank learned in the Form shows on the next entry, as in vmangos.
+`HandleShapeshiftBoosts` does for the feral Forms. A rank line is a spell and the later ranks of
+its talent or spell chain. A nonzero `required_spell` gives the passive only to a unit that knows a
+spell of its rank line: Cat, Bear and Dire Bear Form give Leader of the Pack 24932 to a druid who
+knows 17007. Its party Aura reaches the druid's Subgroup through the [area Aura](#area-auras) pass,
+and a druid who holds another druid's copy gets its own Aura in place of the copy. A nonzero
+`amount_spell` gives the passive only to a unit holding an Aura of its rank line, and the passive's
+first effect holds the amount of that Aura's lowest effect unconverted, as vmangos
+`CastCustomSpell` passes `m_amount`: Cat Form gives Heart of the Wild 24900 and the bear Forms 24899
+at the amount of the druid's Heart of the Wild rank (17003 to 24894, 4 to 20 percent). Zero is no
+condition. Every Form Projection, world entry included, places such a passive again when the amount
+it holds is not the amount its source gives. A talent rank learned in the Form starts no
+projection, so it shows at the next Form entry or world entry, as in vmangos.
 
 Imported Forms keep the ids of the 1.12 client's `SpellShapeshiftForm.dbc`, and the `spell` import
 replaces only the Forms it writes. A Package Form sits in a band no import reaches, so a reimport
@@ -628,10 +631,10 @@ Aura's events drive the Form:
 The Aura change then projects once: `form::project_form` re-derives the client form byte, the shown
 pool, the passives the Form brings and the equipment that depends on the Form. The passives are the
 Form's `game_form_spell` rows whose conditions the unit meets and every known passive whose Form
-Set requires a Form with a
-`game_form` row, such as Defiance or Sharpened Claws. A passive whose Form Set names only Forms
-without a row, such as Tree Form, keeps the Aura its learning applied. The projection
-removes only Auras the unit cast itself; equipment Auras stay with the equipment reconcile. A spell
+Set requires a Form with a `game_form` row, such as Defiance or Sharpened Claws. A passive whose
+Form Set names only Forms without a row, such as Tree Form, keeps the Aura its learning applied.
+The projection removes only Auras the unit cast itself; equipment Auras stay with the equipment
+reconcile. A spell
 with `CAST_FLAG_LOCKS_FORM`, Berserk among them, refuses every shapeshift cast while its Aura is
 held.
 

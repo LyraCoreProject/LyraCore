@@ -6,7 +6,9 @@ use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
 
 use super::depth::TriggerLink;
 use super::impact::SpellFlights;
-use super::targeting::{affected_target_cap, helps_units, CappedPicks, EffectHit};
+use super::targeting::{
+    affected_target_cap, aura_apply_amount, helps_units, CappedPicks, EffectHit,
+};
 use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::spell::tables::SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT;
@@ -3312,26 +3314,19 @@ pub(crate) fn apply_spell_auras(
     level: u8,
     rank: u8,
 ) {
-    place_spell_auras(ctx, spell_id, target_guid, level, |effect| {
-        i32::from(rank) * effect.base_points
-    });
+    place_spell_auras(ctx, spell_id, target_guid, level, rank, None);
 }
 
-/// As vmangos `CastCustomSpell` with only its first base points: effect 0 takes `points`.
-pub(crate) fn apply_spell_auras_with_points(
+/// As vmangos `CastCustomSpell` with another Aura's `m_amount` as the first base points: effect 0
+/// holds `amount` unconverted.
+pub(crate) fn apply_spell_auras_with_amount(
     ctx: &ReducerContext,
     spell_id: u32,
     target_guid: u64,
     level: u8,
-    points: i32,
+    amount: i32,
 ) {
-    place_spell_auras(ctx, spell_id, target_guid, level, |effect| {
-        if effect.effect_index == 0 {
-            points
-        } else {
-            effect.base_points
-        }
-    });
+    place_spell_auras(ctx, spell_id, target_guid, level, 1, Some(amount));
 }
 
 fn place_spell_auras(
@@ -3339,7 +3334,8 @@ fn place_spell_auras(
     spell_id: u32,
     target_guid: u64,
     level: u8,
-    points_of: impl Fn(&SpellEffect) -> i32,
+    rank: u8,
+    first_effect_amount: Option<i32>,
 ) {
     let Some(mut hdr) = ctx.db.game_spell().spell_id().find(spell_id) else {
         log::info!("apply_spell_auras: unknown spell {spell_id}");
@@ -3363,17 +3359,21 @@ fn place_spell_auras(
         return;
     }
     for e in effects {
-        aura_apply(
-            ctx,
-            &e,
-            &hdr,
-            target_guid,
-            target_guid,
-            target_guid,
-            level,
-            points_of(&e),
-            0,
-        );
+        let (t, l) = (target_guid, level);
+        match first_effect_amount.filter(|_| e.effect_index == 0) {
+            Some(amount) => aura_apply_amount(ctx, &e, &hdr, t, t, t, l, amount, 0),
+            None => aura_apply(
+                ctx,
+                &e,
+                &hdr,
+                t,
+                t,
+                t,
+                l,
+                i32::from(rank) * e.base_points,
+                0,
+            ),
+        }
     }
 }
 

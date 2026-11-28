@@ -813,9 +813,35 @@ pub(crate) fn aura_apply(
     points: i32,
     source_item: u64,
 ) {
+    let amount = aura_points(ctx, e, hdr, caster_guid, points);
+    aura_apply_amount(
+        ctx,
+        e,
+        hdr,
+        caster_guid,
+        target_guid,
+        cast_target_guid,
+        level,
+        amount,
+        source_item,
+    );
+}
+
+/// As `aura_apply`, with `amount` already the Aura's final amount, which no scaling converts again.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn aura_apply_amount(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    hdr: &Spell,
+    caster_guid: u64,
+    target_guid: u64,
+    cast_target_guid: u64,
+    level: u8,
+    amount: i32,
+    source_item: u64,
+) {
     let now = crate::time::now(ctx);
-    let points = aura_points(ctx, e, hdr, caster_guid, points);
-    let points = crate::spell::area_aura::own_points(ctx, hdr, caster_guid, target_guid, points);
+    let points = crate::spell::area_aura::own_points(ctx, hdr, caster_guid, target_guid, amount);
     let duration_ms = if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0 {
         let combo = crate::combo::held_points(ctx, caster_guid);
         crate::combo::finisher_duration_ms(hdr.duration_ms, hdr.max_duration_ms, combo)

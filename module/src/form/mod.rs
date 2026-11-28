@@ -380,10 +380,12 @@ pub(crate) fn binds_to_forms(ctx: &ReducerContext, spell: &crate::Spell) -> bool
 /// The passives the unit's Form brings: the Form's own whose conditions the unit meets, and every
 /// known passive whose Form Set requires the Form (vmangos `HandleShapeshiftBoosts(true)`). Every
 /// other such passive goes, except a learned spell that some Form names as its passive: the
-/// learning owns that Aura.
+/// learning owns that Aura. A held passive whose amount another Aura gives is placed again when
+/// that amount changed.
 fn reconcile_passives(ctx: &ReducerContext, unit: &WorldEntity, form: Option<&Form>) {
     let form_id = form.map(|form| form.form_id);
     let spells = ctx.db.game_spell();
+    let own = |aura: &Aura| aura.caster_guid == unit.guid && aura.item_guid(ctx) == 0;
     let known: BTreeSet<u32> = ctx
         .db
         .game_player_spell()
@@ -391,10 +393,10 @@ fn reconcile_passives(ctx: &ReducerContext, unit: &WorldEntity, form: Option<&Fo
         .filter(unit.guid)
         .map(|known| known.spell_id)
         .collect();
-    let mut desired: BTreeMap<u32, FirstEffectPoints> = form
+    let mut desired: BTreeMap<u32, FirstEffectAmount> = form
         .into_iter()
         .flat_map(|form| ctx.db.game_form_spell().by_form().filter(form.form_id))
-        .filter_map(|row| Some((row.spell_id, granted_points(ctx, unit.guid, &known, &row)?)))
+        .filter_map(|row| Some((row.spell_id, granted_amount(ctx, unit.guid, &known, &row)?)))
         .collect();
     if form_id.is_some() {
         for &spell_id in &known {
@@ -405,52 +407,60 @@ fn reconcile_passives(ctx: &ReducerContext, unit: &WorldEntity, form: Option<&Fo
             }
         }
     }
+    let form_owned = |spell_id: u32| {
+        (!known.contains(&spell_id)
+            && ctx
+                .db
+                .game_form_spell()
+                .by_spell()
+                .filter(spell_id)
+                .next()
+                .is_some())
+            || spells
+                .spell_id()
+                .find(spell_id)
+                .is_some_and(|spell| binds_to_forms(ctx, &spell))
+    };
+    let outdated: BTreeSet<u32> = desired
+        .iter()
+        .filter_map(|(&spell_id, &amount)| {
+            let held = auras_on(ctx, unit.guid)
+                .filter(|aura| aura.spell_id == spell_id && own(aura))
+                .min_by_key(|aura| aura.effect_id)?;
+            (held.amount != amount?).then_some(spell_id)
+        })
+        .collect();
     let (stale, held): (Vec<Aura>, Vec<Aura>) = auras_on(ctx, unit.guid).partition(|aura| {
-        !desired.contains_key(&aura.spell_id)
-            && aura.caster_guid == unit.guid
-            && aura.item_guid(ctx) == 0
-            && ((!known.contains(&aura.spell_id)
-                && ctx
-                    .db
-                    .game_form_spell()
-                    .by_spell()
-                    .filter(aura.spell_id)
-                    .next()
-                    .is_some())
-                || spells
-                    .spell_id()
-                    .find(aura.spell_id)
-                    .is_some_and(|spell| binds_to_forms(ctx, &spell)))
+        own(aura)
+            && (outdated.contains(&aura.spell_id)
+                || (!desired.contains_key(&aura.spell_id) && form_owned(aura.spell_id)))
     });
     shed_auras(ctx, stale);
-    for (spell, points) in desired {
-        if held.iter().any(|aura| aura.spell_id == spell) {
+    for (spell, amount) in desired {
+        if held.iter().any(|aura| aura.spell_id == spell && own(aura)) {
             continue;
         }
-        match points {
-            Some(points) => crate::spell::apply_spell_auras_with_points(
-                ctx,
-                spell,
-                unit.guid,
-                unit.level as u8,
-                points,
-            ),
-            None => crate::spell::apply_spell_auras(ctx, spell, unit.guid, unit.level as u8, 1),
+        let level = unit.level as u8;
+        match amount {
+            Some(amount) => {
+                crate::spell::apply_spell_auras_with_amount(ctx, spell, unit.guid, level, amount)
+            }
+            None => crate::spell::apply_spell_auras(ctx, spell, unit.guid, level, 1),
         }
     }
 }
 
-/// The amount a Form passive's first effect takes; `None` keeps the spell's own.
-type FirstEffectPoints = Option<i32>;
+/// The final amount a Form passive's first effect takes; `None` keeps the spell's own.
+type FirstEffectAmount = Option<i32>;
 
-/// The points a Form passive row grants the unit, or `None` when the unit does not meet its
+/// The amount a Form passive row grants the unit, or `None` when the unit does not meet its
 /// conditions, as vmangos `HandleShapeshiftBoosts` casts Leader of the Pack and Heart of the Wild.
-fn granted_points(
+fn granted_amount(
     ctx: &ReducerContext,
     guid: u64,
     known: &BTreeSet<u32>,
     row: &FormSpell,
-) -> Option<FirstEffectPoints> {
+) -> Option<FirstEffectAmount> {
     if row.required_spell != 0 && rank_line(ctx, row.required_spell).is_disjoint(known) {
         return None;
     }
@@ -464,31 +474,36 @@ fn granted_points(
         .map(|aura| Some(aura.amount))
 }
 
-/// `spell_id` and the later ranks of the talent or spell chain it is the first rank of.
+/// `spell_id` and the later ranks of its talent or spell chain.
 fn rank_line(ctx: &ReducerContext, spell_id: u32) -> BTreeSet<u32> {
-    let mut line: BTreeSet<u32> = ctx
-        .db
-        .game_spell_chain()
+    let chains = ctx.db.game_spell_chain();
+    let (first, rank) = chains
+        .spell_id()
+        .find(spell_id)
+        .map_or((spell_id, 0), |chain| (chain.first_spell, chain.rank));
+    let mut line: BTreeSet<u32> = chains
         .by_first()
-        .filter(spell_id)
-        .map(|rank| rank.spell_id)
+        .filter(first)
+        .filter(|later| later.rank >= rank)
+        .map(|later| later.spell_id)
         .collect();
     line.insert(spell_id);
-    if let Some(talent) = ctx
-        .db
-        .game_talent()
-        .iter()
-        .find(|talent| talent.spell_id == spell_id)
-    {
+    let talent_ranks = ctx.db.game_talent().iter().find_map(|talent| {
+        let ranks = [
+            talent.spell_id,
+            talent.rank_spell_2,
+            talent.rank_spell_3,
+            talent.rank_spell_4,
+            talent.rank_spell_5,
+        ];
+        ranks.contains(&spell_id).then_some(ranks)
+    });
+    if let Some(ranks) = talent_ranks {
         line.extend(
-            [
-                talent.rank_spell_2,
-                talent.rank_spell_3,
-                talent.rank_spell_4,
-                talent.rank_spell_5,
-            ]
-            .into_iter()
-            .filter(|&rank| rank != 0),
+            ranks
+                .into_iter()
+                .skip_while(|&rank| rank != spell_id)
+                .filter(|&rank| rank != 0),
         );
     }
     line

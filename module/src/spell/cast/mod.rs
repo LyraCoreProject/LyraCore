@@ -5,7 +5,7 @@ mod targeting;
 
 pub(crate) use impact::land_spell_impact;
 pub(crate) use resolve::{
-    apply_item_auras, apply_spell_auras, apply_spell_auras_with_points, begin_cast,
+    apply_item_auras, apply_spell_auras, apply_spell_auras_with_amount, begin_cast,
     begin_loaded_cast, cast_aura_triggered, cast_triggered, charge_spell_cost,
     check_cast_start_gates, clear_dead_callback_cast_admission, complete_cast,
     record_spell_cooldown, refund_avoided_cost, resolve_cast, start_creature_spell,
