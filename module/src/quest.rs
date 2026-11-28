@@ -80,8 +80,6 @@ pub(crate) enum QuestCreditOutcome {
     Refused,
 }
 
-const PARTY_SHARE_RANGE_SQ: f32 = crate::group::GROUP_XP_RANGE_SQ;
-
 pub(crate) const MAX_QUEST_LOG_SIZE: usize = 20;
 pub(crate) const QUEST_REWARD_CHOICES_COUNT: u32 = 6;
 
@@ -740,7 +738,7 @@ fn validate_giver(
 ) -> Result<GiverKind, ActionRefusal> {
     if let Some(giver) = ctx.db.game_world_entity().guid().find(giver_guid) {
         if giver.is_player() {
-            return validate_party_giver(ctx, player, giver_guid, &giver);
+            return validate_party_giver(ctx, player, giver_guid);
         }
         let giver = crate::npc_interaction::serving_npc(
             ctx,
@@ -800,7 +798,6 @@ fn validate_party_giver(
     ctx: &ReducerContext,
     player: &crate::WorldEntity,
     giver_guid: u64,
-    giver: &crate::WorldEntity,
 ) -> Result<GiverKind, ActionRefusal> {
     let same_group = match (
         crate::group::group_of(ctx, player.guid),
@@ -811,19 +808,6 @@ fn validate_party_giver(
     };
     if !same_group {
         return Err("target is not a quest giver".to_string().into());
-    }
-    if giver.map_id != player.map_id || giver.instance_id != player.instance_id {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::OtherPartition,
-            "quest giver on another map",
-        ));
-    }
-    let (dx, dy, dz) = (giver.x - player.x, giver.y - player.y, giver.z - player.z);
-    if dx * dx + dy * dy + dz * dz > PARTY_SHARE_RANGE_SQ {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::OutOfRange,
-            "quest giver out of range",
-        ));
     }
     Ok(GiverKind::Party(giver_guid))
 }
@@ -1153,6 +1137,7 @@ pub(crate) fn accept_offered_quest(
     if !crate::game_events::quest_offered(ctx, quest_entry) {
         return Err(QUEST_NOT_OFFERED.to_string().into());
     }
+    share::reach_sharer(ctx, &player, quest_entry)?;
     if existing.as_ref().is_none_or(|row| row.rewarded)
         && quest_slots_used(ctx, player_guid) >= MAX_QUEST_LOG_SIZE
     {
@@ -1172,7 +1157,7 @@ pub(crate) fn accept_offered_quest(
         existing,
         deadline_micros,
     )?;
-    share::settle_on_accept(ctx, player_guid, quest_entry);
+    share::settle_on_accept(ctx, player_guid);
     Ok(())
 }
 
