@@ -72,8 +72,11 @@ pub(super) fn receive(
             Ok(())
         }
         ClientOpcodeMessage::CMSG_UNLEARN_SKILL(c) => {
-            super::actor(ctx, guid)?;
-            crate::skill::unlearn_skill(ctx, guid, u32::from(c.skill.as_int()));
+            // vmangos runs this request on a taxi but drops it while the Character teleports.
+            if !super::is_teleporting(ctx, guid) {
+                let entity = super::available_entity(ctx, guid)?;
+                crate::skill::unlearn_skill(ctx, &entity, u32::from(c.skill.as_int()));
+            }
             Ok(())
         }
         ClientOpcodeMessage::CMSG_TRAINER_LIST(c) => {

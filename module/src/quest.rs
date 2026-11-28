@@ -1967,7 +1967,12 @@ pub(crate) fn forget_quests_requiring_skill(ctx: &ReducerContext, guid: u64, ski
         .collect();
     for row in requiring {
         if !row.rewarded {
-            let _ = take_source_item(ctx, guid, row.quest_entry);
+            if let Err(refusal) = take_source_item(ctx, guid, row.quest_entry) {
+                spacetimedb::log::warn!(
+                    "quest {} kept its source item for character {guid}: {refusal}",
+                    row.quest_entry
+                );
+            }
         }
         CharacterQuest::delete(ctx, row.id);
     }

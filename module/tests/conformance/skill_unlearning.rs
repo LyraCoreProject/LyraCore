@@ -1,5 +1,7 @@
-// Behavior checks for CMSG_UNLEARN_SKILL against vmangos d9173eca WorldSession::HandleUnlearnSkillOpcode.
+// Behavior checks for CMSG_UNLEARN_SKILL against vmangos d9173eca
+// WorldSession::HandleUnlearnSkillOpcode.
 use lyracore_test_support::{ReducerConnection, Standalone};
+use wire_client::decode::Field;
 
 use super::buy_in_slot::request;
 use super::{enter, fixture};
@@ -7,6 +9,7 @@ use super::{enter, fixture};
 const CMSG_UNLEARN_SKILL: u32 = 0x202;
 const SMSG_REMOVED_SPELL: u16 = 0x203;
 const SMSG_UPDATE_OBJECT: u16 = 0xa9;
+const PLAYER_CHARACTER_POINTS2: &str = "field_1103";
 const ALCHEMY: u32 = 171;
 const UNLEARNABLE: u32 = 0x20;
 const MAGE_CLASS_MASK: u32 = 0x80;
@@ -16,6 +19,7 @@ const JOURNEYMAN_SPELL: u32 = 900_802;
 const EXPERT_SPELL: u32 = 900_803;
 const TAUGHT_SPELL: u32 = 900_804;
 const OTHER_SPELL: u32 = 900_805;
+const REQUIRING_SPELL: u32 = 900_806;
 const ALCHEMY_QUEST: u32 = 900_810;
 const OTHER_QUEST: u32 = 900_811;
 
@@ -71,6 +75,15 @@ fn stage(name: &str) -> Stage {
         ],
     );
     shard.insert_row(
+        "game_spell_chain",
+        &[
+            ("spell_id", &REQUIRING_SPELL),
+            ("first_spell", &REQUIRING_SPELL),
+            ("rank", &1),
+            ("req_spell", &APPRENTICE_SPELL),
+        ],
+    );
+    shard.insert_row(
         "game_spell_learn",
         &[
             ("parent_spell", &APPRENTICE_SPELL),
@@ -103,7 +116,7 @@ impl Stage {
             "debug_learn_profession",
             &[&character, &ALCHEMY.to_string(), "75"],
         );
-        for spell in [EXPERT_SPELL, TAUGHT_SPELL, OTHER_SPELL] {
+        for spell in [EXPERT_SPELL, TAUGHT_SPELL, REQUIRING_SPELL, OTHER_SPELL] {
             self.shard
                 .assert_call("debug_learn_spell", &[&character, &spell.to_string()]);
         }
@@ -160,6 +173,34 @@ impl Stage {
     }
 }
 
+fn free_primary_professions(packets: &[(u16, Vec<u8>)], guid: u64) -> Option<u64> {
+    packets
+        .iter()
+        .filter(|(opcode, _)| *opcode == SMSG_UPDATE_OBJECT)
+        .filter_map(|(opcode, body)| {
+            let packet = wire_client::decode::decode(*opcode, body).unwrap();
+            let Some(Field::List(objects)) = packet.fields.get("objects") else {
+                return None;
+            };
+            objects.iter().find_map(|object| {
+                let Field::Object(object) = object else {
+                    return None;
+                };
+                let Some(Field::Object(values)) = object.get("values") else {
+                    return None;
+                };
+                if object.get("guid") != Some(&Field::Guid(guid)) {
+                    return None;
+                }
+                match values.get(PLAYER_CHARACTER_POINTS2) {
+                    Some(Field::Unsigned(free)) => Some(*free),
+                    _ => None,
+                }
+            })
+        })
+        .last()
+}
+
 fn removed_spells(packets: &[(u16, Vec<u8>)]) -> Vec<u16> {
     let mut removed: Vec<u16> = packets
         .iter()
@@ -187,14 +228,14 @@ fn unlearning_a_skill_removes_its_spells_ranks_taught_spells_and_quests() {
             APPRENTICE_SPELL as u16,
             JOURNEYMAN_SPELL as u16,
             EXPERT_SPELL as u16,
-            TAUGHT_SPELL as u16
+            TAUGHT_SPELL as u16,
+            REQUIRING_SPELL as u16
         ]
     );
-    assert!(
-        packets
-            .iter()
-            .any(|(opcode, _)| *opcode == SMSG_UPDATE_OBJECT),
-        "the emptied skill slot and the freed profession slot reach the client"
+    assert_eq!(
+        free_primary_professions(&packets, stage.character),
+        Some(2),
+        "Alchemy held one of the two primary profession slots"
     );
 }
 

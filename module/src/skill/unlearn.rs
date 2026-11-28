@@ -1,11 +1,11 @@
-use spacetimedb::ReducerContext;
+use spacetimedb::{ReducerContext, Table};
 
 use lyracore_shared::race_class::{mask_admits, ZeroMask};
 
 use super::{game_player_skill, PlayerSkill};
 use crate::skilldata::{game_skill_ability, game_skill_availability};
 use crate::spell::spellbook::{game_spell_chain, game_spell_learn};
-use crate::{game_world_entity, WorldEntity};
+use crate::WorldEntity;
 
 // vmangos SKILL_FLAG_UNLEARNABLE: the skill can be unlearned.
 const UNLEARNABLE: i32 = 0x20;
@@ -24,7 +24,8 @@ fn unlearnable(ctx: &ReducerContext, entity: &WorldEntity, skill_line: u32) -> b
         .is_some_and(|row| row.flags & UNLEARNABLE != 0)
 }
 
-// vmangos Player::RemoveSpell order: spells it teaches, higher ranks, then the spell itself.
+// vmangos Player::RemoveSpell order: spells it teaches, spells whose prev or req spell it is,
+// then the spell itself.
 fn forgetting_order(
     ctx: &ReducerContext,
     guid: u64,
@@ -43,13 +44,11 @@ fn forgetting_order(
         .filter(&spell_id)
         .map(|row| row.learn_spell)
         .collect();
-    let first_rank = crate::spell::first_rank(ctx, spell_id);
     let higher_ranks: Vec<u32> = ctx
         .db
         .game_spell_chain()
-        .by_first()
-        .filter(&first_rank)
-        .filter(|row| row.prev_spell == spell_id)
+        .iter()
+        .filter(|row| row.prev_spell == spell_id || row.req_spell == spell_id)
         .map(|row| row.spell_id)
         .collect();
     for next in taught.into_iter().chain(higher_ranks) {
@@ -61,11 +60,9 @@ fn forgetting_order(
 /// CMSG_UNLEARN_SKILL (vmangos `HandleUnlearnSkillOpcode`): drops a skill the Character's race and
 /// class may unlearn, with every spell of the skill line and every quest that requires it. Any
 /// other request is ignored.
-pub(crate) fn unlearn_skill(ctx: &ReducerContext, guid: u64, skill_line: u32) {
-    let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
-        return;
-    };
-    if !unlearnable(ctx, &entity, skill_line) {
+pub(crate) fn unlearn_skill(ctx: &ReducerContext, entity: &WorldEntity, skill_line: u32) {
+    let guid = entity.guid;
+    if !unlearnable(ctx, entity, skill_line) {
         spacetimedb::log::warn!("character {guid} tried to unlearn skill {skill_line}");
         return;
     }
