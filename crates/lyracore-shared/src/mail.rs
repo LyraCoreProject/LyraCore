@@ -2,6 +2,8 @@ const HAS_UNREAD_MAIL: f32 = 0.0;
 const NO_UNREAD_MAIL: f32 = -86400.0;
 pub const MAILBOX_GO_TYPE: u8 = 19;
 pub const INBOX_CAPACITY: usize = 50;
+// vmangos refuses a send to a recipient that already holds more Mail than this.
+pub const RECIPIENT_MAIL_LIMIT: usize = 100;
 pub const CHECK_MASK_READ: u32 = 0x01;
 pub const CHECK_MASK_RETURNED: u32 = 0x02;
 pub const CHECK_MASK_COPIED: u32 = 0x04;
@@ -184,6 +186,7 @@ pub const ITEM_HAS_LOOT: &str = "mail: an opened item cannot be mailed";
 pub const ITEM_HAS_SPENT_CHARGES: &str = "mail: an item with spent charges cannot be mailed";
 pub const ITEM_IN_BANK_OR_BAG_SLOT: &str = "mail: a bank item or an equipped bag cannot be mailed";
 pub const ITEM_CANNOT_BE_UNEQUIPPED: &str = "mail: that item cannot be unequipped right now";
+pub const RECIPIENT_MAILBOX_FULL: &str = "mail: the recipient mailbox is full";
 pub const SENDER_IS_TRADING: &str = "mail: a Character in a trade cannot send mail";
 pub const INVENTORY_FULL: &str = "inventory full";
 pub const NOT_YOUR_MAIL: &str = "mail: not addressed to you";
