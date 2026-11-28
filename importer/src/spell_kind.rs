@@ -95,6 +95,8 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         ModSpellCritChanceSchool => A_MOD_SCHOOL_CRIT,
         ModHealing => A_MOD_HEALING_TAKEN,
         ModHealingDone => A_MOD_HEALING,
+        ModPowerCostSchool => A_MOD_POWER_COST_FLAT,
+        ModPowerCostSchoolPct => A_MOD_POWER_COST_PCT,
         ModDodgePercent | ModTotalThreat | ModThreat => A_MOD_COMBAT,
 
         ModIncreaseSpeed | ModDecreaseSpeed | ModSpeedAlways | ModSpeedNotStack => A_MOD_SPEED,
@@ -269,6 +271,8 @@ mod tests {
         assert!(supported_effect("Stealth", &slot(6, 16, 0, 0)));
         assert!(supported_effect("Other", &slot(6, 143, 0, 126)));
         assert!(supported_effect("Other", &slot(6, 182, 0, 1)));
+        assert!(supported_effect("Insight", &slot(6, 73, 0, 0x7e)));
+        assert!(supported_effect("Other", &slot(6, 72, 0, 0x7f)));
         assert!(!supported_effect("Stealth", &slot(3, 0, 0, 0)));
         assert!(!supported_effect("Other", &slot(6, 999, 0, 0)));
         assert!(!supported_effect("Other", &slot(108, 0, 0, 1)));

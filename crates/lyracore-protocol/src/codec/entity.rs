@@ -964,5 +964,21 @@ pub fn set_create_damage_bonuses(
         }
     })
 }
+
+/// Adds the nonzero power cost fields; a zero field is the client's default.
+pub fn set_create_power_costs(
+    create: &mut SMSG_UPDATE_OBJECT,
+    values: &super::values::PowerCostValues,
+) -> Result<()> {
+    let fields = super::values::power_cost_mask(values);
+    add_create_fields(create, |mask| {
+        for index in 173..187 {
+            if let Some(value) = fields.get(index).filter(|value| *value != 0) {
+                mask.set_u32(index, value);
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests;

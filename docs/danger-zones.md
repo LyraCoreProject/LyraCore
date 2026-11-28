@@ -698,6 +698,16 @@ whose `damage_class` is 3 (ranged) rolls a partial block for an Auto Shot or a c
 Strike, and not one with `SPELL_ATTR_NO_ACTIVE_DEFENSE` or `SPELL_ATTR_EX3_COMPLETELY_BLOCKED`, so a
 ranged shot with no imported Spell row never blocks.
 
+### School power cost migration
+
+Reimport `spell`, then call `debug_repair_after_publish` before play resumes. Source auras 73
+(`SPELL_AURA_MOD_POWER_COST_SCHOOL`) and 72 (`SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT`) now import as
+`A_MOD_POWER_COST_FLAT` and `A_MOD_POWER_COST_PCT` with the school mask in `p0`, where they were
+`A_INERT`. Until the reimport, Insight, Burst of Knowledge, the school Focus talents, Lucifron's
+Curse and Spirit of Redemption leave spell costs unchanged, a held Insight is never spent, and the
+client's power cost fields stay at 0. Repair copies the kind and school mask to stored Auras. No
+table schema changes.
+
 ### Spell attributes migration
 
 `game_spell.attributes_ex` holds the Spell.dbc AttributesEx. It is END-appended with default 0, so

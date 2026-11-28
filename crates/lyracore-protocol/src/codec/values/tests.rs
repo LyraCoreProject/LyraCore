@@ -924,3 +924,18 @@ fn school_damage_values_preserve_signed_bonuses_and_float_multipliers_without_ty
     assert!(fields.contains(&(1215, 1.3f32.to_bits())));
     assert!(fields.contains(&(1221, 1.0f32.to_bits())));
 }
+
+#[test]
+fn power_cost_values_carry_a_signed_flat_cost_and_a_multiplier_offset_by_school() {
+    let mut values = PowerCostValues::default();
+    values.modifier[6] = -500;
+    values.multiplier[1] = -1.0;
+    let (_, body) = build_power_cost_values(1, &values);
+    let updates = crate::codec::values_mask::parse_values_updates(&body);
+    let fields = &updates[0].fields;
+    assert!(!fields.iter().any(|(index, _)| *index == 2));
+    assert!(fields.contains(&(179, (-500i32) as u32)));
+    assert!(fields.contains(&(173, 0)));
+    assert!(fields.contains(&(181, (-1.0f32).to_bits())));
+    assert!(fields.contains(&(180, 0.0f32.to_bits())));
+}

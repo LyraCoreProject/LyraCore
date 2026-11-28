@@ -202,6 +202,7 @@ fn entity_projection(
     view.run_speed_mult_bp = 10_000;
     let stats = (viewer == guid).then(|| native::view::sheet_stats(&entity));
     let damage_bonuses = (viewer == guid).then(|| crate::spell::bonuses::damage_fields(ctx, guid));
+    let power_costs = (viewer == guid).then(|| crate::spell::power_cost_fields(ctx, guid));
     let (body, extra) = encoded(
         ctx,
         connection_id,
@@ -216,6 +217,7 @@ fn entity_projection(
             &quests,
             &stats,
             &damage_bonuses,
+            &power_costs,
             stats.as_ref().map(|stats| stats.crit_pct.to_bits()),
         ),
         || {
@@ -227,6 +229,10 @@ fn entity_projection(
             .map_err(|error| error.to_string())?;
             if let Some(values) = &damage_bonuses {
                 codec::set_create_damage_bonuses(&mut message, values)
+                    .map_err(|error| error.to_string())?;
+            }
+            if let Some(values) = &power_costs {
+                codec::set_create_power_costs(&mut message, values)
                     .map_err(|error| error.to_string())?;
             }
             let extra = stats

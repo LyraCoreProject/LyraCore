@@ -1,14 +1,15 @@
 use lyracore_shared::spell::taxonomy::{
-    A_SPELLMOD_FLAT, A_SPELLMOD_PCT, SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST,
-    SPELLMOD_OP_CRITICAL_CHANCE, SPELL_FAMILY_POTION,
+    A_MOD_POWER_COST_FLAT, A_MOD_POWER_COST_PCT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT,
+    SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST, SPELLMOD_OP_CRITICAL_CHANCE, SPELL_FAMILY_POTION,
 };
 use spacetimedb::{ReducerContext, Timestamp};
 
 use super::proc::{DAMAGE_CLASS_MAGIC, DAMAGE_CLASS_MELEE, DAMAGE_CLASS_RANGED};
 use super::tables::SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS;
-use super::{apply_spell_mod, auras_on, can_crit, shed_auras};
+use super::{apply_signed_spell_mod, auras_on, can_crit, shed_auras};
 use crate::modifiers::AuraAmount;
 use crate::{game_spell, Aura, Spell, SpellEffect};
+use lyracore_protocol::codec::PowerCostValues;
 
 // vmangos Player::ApplySpellMod leaves an instant cast-time modifier off a cast this long or longer.
 const INSTANT_CAST_LIMIT_MS: u32 = 10_000;
@@ -70,12 +71,30 @@ fn makes_instant(row: &Aura) -> bool {
 }
 
 // Read docs/schema.md#spell-modifiers for the base-value rules.
-fn changes(row: &Aura, base: u32) -> bool {
+fn changes(row: &Aura, base: i64) -> bool {
     if row.eff_p0 == SPELLMOD_OP_CASTING_TIME && base == 0 {
         return false;
     }
     row.eff_kind == A_SPELLMOD_FLAT
-        || (base != 0 && !(makes_instant(row) && base >= INSTANT_CAST_LIMIT_MS))
+        || (base != 0 && !(makes_instant(row) && base >= i64::from(INSTANT_CAST_LIMIT_MS)))
+}
+
+fn signed_modified_value(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    op: i32,
+    hdr: &Spell,
+    base: i64,
+) -> i64 {
+    let rows: Vec<Aura> = affecting(ctx, caster_guid, hdr)
+        .into_iter()
+        .filter(|row| row.eff_p0 == op && changes(row, base))
+        .collect();
+    if rows.iter().any(makes_instant) {
+        return 0;
+    }
+    let (flat, pct) = sums(&rows);
+    apply_signed_spell_mod(base, flat, pct)
 }
 
 /// vmangos Player::ApplySpellMod: `base` under the caster's `op` modifiers that affect `hdr`.
@@ -86,20 +105,70 @@ pub(crate) fn spell_modified_value(
     hdr: &Spell,
     base: u32,
 ) -> u32 {
-    let rows: Vec<Aura> = affecting(ctx, caster_guid, hdr)
-        .into_iter()
-        .filter(|row| row.eff_p0 == op && changes(row, base))
-        .collect();
-    if rows.iter().any(makes_instant) {
-        return 0;
-    }
-    let (flat, pct) = sums(&rows);
-    apply_spell_mod(base, flat, pct)
+    let value = signed_modified_value(ctx, caster_guid, op, hdr, i64::from(base));
+    value.clamp(0, i64::from(u32::MAX)) as u32
 }
 
-/// The power `hdr` costs the caster after its cost modifiers.
+/// The summed flat and percent school power cost Auras of the unit, by school index.
+fn school_cost_totals(ctx: &ReducerContext, guid: u64) -> [(i32, i32); 7] {
+    let mut totals = [(0, 0); 7];
+    for row in auras_on(ctx, guid)
+        .filter(|row| matches!(row.eff_kind, A_MOD_POWER_COST_FLAT | A_MOD_POWER_COST_PCT))
+    {
+        let amount = AuraAmount::from(&row).total();
+        for (school, (flat, pct)) in totals.iter_mut().enumerate() {
+            if row.eff_p0 & (1 << school) == 0 {
+                continue;
+            }
+            if row.eff_kind == A_MOD_POWER_COST_FLAT {
+                *flat += amount;
+            } else {
+                *pct += amount;
+            }
+        }
+    }
+    totals
+}
+
+/// The flat and percent school power cost totals a spell of `school_mask` reads.
+fn school_cost_modifiers(ctx: &ReducerContext, caster_guid: u64, school_mask: u8) -> (i32, i32) {
+    // vmangos GetFirstSchoolInMask, which reads an empty mask as physical.
+    let first_school = if school_mask == 0 {
+        0
+    } else {
+        school_mask.trailing_zeros() as usize
+    };
+    school_cost_totals(ctx, caster_guid)[first_school]
+}
+
+/// The unit's power cost fields, as vmangos HandleModPowerCost and HandleModPowerCostPCT set them.
+pub(crate) fn power_cost_fields(ctx: &ReducerContext, guid: u64) -> PowerCostValues {
+    let mut fields = PowerCostValues::default();
+    for (school, (flat, pct)) in school_cost_totals(ctx, guid).into_iter().enumerate() {
+        fields.modifier[school] = flat;
+        fields.multiplier[school] = pct as f32 / 100.0;
+    }
+    fields
+}
+
+/// `cost` under the school cost multiplier, which vmangos Spell::CalculatePowerCost applies last.
+fn power_cost(cost: i64, school_pct: i32) -> u32 {
+    let cost = if school_pct == 0 {
+        cost
+    } else {
+        // vmangos int32(powerCost * (1.0f + multiplier)) in single precision.
+        (cost as f32 * (1.0 + school_pct as f32 / 100.0)) as i64
+    };
+    cost.clamp(0, i64::from(u32::MAX)) as u32
+}
+
+/// The power `hdr` costs the caster: the school flat cost, the cost modifiers, then the school
+/// multiplier, as vmangos Spell::CalculatePowerCost orders them.
 pub(crate) fn spell_cost(ctx: &ReducerContext, caster_guid: u64, hdr: &Spell) -> u32 {
-    spell_modified_value(ctx, caster_guid, SPELLMOD_OP_COST, hdr, hdr.cost)
+    let (school_flat, school_pct) = school_cost_modifiers(ctx, caster_guid, hdr.school_mask);
+    let base = i64::from(hdr.cost) + i64::from(school_flat);
+    let modified = signed_modified_value(ctx, caster_guid, SPELLMOD_OP_COST, hdr, base);
+    power_cost(modified, school_pct)
 }
 
 /// vmangos Player::ApplySpellMod on a crit `chance` in percent; percent modifiers skip a 0 chance.
@@ -165,9 +234,11 @@ impl ModifierCharges {
                     .is_some_and(|source| source.max_stacks <= 1)
             })
             .collect();
+        let (school_flat, _) = school_cost_modifiers(ctx, caster_guid, hdr.school_mask);
+        let cost_base = i64::from(hdr.cost) + i64::from(school_flat);
         Self {
             carrier_guid: caster_guid,
-            used: used_rows(chargeable, hdr, cast),
+            used: used_rows(chargeable, hdr, cast, cost_base),
         }
     }
 
@@ -200,8 +271,8 @@ impl ModifierCharges {
     }
 }
 
-// Read docs/schema.md#spell-modifiers for which rows a cast uses.
-fn used_rows(rows: Vec<Aura>, hdr: &Spell, cast: ModifiedCast) -> Vec<Aura> {
+// Read docs/schema.md#spell-modifiers for the rows a cast uses and the cost base they read.
+fn used_rows(rows: Vec<Aura>, hdr: &Spell, cast: ModifiedCast, cost_base: i64) -> Vec<Aura> {
     let fixed_cast_time = |row: &Aura| row.applied_at <= cast.began_at;
     let instant = rows
         .iter()
@@ -212,10 +283,10 @@ fn used_rows(rows: Vec<Aura>, hdr: &Spell, cast: ModifiedCast) -> Vec<Aura> {
                 && match row.eff_p0 {
                     SPELLMOD_OP_CASTING_TIME => {
                         fixed_cast_time(row)
-                            && changes(row, hdr.cast_time_ms)
+                            && changes(row, i64::from(hdr.cast_time_ms))
                             && !(instant && row.eff_kind == A_SPELLMOD_FLAT)
                     }
-                    SPELLMOD_OP_COST => cast.pays_cost && changes(row, hdr.cost),
+                    SPELLMOD_OP_COST => cast.pays_cost && changes(row, cost_base),
                     SPELLMOD_OP_CRITICAL_CHANCE => cast.rolls_crit,
                     _ => true,
                 }
@@ -282,7 +353,7 @@ mod tests {
     }
 
     fn uses(rows: Vec<Aura>, hdr: &Spell, cast: ModifiedCast) -> usize {
-        used_rows(rows, hdr, cast).len()
+        used_rows(rows, hdr, cast, i64::from(hdr.cost)).len()
     }
 
     #[test]
@@ -348,6 +419,15 @@ mod tests {
     }
 
     #[test]
+    fn a_percent_cost_modifier_is_kept_when_a_school_flat_cost_leaves_a_zero_base() {
+        let clearcasting = || vec![modifier(A_SPELLMOD_PCT, SPELLMOD_OP_COST, -100, 1)];
+        // Insight's -500 takes a 500 cost to 0 and a 100 cost to -400.
+        let used = |cost_base| used_rows(clearcasting(), &spell(500, 0), cast(), cost_base).len();
+        assert_eq!(used(0), 0);
+        assert_eq!(used(-400), 1);
+    }
+
+    #[test]
     fn an_uncharged_modifier_is_never_used() {
         let talent = vec![modifier(A_SPELLMOD_FLAT, SPELLMOD_OP_COST, -5, 0)];
         assert_eq!(uses(talent, &spell(10, 0), cast()), 0);
@@ -382,7 +462,25 @@ mod tests {
                 ..modifier(A_SPELLMOD_FLAT, SPELLMOD_OP_CASTING_TIME, -500, 1)
             },
         ];
-        let used = used_rows(rows, &spell(0, 2000), cast());
+        let used = used_rows(rows, &spell(0, 2000), cast(), 0);
         assert_eq!(used.iter().map(|row| row.spell_id).collect::<Vec<_>>(), [1]);
+    }
+
+    #[test]
+    fn the_school_cost_multiplier_scales_the_cost_and_truncates() {
+        assert_eq!(power_cost(250, 0), 250);
+        // Lucifron's Curse 19703: +100%.
+        assert_eq!(power_cost(250, 100), 500);
+        // Shadow Cost Reduction 23553: -15%; 333 * 0.85 = 283.05.
+        assert_eq!(power_cost(333, -15), 283);
+        // Spirit of Redemption 27792: -100%.
+        assert_eq!(power_cost(500, -100), 0);
+    }
+
+    #[test]
+    fn a_school_flat_cost_below_the_base_leaves_the_spell_free() {
+        // Insight 18820 takes 500 from a 100 cost before a +50 cost modifier adds to it.
+        assert_eq!(power_cost(apply_signed_spell_mod(100 - 500, 50, 0), 0), 0);
+        assert_eq!(power_cost(apply_signed_spell_mod(100 - 500, 0, 0), 100), 0);
     }
 }

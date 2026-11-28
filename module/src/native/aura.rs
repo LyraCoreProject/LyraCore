@@ -369,6 +369,14 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
         }
         if changed
             .iter()
+            .any(|aura| matches!(aura.eff_kind, A_MOD_POWER_COST_FLAT | A_MOD_POWER_COST_PCT))
+        {
+            let values = crate::spell::power_cost_fields(ctx, row.target_guid);
+            let (opcode, body) = codec::build_power_cost_values(row.target_guid, &values);
+            packets.push(Packet { opcode, body });
+        }
+        if changed
+            .iter()
             .any(|row| matches!(row.eff_kind, A_SPELLMOD_FLAT | A_SPELLMOD_PCT))
         {
             packets.extend(modifiers(&auras, &changed));

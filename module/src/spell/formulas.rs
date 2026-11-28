@@ -90,9 +90,12 @@ pub(crate) fn dispel_category_matches(dispel_cat: u8, aura_cat: u8) -> bool {
 }
 
 pub(crate) fn apply_spell_mod(base: u32, flat: i32, pct: i32) -> u32 {
-    let v = base as i64 + flat as i64;
-    let v = v * (100 + pct as i64) / 100;
-    v.max(0) as u32
+    apply_signed_spell_mod(i64::from(base), flat, pct).max(0) as u32
+}
+
+/// vmangos Player::ApplySpellMod on a signed base, which a school flat cost can make negative.
+pub(crate) fn apply_signed_spell_mod(base: i64, flat: i32, pct: i32) -> i64 {
+    (base + i64::from(flat)) * (100 + i64::from(pct)) / 100
 }
 
 pub(crate) fn apply_damage_pct(dmg: u32, pct: i32) -> u32 {
