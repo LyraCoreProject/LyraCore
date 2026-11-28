@@ -23,6 +23,13 @@ const MANA: u32 = 1000;
 const COST: u32 = 10;
 const COOLDOWN_MS: u32 = 30_000;
 const CERTAIN_CRIT_PERCENT: i32 = 100;
+// Faction groups: the Paladin and its ally, the other faction's Characters, and the wolf.
+const ALLIED_FACTION: u32 = 5_141;
+const HORDE_FACTION: u32 = 5_142;
+const WOLF_FACTION: u32 = 5_143;
+const ALLIED_GROUP: u32 = 0x1;
+const HORDE_GROUP: u32 = 0x2;
+const WOLF_GROUP: u32 = 0x4;
 // vmangos Holy Shock rank 1 20473 and the family flag its heal 25914 and damage 25912 carry.
 const HOLY_SHOCK_FAMILY_FLAG: u64 = 0x20_0000;
 // Divine Favor's mask as vmangos SpellModMgr sets it.
@@ -115,7 +122,13 @@ fn an_unflagged_character_of_the_other_faction_behind_the_caster_refuses_holy_sh
 ) {
     let mut standalone = Standalone::start("holy-shock-other-faction");
     stage(&mut standalone);
-    let orc = spawn_character(&standalone, "holy-shock-horde", "Orc", (2, 1));
+    let orc = spawn_character(
+        &standalone,
+        "holy-shock-horde",
+        "Orc",
+        (2, 1),
+        HORDE_FACTION,
+    );
     place_beside_caster(&standalone, orc, -SEPARATION_YD);
     standalone.assert_sql(&format!(
         "UPDATE game_spell SET cost = {COST}, cooldown_ms = {COOLDOWN_MS} \
@@ -198,9 +211,37 @@ fn stage(standalone: &mut Standalone) -> u64 {
          health = {WOLF_HEALTH}, max_health = {WOLF_HEALTH} WHERE guid = {wolf}"
     ));
     standalone.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
+    factions(standalone);
+    set_faction(standalone, PLAYER, ALLIED_FACTION);
+    set_faction(standalone, wolf, WOLF_FACTION);
     holy_shock(standalone);
     place_beside_caster(standalone, wolf, SEPARATION_YD);
     wolf
+}
+
+fn factions(standalone: &Standalone) {
+    for (id, group, enemy_groups) in [
+        (ALLIED_FACTION, ALLIED_GROUP, HORDE_GROUP | WOLF_GROUP),
+        (HORDE_FACTION, HORDE_GROUP, ALLIED_GROUP),
+        (WOLF_FACTION, WOLF_GROUP, ALLIED_GROUP),
+    ] {
+        standalone.insert_row(
+            "game_faction_template",
+            &[
+                ("id", &id),
+                ("faction", &id),
+                ("faction_group", &group),
+                ("friend_group", &group),
+                ("enemy_group", &enemy_groups),
+            ],
+        );
+    }
+}
+
+fn set_faction(standalone: &Standalone, guid: u64, faction: u32) {
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET faction_template = {faction} WHERE guid = {guid}"
+    ));
 }
 
 fn holy_shock(standalone: &Standalone) {
@@ -288,7 +329,13 @@ fn divine_favor(standalone: &Standalone) {
 }
 
 fn spawn_ally(standalone: &Standalone) -> u64 {
-    spawn_character(standalone, "holy-shock-test", "Ally", (1, 2))
+    spawn_character(
+        standalone,
+        "holy-shock-test",
+        "Ally",
+        (1, 2),
+        ALLIED_FACTION,
+    )
 }
 
 fn spawn_character(
@@ -296,6 +343,7 @@ fn spawn_character(
     package: &str,
     name: &str,
     (race, class): (u8, u8),
+    faction: u32,
 ) -> u64 {
     standalone.assert_call(
         "debug_create_package_character",
@@ -314,6 +362,7 @@ fn spawn_character(
         .parse()
         .unwrap();
     standalone.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
+    set_faction(standalone, guid, faction);
     place_beside_caster(standalone, guid, SEPARATION_YD);
     guid
 }
@@ -383,7 +432,7 @@ fn charges(standalone: &Standalone) -> Option<u8> {
         .map(|row| row["proc_charges"].parse().unwrap())
 }
 
-// The spells whose SMSG_SPELL_GO the cast sends, in order.
+// The spells whose SMSG_SPELL_GO the cast sends, in the order of the event ids.
 fn cast_spells(standalone: &Standalone, target: u64) -> Vec<u32> {
     let events = subscribe_with_fence(
         standalone,
@@ -394,9 +443,10 @@ fn cast_spells(standalone: &Standalone, target: u64) -> Vec<u32> {
         &["1", &HOLY_SHOCK.to_string(), &target.to_string()],
     );
     fence_subscription(standalone, &events);
-    event_rows(&events, "game_spell_cast_event_live")
-        .iter()
-        .map(|row| row["spell_id"].parse().expect("spell_id is a number"))
+    let mut rows = event_rows(&events, "game_spell_cast_event_live");
+    rows.sort_by_key(|row| support::number::<u64>(row, "id"));
+    rows.iter()
+        .map(|row| support::number(row, "spell_id"))
         .collect()
 }
 
