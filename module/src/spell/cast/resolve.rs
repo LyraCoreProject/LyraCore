@@ -3312,6 +3312,35 @@ pub(crate) fn apply_spell_auras(
     level: u8,
     rank: u8,
 ) {
+    place_spell_auras(ctx, spell_id, target_guid, level, |effect| {
+        i32::from(rank) * effect.base_points
+    });
+}
+
+/// As vmangos `CastCustomSpell` with only its first base points: effect 0 takes `points`.
+pub(crate) fn apply_spell_auras_with_points(
+    ctx: &ReducerContext,
+    spell_id: u32,
+    target_guid: u64,
+    level: u8,
+    points: i32,
+) {
+    place_spell_auras(ctx, spell_id, target_guid, level, |effect| {
+        if effect.effect_index == 0 {
+            points
+        } else {
+            effect.base_points
+        }
+    });
+}
+
+fn place_spell_auras(
+    ctx: &ReducerContext,
+    spell_id: u32,
+    target_guid: u64,
+    level: u8,
+    points_of: impl Fn(&SpellEffect) -> i32,
+) {
     let Some(mut hdr) = ctx.db.game_spell().spell_id().find(spell_id) else {
         log::info!("apply_spell_auras: unknown spell {spell_id}");
         return;
@@ -3334,7 +3363,6 @@ pub(crate) fn apply_spell_auras(
         return;
     }
     for e in effects {
-        let points = (rank as i32) * e.base_points;
         aura_apply(
             ctx,
             &e,
@@ -3343,7 +3371,7 @@ pub(crate) fn apply_spell_auras(
             target_guid,
             target_guid,
             level,
-            points,
+            points_of(&e),
             0,
         );
     }

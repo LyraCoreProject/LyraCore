@@ -97,7 +97,7 @@ fn no_operation_may_claim_a_form_set_row_of_an_imported_form() {
 }
 
 #[test]
-fn a_passive_names_no_column_so_it_cannot_be_updated() {
+fn a_passive_update_that_claims_no_column_is_refused() {
     let json = artifact(
         "example.aspect",
         &form_spell_claim(PACKAGE_FORM, PACKAGE_SPELL, "update"),

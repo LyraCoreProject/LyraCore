@@ -9,12 +9,14 @@ use crate::spell::tables::game_spell_form;
 use crate::spell::{auras_on, shed_auras, FormRequirement, ShapeshiftState};
 use crate::world::power_pool::is_power_type;
 use crate::{
-    game_player_spell, game_spell, game_spell_effect, game_world_entity, Aura, WorldEntity,
+    game_player_spell, game_spell, game_spell_chain, game_spell_effect, game_talent,
+    game_world_entity, Aura, WorldEntity,
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) mod tables;
 
-pub(crate) use tables::{game_form, game_form_spell, Form};
+pub(crate) use tables::{game_form, game_form_spell, Form, FormSpell};
 
 const CLIENT_FORM_SHIFT: u32 = 16;
 const CLIENT_FORM_MASK: u32 = 0xFF << CLIENT_FORM_SHIFT;
@@ -38,8 +40,8 @@ pub(crate) fn active_form(ctx: &ReducerContext, guid: u64) -> Option<Form> {
 }
 
 thread_local! {
-    static WARNED_AURAS: std::cell::RefCell<std::collections::BTreeSet<u64>> =
-        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+    static WARNED_AURAS: std::cell::RefCell<BTreeSet<u64>> =
+        const { std::cell::RefCell::new(BTreeSet::new()) };
 }
 
 /// Records a warning for the Aura row `aura_id`; true only the first time in this Module instance.
@@ -110,7 +112,7 @@ pub(crate) fn blocks_mounting(ctx: &ReducerContext, guid: u64) -> bool {
 /// Form, the Form's pool is shown and the power rule runs. The caller's Aura refresh projects the
 /// Form once.
 pub(crate) fn entered(ctx: &ReducerContext, guid: u64, spell_id: u32, form_id: u32) {
-    let replaced: std::collections::BTreeSet<u32> = shapeshift_auras(ctx, guid)
+    let replaced: BTreeSet<u32> = shapeshift_auras(ctx, guid)
         .map(|aura| aura.spell_id)
         .filter(|&spell| spell != spell_id)
         .collect();
@@ -167,7 +169,7 @@ const MECHANICS_A_SHAPESHIFT_KEEPS: [u8; 12] = [1, 2, 5, 8, 12, 13, 18, 20, 23, 
 /// vmangos Shapeshift Form Effect 9033: every root with a mechanic ends, and so does every
 /// movement slow with a mechanic that a shapeshift does not keep.
 fn clear_snares(ctx: &ReducerContext, guid: u64) {
-    let freed: std::collections::BTreeSet<u32> = auras_on(ctx, guid)
+    let freed: BTreeSet<u32> = auras_on(ctx, guid)
         .filter(|aura| {
             let root = aura.eff_kind == A_CONTROL && aura.eff_p0 == M_ROOT;
             let slow = aura.eff_kind == A_MOD_SPEED
@@ -375,40 +377,36 @@ pub(crate) fn binds_to_forms(ctx: &ReducerContext, spell: &crate::Spell) -> bool
             .any(|row| !row.excluded && ctx.db.game_form().form_id().find(row.form_id).is_some())
 }
 
-/// The passives the unit's Form brings: the Form's own, and every known passive whose Form Set
-/// requires the Form (vmangos `HandleShapeshiftBoosts(true)`). Every other such passive goes,
-/// except a learned spell that some Form names as its passive: the learning owns that Aura.
+/// The passives the unit's Form brings: the Form's own whose conditions the unit meets, and every
+/// known passive whose Form Set requires the Form (vmangos `HandleShapeshiftBoosts(true)`). Every
+/// other such passive goes, except a learned spell that some Form names as its passive: the
+/// learning owns that Aura.
 fn reconcile_passives(ctx: &ReducerContext, unit: &WorldEntity, form: Option<&Form>) {
     let form_id = form.map(|form| form.form_id);
     let spells = ctx.db.game_spell();
-    let mut desired: std::collections::BTreeSet<u32> = form
-        .into_iter()
-        .flat_map(|form| ctx.db.game_form_spell().by_form().filter(form.form_id))
-        .map(|row| row.spell_id)
-        .collect();
-    if form_id.is_some() {
-        desired.extend(
-            ctx.db
-                .game_player_spell()
-                .by_character()
-                .filter(unit.guid)
-                .map(|known| known.spell_id)
-                .filter(|&spell_id| {
-                    spells.spell_id().find(spell_id).is_some_and(|spell| {
-                        spell.applies_on_form_entry(FormRequirement::of(ctx, spell_id, form_id))
-                    })
-                }),
-        );
-    }
-    let known: std::collections::BTreeSet<u32> = ctx
+    let known: BTreeSet<u32> = ctx
         .db
         .game_player_spell()
         .by_character()
         .filter(unit.guid)
         .map(|known| known.spell_id)
         .collect();
+    let mut desired: BTreeMap<u32, FirstEffectPoints> = form
+        .into_iter()
+        .flat_map(|form| ctx.db.game_form_spell().by_form().filter(form.form_id))
+        .filter_map(|row| Some((row.spell_id, granted_points(ctx, unit.guid, &known, &row)?)))
+        .collect();
+    if form_id.is_some() {
+        for &spell_id in &known {
+            if spells.spell_id().find(spell_id).is_some_and(|spell| {
+                spell.applies_on_form_entry(FormRequirement::of(ctx, spell_id, form_id))
+            }) {
+                desired.entry(spell_id).or_insert(None);
+            }
+        }
+    }
     let (stale, held): (Vec<Aura>, Vec<Aura>) = auras_on(ctx, unit.guid).partition(|aura| {
-        !desired.contains(&aura.spell_id)
+        !desired.contains_key(&aura.spell_id)
             && aura.caster_guid == unit.guid
             && aura.item_guid(ctx) == 0
             && ((!known.contains(&aura.spell_id)
@@ -425,11 +423,75 @@ fn reconcile_passives(ctx: &ReducerContext, unit: &WorldEntity, form: Option<&Fo
                     .is_some_and(|spell| binds_to_forms(ctx, &spell)))
     });
     shed_auras(ctx, stale);
-    for spell in desired {
-        if !held.iter().any(|aura| aura.spell_id == spell) {
-            crate::spell::apply_spell_auras(ctx, spell, unit.guid, unit.level as u8, 1);
+    for (spell, points) in desired {
+        if held.iter().any(|aura| aura.spell_id == spell) {
+            continue;
+        }
+        match points {
+            Some(points) => crate::spell::apply_spell_auras_with_points(
+                ctx,
+                spell,
+                unit.guid,
+                unit.level as u8,
+                points,
+            ),
+            None => crate::spell::apply_spell_auras(ctx, spell, unit.guid, unit.level as u8, 1),
         }
     }
+}
+
+/// The amount a Form passive's first effect takes; `None` keeps the spell's own.
+type FirstEffectPoints = Option<i32>;
+
+/// The points a Form passive row grants the unit, or `None` when the unit does not meet its
+/// conditions, as vmangos `HandleShapeshiftBoosts` casts Leader of the Pack and Heart of the Wild.
+fn granted_points(
+    ctx: &ReducerContext,
+    guid: u64,
+    known: &BTreeSet<u32>,
+    row: &FormSpell,
+) -> Option<FirstEffectPoints> {
+    if row.required_spell != 0 && rank_line(ctx, row.required_spell).is_disjoint(known) {
+        return None;
+    }
+    if row.amount_spell == 0 {
+        return Some(None);
+    }
+    let line = rank_line(ctx, row.amount_spell);
+    auras_on(ctx, guid)
+        .filter(|aura| line.contains(&aura.spell_id))
+        .min_by_key(|aura| aura.effect_id)
+        .map(|aura| Some(aura.amount))
+}
+
+/// `spell_id` and the later ranks of the talent or spell chain it is the first rank of.
+fn rank_line(ctx: &ReducerContext, spell_id: u32) -> BTreeSet<u32> {
+    let mut line: BTreeSet<u32> = ctx
+        .db
+        .game_spell_chain()
+        .by_first()
+        .filter(spell_id)
+        .map(|rank| rank.spell_id)
+        .collect();
+    line.insert(spell_id);
+    if let Some(talent) = ctx
+        .db
+        .game_talent()
+        .iter()
+        .find(|talent| talent.spell_id == spell_id)
+    {
+        line.extend(
+            [
+                talent.rank_spell_2,
+                talent.rank_spell_3,
+                talent.rank_spell_4,
+                talent.rank_spell_5,
+            ]
+            .into_iter()
+            .filter(|&rank| rank != 0),
+        );
+    }
+    line
 }
 
 /// Writes onto a Character's entity, before insertion, the client form byte of the Form it enters
@@ -480,7 +542,7 @@ pub(crate) fn repair(ctx: &ReducerContext, guid: u64) {
         let others = auras_on(ctx, guid)
             .filter(|aura| aura.eff_kind == A_SHAPESHIFT && aura.spell_id != newest.spell_id)
             .map(|aura| aura.spell_id)
-            .collect::<std::collections::BTreeSet<_>>();
+            .collect::<BTreeSet<_>>();
         let removed = auras_on(ctx, guid)
             .filter(|aura| others.contains(&aura.spell_id))
             .collect();

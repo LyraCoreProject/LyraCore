@@ -598,8 +598,8 @@ _Avoid_: feral form (for the rule), stance check
 **Form Projection**:
 The client form byte, the shown power pool, the model, the passive Auras a Form brings and
 Form-dependent equipment, re-derived from a unit's shapeshift Aura. The passives are the Form's own
-and every known passive whose Form Set requires a Form with a `game_form` row. Never a second state
-machine.
+whose conditions the unit meets, a known spell or an amount from another Aura, and every known
+passive whose Form Set requires a Form with a `game_form` row. Never a second state machine.
 
 
 **Form Set**:

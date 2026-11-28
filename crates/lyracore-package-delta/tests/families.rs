@@ -242,18 +242,11 @@ fn every_family_name_is_a_lowercase_import_family_name() {
 }
 
 #[test]
-fn every_table_but_a_form_passive_has_claimable_columns() {
-    for table in Table::ALL
-        .iter()
-        .filter(|table| **table != Table::FormSpell)
-    {
+fn every_table_has_claimable_columns() {
+    for table in Table::ALL {
         assert!(
             !table.columns().is_empty(),
             "`{table}` has no claimable column"
         );
     }
-    assert!(
-        Table::FormSpell.columns().is_empty(),
-        "a Form passive is its key alone"
-    );
 }

@@ -1884,3 +1884,219 @@ fn a_transform_during_a_form_wins_and_the_form_model_returns_when_it_ends() {
     assert_eq!(shown, 892, "Cat Form's model returns");
     assert_scale(scale, 0.8);
 }
+
+const LEADER_OF_THE_PACK_TALENT: u32 = 17007;
+const LEADER_OF_THE_PACK: u32 = 24932;
+const HEART_OF_THE_WILD: [u32; 5] = [17003, 17004, 17005, 17006, 24894];
+const HEART_OF_THE_WILD_CAT: u32 = 24900;
+const HEART_OF_THE_WILD_BEAR: u32 = 24899;
+const FERAL_COMBAT_TAB: u32 = 281;
+// One Aura pass: game_aura_schedule runs every second, 20 ticks of the 50 ms virtual clock.
+const AURA_PASS_TICKS: &str = "20";
+
+/// The amount of the Aura of `spell` that a unit holds, if it holds one.
+fn amount_on(shard: &Standalone, guid: u64, spell: u32) -> Option<i32> {
+    shard
+        .query_rows(&format!(
+            "SELECT amount FROM game_aura WHERE target_guid = {guid} AND spell_id = {spell}"
+        ))
+        .first()
+        .map(|row| number(row, "amount"))
+}
+
+fn druid_amount(shard: &Standalone, spell: u32) -> Option<i32> {
+    amount_on(shard, 1, spell)
+}
+
+fn learn_leader_of_the_pack(shard: &Standalone) {
+    shard.assert_call(
+        "debug_learn_spell",
+        &[DRUID_GUID, &LEADER_OF_THE_PACK_TALENT.to_string()],
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn leader_of_the_pack_comes_with_each_feral_form_for_a_druid_who_knows_it() {
+    let (shard, _wire) = feral_druid("forms-leader-of-the-pack");
+    enter(&shard, CAT_FORM);
+    assert!(
+        !aura_spells(&shard).contains(&LEADER_OF_THE_PACK),
+        "vmangos HandleShapeshiftBoosts casts 24932 only when the druid HasSpell(17007)"
+    );
+    leave(&shard, CAT_FORM);
+
+    learn_leader_of_the_pack(&shard);
+    for form in [CAT_FORM, BEAR_FORM, DIRE_BEAR_FORM] {
+        enter(&shard, form);
+        assert!(aura_spells(&shard).contains(&LEADER_OF_THE_PACK), "{form}");
+        leave(&shard, form);
+        assert!(!aura_spells(&shard).contains(&LEADER_OF_THE_PACK), "{form}");
+    }
+}
+
+/// A Character of the fixture Account standing five yards from the druid, in its Group.
+fn party_member(shard: &Standalone) -> u64 {
+    shard.assert_call(
+        "create_character",
+        &["1", "\"Member\"", "1", "1", "0", "0", "0", "0", "0", "0"],
+    );
+    let member: u64 = number(
+        &shard.query_rows("SELECT guid FROM game_character WHERE name = 'Member'")[0],
+        "guid",
+    );
+    let druid = warrior(shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET map_id = {}, x = {}, y = {}, z = {} WHERE guid = {member}",
+        druid["map_id"],
+        number::<f32>(&druid, "x") + 5.0,
+        druid["y"],
+        druid["z"]
+    ));
+    shard.assert_call("debug_spawn_player_entity", &[&member.to_string()]);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET faction_template = {} WHERE guid = {member}",
+        druid["faction_template"]
+    ));
+    const GROUP: u64 = 24_932;
+    shard.insert_row(
+        "game_group",
+        &[("group_id", &GROUP), ("leader_guid", &1u64)],
+    );
+    let no_identity = format!("0x{}", "00".repeat(32));
+    for (id, character_guid) in [(GROUP * 10, 1u64), (GROUP * 10 + 1, member)] {
+        shard.insert_row(
+            "game_group_member",
+            &[
+                ("id", &id),
+                ("group_id", &GROUP),
+                ("character_guid", &character_guid),
+                ("owner_identity", &no_identity),
+            ],
+        );
+    }
+    member
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn leader_of_the_pack_reaches_a_party_member_and_leaves_them_with_the_form() {
+    let (shard, _wire) = feral_druid("forms-leader-of-the-pack-party");
+    learn_leader_of_the_pack(&shard);
+    let member = party_member(&shard);
+    enter(&shard, CAT_FORM);
+    shard.assert_call("debug_advance_roll_batch", &[AURA_PASS_TICKS]);
+    let druid_crit = druid_amount(&shard, LEADER_OF_THE_PACK);
+    assert!(druid_crit.is_some());
+    assert_eq!(
+        amount_on(&shard, member, LEADER_OF_THE_PACK),
+        druid_crit,
+        "vmangos AreaAura::Update gives the Subgroup member the druid's 24932"
+    );
+
+    leave(&shard, CAT_FORM);
+    assert_eq!(druid_amount(&shard, LEADER_OF_THE_PACK), None);
+    assert_eq!(
+        amount_on(&shard, member, LEADER_OF_THE_PACK),
+        None,
+        "the copy goes with the druid's Aura, before the next pass"
+    );
+}
+
+/// A logged-in feral druid whose Feral Combat tree offers Heart of the Wild, whose five ranks raise
+/// Intellect by 4, 8, 12, 16 and 20 percent as Spell.dbc gives them.
+fn druid_with_heart_of_the_wild(name: &str) -> (Standalone, ReducerConnection) {
+    let (shard, wire) = feral_druid(name);
+    for (rank, spell) in (1..).zip(HEART_OF_THE_WILD) {
+        insert_spell(
+            &shard,
+            spell,
+            "Heart of the Wild",
+            (0x1D0, 0, 0),
+            &[(A_MOD_STAT_PCT, 4 * rank, i32::from(STAT_INT), P_STAT_ID)],
+        );
+    }
+    shard.insert_row(
+        "game_talent_tab",
+        &[
+            ("tab_id", &FERAL_COMBAT_TAB),
+            ("name", &"Feral Combat"),
+            ("class_mask", &(1u32 << 10)),
+            ("race_mask", &0u32),
+            ("order_index", &1u8),
+        ],
+    );
+    shard.insert_row(
+        "game_talent",
+        &[
+            ("talent_id", &HEART_OF_THE_WILD[0]),
+            ("name", &"Heart of the Wild"),
+            ("tree_id", &0u8),
+            ("tier", &0u8),
+            ("column", &0u8),
+            ("max_rank", &5u8),
+            ("required_talent_id", &0u32),
+            ("required_points_in_tree", &0u32),
+            ("spell_id", &HEART_OF_THE_WILD[0]),
+            ("tab_id", &FERAL_COMBAT_TAB),
+            ("rank_spell_2", &HEART_OF_THE_WILD[1]),
+            ("rank_spell_3", &HEART_OF_THE_WILD[2]),
+            ("rank_spell_4", &HEART_OF_THE_WILD[3]),
+            ("rank_spell_5", &HEART_OF_THE_WILD[4]),
+        ],
+    );
+    (shard, wire)
+}
+
+fn learn_heart_of_the_wild_to_rank(shard: &Standalone, rank: usize) {
+    for _ in 0..rank {
+        shard.assert_call(
+            "debug_learn_talent",
+            &[DRUID_GUID, &HEART_OF_THE_WILD[0].to_string()],
+        );
+    }
+    assert_eq!(
+        druid_amount(shard, HEART_OF_THE_WILD[rank - 1]),
+        Some(4 * rank as i32)
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn heart_of_the_wild_gives_cat_strength_and_bear_stamina_at_the_talent_ranks_amount() {
+    let (shard, _wire) = druid_with_heart_of_the_wild("forms-heart-of-the-wild");
+    learn_heart_of_the_wild_to_rank(&shard, 3);
+    let bonuses = |shard: &Standalone| {
+        (
+            druid_amount(shard, HEART_OF_THE_WILD_CAT),
+            druid_amount(shard, HEART_OF_THE_WILD_BEAR),
+        )
+    };
+    enter(&shard, CAT_FORM);
+    assert_eq!(
+        bonuses(&shard),
+        (Some(12), None),
+        "vmangos casts 24900 with CastCustomSpell at rank 3's 12 percent"
+    );
+    leave(&shard, CAT_FORM);
+    assert_eq!(bonuses(&shard), (None, None));
+    for form in [BEAR_FORM, DIRE_BEAR_FORM] {
+        enter(&shard, form);
+        assert_eq!(bonuses(&shard), (None, Some(12)), "{form}");
+        leave(&shard, form);
+        assert_eq!(bonuses(&shard), (None, None), "{form}");
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn heart_of_the_wild_keeps_its_amount_across_world_entry_in_cat_form() {
+    let (shard, _first) = druid_with_heart_of_the_wild("forms-heart-of-the-wild-relog");
+    learn_heart_of_the_wild_to_rank(&shard, 2);
+    enter(&shard, CAT_FORM);
+    assert_eq!(druid_amount(&shard, HEART_OF_THE_WILD_CAT), Some(8));
+    shard.assert_call("debug_logout_character", &[DRUID_GUID]);
+    let _second = log_in(&shard, 43);
+    assert_eq!(shapeshift_spells(&shard), vec![CAT_FORM]);
+    assert_eq!(druid_amount(&shard, HEART_OF_THE_WILD_CAT), Some(8));
+}

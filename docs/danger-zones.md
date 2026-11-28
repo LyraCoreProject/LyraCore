@@ -1301,6 +1301,26 @@ the Form's model, the Form's model wins over the unit's own, and a Character on 
 takes the Horde model while a creature takes the Alliance one. Players see a Form's model and scale
 change for every viewer, with one VALUES update for the display id and one for the scale.
 
+### Form passive condition migration
+
+`game_form_spell` gains the END-appended columns `required_spell` and `amount_spell` (default 0), so
+every existing passive keeps no condition. A Package Delta written before this revision omits them,
+and its passives keep no condition, as before.
+
+Until you reimport `spell` with `--dbc`, the feral Forms have no Leader of the Pack or Heart of the
+Wild rows, so druids get neither, as before. Before play resumes:
+
+1. Publish the Module through a planned additive update.
+2. Reimport `spell` with `--dbc`. It writes Leader of the Pack 24932 with `required_spell` 17007 on
+   Forms 1, 5 and 8, and Heart of the Wild 24900 on Form 1 and 24899 on Forms 5 and 8 with
+   `amount_spell` 17003.
+3. Call `debug_repair_after_publish`. It projects each online Character, so a druid already in a
+   feral Form gets the passives its talents give. Offline Characters get them on world entry.
+
+Players see a druid with Leader of the Pack give its Subgroup in range 3 percent crit in Cat, Bear
+and Dire Bear Form, and Heart of the Wild raise a druid's Strength in Cat Form and Stamina in the
+bear Forms by its rank's percent.
+
 ### Cast item migration
 
 `game_pending_cast` gains the END-appended `cast_item_guid` (default 0), and an Item cast now uses

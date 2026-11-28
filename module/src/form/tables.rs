@@ -60,6 +60,13 @@ pub struct FormSpell {
     pub id: u64,
     pub form_id: u32,
     pub spell_id: u32,
+    /// The unit holds the passive only while it knows this spell or a later rank; zero is none.
+    #[default(0u32)]
+    pub required_spell: u32,
+    /// Nonzero: the passive's first effect takes the amount of the unit's Aura of this spell or a
+    /// later rank, and a unit with no such Aura gets no passive.
+    #[default(0u32)]
+    pub amount_spell: u32,
 }
 
 crate::outside_table_catalog!(game_form, game_form_spell);
