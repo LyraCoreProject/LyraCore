@@ -645,10 +645,12 @@ equipment slots) into the CREATE, as vmangos `Player::CreateCorpse` does. Bones 
 drop the flags and items, as `Map::RemoveCorpses` does.
 
 `game_character.pvp_flagged` and `pvp_desired` keep the PvP Flag and `PVP_DESIRED` across logout and
-Transfer, as vmangos `CHARACTER_FLAG_PVP_ENABLED` and `CHARACTER_FLAG_PVP_DESIRED` do. Login and an
-arrival from another Shard restore both and start a fresh 5-minute countdown, as vmangos
-`Player::LoadFromDB` calls `UpdatePvP(true)`; a map change on one Shard keeps the running countdown.
-A taxi take-off drops the flag and its countdown unless `PVP_DESIRED` is set.
+Transfer, as vmangos `CHARACTER_FLAG_PVP_ENABLED` and `CHARACTER_FLAG_PVP_DESIRED` do. World entry
+restores both. Login starts a fresh 5-minute countdown, as vmangos `Player::LoadFromDB` calls
+`UpdatePvP(true)`. A far teleport on one Shard deletes the entity but keeps its
+`game_pvp_flag_timer` row, so the WorldPort keeps the running countdown. A Transfer carries no timer
+row, so the destination starts a fresh countdown. A taxi take-off drops the flag and its countdown
+unless `PVP_DESIRED` is set.
 
 #### Drunk value
 

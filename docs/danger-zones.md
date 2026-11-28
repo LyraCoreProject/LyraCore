@@ -659,7 +659,9 @@ Character online at the publish keeps its live PvP Flag and `PVP_DESIRED`, and i
 them. A Character offline at the publish logs in unflagged, as before. A Character Transfer row from
 a Shard before the publish arrives unflagged, and an older destination refuses the longer row, so
 update both Shards before you move a Character. No repair or reimport is needed. Package Deltas do
-not read these columns, and Character Migration writes both as false.
+not read these columns. The `migrate_character` argument gains the fields `pvp_flagged` and
+`pvp_desired`, so use the Character Migration tool from the same revision as the Module; a plan file
+written before them still reads, as unflagged.
 
 ### Queued strike report migration
 

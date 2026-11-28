@@ -46,6 +46,11 @@ function = "the_pvp_flag_and_pvp_desired_survive_logout_and_login_restarts_the_c
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/pvp.rs"
+function = "a_far_teleport_on_one_shard_keeps_the_running_countdown"
+rung = "durable_module"
+
+[[tests]]
 path = "module/tests/taxi_activation.rs"
 function = "a_take_off_drops_a_pvp_flag_the_character_does_not_want"
 rung = "durable_module"
@@ -79,6 +84,12 @@ description = "Help to a flagged Character in combat flags the helper for every 
 path = "module/src/pvp.rs"
 symbol = "spell_targeted"
 evidence = "At d9173eca, Spell.cpp Spell::DoSpellHitOnUnit calls SetInCombatWithAssisted only when the spell lacks SPELL_ATTR_EX_NO_THREAT."
+
+[[known_gaps]]
+description = "A Transfer restarts the PvP countdown at 300 s; vmangos keeps the running countdown across a far teleport, including a dungeon entry that a split Realm runs as a Transfer."
+path = "module/src/pvp.rs"
+symbol = "enter_world"
+evidence = "At d9173eca, Player.cpp Player::TeleportTo and ExecuteTeleportFar keep the Player and never reset pvpInfo.timerPvPRemaining; module/src/pvp.rs game_pvp_flag_timer is not_transported, so the destination arms a fresh countdown."
 
 [[known_gaps]]
 description = "A Character's pets and totems do not carry its UNIT_FLAG_PVP, so their unit frames show no PvP icon; harm and help checks already use the owner's flag."

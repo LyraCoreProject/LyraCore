@@ -139,16 +139,17 @@ pub(crate) fn update_zone(
 }
 
 /// Restores the saved PvP Flag and `PVP_DESIRED`, then runs the zone check, before viewers build
-/// the CREATE. A map change on this Shard keeps the running countdown. Any other entry reloads the
-/// Character and starts a fresh one, as vmangos `Player::LoadFromDB` calls `UpdatePvP(true)`.
+/// the CREATE. A WorldPort keeps the countdown that outlived the entity on this Shard, as vmangos
+/// `TeleportTo` keeps the Player; one from another Shard finds none. Any other entry starts a fresh
+/// countdown, as vmangos `Player::LoadFromDB` calls `UpdatePvP(true)`.
 pub(crate) fn enter_world(
     ctx: &ReducerContext,
     saved: &Character,
     character: &mut WorldEntity,
-    map_change: bool,
+    world_port: bool,
 ) {
     let timers = ctx.db.game_pvp_flag_timer();
-    if !map_change {
+    if !world_port {
         timers.character_guid().delete(character.guid);
     }
     if saved.pvp_desired {

@@ -254,7 +254,8 @@ pub fn debug_spawn_player_entity(ctx: &ReducerContext, character_guid: u64) -> R
     let character = crate::helpers::require_character(ctx, character_guid)
         .map_err(|_| format!("no such character: {character_guid}"))?;
 
-    let entity = crate::world::build_player_entity(ctx, &character, character.owner_identity);
+    let mut entity = crate::world::build_player_entity(ctx, &character, character.owner_identity);
+    crate::pvp::enter_world(ctx, &character, &mut entity, false);
     let (level, max_health) = (entity.level, entity.max_health);
     entity.insert(ctx);
     crate::mount::restore_mount_on_rebuild(ctx, character_guid);

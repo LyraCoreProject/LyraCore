@@ -83,6 +83,7 @@ rerun never brings back a Character that its player deleted.
 | Position | Kept on a continent. A Character in an Instance map, or with no position, arrives at its home bind. |
 | Home bind, rest | Kept. The last logout time and inn flag feed the normal offline rest at login. |
 | Hidden helm and cloak | Kept from a vmangos source's `character_flags` (0x400, 0x800). A cmangos source has none, so its Characters show both. A plan written before this field reads as nothing hidden. |
+| PvP Flag, `/pvp` toggle | Kept from a vmangos source's `character_flags` (0x40, 0x10000). The first login starts a fresh 5-minute countdown. A cmangos source has none, so its Characters arrive unflagged. A plan written before these fields reads as unflagged. |
 | Items | Vanilla slots 0 to 62 and keyring slots 81 to 112 keep their address. Bag contents use the flat bag-content slot of their bag. |
 | Bank bags, large bags | This model has no bank bag slots and addresses 18 slots in each bag. A bank bag, its contents and Items past slot 18 of a bag move to the first free bank, backpack or bag slot whose bag can hold them, or the Character is refused. |
 | Item state | Entry, stack, durability (capped at the template), permanent enchantment, random property and soulbound. A Letter Copy gets its own Item Text row. |

@@ -200,6 +200,9 @@ pub struct CharacterMigration {
     pub taxi_nodes: Vec<u32>,
     pub hunter_pet: Option<MigratedHunterPet>,
     pub hide_equipment_flags: u32,
+    // vmangos CHARACTER_FLAG_PVP_ENABLED and CHARACTER_FLAG_PVP_DESIRED.
+    pub pvp_flagged: bool,
+    pub pvp_desired: bool,
 }
 
 const SOURCE_LABEL_MAX_LEN: usize = 64;
@@ -827,8 +830,8 @@ fn insert_character(
         drunk_value: 0,
         hide_equipment_flags: migration.hide_equipment_flags
             & lyracore_shared::constants::player_flags::HIDE_EQUIPMENT,
-        pvp_flagged: false,
-        pvp_desired: false,
+        pvp_flagged: migration.pvp_flagged,
+        pvp_desired: migration.pvp_desired,
     });
     Ok(guid)
 }

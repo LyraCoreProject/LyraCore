@@ -573,8 +573,7 @@ pub(crate) fn apply_player_login(
         entity.unit_bytes_1 = unit_bytes_1;
     }
     crate::away::at_world_entry(ctx, &mut entity, entry);
-    let map_change = entry == WorldEntry::WorldPort && replaced.is_some();
-    crate::pvp::enter_world(ctx, &character, &mut entity, map_change);
+    crate::pvp::enter_world(ctx, &character, &mut entity, entry == WorldEntry::WorldPort);
     entity.insert(ctx);
     if entry == WorldEntry::Login {
         crate::drunk::sweep_delete_game_drunk_sobering(ctx, character_guid);

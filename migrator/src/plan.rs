@@ -207,6 +207,11 @@ pub(crate) struct CharacterMigration {
     // Absent from a plan written before this field: nothing is hidden.
     #[serde(default)]
     pub(crate) hide_equipment_flags: u32,
+    // Absent from a plan written before these fields: the Character arrives unflagged.
+    #[serde(default)]
+    pub(crate) pvp_flagged: bool,
+    #[serde(default)]
+    pub(crate) pvp_desired: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -728,6 +733,8 @@ fn migrated_character(
         },
         hunter_pet: hunter_pet(catalogue, character, subject, report).into(),
         hide_equipment_flags: character.hide_equipment_flags,
+        pvp_flagged: character.pvp_flagged,
+        pvp_desired: character.pvp_desired,
     };
     fits_one_call(&migration)?;
     Ok(migration)
@@ -1311,6 +1318,8 @@ mod tests {
             logout_resting: false,
             locked_for_transfer: false,
             hide_equipment_flags: 0,
+            pvp_flagged: false,
+            pvp_desired: false,
             rest_bonus: 12.7,
             bank_bag_slots: 1,
             watched_faction: -1,
@@ -1572,6 +1581,33 @@ mod tests {
             .is_some());
         let read: CharacterMigration = serde_json::from_value(written).unwrap();
         assert_eq!(read.hide_equipment_flags, 0);
+    }
+
+    #[test]
+    fn a_character_keeps_its_pvp_flag_and_pvp_desired_in_the_plan() {
+        let mut source = character();
+        (source.pvp_flagged, source.pvp_desired) = (true, true);
+        let plan = plan_one(source);
+        assert_eq!(
+            (
+                plan.characters[0].pvp_flagged,
+                plan.characters[0].pvp_desired
+            ),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn a_plan_written_before_the_pvp_fields_still_reads_unflagged() {
+        let mut source = character();
+        (source.pvp_flagged, source.pvp_desired) = (true, true);
+        let plan = plan_one(source);
+        let mut written = serde_json::to_value(&plan.characters[0]).unwrap();
+        for field in ["pvp_flagged", "pvp_desired"] {
+            assert!(written.as_object_mut().unwrap().remove(field).is_some());
+        }
+        let read: CharacterMigration = serde_json::from_value(written).unwrap();
+        assert_eq!((read.pvp_flagged, read.pvp_desired), (false, false));
     }
 
     #[test]

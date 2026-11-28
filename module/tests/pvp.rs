@@ -33,6 +33,7 @@ const ORC: &str = "2";
 const CMSG_TOGGLE_PVP: u32 = 0x253;
 const CMSG_CAST_SPELL_OPCODE: u32 = 0x12e;
 const CMSG_ATTACKSWING: u32 = 0x141;
+const MSG_MOVE_WORLDPORT_ACK: u32 = 0xdc;
 // 1.12.1 SpellCastResult values from vmangos SpellDefines.h.
 const NO_DUELING: u8 = 0x47;
 const TARGET_DUELING: u8 = 0x68;
@@ -349,6 +350,43 @@ fn the_pvp_flag_and_pvp_desired_survive_logout_and_login_restarts_the_countdown(
         flagged,
         "vmangos UpdatePvP(true) at load restarts the 300 s countdown"
     );
+    advance(&shard, 1);
+    assert_eq!(
+        flags(&shard, guid),
+        (unit_flags_before, player_flags_before)
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_far_teleport_on_one_shard_keeps_the_running_countdown() {
+    let (shard, account) = realm("pvp-far-teleport");
+    shard.clear_schedule("game_creature_move_schedule");
+    let guid = character(&shard, &account, "Traveller", HUMAN);
+    let mut connection = enter(&shard, guid);
+    let (unit_flags_before, player_flags_before) = flags(&shard, guid);
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    toggle(&mut connection, &[]);
+    toggle(&mut connection, &[0]);
+    advance(&shard, PVP_FLAG_TICKS / 2);
+    let countdown = timer(&shard, guid);
+
+    shard.assert_call(
+        "debug_teleport",
+        &[&guid.to_string(), "1", "300.0", "300.0", "30.0", "0.0"],
+    );
+    connection
+        .call("native_world_receive", json!([MSG_MOVE_WORLDPORT_ACK, []]))
+        .unwrap();
+    let flagged = (unit_flags_before | unit_flags::PVP, player_flags_before);
+    assert_eq!(flags(&shard, guid), flagged);
+    assert_eq!(
+        timer(&shard, guid),
+        countdown,
+        "vmangos Player::TeleportTo keeps the Player and its countdown"
+    );
+    advance(&shard, PVP_FLAG_TICKS - PVP_FLAG_TICKS / 2 - 1);
+    assert_eq!(flags(&shard, guid), flagged);
     advance(&shard, 1);
     assert_eq!(
         flags(&shard, guid),
