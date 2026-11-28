@@ -25,7 +25,7 @@ symbol = "WorldSession::HandleSendMail"
 status = "unverified"
 
 [[known_gaps]]
-description = "A send to a Character whose Mail another Shard holds never meets the 100-mail limit. The sending Shard counts only its own Mail rows and routes the letter on, so a full mailbox on another Shard still receives it. Mail to a Character on the sending Shard is refused at the limit."
+description = "A send to a Character whose Mail another Shard holds never meets the Mail Limit. The sending Shard counts only its own Mail rows and routes the letter on, so a full mailbox on another Shard still receives it. Mail to a Character on the sending Shard is refused at the limit."
 path = "module/src/mail.rs"
 symbol = "mailbox_is_full"
 evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/MailHandler.cpp#L258-L264"

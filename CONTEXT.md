@@ -970,9 +970,10 @@ is sent and when it is returned. A cash on delivery price needs an item, so a pr
 Copper, text, a COD payment, Auction Mail and a return at Mail Expiry arrive at once.
 
 **Mail Limit**:
-A Character's mailbox takes a new Mail only while it holds 100 Mail or fewer. Every Mail row counts,
-delivered or not. A send to a fuller mailbox is refused after the postage check and before the team,
-trade and attachment checks, and charges nothing.
+A Character's send is refused when the recipient's mailbox already holds more than 100 Mail. Every
+Mail row counts, delivered or not. The refusal comes after the postage check and before the team, trade
+and attachment checks, and charges nothing. Auction Mail, COD payments and returns at Mail Expiry still
+arrive at a fuller mailbox.
 
 **Mail Sender**:
 Who a Mail is from, as the client names it in the inbox: a Character, an Auction House, a Creature
