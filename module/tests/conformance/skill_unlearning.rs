@@ -135,6 +135,7 @@ impl Stage {
         )
     }
 
+    /// The fixture's own spells the Character knows, leaving out its race and class spells.
     fn known_spells(&self) -> Vec<u32> {
         let mut spells: Vec<u32> = self
             .shard
@@ -144,6 +145,7 @@ impl Stage {
             ))
             .iter()
             .map(|row| row["spell_id"].parse().unwrap())
+            .filter(|spell| *spell >= APPRENTICE_SPELL)
             .collect();
         spells.sort_unstable();
         spells
