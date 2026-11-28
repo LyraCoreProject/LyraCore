@@ -443,11 +443,13 @@ fn cast_spells(standalone: &Standalone, target: u64) -> Vec<u32> {
         &["1", &HOLY_SHOCK.to_string(), &target.to_string()],
     );
     fence_subscription(standalone, &events);
-    let mut rows = event_rows(&events, "game_spell_cast_event_live");
-    rows.sort_by_key(|row| support::number::<u64>(row, "id"));
-    rows.iter()
+    let mut spells: Vec<u32> = event_rows(&events, "game_spell_cast_event_live")
+        .iter()
         .map(|row| support::number(row, "spell_id"))
-        .collect()
+        .collect();
+    // These tests check which spells cast, not the order of their cast events.
+    spells.sort_unstable();
+    spells
 }
 
 fn go_event(standalone: &Standalone, spell_id: u32, target: u64) -> support::Row {
