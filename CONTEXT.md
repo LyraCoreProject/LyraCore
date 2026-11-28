@@ -33,7 +33,7 @@ entry in both files.
 
 **L** [Land Mount](#mounts) · [Lethal Damage Floor](#creature-ai) · [Letter Copy](#mail) · [Listing](#auctions) · [Login Queue](#accounts-characters-and-sessions) · [Logon Limiter](#accounts-characters-and-sessions) · [Loot Release](#loot) · [Loot Roll](#loot) · [Loot Roll Promotion](#retired-terms) · [Loot Roll Promotion Receipt](#retired-terms) · [Loot Source](#loot) · [Loot Tag](#loot) · [Loot Window](#loot) · [Low-Priority Source](#creature-ai)
 
-**M** [Mail](#mail) · [Mail Arrival](#mail) · [Mail Expiry](#mail) · [Mail Sender](#mail) · [Mail Template](#mail) · [Mail Timer](#mail) · [Meeting Stone](#meeting-stones) · [Meeting Stone Queue](#meeting-stones) · [Melee Reach](#procs) · [Member Stats](#groups) · [Migration Source](#accounts-characters-and-sessions) · [Module](CORE_TERMS.md#module) · [Motion Permit](#requests-and-delivery) · [Mount Projection](#mounts) · [Movement Intent](#creature-ai)
+**M** [Mail](#mail) · [Mail Arrival](#mail) · [Mail Expiry](#mail) · [Mail Limit](#mail) · [Mail Sender](#mail) · [Mail Template](#mail) · [Mail Timer](#mail) · [Meeting Stone](#meeting-stones) · [Meeting Stone Queue](#meeting-stones) · [Melee Reach](#procs) · [Member Stats](#groups) · [Migration Source](#accounts-characters-and-sessions) · [Module](CORE_TERMS.md#module) · [Motion Permit](#requests-and-delivery) · [Mount Projection](#mounts) · [Movement Intent](#creature-ai)
 
 **N** [Native Host](CORE_TERMS.md#native-host) · [Navigation Inputs](#bots)
 
@@ -968,6 +968,12 @@ _Avoid_: message
 The hour a Mail with an item waits before it reaches a Character on another Realm Account, when it
 is sent and when it is returned. A cash on delivery price needs an item, so a priced Mail waits too.
 Copper, text, a COD payment, Auction Mail and a return at Mail Expiry arrive at once.
+
+**Mail Limit**:
+A Character's send is refused when the recipient's mailbox already holds more than 100 Mail. Every
+Mail row counts, delivered or not. The refusal comes after the postage check and before the team, trade
+and attachment checks, and charges nothing. Auction Mail, COD payments and returns at Mail Expiry still
+arrive at a fuller mailbox.
 
 **Mail Sender**:
 Who a Mail is from, as the client names it in the inbox: a Character, an Auction House, a Creature

@@ -12,6 +12,8 @@ prerequisites = []
 tests = [
     { path = "module/tests/item_state_transfers.rs", function = "a_conjured_item_cannot_be_mailed", rung = "durable_module" },
     { path = "module/tests/mail_attachment_slots.rs", function = "a_sender_short_of_postage_is_refused_for_money_before_its_attachment_is_checked", rung = "durable_module" },
+    { path = "module/tests/mail_recipient_cap.rs", function = "a_send_to_a_mailbox_holding_more_than_a_hundred_mails_is_refused_and_charges_nothing", rung = "durable_module" },
+    { path = "module/src/native/mail.rs", function = "a_full_recipient_mailbox_answers_the_recipient_cap_error", rung = "unit" },
 ]
 
 [vmangos]
@@ -23,7 +25,7 @@ symbol = "WorldSession::HandleSendMail"
 status = "unverified"
 
 [[known_gaps]]
-description = "The Module never refuses a send for a full recipient mailbox. vmangos answers MAIL_ERR_RECIPIENT_CAP_REACHED when the recipient already holds more than 100 mails, after the postage check and before the team, trade and attachment checks. Send order otherwise matches: money, team, trade, attachment."
+description = "A send to a Character whose Mail another Shard holds never meets the Mail Limit. The sending Shard counts only its own Mail rows and routes the letter on, so a full mailbox on another Shard still receives it. Mail to a Character on the sending Shard is refused at the limit."
 path = "module/src/mail.rs"
-symbol = "send"
+symbol = "mailbox_is_full"
 evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/MailHandler.cpp#L258-L264"

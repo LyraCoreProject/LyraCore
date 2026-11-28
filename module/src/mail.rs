@@ -11,6 +11,7 @@ pub(crate) enum MailRefusal {
     InventoryFull,
     NotEnoughMoney,
     CodNotAffordable,
+    RecipientMailboxFull,
     ItemIsSoulbound,
     NotYourItem,
     Refused(crate::Refusal),
@@ -44,6 +45,7 @@ impl std::fmt::Display for MailRefusal {
             Self::InventoryFull => text::INVENTORY_FULL.fmt(f),
             Self::NotEnoughMoney => text::NOT_ENOUGH_MONEY.fmt(f),
             Self::CodNotAffordable => text::COD_NOT_AFFORDABLE.fmt(f),
+            Self::RecipientMailboxFull => text::RECIPIENT_MAILBOX_FULL.fmt(f),
             Self::ItemIsSoulbound => text::ITEM_IS_SOULBOUND.fmt(f),
             Self::NotYourItem => text::NOT_YOUR_ITEM.fmt(f),
             Self::Refused(refusal) => refusal.fmt(f),
@@ -474,6 +476,14 @@ pub(crate) fn check_postage(
     }
     Ok(())
 }
+pub(crate) fn mailbox_is_full(ctx: &ReducerContext, recipient_guid: u64) -> bool {
+    ctx.db
+        .game_mail()
+        .by_recipient()
+        .filter(&recipient_guid)
+        .nth(lyracore_shared::mail::RECIPIENT_MAIL_LIMIT)
+        .is_some()
+}
 pub(crate) fn debit_purse(
     ctx: &ReducerContext,
     payer_guid: u64,
@@ -531,6 +541,9 @@ fn send(
     same_account: bool,
 ) -> Result<(), MailRefusal> {
     check_postage(ctx, sender_guid, mail.money)?;
+    if mailbox_is_full(ctx, mail.recipient_guid) {
+        return Err(MailRefusal::RecipientMailboxFull);
+    }
     // vmangos HandleSendMailCallback refuses any send while the sender has a trade, even a proposed one.
     if crate::trade::session_involving(ctx, sender_guid).is_some() {
         return Err(lyracore_shared::mail::SENDER_IS_TRADING.to_string().into());

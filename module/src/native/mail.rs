@@ -94,7 +94,8 @@ pub(super) fn receive(
                         MailRefusal::CodNotAffordable | MailRefusal::NotEnoughMoney => {
                             codec::MailTakeItemError::NotEnoughMoney
                         }
-                        MailRefusal::ItemIsSoulbound
+                        MailRefusal::RecipientMailboxFull
+                        | MailRefusal::ItemIsSoulbound
                         | MailRefusal::NotYourItem
                         | MailRefusal::Refused(_) => codec::MailTakeItemError::Other,
                     };
@@ -129,6 +130,7 @@ pub(super) fn receive(
                         MailRefusal::InventoryFull => codec::MailMadePermanentError::BagsFull,
                         MailRefusal::NotEnoughMoney
                         | MailRefusal::CodNotAffordable
+                        | MailRefusal::RecipientMailboxFull
                         | MailRefusal::ItemIsSoulbound
                         | MailRefusal::NotYourItem
                         | MailRefusal::Refused(_) => codec::MailMadePermanentError::Other,
@@ -218,9 +220,15 @@ fn send_letter(
     {
         return Err(MailResult::ErrCannotSendToSelf);
     }
-    // vmangos answers a poor sender before it compares teams.
+    // vmangos answers a poor sender, then a full mailbox, before it compares teams.
     let attached_money = request.money.as_int();
     core::check_postage(ctx, sender_guid, attached_money).map_err(send_refusal_result)?;
+    if candidates
+        .iter()
+        .all(|character| core::mailbox_is_full(ctx, character.0))
+    {
+        return Err(MailResult::ErrRecipientCapReached);
+    }
     let mut reachable = candidates
         .iter()
         .filter(|character| same_team(sender.race, character.1));
@@ -246,6 +254,7 @@ fn send_letter(
 fn send_refusal_result(refusal: MailRefusal) -> MailResult {
     match refusal {
         MailRefusal::NotEnoughMoney => MailResult::ErrNotEnoughMoney,
+        MailRefusal::RecipientMailboxFull => MailResult::ErrRecipientCapReached,
         // vmangos HandleSendMailCallback answers MAIL_ERR_INTERNAL_ERROR for a missing item and
         // for one that fails CanBeTraded.
         MailRefusal::ItemIsSoulbound
@@ -347,6 +356,14 @@ mod tests {
         assert_eq!(
             send_refusal_result(MailRefusal::NotEnoughMoney),
             MailResult::ErrNotEnoughMoney
+        );
+    }
+
+    #[test]
+    fn a_full_recipient_mailbox_answers_the_recipient_cap_error() {
+        assert_eq!(
+            send_refusal_result(MailRefusal::RecipientMailboxFull),
+            MailResult::ErrRecipientCapReached
         );
     }
 }
