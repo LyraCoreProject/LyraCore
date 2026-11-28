@@ -71,6 +71,11 @@ pub(super) fn receive(
             crate::talent::do_learn_talent(ctx, guid, actor.owner_identity, c.talent.as_int())?;
             Ok(())
         }
+        ClientOpcodeMessage::CMSG_UNLEARN_SKILL(c) => {
+            super::actor(ctx, guid)?;
+            crate::skill::unlearn_skill(ctx, guid, u32::from(c.skill.as_int()));
+            Ok(())
+        }
         ClientOpcodeMessage::CMSG_TRAINER_LIST(c) => {
             Ok(list(ctx, connection, guid, c.guid.guid())?)
         }
