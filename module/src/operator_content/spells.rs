@@ -4,7 +4,7 @@ use lyracore_package_delta::ids::{
     is_fixture_reserved_spell_id, is_fixture_reserved_trainer_id, is_operator_spell_id,
     is_package_spell_id, is_package_trainer_id, packed_spell_effect_id,
 };
-use lyracore_shared::spell::taxonomy::{EffectKind, P_RAW, T_TARGET_GROUP_CLASS};
+use lyracore_shared::spell::taxonomy::{EffectKind, P_RAW, P_SPELL_ID, T_TARGET_GROUP_CLASS};
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table};
 
 use crate::game_item_template;
@@ -176,6 +176,9 @@ fn check_children(
                 "trigger spell {} does not exist",
                 row.trigger_spell
             ));
+        }
+        if row.p0_kind == P_SPELL_ID && !spell_exists(u32::try_from(row.p0).unwrap_or(u32::MAX)) {
+            return Err(format!("spell {} in p0 does not exist", row.p0));
         }
     }
     let mut reagents = BTreeSet::new();

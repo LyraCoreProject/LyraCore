@@ -2,11 +2,15 @@ use lyracore_shared::spell::taxonomy::E_CAST_FRIEND_OR_FOE;
 use spacetimedb::{log, ReducerContext};
 
 use super::resolve::{resolve_trigger_cast, CastRequest};
+use crate::combat::Relation;
 use crate::{game_world_entity, SpellEffect, WorldEntity};
 
-// vmangos IsFriendlyTo, taken as the caster itself or a unit the caster may not harm.
+// vmangos IsFriendlyTo: the reaction between the two units is friendly or better.
 fn is_friend(ctx: &ReducerContext, caster: &WorldEntity, target: &WorldEntity) -> bool {
-    caster.guid == target.guid || !crate::combat::may_harm(ctx, caster, target)
+    matches!(
+        crate::combat::relation(ctx, caster, target),
+        Relation::SelfUnit | Relation::Friendly
+    )
 }
 
 /// Casts the effect's friend spell at a friend and its foe spell (`p0`) at any other target.

@@ -339,7 +339,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
         }
         if spell.follow_up_spell.is_none()
             && !script_name.is_empty()
-            && lyracore_importer::spell_overrides::friend_or_foe_cast(spell.id).is_none()
+            && !lyracore_importer::spell_overrides::is_friend_or_foe_script(script_name)
         {
             scripts.push(spell.id);
         }
@@ -437,12 +437,12 @@ mod tests {
 
     #[test]
     fn the_holy_shock_script_is_no_script_finding_and_another_script_on_its_spell_is() {
-        let finding = |entry: u32| {
+        let finding = |script: &str| {
             let source = fixture();
             source
                 .fixture_connection()
                 .execute_batch(&format!(
-                    "UPDATE spell_template SET entry={entry}, script_name='spell_paladin_holy_shock'"
+                    "UPDATE spell_template SET entry=20473, script_name='{script}'"
                 ))
                 .unwrap();
             let (_, manifest) = read(&source).unwrap();
@@ -454,8 +454,8 @@ mod tests {
                 .unwrap()["source_ids"]
                 .clone()
         };
-        assert_eq!(finding(20473), serde_json::json!([]));
-        assert_eq!(finding(20474), serde_json::json!([20474]));
+        assert_eq!(finding("spell_paladin_holy_shock"), serde_json::json!([]));
+        assert_eq!(finding("spell_paladin_other"), serde_json::json!([20473]));
     }
 
     #[test]

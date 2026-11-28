@@ -19,6 +19,9 @@ const RANGE_YD: u32 = 30;
 const SEPARATION_YD: f32 = 5.0;
 const EFFECT_POINTS: i32 = 100;
 const DURATION_MS: u32 = 600_000;
+const MANA: u32 = 1000;
+const COST: u32 = 10;
+const COOLDOWN_MS: u32 = 30_000;
 const CERTAIN_CRIT_PERCENT: i32 = 100;
 // vmangos Holy Shock rank 1 20473 and the family flag its heal 25914 and damage 25912 carry.
 const HOLY_SHOCK_FAMILY_FLAG: u64 = 0x20_0000;
@@ -108,6 +111,37 @@ fn an_enemy_behind_the_caster_refuses_holy_shock_and_a_friend_behind_does_not() 
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_unflagged_character_of_the_other_faction_behind_the_caster_refuses_holy_shock_and_spends_nothing(
+) {
+    let mut standalone = Standalone::start("holy-shock-other-faction");
+    stage(&mut standalone);
+    let orc = spawn_character(&standalone, "holy-shock-horde", "Orc", (2, 1));
+    place_beside_caster(&standalone, orc, -SEPARATION_YD);
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell SET cost = {COST}, cooldown_ms = {COOLDOWN_MS} \
+         WHERE spell_id = {HOLY_SHOCK}"
+    ));
+    use_mana(&standalone);
+    set_health(&standalone, orc, 1);
+
+    support::refused(
+        &standalone,
+        "debug_cast_at",
+        &["1", &HOLY_SHOCK.to_string(), &orc.to_string()],
+        "target must be in front of caster",
+    );
+
+    assert_eq!(mana(&standalone), MANA);
+    assert!(standalone
+        .query_rows(&format!(
+            "SELECT id FROM game_spell_cd WHERE spell_id = {HOLY_SHOCK}"
+        ))
+        .is_empty());
+    assert_eq!(health(&standalone, orc), 1);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn divine_favor_makes_the_heal_holy_shock_casts_crit_and_ends_with_it() {
     let mut standalone = Standalone::start("holy-shock-divine-favor");
     stage(&mut standalone);
@@ -119,6 +153,21 @@ fn divine_favor_makes_the_heal_holy_shock_casts_crit_and_ends_with_it() {
     let heal = go_event(&standalone, HOLY_SHOCK_HEAL, PLAYER);
 
     assert_eq!(heal["is_crit"], "true");
+    assert_eq!(charges(&standalone), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn divine_favor_makes_the_damage_holy_shock_casts_crit_and_ends_with_it() {
+    let mut standalone = Standalone::start("holy-shock-divine-favor-damage");
+    let wolf = stage(&mut standalone);
+    divine_favor(&standalone);
+    standalone.assert_call("debug_force_cast", &["1", &DIVINE_FAVOR.to_string()]);
+    standalone.assert_call("debug_advance_virtual_clock", &["50000"]);
+
+    let damage = go_event(&standalone, HOLY_SHOCK_DAMAGE, wolf);
+
+    assert_eq!(damage["is_crit"], "true");
     assert_eq!(charges(&standalone), None);
 }
 
@@ -239,18 +288,57 @@ fn divine_favor(standalone: &Standalone) {
 }
 
 fn spawn_ally(standalone: &Standalone) -> u64 {
+    spawn_character(standalone, "holy-shock-test", "Ally", (1, 2))
+}
+
+fn spawn_character(
+    standalone: &Standalone,
+    package: &str,
+    name: &str,
+    (race, class): (u8, u8),
+) -> u64 {
     standalone.assert_call(
         "debug_create_package_character",
-        &[r#""holy-shock-test""#, r#""Ally""#, "1", "2"],
+        &[
+            &format!("\"{package}\""),
+            &format!("\"{name}\""),
+            &race.to_string(),
+            &class.to_string(),
+        ],
     );
-    let ally: u64 = standalone
-        .query_rows("SELECT guid FROM game_character WHERE name = 'Ally'")
+    let guid: u64 = standalone
+        .query_rows(&format!(
+            "SELECT guid FROM game_character WHERE name = '{name}'"
+        ))
         .remove(0)["guid"]
         .parse()
         .unwrap();
-    standalone.assert_call("debug_spawn_player_entity", &[&ally.to_string()]);
-    place_beside_caster(standalone, ally, SEPARATION_YD);
-    ally
+    standalone.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
+    place_beside_caster(standalone, guid, SEPARATION_YD);
+    guid
+}
+
+fn use_mana(standalone: &Standalone) {
+    let bytes: u32 = standalone
+        .query_rows(&format!(
+            "SELECT unit_bytes_0 FROM game_world_entity WHERE guid = {PLAYER}"
+        ))
+        .remove(0)["unit_bytes_0"]
+        .parse()
+        .expect("unit_bytes_0 is a number");
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_bytes_0 = {}, power = {MANA}, max_power = {MANA} \
+         WHERE guid = {PLAYER}",
+        bytes & 0x00FF_FFFF
+    ));
+}
+
+fn mana(standalone: &Standalone) -> u32 {
+    standalone.query_rows(&format!(
+        "SELECT power FROM game_world_entity WHERE guid = {PLAYER}"
+    ))[0]["power"]
+        .parse()
+        .expect("power is a number")
 }
 
 fn place_beside_caster(standalone: &Standalone, guid: u64, offset_x: f32) {

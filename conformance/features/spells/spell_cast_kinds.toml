@@ -1072,3 +1072,13 @@ rung = "unit"
 path = "importer/src/vmangos_spell.rs"
 function = "the_holy_shock_script_is_no_script_finding_and_another_script_on_its_spell_is"
 rung = "unit"
+
+[[tests]]
+path = "module/tests/holy_shock.rs"
+function = "an_unflagged_character_of_the_other_faction_behind_the_caster_refuses_holy_shock_and_spends_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/holy_shock.rs"
+function = "divine_favor_makes_the_damage_holy_shock_casts_crit_and_ends_with_it"
+rung = "durable_module"

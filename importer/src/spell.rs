@@ -1424,7 +1424,7 @@ fn resolve_effect_kind(
         } else {
             instant_effect_to_kind(effect_id)
         };
-        if k == E_SCRIPTED {
+        if k == E_SCRIPTED && spell_overrides::friend_or_foe_cast(s.id).is_none() {
             *cov.unmapped_effect.entry(effect_id).or_default() += 1;
         }
         (
@@ -4440,7 +4440,8 @@ mod tests {
         };
         dbc.spells = vec![holy_shock(20473), holy_shock(20929), holy_shock(20930)];
 
-        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let (rows, coverage, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        assert!(coverage.unmapped_effect.is_empty());
         for (spell_id, friend, foe) in [
             (20473, 25914, 25912),
             (20929, 25913, 25911),
@@ -4455,13 +4456,7 @@ mod tests {
                     effect.p0,
                     effect.p0_kind
                 ),
-                (
-                    E_CAST_FRIEND_OR_FOE,
-                    T_TARGET_ANY,
-                    friend,
-                    foe as i32,
-                    P_SPELL_ID
-                ),
+                (E_CAST_FRIEND_OR_FOE, T_TARGET_ANY, friend, foe, P_SPELL_ID),
                 "rank spell {spell_id}"
             );
         }
@@ -4478,8 +4473,9 @@ mod tests {
             ..Default::default()
         }];
 
-        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let (rows, coverage, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
         assert_eq!(first_effect(&rows, 20474).kind, E_SCRIPTED);
+        assert_eq!(coverage.unmapped_effect.get(&3), Some(&1));
     }
 
     #[test]

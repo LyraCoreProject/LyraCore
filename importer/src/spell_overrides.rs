@@ -216,7 +216,13 @@ pub struct FriendOrFoeCast {
     pub foe: u32,
 }
 
-/// `spell_paladin_holy_shock`: Holy Shock heals a friend and hurts an enemy.
+const FRIEND_OR_FOE_SCRIPT: &str = "spell_paladin_holy_shock";
+
+pub fn is_friend_or_foe_script(script_name: &str) -> bool {
+    script_name == FRIEND_OR_FOE_SCRIPT
+}
+
+/// Holy Shock heals a friend and hurts an enemy.
 const FRIEND_OR_FOE_CASTS: &[FriendOrFoeCast] = &[
     FriendOrFoeCast {
         spell: 20473,
