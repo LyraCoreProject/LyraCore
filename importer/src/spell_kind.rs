@@ -194,14 +194,9 @@ pub fn equip_aura_supported(aura: u32, misc: u32, equipment: [u32; 3]) -> bool {
     match AuraMod::from_int(aura).ok() {
         Some(ModSkill | ModSkillTalent) => misc > 0 && misc <= u16::MAX.into(),
         Some(ModStat) => misc <= 4 || misc == u32::MAX,
-        Some(
-            ModResistance
-            | ModDamageDone
-            | ModDamageTaken
-            | ModSpellCritChanceSchool
-            | ModPowerCostSchool
-            | ModPowerCostSchoolPct,
-        ) => misc != 0 && misc & !0x7f == 0,
+        Some(ModResistance | ModDamageDone | ModDamageTaken | ModSpellCritChanceSchool) => {
+            misc != 0 && misc & !0x7f == 0
+        }
         Some(ModCritPercent) => equipment[0] == u32::MAX,
         Some(ModPowerRegen) => misc == 0,
         Some(

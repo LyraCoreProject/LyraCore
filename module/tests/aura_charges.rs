@@ -4,6 +4,7 @@ use lyracore_package_delta::fixture_ids::{
     FIXTURE_BLADE, LINEN_BANDAGE_SPELL, TEST_POWER_WORD_SHIELD_SPELL, TEST_WOLF_ENTRY,
 };
 use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_protocol::codec::values_mask::parse_values_updates;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
     A_MOD_POWER_COST_FLAT, A_MOD_POWER_COST_PCT, A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE,
@@ -14,6 +15,9 @@ use lyracore_shared::spell::taxonomy::{
     SPEED_CAST, SPEED_MOVE, SPEED_SWING, SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_COST,
     SPELLMOD_OP_CRITICAL_CHANCE, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
+use lyracore_test_support::{NativePacket, ReducerConnection};
+use serde_json::json;
+use std::time::{Duration, Instant};
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
 const PLAYER: u64 = 1;
@@ -137,6 +141,10 @@ const SCHOOL_COST_FIXTURE: u32 = 5_091_152;
 const INSIGHT: u32 = 18820;
 const INSIGHT_COST: i32 = -500;
 const INSIGHT_SCHOOLS: u8 = 0x7E;
+// UNIT_FIELD_POWER_COST_MODIFIER is fields 173 to 179 by school; arcane is school 6.
+const ARCANE_POWER_COST_MODIFIER: u16 = 179;
+const SMSG_UPDATE_OBJECT: u16 = 0xA9;
+const PACKET_WAIT: Duration = Duration::from_secs(10);
 // Cold Blood 14177 and Divine Favor 20216: a flat +100% crit chance modifier with one charge.
 const CERTAIN_CRIT_PERCENT: i32 = 100;
 const DIVINE_FAVOR: u32 = 20216;
@@ -1390,22 +1398,7 @@ fn focus_is_kept_by_an_instant_spell_and_spent_by_one_with_a_cast_time() {
 fn insight_makes_one_costly_magic_spell_free_and_that_spell_spends_it() {
     let mut standalone = Standalone::start("aura-charges-insight");
     let wolf = stage(&mut standalone);
-    aura_spell(
-        &standalone,
-        Charged {
-            spell_id: INSIGHT,
-            school_mask: ARCANE,
-            target: T_SELF,
-            proc_flags: DEAL_HARMFUL_SPELL,
-            charges: 1,
-        },
-        &[(
-            A_MOD_POWER_COST_FLAT,
-            INSIGHT_COST,
-            i32::from(INSIGHT_SCHOOLS),
-            P_SCHOOL_MASK,
-        )],
-    );
+    insight(&standalone);
     bolt(&standalone, FIRE_BOLT, FIRE, 0);
     bolt(&standalone, COSTLY_BOLT, FIRE, 0);
     set_spell(&standalone, COSTLY_BOLT, &format!("cost = {BOLT_COST}"));
@@ -1428,6 +1421,35 @@ fn insight_makes_one_costly_magic_spell_free_and_that_spell_spends_it() {
     assert_eq!(charges(&standalone, PLAYER, INSIGHT), None);
     cast(&standalone, COSTLY_BOLT, wolf);
     assert_eq!(mana(&standalone), MANA - BOLT_COST);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn insight_sends_its_flat_cost_by_school_and_clears_it_when_spent() {
+    let mut standalone = Standalone::start("aura-charges-insight-fields");
+    let wolf = stage(&mut standalone);
+    let mut wire = standalone.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    wire.call("native_world_open", json!([42])).unwrap();
+    wire.call("debug_native_enter_world", json!([PLAYER]))
+        .unwrap();
+    insight(&standalone);
+    bolt(&standalone, COSTLY_BOLT, FIRE, 0);
+    set_spell(&standalone, COSTLY_BOLT, &format!("cost = {BOLT_COST}"));
+    use_mana(&standalone);
+    wire.drain_packets();
+
+    standalone.assert_call("debug_force_cast", &["1", &INSIGHT.to_string()]);
+    advance(&standalone);
+    assert!(
+        sends_power_cost_field(&mut wire, ARCANE_POWER_COST_MODIFIER, INSIGHT_COST as u32),
+        "vmangos Aura::HandleModPowerCost adds -500 to UNIT_FIELD_POWER_COST_MODIFIER + arcane"
+    );
+    cast(&standalone, COSTLY_BOLT, wolf);
+    assert_eq!(charges(&standalone, PLAYER, INSIGHT), None);
+    assert!(
+        sends_power_cost_field(&mut wire, ARCANE_POWER_COST_MODIFIER, 0),
+        "the spent Insight takes its -500 back off the field"
+    );
 }
 
 #[test]
@@ -2728,6 +2750,46 @@ fn item_stack(standalone: &Standalone, entry: u32) -> Option<u32> {
         ))
         .first()
         .map(|row| row["stack_count"].parse().unwrap())
+}
+
+fn insight(standalone: &Standalone) {
+    aura_spell(
+        standalone,
+        Charged {
+            spell_id: INSIGHT,
+            school_mask: ARCANE,
+            target: T_SELF,
+            proc_flags: DEAL_HARMFUL_SPELL,
+            charges: 1,
+        },
+        &[(
+            A_MOD_POWER_COST_FLAT,
+            INSIGHT_COST,
+            i32::from(INSIGHT_SCHOOLS),
+            P_SCHOOL_MASK,
+        )],
+    );
+}
+
+fn sends_power_cost_field(wire: &mut ReducerConnection, field: u16, value: u32) -> bool {
+    let carries = |packet: &NativePacket| {
+        packet.opcode == Some(SMSG_UPDATE_OBJECT)
+            && parse_values_updates(&packet.body)
+                .iter()
+                .any(|update| update.guid == PLAYER && update.fields.contains(&(field, value)))
+    };
+    let deadline = Instant::now() + PACKET_WAIT;
+    while Instant::now() < deadline {
+        if wire
+            .wait_for_packets(Duration::from_secs(1))
+            .unwrap()
+            .iter()
+            .any(carries)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn charges(standalone: &Standalone, carrier: u64, spell_id: u32) -> Option<u8> {

@@ -95,8 +95,8 @@ pub(crate) use self_resurrect::{
     clear_resurrect_request_and_option, do_self_resurrect, record_self_resurrect_option,
 };
 pub(crate) use spell_modifier::{
-    crit_chance_under, modified_crit_chance, rolls_modified_crit, spell_cost, spell_mod,
-    spell_modified_value, ModifiedCast, ModifierCharges,
+    crit_chance_under, modified_crit_chance, power_cost_fields, rolls_modified_crit, spell_cost,
+    spell_mod, spell_modified_value, ModifiedCast, ModifierCharges,
 };
 pub(crate) use spellbook::{
     apply_starting_passives, first_rank, forget_spell, knows_spell, learn_from_effect, learn_spell,

@@ -525,5 +525,25 @@ pub fn build_damage_bonus_values(guid: u64, values: &DamageBonusValues) -> (u16,
     build_values_update_raw(guid, &damage_bonus_mask(values))
 }
 
+/// The power cost fields by school; the client multiplies a cost by 1 + `multiplier`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PowerCostValues {
+    pub modifier: [i32; 7],
+    pub multiplier: [f32; 7],
+}
+
+pub fn power_cost_mask(values: &PowerCostValues) -> update_mask::UpdateMaskValues {
+    let mut mask = update_mask::UpdateMaskValues::new();
+    for school in 0..7u16 {
+        mask.set_u32(173 + school, values.modifier[school as usize] as u32);
+        mask.set_f32(180 + school, values.multiplier[school as usize]);
+    }
+    mask
+}
+
+pub fn build_power_cost_values(guid: u64, values: &PowerCostValues) -> (u16, Vec<u8>) {
+    build_values_update_raw(guid, &power_cost_mask(values))
+}
+
 #[cfg(test)]
 mod tests;

@@ -1531,6 +1531,39 @@ fn self_create_preserves_non_quest_fields_and_movement() {
 }
 
 #[test]
+fn a_self_create_carries_only_the_nonzero_power_cost_fields() {
+    let mut create =
+        build_create_object(&warrior_entity(), CreateKind::SelfPlayer, &[], &[]).unwrap();
+    let mut values = crate::codec::values::PowerCostValues::default();
+    values.modifier[6] = -500;
+    values.multiplier[2] = 1.0;
+    set_create_power_costs(&mut create, &values).unwrap();
+    let mask2 = match create.objects[0].clone() {
+        Object::CreateObject { mask2, .. } | Object::CreateObject2 { mask2, .. } => mask2,
+        _ => panic!("expected a CREATE"),
+    };
+    let packet = SMSG_UPDATE_OBJECT {
+        has_transport: 0,
+        objects: vec![Object::Values {
+            guid1: Guid::new(1),
+            mask1: mask2,
+        }],
+    };
+    let mut bytes = Vec::new();
+    packet.write_unencrypted_server(&mut bytes).unwrap();
+    let cost_fields: Vec<_> = crate::codec::values_mask::parse_values_updates(&bytes[4..])
+        .remove(0)
+        .fields
+        .into_iter()
+        .filter(|(index, _)| (173..187).contains(index))
+        .collect();
+    assert_eq!(
+        cost_fields,
+        [(179, (-500i32) as u32), (182, 1.0f32.to_bits())]
+    );
+}
+
+#[test]
 fn self_create_with_no_quests_matches_the_ordinary_create() {
     let entity = warrior_entity();
     assert_eq!(

@@ -228,10 +228,10 @@ symbol = "fire_ranged_shot"
 evidence = "Source reading, not measured. At d9173eca, Unit::ProcDamageAndSpell runs for an avoided ranged attack with PROC_EX_MISS or PROC_EX_DODGE; fire_ranged_shot schedules an impact only for damage, and ranged_impact returns before the pass when the shot's damage is zero."
 
 [[known_gaps]]
-description = "A school power cost Aura (aura types 72 and 73) changes what the Module charges, but the Module sends no UNIT_FIELD_POWER_COST_MODIFIER or UNIT_FIELD_POWER_COST_MULTIPLIER, so the client's tooltip and its own power check still use the unmodified cost."
-path = "module/src/native/aura.rs"
-symbol = "changed"
-evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleModPowerCost and Aura::HandleModPowerCostPCT write those per-school unit fields; no LyraCore codec writes fields 173 to 186."
+description = "Lucifron's Curse (19703) imports as a helpful spell (is_negative = false): spell_is_negative reads effects and aura types but not targets, and its one effect is an aura 72 on an enemy area. vmangos makes a spell with no positive target harmful."
+path = "importer/src/spell.rs"
+symbol = "spell_is_negative"
+evidence = "Source reading, not measured. At d9173eca, SpellEntry.cpp:1014 SpellEntry::IsPositiveEffect returns false when IsPositiveTarget fails; 19703 effect 0 has targets 22 and 15 (enemy area at the source location)."
 
 [[known_gaps]]
 description = "Tame Beast sends its SMSG_SPELL_START with the channel duration as a cast time, and sends its SMSG_SPELL_GO only when the channel completes. vmangos sends START, then the GO and MSG_CHANNEL_START when the channel begins."
@@ -462,6 +462,26 @@ rung = "durable_module"
 path = "module/tests/aura_charges.rs"
 function = "school_power_cost_auras_change_the_cost_of_a_spell_by_its_first_school"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "insight_sends_its_flat_cost_by_school_and_clears_it_when_spent"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/spell/spell_modifier.rs"
+function = "a_percent_cost_modifier_is_kept_when_a_school_flat_cost_leaves_a_zero_base"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/values/tests.rs"
+function = "power_cost_values_carry_a_signed_flat_cost_and_a_multiplier_offset_by_school"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/entity/tests.rs"
+function = "a_self_create_carries_only_the_nonzero_power_cost_fields"
+rung = "unit"
 
 [[tests]]
 path = "module/src/spell/spell_modifier.rs"

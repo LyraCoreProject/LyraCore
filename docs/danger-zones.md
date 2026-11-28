@@ -703,10 +703,10 @@ ranged shot with no imported Spell row never blocks.
 Reimport `spell`, then call `debug_repair_after_publish` before play resumes. Source auras 73
 (`SPELL_AURA_MOD_POWER_COST_SCHOOL`) and 72 (`SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT`) now import as
 `A_MOD_POWER_COST_FLAT` and `A_MOD_POWER_COST_PCT` with the school mask in `p0`, where they were
-`A_INERT`. Until the reimport, Insight, Burst of Knowledge, the school Focus talents, Spell Focus
-equipment, Lucifron's Curse and Spirit of Redemption leave spell costs unchanged, and a held
-Insight is never spent. Repair copies the kind and school mask to stored Auras, and equipment repair
-applies Spell Focus to worn Items. No table schema changes.
+`A_INERT`. Until the reimport, Insight, Burst of Knowledge, the school Focus talents, Lucifron's
+Curse and Spirit of Redemption leave spell costs unchanged, a held Insight is never spent, and the
+client's power cost fields stay at 0. Repair copies the kind and school mask to stored Auras. No
+table schema changes.
 
 ### Spell attributes migration
 

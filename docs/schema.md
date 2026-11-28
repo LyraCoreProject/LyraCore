@@ -1318,7 +1318,8 @@ mask covers it. When the cast resolves, after its effects, each Holder it used l
 and its last charge removes it. A refused or interrupted cast spends nothing. A queued strike
 spends its charges when its swing pays. The cast uses these rows:
 
-- A cost row, only when the cast pays a power cost.
+- A cost row, only when the cast pays a power cost. It reads the cost after the school flat
+  amount of [school power cost Auras](#school-power-cost-auras).
 - A cast-time row, only when it was on the caster when the cast began.
   `game_pending_cast.began_at_micros` holds that time for a timed cast.
 - No flat cast-time row when a −100% cast-time modifier made the cast instant. In 1.11, Nature's
@@ -1332,15 +1333,20 @@ spends its charges when its swing pays. The cast uses these rows:
 spell costs its caster in any power type. `eff_p0` is the source school mask. A spell reads only
 the rows whose mask holds the first school of its own mask, as vmangos `GetFirstSchoolInMask`, so
 a fire and frost spell uses its fire rows. vmangos `Spell::CalculatePowerCost` sets the order: the
-summed flat amounts add to the base cost, the cost spell modifiers apply to that sum, and the
-summed percent amounts then scale it in single precision, truncated and never below 0. A flat
-amount larger than the cost makes the spell free whatever the spell modifiers add.
+summed flat amounts add to the base cost, the cost spell modifiers apply to that signed sum, and
+the summed percent amounts then scale it in single precision, truncated and never below 0. A flat
+amount that takes the base below 0 leaves the spell free unless the spell modifiers add more than
+that deficit: a cost of 100 under Insight's -500 and a +500 modifier costs 100. A percent cost
+modifier skips a base of 0, and its charge stays.
 
 A charged row, as on Insight, is spent by the proc pass, not by the cost: vmangos
 `HandleModPowerCostSchoolAuraProc` counts a spell with a nonzero base cost whose mask meets the
-row's mask. Equipment applies both kinds; Spirit of Aquementas and Choker of Enlightenment carry
-Spell Focus. The client still shows the unmodified cost, because the Module sends neither per-school
-cost field.
+row's mask. Equipment does not apply these kinds; no Item at patch 10 has an equip spell with them.
+
+The Character's own CREATE and an Aura change send `UNIT_FIELD_POWER_COST_MODIFIER` (fields 173 to
+179, the flat total by school) and `UNIT_FIELD_POWER_COST_MULTIPLIER` (fields 180 to 186, the
+percent total by school divided by 100). The client multiplies a cost by 1 plus the multiplier, so
+both default to 0 and a CREATE carries only the nonzero fields.
 
 ### Spell travel
 
