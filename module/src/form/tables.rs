@@ -60,6 +60,12 @@ pub struct FormSpell {
     pub id: u64,
     pub form_id: u32,
     pub spell_id: u32,
+    /// Nonzero: the unit must know this spell or a later rank.
+    #[default(0u32)]
+    pub required_spell: u32,
+    /// Nonzero: the first effect takes the amount of the unit's Aura of this rank line.
+    #[default(0u32)]
+    pub amount_spell: u32,
 }
 
 crate::outside_table_catalog!(game_form, game_form_spell);

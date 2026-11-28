@@ -80,8 +80,9 @@ reagents and creature spell metadata. It keeps the existing effect translation a
 markers. SpellCastTimes, SpellRange, SpellDuration and SpellRadius remain separate client tables.
 The family also writes `game_form` and `game_form_spell` for the Forms that
 `lyracore_shared::form::FORM_FACTS` declares, from the client's SpellShapeshiftForm.dbc and those
-vmangos facts. It replaces only those Forms and the Form Set rows below the Package Form Range, so
-a Package Form survives the import. The Base Snapshot uses the same selected spell rows:
+vmangos facts, including the conditions on Leader of the Pack and Heart of the Wild. It replaces
+only those Forms and the Form Set rows below the Package Form Range, so a Package Form survives the
+import. The Base Snapshot uses the same selected spell rows:
 
 ```bash
 lyracore-importer --dump "$DUMP" --dbc "$CLIENT_DATA" \

@@ -117,8 +117,9 @@ const DRUID_PASSIVES: [(u32, &str, &[PassiveEffect]); 4] = {
     ]
 };
 
-/// Writes Forms 1, 5 and 8 with their form spells, as the `spell` import writes them, and passives
-/// that carry only their attack power and threat effects.
+/// Writes Forms 1, 5 and 8 with their form spells, as the `spell` import writes them, passives
+/// that carry only their attack power and threat effects, and Leader of the Pack and the Heart of
+/// the Wild effects.
 #[reducer]
 pub fn debug_seed_druid_forms(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -139,7 +140,76 @@ pub fn debug_seed_druid_forms(ctx: &ReducerContext) -> Result<(), String> {
         seed_form(ctx, fact, name, true, agility);
     }
     seed_passives(ctx, &DRUID_PASSIVES);
+    seed_talent_passives(ctx);
     Ok(())
+}
+
+// Build-5875 Spell.dbc values the `spell` import reads for Leader of the Pack 24932 and the Heart of
+// the Wild effects 24900 and 24899: `Stances`, attributes, and the one effect with its base points.
+const TALENT_PASSIVES: [(u32, &str, u32, u32, PassiveEffect); 3] = {
+    use lyracore_shared::spell::taxonomy::{
+        A_MOD_COMBAT, A_MOD_STAT_PCT, COMBAT_CRIT, P_COMBAT_PERCENT, P_STAT_ID, STAT_STA, STAT_STR,
+    };
+    [
+        (
+            24932,
+            "Leader of the Pack",
+            0x91,
+            0,
+            (A_MOD_COMBAT, 3, COMBAT_CRIT, P_COMBAT_PERCENT),
+        ),
+        (
+            24900,
+            "Heart of the Wild Cat Effect",
+            0x1,
+            0x190,
+            (A_MOD_STAT_PCT, 0, STAT_STR, P_STAT_ID),
+        ),
+        (
+            24899,
+            "Heart of the Wild Bear Effect",
+            0x90,
+            0x190,
+            (A_MOD_STAT_PCT, 0, STAT_STA, P_STAT_ID),
+        ),
+    ]
+};
+// Spell.dbc radius index 11 of Leader of the Pack's party Aura.
+const LEADER_OF_THE_PACK_RADIUS_YD: f32 = 45.0;
+
+fn seed_talent_passives(ctx: &ReducerContext) {
+    use lyracore_shared::spell::taxonomy::{CAST_FLAG_AREA_AURA, T_SELF};
+    for (spell_id, name, stances, attributes, (kind, base_points, p0, p0_kind)) in TALENT_PASSIVES {
+        let area = spell_id == 24932;
+        if ctx.db.game_spell().spell_id().find(spell_id).is_none() {
+            ctx.db.game_spell().insert(crate::Spell {
+                attributes,
+                cast_flags: if area { CAST_FLAG_AREA_AURA } else { 0 },
+                duration_ms: u32::MAX,
+                gcd_ms: 0,
+                school_mask: 1,
+                form_mask: stances,
+                ..crate::Spell::blank(spell_id, name)
+            });
+            crate::spell::write_dbc_form_set(ctx, spell_id, stances, 0);
+        }
+        upsert_effect(
+            ctx,
+            crate::SpellEffect {
+                kind,
+                base_points,
+                target: T_SELF,
+                radius_yd: if area {
+                    LEADER_OF_THE_PACK_RADIUS_YD
+                } else {
+                    0.0
+                },
+                p0: i32::from(p0),
+                p0_kind,
+                ..crate::SpellEffect::blank(spell_id, 0)
+            },
+        );
+    }
 }
 
 fn upsert_effect(ctx: &ReducerContext, effect: crate::SpellEffect) {
@@ -184,13 +254,15 @@ fn seed_form(
         horde_display_id: fact.horde_display_id,
         display_scale: fact.display_scale,
     });
-    for &spell_id in fact.passives {
-        let id = lyracore_package_delta::packed_form_spell_id(fact.form_id, spell_id);
+    for passive in fact.passives {
+        let id = lyracore_package_delta::packed_form_spell_id(fact.form_id, passive.spell_id);
         ctx.db.game_form_spell().id().delete(id);
         ctx.db.game_form_spell().insert(FormSpell {
             id,
             form_id: fact.form_id,
-            spell_id,
+            spell_id: passive.spell_id,
+            required_spell: passive.required_spell,
+            amount_spell: passive.amount_spell,
         });
     }
 }

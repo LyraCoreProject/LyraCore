@@ -41,7 +41,7 @@ pub struct FormFact {
     pub power_on_entry: PowerOnEntry,
     /// Zero is no class.
     pub default_for_class: u8,
-    pub passives: &'static [u32],
+    pub passives: &'static [FormPassive],
     /// The swing time of the Form's natural attacks; zero keeps the weapon combat profile.
     pub natural_attack_ms: u32,
     /// Entering and leaving the Form ends the unit's roots and snares.
@@ -57,6 +57,39 @@ pub struct FormFact {
     /// The scale the Form's model shows at.
     pub display_scale: f32,
 }
+
+/// A passive a Form brings, and the conditions on it. See docs/schema.md "Forms".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FormPassive {
+    pub spell_id: u32,
+    /// Nonzero: the unit must know this spell or a later rank.
+    pub required_spell: u32,
+    /// Nonzero: the first effect takes the amount of the unit's Aura of this rank line.
+    pub amount_spell: u32,
+}
+
+const fn passive(spell_id: u32) -> FormPassive {
+    FormPassive {
+        spell_id,
+        required_spell: 0,
+        amount_spell: 0,
+    }
+}
+
+// vmangos HandleShapeshiftBoosts: Leader of the Pack needs 17007, Heart of the Wild 17003's amount.
+const LEADER_OF_THE_PACK: FormPassive = FormPassive {
+    required_spell: 17007,
+    ..passive(24932)
+};
+const HEART_OF_THE_WILD_RANK_1: u32 = 17003;
+const HEART_OF_THE_WILD_CAT: FormPassive = FormPassive {
+    amount_spell: HEART_OF_THE_WILD_RANK_1,
+    ..passive(24900)
+};
+const HEART_OF_THE_WILD_BEAR: FormPassive = FormPassive {
+    amount_spell: HEART_OF_THE_WILD_RANK_1,
+    ..passive(24899)
+};
 
 const STANCE: FormFact = FormFact {
     form_id: 0,
@@ -108,7 +141,7 @@ pub const FORM_FACTS: &[FormFact] = &[
         spell_id: 768,
         power_type: ENERGY,
         power_on_entry: PowerOnEntry::Zero,
-        passives: &[3025],
+        passives: &[passive(3025), LEADER_OF_THE_PACK, HEART_OF_THE_WILD_CAT],
         natural_attack_ms: 1000,
         entry_chance_spell: FUROR_ENERGY,
         alliance_display_id: 892,
@@ -119,7 +152,12 @@ pub const FORM_FACTS: &[FormFact] = &[
     FormFact {
         form_id: 5,
         spell_id: 5487,
-        passives: &[1178, 21178],
+        passives: &[
+            passive(1178),
+            passive(21178),
+            LEADER_OF_THE_PACK,
+            HEART_OF_THE_WILD_BEAR,
+        ],
         natural_attack_ms: 2500,
         alliance_display_id: 2281,
         horde_display_id: 2289,
@@ -128,7 +166,12 @@ pub const FORM_FACTS: &[FormFact] = &[
     FormFact {
         form_id: 8,
         spell_id: 9634,
-        passives: &[9635, 21178],
+        passives: &[
+            passive(9635),
+            passive(21178),
+            LEADER_OF_THE_PACK,
+            HEART_OF_THE_WILD_BEAR,
+        ],
         natural_attack_ms: 2500,
         alliance_display_id: 2281,
         horde_display_id: 2289,
@@ -138,25 +181,25 @@ pub const FORM_FACTS: &[FormFact] = &[
         form_id: 17,
         spell_id: 2457,
         default_for_class: CLASS_WARRIOR,
-        passives: &[21156],
+        passives: &[passive(21156)],
         ..STANCE
     },
     FormFact {
         form_id: 18,
         spell_id: 71,
-        passives: &[7376],
+        passives: &[passive(7376)],
         ..STANCE
     },
     FormFact {
         form_id: 19,
         spell_id: 2458,
-        passives: &[7381],
+        passives: &[passive(7381)],
         ..STANCE
     },
     FormFact {
         form_id: 3,
         spell_id: 783,
-        passives: &[5419],
+        passives: &[passive(5419)],
         alliance_display_id: 632,
         horde_display_id: 632,
         display_scale: 0.8,
@@ -165,7 +208,7 @@ pub const FORM_FACTS: &[FormFact] = &[
     FormFact {
         form_id: 4,
         spell_id: 1066,
-        passives: &[5421],
+        passives: &[passive(5421)],
         alliance_display_id: 2428,
         horde_display_id: 2428,
         display_scale: 0.8,
@@ -174,7 +217,7 @@ pub const FORM_FACTS: &[FormFact] = &[
     FormFact {
         form_id: 31,
         spell_id: 24858,
-        passives: &[24905],
+        passives: &[passive(24905)],
         alliance_display_id: 15374,
         horde_display_id: 15375,
         ..DRUID_OWN_POOL

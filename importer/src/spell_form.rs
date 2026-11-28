@@ -1,7 +1,7 @@
 //! Forms: client SpellShapeshiftForm.dbc rows composed with the vmangos facts the DBC lacks.
 
 use lyracore_package_delta::packed_form_spell_id;
-use lyracore_shared::form::{DBC_MASK_FORMS, FORM_FACTS};
+use lyracore_shared::form::{FormPassive, DBC_MASK_FORMS, FORM_FACTS};
 
 use crate::dump::{push_insert, sql_str};
 
@@ -140,7 +140,7 @@ impl FormRow {
 #[derive(Default)]
 pub(crate) struct FormRows {
     pub(crate) forms: Vec<FormRow>,
-    pub(crate) passives: Vec<(u32, u32)>,
+    pub(crate) passives: Vec<(u32, FormPassive)>,
 }
 
 /// Composes each declared Form the client's SpellShapeshiftForm.dbc defines.
@@ -174,7 +174,7 @@ pub(crate) fn form_rows(dbc: &[ShapeshiftFormEntry]) -> FormRows {
             display_scale: fact.display_scale,
         });
         rows.passives
-            .extend(fact.passives.iter().map(|&spell| (fact.form_id, spell)));
+            .extend(fact.passives.iter().map(|&passive| (fact.form_id, passive)));
     }
     rows
 }
@@ -199,11 +199,19 @@ pub(crate) fn push_form_sql(stmts: &mut Vec<String>, rows: &FormRows) {
     push_insert(
         stmts,
         "game_form_spell",
-        "id,form_id,spell_id",
+        "id,form_id,spell_id,required_spell,amount_spell",
         &rows
             .passives
             .iter()
-            .map(|&(form, spell)| format!("({},{form},{spell})", packed_form_spell_id(form, spell)))
+            .map(|&(form, passive)| {
+                format!(
+                    "({},{form},{},{},{})",
+                    packed_form_spell_id(form, passive.spell_id),
+                    passive.spell_id,
+                    passive.required_spell,
+                    passive.amount_spell
+                )
+            })
             .collect::<Vec<_>>(),
     );
 }
@@ -259,6 +267,12 @@ mod tests {
         }
     }
 
+    fn has_passive(rows: &FormRows, (form_id, spell_id): (u32, u32)) -> bool {
+        rows.passives
+            .iter()
+            .any(|&(form, passive)| (form, passive.spell_id) == (form_id, spell_id))
+    }
+
     fn rows_for(rows: &FormRows, forms: &[u32]) -> Vec<FormRow> {
         forms
             .iter()
@@ -279,7 +293,7 @@ mod tests {
             ]
         );
         for passive in [(17, 21156), (18, 7376), (19, 7381)] {
-            assert!(rows.passives.contains(&passive));
+            assert!(has_passive(&rows, passive), "{passive:?}");
         }
     }
 
@@ -343,7 +357,7 @@ mod tests {
             ]
         );
         for passive in [(1, 3025), (5, 1178), (5, 21178), (8, 9635), (8, 21178)] {
-            assert!(rows.passives.contains(&passive), "{passive:?}");
+            assert!(has_passive(&rows, passive), "{passive:?}");
         }
     }
 
@@ -395,7 +409,7 @@ mod tests {
             ]
         );
         for passive in [(3, 5419), (4, 5421), (31, 24905)] {
-            assert!(rows.passives.contains(&passive), "{passive:?}");
+            assert!(has_passive(&rows, passive), "{passive:?}");
         }
         assert!(!rows
             .passives
@@ -414,6 +428,36 @@ mod tests {
             (form_entry_chance_mask(17057), form_entry_chance_ex2(17057)),
             (0, 0)
         );
+    }
+
+    #[test]
+    fn the_feral_forms_bring_leader_of_the_pack_and_heart_of_the_wild_on_their_talents() {
+        let rows = form_rows(&build_5875_rows());
+        let conditional = |form_id: u32| -> Vec<(u32, u32, u32)> {
+            rows.passives
+                .iter()
+                .filter(|&&(form, passive)| {
+                    form == form_id && (passive.required_spell != 0 || passive.amount_spell != 0)
+                })
+                .map(|(_, passive)| {
+                    (
+                        passive.spell_id,
+                        passive.required_spell,
+                        passive.amount_spell,
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(conditional(1), vec![(24932, 17007, 0), (24900, 0, 17003)]);
+        for bear in [5, 8] {
+            assert_eq!(
+                conditional(bear),
+                vec![(24932, 17007, 0), (24899, 0, 17003)]
+            );
+        }
+        for other in [3, 4, 16, 17, 18, 19, 28, 30, 31] {
+            assert!(conditional(other).is_empty(), "Form {other}");
+        }
     }
 
     #[test]
@@ -458,7 +502,7 @@ mod tests {
                 "DELETE FROM game_form WHERE form_id = 17".to_string(),
                 "DELETE FROM game_form_spell WHERE form_id = 17".to_string(),
                 "INSERT INTO game_form (form_id,name,spell_id,acts_as_shapeshifted,power_type,power_on_entry,default_for_class,client_form,natural_attack_ms,attack_power_from_agility,clears_snares,entry_chance_spell,blocks_mounting,alliance_display_id,horde_display_id,display_scale) VALUES (17,'Battle Stance',2457,false,1,2,1,17,0,false,false,0,false,0,0,1.0)".to_string(),
-                format!("INSERT INTO game_form_spell (id,form_id,spell_id) VALUES ({},17,21156)", (17u64 << 32) | 21156),
+                format!("INSERT INTO game_form_spell (id,form_id,spell_id,required_spell,amount_spell) VALUES ({},17,21156,0,0)", (17u64 << 32) | 21156),
             ]
         );
         let mut empty = Vec::new();

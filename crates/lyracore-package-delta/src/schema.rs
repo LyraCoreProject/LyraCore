@@ -320,7 +320,7 @@ impl Table {
             Self::CreatureAiSummon => CREATURE_AI_SUMMON_COLUMNS,
             Self::QuestEventRequirement => QUEST_EVENT_REQUIREMENT_COLUMNS,
             Self::Form => FORM_COLUMNS,
-            Self::FormSpell => &[],
+            Self::FormSpell => FORM_SPELL_COLUMNS,
             Self::SpellForm => SPELL_FORM_COLUMNS,
             Self::SpellFollowUp => SPELL_FOLLOW_UP_COLUMNS,
         }
@@ -368,6 +368,7 @@ impl Table {
                         | "horde_display_id"
                         | "display_scale"
                 )
+                | (Self::FormSpell, "required_spell" | "amount_spell")
                 | (Self::Item, "damage_school")
                 | (
                     Self::Quest,
@@ -905,6 +906,11 @@ const FORM_COLUMNS: &[Column] = &[
     column("alliance_display_id", FieldType::U32),
     column("horde_display_id", FieldType::U32),
     column("display_scale", FieldType::F32),
+];
+
+const FORM_SPELL_COLUMNS: &[Column] = &[
+    column("required_spell", FieldType::U32),
+    column("amount_spell", FieldType::U32),
 ];
 
 const SPELL_FORM_COLUMNS: &[Column] = &[column("excluded", FieldType::Bool)];

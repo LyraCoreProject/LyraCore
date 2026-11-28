@@ -3979,12 +3979,12 @@ mod tests {
                      entry_chance_spell INTEGER, blocks_mounting BOOLEAN,
                      alliance_display_id INTEGER, horde_display_id INTEGER, display_scale REAL);
                  CREATE TABLE game_form_spell (id INTEGER PRIMARY KEY, form_id INTEGER,
-                     spell_id INTEGER);
+                     spell_id INTEGER, required_spell INTEGER, amount_spell INTEGER);
                  CREATE TABLE game_spell_form (id INTEGER PRIMARY KEY, spell_id INTEGER,
                      form_id INTEGER, excluded BOOLEAN);
                  INSERT INTO game_form VALUES (17,'Old Battle Stance',2457,true,1,0,1,17,0,false,false,0,false,0,0,1.0),
                      ({PACKAGE_FORM},'Kindled Aspect',{PACKAGE_SPELL},true,1,1,0,5,0,false,false,0,false,0,0,1.0);
-                 INSERT INTO game_form_spell VALUES ({},{PACKAGE_FORM},{PACKAGE_SPELL});
+                 INSERT INTO game_form_spell VALUES ({},{PACKAGE_FORM},{PACKAGE_SPELL},0,0);
                  INSERT INTO game_spell_form VALUES ({},78,18,false),({},78,40,false),
                      ({},78,{PACKAGE_FORM},false),({},{PACKAGE_SPELL},{PACKAGE_FORM},true);",
                 packed_form_spell_id(PACKAGE_FORM, PACKAGE_SPELL),

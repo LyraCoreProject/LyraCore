@@ -156,14 +156,30 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                     .spell_id()
                     .find(spell_id)
                     .ok_or_else(|| missing_reference(row, "spell", spell_id))?;
-                if spell.attributes & SPELL_ATTR_PASSIVE == 0
-                    || shapeshifts(spell_id).next().is_some()
-                {
+                let passive = ctx
+                    .db
+                    .game_form_spell()
+                    .id()
+                    .find(row.row_id())
+                    .ok_or_else(|| {
+                        format!("`game_form_spell` row {} vanished mid-apply", row.key())
+                    })?;
+                let conditioned = passive.required_spell != 0 || passive.amount_spell != 0;
+                let permanent = matches!(spell.duration_ms, 0 | u32::MAX);
+                let held_for_the_form =
+                    spell.attributes & SPELL_ATTR_PASSIVE != 0 || (conditioned && permanent);
+                if !held_for_the_form || shapeshifts(spell_id).next().is_some() {
                     return Err(format!(
-                        "`game_form_spell` row {} names spell {spell_id}, which is not a passive \
-                         spell or which shapeshifts",
+                        "`game_form_spell` row {} names spell {spell_id}, which shapeshifts, or \
+                         which is not a passive spell and not a permanent spell of a passive \
+                         with a condition",
                         row.key()
                     ));
+                }
+                for condition in [passive.required_spell, passive.amount_spell] {
+                    if condition != 0 && spells.spell_id().find(condition).is_none() {
+                        return Err(missing_reference(row, "spell", condition));
+                    }
                 }
                 (form_id, spell_id)
             }
@@ -405,21 +421,36 @@ fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
             forms.form_id().update(form);
         }
         (ClaimTable::FormSpell, Operation::Insert) => {
+            check_insert_is_whole(row)?;
             let PrimaryKey::FormSpell { form_id, spell_id } = row.key() else {
                 unreachable!("a `game_form_spell` row carries a `game_form_spell` key")
             };
+            let mut passive = FormSpell {
+                id: row.row_id(),
+                form_id,
+                spell_id,
+                required_spell: 0,
+                amount_spell: 0,
+            };
+            for (field, claimed) in row.fields() {
+                apply_form_spell_field(&mut passive, field, &claimed.value)?;
+            }
             ctx.db
                 .game_form_spell()
-                .try_insert(FormSpell {
-                    id: row.row_id(),
-                    form_id,
-                    spell_id,
-                })
+                .try_insert(passive)
                 .map_err(|e| format!("`game_form_spell` row {} did not insert: {e}", row.key()))?;
         }
-        (ClaimTable::FormSpell, Operation::Update) => unreachable!(
-            "`Claim::new` refuses an update that claims no column, and `game_form_spell` has none"
-        ),
+        (ClaimTable::FormSpell, Operation::Update) => {
+            let passives = ctx.db.game_form_spell();
+            let mut passive = passives
+                .id()
+                .find(row.row_id())
+                .ok_or_else(|| format!("`game_form_spell` row {} vanished mid-apply", row.key()))?;
+            for (field, claimed) in row.fields() {
+                apply_form_spell_field(&mut passive, field, &claimed.value)?;
+            }
+            passives.id().update(passive);
+        }
         (ClaimTable::SpellForm, Operation::Insert) => {
             check_insert_is_whole(row)?;
             let PrimaryKey::SpellForm { spell_id, form_id } = row.key() else {
@@ -658,6 +689,19 @@ fn apply_form_field(form: &mut Form, field: &str, value: &FieldValue) -> Result<
     Ok(())
 }
 
+fn apply_form_spell_field(
+    passive: &mut FormSpell,
+    field: &str,
+    value: &FieldValue,
+) -> Result<(), String> {
+    match field {
+        "required_spell" => passive.required_spell = as_u32(field, value)?,
+        "amount_spell" => passive.amount_spell = as_u32(field, value)?,
+        other => return Err(no_such_column("game_form_spell", other)),
+    }
+    Ok(())
+}
+
 fn apply_spell_form_field(
     form_set: &mut SpellForm,
     field: &str,
@@ -763,6 +807,21 @@ mod tests {
             ClaimTable::SpellFollowUp,
             || blank_spell_follow_up(PACKAGE_SPELL),
             apply_spell_follow_up_field,
+        );
+    }
+
+    #[test]
+    fn every_claimable_form_passive_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::FormSpell,
+            || FormSpell {
+                id: lyracore_package_delta::packed_form_spell_id(PACKAGE_FORM, REAL_SPELL),
+                form_id: PACKAGE_FORM,
+                spell_id: REAL_SPELL,
+                required_spell: 0,
+                amount_spell: 0,
+            },
+            apply_form_spell_field,
         );
     }
 
