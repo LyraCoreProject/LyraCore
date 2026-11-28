@@ -287,6 +287,7 @@ pub(crate) fn restore_sessionless_body(
         entity.player_flags = player_flags;
         entity.unit_bytes_1 = unit_bytes_1;
     }
+    crate::pvp::enter_world(ctx, &character, &mut entity, false);
     let entity = entity.insert(ctx);
     ctx.db.game_creature_spline().guid().delete(character_guid);
     Some(entity)

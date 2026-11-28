@@ -33,6 +33,7 @@ const ORC: &str = "2";
 const CMSG_TOGGLE_PVP: u32 = 0x253;
 const CMSG_CAST_SPELL_OPCODE: u32 = 0x12e;
 const CMSG_ATTACKSWING: u32 = 0x141;
+const MSG_MOVE_WORLDPORT_ACK: u32 = 0xdc;
 // 1.12.1 SpellCastResult values from vmangos SpellDefines.h.
 const NO_DUELING: u8 = 0x47;
 const TARGET_DUELING: u8 = 0x68;
@@ -318,6 +319,83 @@ fn toggling_pvp_flags_at_once_and_the_flag_drops_five_minutes_after_desire_clear
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_pvp_flag_and_pvp_desired_survive_logout_and_login_restarts_the_countdown() {
+    let (shard, account) = realm("pvp-relog");
+    shard.clear_schedule("game_creature_move_schedule");
+    let guid = character(&shard, &account, "Relogger", HUMAN);
+    let mut connection = enter(&shard, guid);
+    let (unit_flags_before, player_flags_before) = flags(&shard, guid);
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    let desired = (
+        unit_flags_before | unit_flags::PVP,
+        player_flags_before | player_flags::PVP_DESIRED,
+    );
+
+    toggle(&mut connection, &[]);
+    let mut connection = relog(&shard, connection, guid);
+    assert_eq!(
+        flags(&shard, guid),
+        desired,
+        "vmangos Player::LoadFromDB restores CHARACTER_FLAG_PVP_ENABLED and _DESIRED"
+    );
+
+    toggle(&mut connection, &[0]);
+    advance(&shard, PVP_FLAG_TICKS / 2);
+    let _connection = relog(&shard, connection, guid);
+    let flagged = (desired.0, player_flags_before);
+    assert_eq!(flags(&shard, guid), flagged);
+    advance(&shard, PVP_FLAG_TICKS - 1);
+    assert_eq!(
+        flags(&shard, guid),
+        flagged,
+        "vmangos UpdatePvP(true) at load restarts the 300 s countdown"
+    );
+    advance(&shard, 1);
+    assert_eq!(
+        flags(&shard, guid),
+        (unit_flags_before, player_flags_before)
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_far_teleport_on_one_shard_keeps_the_running_countdown() {
+    let (shard, account) = realm("pvp-far-teleport");
+    shard.clear_schedule("game_creature_move_schedule");
+    let guid = character(&shard, &account, "Traveller", HUMAN);
+    let mut connection = enter(&shard, guid);
+    let (unit_flags_before, player_flags_before) = flags(&shard, guid);
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    toggle(&mut connection, &[]);
+    toggle(&mut connection, &[0]);
+    advance(&shard, PVP_FLAG_TICKS / 2);
+    let countdown = timer(&shard, guid);
+
+    shard.assert_call(
+        "debug_teleport",
+        &[&guid.to_string(), "1", "300.0", "300.0", "30.0", "0.0"],
+    );
+    connection
+        .call("native_world_receive", json!([MSG_MOVE_WORLDPORT_ACK, []]))
+        .unwrap();
+    let flagged = (unit_flags_before | unit_flags::PVP, player_flags_before);
+    assert_eq!(flags(&shard, guid), flagged);
+    assert_eq!(
+        timer(&shard, guid),
+        countdown,
+        "vmangos Player::TeleportTo keeps the Player and its countdown"
+    );
+    advance(&shard, PVP_FLAG_TICKS - PVP_FLAG_TICKS / 2 - 1);
+    assert_eq!(flags(&shard, guid), flagged);
+    advance(&shard, 1);
+    assert_eq!(
+        flags(&shard, guid),
+        (unit_flags_before, player_flags_before)
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_duel_challenge_refuses_with_the_vmangos_cast_result() {
     let (shard, account) = realm("duel-challenge");
     shard.clear_schedule("game_duel_schedule");
@@ -477,6 +555,20 @@ fn enter(shard: &Standalone, guid: u64) -> ReducerConnection {
         .call("debug_native_enter_world", json!([guid]))
         .unwrap();
     connection
+}
+
+/// Closes the World Session, which logs the Character out, and enters the world again.
+fn relog(shard: &Standalone, connection: ReducerConnection, guid: u64) -> ReducerConnection {
+    drop(connection);
+    assert!(
+        poll_until(POLL_TIMEOUT, || shard
+            .query_rows(&format!(
+                "SELECT guid FROM game_world_entity WHERE guid = {guid}"
+            ))
+            .is_empty()),
+        "the closed World Session logs the Character out"
+    );
+    enter(shard, guid)
 }
 
 /// Stormwind City (area 1519, an Alliance capital) under the terrain cell holding `x`, `y`.

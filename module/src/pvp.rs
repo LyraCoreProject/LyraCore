@@ -2,7 +2,7 @@ use lyracore_shared::constants::{player_flags, realm_type, unit_flags};
 use lyracore_shared::faction;
 use spacetimedb::{table, ReducerContext, ScheduleAt, Table, Timestamp};
 
-use crate::{game_area, game_realm, game_world_entity, GameArea, WorldEntity};
+use crate::{game_area, game_realm, game_world_entity, Character, GameArea, WorldEntity};
 
 // vmangos Player::UpdatePvP restarts the countdown at 300 000 ms.
 const PVP_FLAG_MS: u64 = 300_000;
@@ -32,7 +32,7 @@ crate::outside_table_catalog!(game_pvp_flag_timer);
 crate::character_owned!(delete, fn sweep_delete_game_pvp_flag_timer(ctx, character_guid) {
     ctx.db.game_pvp_flag_timer().character_guid().delete(character_guid);
 });
-// Transfer rebuilds the Character's entity without its PvP Flag.
+// The destination starts a fresh countdown for the PvP Flag the Character row carries.
 crate::character_owned!(not_transported, fn sweep_transfer_game_pvp_flag_timer());
 
 /// What holds a PvP Flag past its countdown, besides `PVP_DESIRED`.
@@ -138,10 +138,50 @@ pub(crate) fn update_zone(
     enforced
 }
 
-/// Runs the zone check for a Character entering the world, before viewers build its CREATE.
-pub(crate) fn enter_world(ctx: &ReducerContext, character: &mut WorldEntity) {
+/// Restores the saved PvP Flag and `PVP_DESIRED`, then runs the zone check, before viewers build
+/// the CREATE. A WorldPort keeps the countdown that outlived the entity on this Shard, as vmangos
+/// `TeleportTo` keeps the Player; one from another Shard finds none. Any other entry starts a fresh
+/// countdown, as vmangos `Player::LoadFromDB` calls `UpdatePvP(true)`.
+pub(crate) fn enter_world(
+    ctx: &ReducerContext,
+    saved: &Character,
+    character: &mut WorldEntity,
+    world_port: bool,
+) {
+    let timers = ctx.db.game_pvp_flag_timer();
+    if !world_port {
+        timers.character_guid().delete(character.guid);
+    }
+    if saved.pvp_desired {
+        character.player_flags |= player_flags::PVP_DESIRED;
+    }
+    if saved.pvp_flagged {
+        character.unit_flags |= unit_flags::PVP;
+        if timers.character_guid().find(character.guid).is_none() {
+            arm(ctx, character, Hold::default());
+        }
+    }
     let zone = zone_at(ctx, character);
     update_zone(ctx, character, zone.as_ref());
+}
+
+/// vmangos `Player::UpdateCharacterFlags`: the Character row keeps the PvP Flag and `PVP_DESIRED`.
+pub(crate) fn save(character: &WorldEntity, saved: &mut Character) {
+    saved.pvp_flagged = is_flagged(character);
+    saved.pvp_desired = character.player_flags & player_flags::PVP_DESIRED != 0;
+}
+
+/// vmangos `Player::ActivateTaxiPathTo` calls `UpdatePvP(false, true)`: take-off drops the PvP Flag
+/// and its countdown unless the Character wants PvP. The caller saves `character`.
+pub(crate) fn take_off(ctx: &ReducerContext, character: &mut WorldEntity) {
+    if character.player_flags & player_flags::PVP_DESIRED != 0 {
+        return;
+    }
+    character.unit_flags &= !unit_flags::PVP;
+    ctx.db
+        .game_pvp_flag_timer()
+        .character_guid()
+        .delete(character.guid);
 }
 
 /// Runs the zone check where a near teleport left the Character; movement's own check skips it.
@@ -155,12 +195,6 @@ pub(crate) fn recheck_zone(ctx: &ReducerContext, character_guid: u64) {
     if character.unit_flags != unit_flags {
         character.update(ctx);
     }
-}
-
-/// A map change keeps the PvP Flag and `PVP_DESIRED` of the replaced entity; its timer row stays.
-pub(crate) fn keep_across_map_change(replaced: &WorldEntity, character: &mut WorldEntity) {
-    character.unit_flags |= replaced.unit_flags & unit_flags::PVP;
-    character.player_flags |= replaced.player_flags & player_flags::PVP_DESIRED;
 }
 
 fn zone_at(ctx: &ReducerContext, character: &WorldEntity) -> Option<GameArea> {

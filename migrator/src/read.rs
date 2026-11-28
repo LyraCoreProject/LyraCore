@@ -165,6 +165,8 @@ pub(crate) struct LegacyCharacter {
     pub(crate) logout_resting: bool,
     pub(crate) locked_for_transfer: bool,
     pub(crate) hide_equipment_flags: u32,
+    pub(crate) pvp_flagged: bool,
+    pub(crate) pvp_desired: bool,
     pub(crate) rest_bonus: f64,
     pub(crate) bank_bag_slots: u8,
     pub(crate) watched_faction: i64,
@@ -206,9 +208,21 @@ enum CharacterFlags {
 // vmangos CHARACTER_FLAG_* bits.
 const CHARACTER_FLAG_RESTING: i64 = 0x2;
 const CHARACTER_FLAG_LOCKED_FOR_TRANSFER: i64 = 0x4;
+const CHARACTER_FLAG_PVP_ENABLED: i64 = 0x40;
 const CHARACTER_FLAG_HIDE_HELM: i64 = 0x400;
 const CHARACTER_FLAG_HIDE_CLOAK: i64 = 0x800;
+const CHARACTER_FLAG_PVP_DESIRED: i64 = 0x1_0000;
 const CHARACTER_FLAG_DELETED_BY_TRANSFER: i64 = 0x4_0000;
+
+/// The saved state a source keeps in its Character flags.
+#[derive(Default)]
+struct SavedFlags {
+    logout_resting: bool,
+    locked_for_transfer: bool,
+    hide_equipment_flags: u32,
+    pvp_flagged: bool,
+    pvp_desired: bool,
+}
 
 pub(crate) struct Dialect {
     appearance: Appearance,
@@ -332,18 +346,25 @@ impl CharacterFlags {
         }
     }
 
-    // Returns whether the Character logged out resting, whether a transfer locked it and which of
-    // the hidden helm and cloak bits it kept. cmangos stores no hidden helm or cloak here.
-    fn read(&self, row: &Row) -> Result<(bool, bool, u32)> {
+    // cmangos stores only the logout rest state here.
+    fn read(&self, row: &Row) -> Result<SavedFlags> {
         let value = row.int(self.column())?;
         Ok(match self {
-            Self::LogoutResting => (value != 0, false, 0),
-            Self::CharacterFlags => (
-                value & CHARACTER_FLAG_RESTING != 0,
-                value & (CHARACTER_FLAG_LOCKED_FOR_TRANSFER | CHARACTER_FLAG_DELETED_BY_TRANSFER)
+            Self::LogoutResting => SavedFlags {
+                logout_resting: value != 0,
+                ..SavedFlags::default()
+            },
+            Self::CharacterFlags => SavedFlags {
+                logout_resting: value & CHARACTER_FLAG_RESTING != 0,
+                locked_for_transfer: value
+                    & (CHARACTER_FLAG_LOCKED_FOR_TRANSFER | CHARACTER_FLAG_DELETED_BY_TRANSFER)
                     != 0,
-                (value & (CHARACTER_FLAG_HIDE_HELM | CHARACTER_FLAG_HIDE_CLOAK)) as u32,
-            ),
+                hide_equipment_flags: (value
+                    & (CHARACTER_FLAG_HIDE_HELM | CHARACTER_FLAG_HIDE_CLOAK))
+                    as u32,
+                pvp_flagged: value & CHARACTER_FLAG_PVP_ENABLED != 0,
+                pvp_desired: value & CHARACTER_FLAG_PVP_DESIRED != 0,
+            },
         })
     }
 }
@@ -810,8 +831,7 @@ fn read_character(
             })
         })
         .transpose()?;
-    let (logout_resting, locked_for_transfer, hide_equipment_flags) =
-        dialect.character_flags.read(row)?;
+    let saved_flags = dialect.character_flags.read(row)?;
     let (items, orphan_items) = read_items(database, dialect, guid)?;
     Ok(LegacyCharacter {
         guid,
@@ -840,9 +860,11 @@ fn read_character(
         online: row.int("online")? != 0,
         played_total_secs: row.number(dialect.played_total)?,
         logout_secs: row.number("logout_time")?,
-        logout_resting,
-        locked_for_transfer,
-        hide_equipment_flags,
+        logout_resting: saved_flags.logout_resting,
+        locked_for_transfer: saved_flags.locked_for_transfer,
+        hide_equipment_flags: saved_flags.hide_equipment_flags,
+        pvp_flagged: saved_flags.pvp_flagged,
+        pvp_desired: saved_flags.pvp_desired,
         rest_bonus: row.float("rest_bonus")?,
         bank_bag_slots,
         watched_faction: row.int(dialect.watched_faction)?,
@@ -1283,6 +1305,27 @@ pub(crate) mod tests {
             .map(|character| character.hide_equipment_flags)
             .collect();
         assert_eq!(flags, [0x400, 0x800, 0]);
+    }
+
+    #[test]
+    fn vmangos_pvp_flag_and_pvp_desired_come_from_character_flags() {
+        let mut database = source(SourceKind::Vmangos);
+        for (guid, flags) in [(10, 0x40), (11, 0x40 | 0x1_0000), (12, 0x200 | 0x2_0000)] {
+            database.row(
+                "characters",
+                &[
+                    ("guid", Value::Int(guid)),
+                    ("account", Value::Int(1)),
+                    ("character_flags", Value::Int(flags)),
+                ],
+            );
+        }
+        let flags: Vec<_> = read_characters(&mut database, Dialect::of(SourceKind::Vmangos), &[1])
+            .unwrap()
+            .iter()
+            .map(|character| (character.pvp_flagged, character.pvp_desired))
+            .collect();
+        assert_eq!(flags, [(true, false), (true, true), (false, false)]);
     }
 
     #[test]

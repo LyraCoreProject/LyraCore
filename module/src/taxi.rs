@@ -1556,6 +1556,7 @@ pub(crate) fn activate_route(
         ctx.db.game_active_taxi_flight().insert(flight);
         crate::native::motion_permit::refresh_character(ctx, character_guid);
         player.money = player_state.money;
+        crate::pvp::take_off(ctx, &mut player);
         player.update(ctx);
         Ok(())
     })();

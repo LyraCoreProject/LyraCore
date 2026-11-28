@@ -224,6 +224,8 @@ fn migration(catalogue: &Catalogue, source_guid: u64, name: &str) -> Value {
         "taxi_nodes": [TAXI_CLIENT_NODE],
         "hunter_pet": {"none": []},
         "hide_equipment_flags": 0x400,
+        "pvp_flagged": true,
+        "pvp_desired": false,
     })
 }
 
@@ -267,6 +269,14 @@ fn a_migrated_character_arrives_with_its_source_state() {
     assert_eq!(
         character["hide_equipment_flags"], "1024",
         "the source Character kept its helm hidden and its cloak shown"
+    );
+    assert_eq!(
+        (
+            character["pvp_flagged"].as_str(),
+            character["pvp_desired"].as_str()
+        ),
+        ("true", "false"),
+        "the source Character kept its PvP Flag without PVP_DESIRED"
     );
     let guid = &character["guid"];
 

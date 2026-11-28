@@ -304,6 +304,8 @@ fn upgraded_character(shard: &Standalone) -> Row {
     assert_eq!(row.remove("rest_state").as_deref(), Some("0"));
     assert_eq!(row.remove("drunk_value").as_deref(), Some("0"));
     assert_eq!(row.remove("hide_equipment_flags").as_deref(), Some("0"));
+    assert_eq!(row.remove("pvp_flagged").as_deref(), Some("false"));
+    assert_eq!(row.remove("pvp_desired").as_deref(), Some("false"));
     row
 }
 
