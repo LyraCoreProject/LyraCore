@@ -55,7 +55,7 @@ use lyracore_shared::spell::taxonomy::{
     CAST_FLAG_WEAPON_PROCS, COMBAT_ATTACK_POWER, COMBAT_ATTACK_POWER_PCT, COMBAT_CRIT,
     COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER_PCT,
     COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE,
-    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL,
+    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISMISS_PET, E_DISPEL, E_DISTRACT, E_DUEL,
     E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
     E_HEAL_MAX_HEALTH, E_INEBRIATE, E_INTERRUPT, E_JUDGEMENT, E_LEARN_SPELL, E_NEXT_SWING,
     E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT,
@@ -1534,6 +1534,7 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         | E_BLINK
         | E_SUMMON_PET
         | E_REVIVE_PET
+        | E_DISMISS_PET
         | E_SUMMON_HOSTILE
         | E_SUMMON_GUARDIANS
         | E_SELF_RESURRECT
@@ -1807,6 +1808,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_INEBRIATE => "E_INEBRIATE",
         E_LEARN_SPELL => "E_LEARN_SPELL",
         E_REVIVE_PET => "E_REVIVE_PET",
+        E_DISMISS_PET => "E_DISMISS_PET",
         E_SUMMON_HOSTILE => "E_SUMMON_HOSTILE",
         E_DISTRACT => "E_DISTRACT",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
@@ -4798,6 +4800,7 @@ mod tests {
         assert_eq!(instant_effect_to_kind(100), E_INEBRIATE);
         assert_eq!(instant_effect_to_kind(112), E_SCRIPTED);
         assert_eq!(instant_effect_to_kind(109), E_REVIVE_PET);
+        assert_eq!(instant_effect_to_kind(102), E_DISMISS_PET);
     }
 
     #[test]

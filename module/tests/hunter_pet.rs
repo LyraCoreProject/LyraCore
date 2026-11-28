@@ -1,7 +1,14 @@
 mod support;
 
+use std::io::Cursor;
+use std::time::Duration;
+
 use lyracore_shared::guid;
-use support::{actor, number, poll_until, Row, Standalone, POLL_TIMEOUT};
+use serde_json::json;
+use support::{actor, number, poll_until, ReducerConnection, Row, Standalone, POLL_TIMEOUT};
+use wow_world_messages::vanilla::{
+    ClientMessage, SpellCastTargets, SpellCastTargets_SpellCastTargetFlags, CMSG_CAST_SPELL,
+};
 
 const HUNTER: &str = "1";
 const BOAR: &str = "51008";
@@ -71,6 +78,11 @@ fn make_tame_call_pet(shard: &Standalone) {
 /// Revive Pet (982) returns the pet with 15 percent of its maximum health.
 const REVIVE_PERCENT: u32 = 15;
 const REVIVE_PET_SPELL: u64 = 982;
+
+/// Dismiss Pet (2641) is SPELL_EFFECT_DISMISS_PET.
+fn make_tame_dismiss_pet(shard: &Standalone) {
+    rewrite_tame(shard, lyracore_shared::spell::taxonomy::E_DISMISS_PET, 0);
+}
 
 fn make_tame_revive_pet(shard: &Standalone) {
     rewrite_tame(
@@ -292,7 +304,7 @@ fn call_pet_builds_the_dismissed_pet_from_its_durable_identity() {
     assert_eq!(live_pet_flags(&shard) & PET_RENAME_FLAG, 0);
     assert_eq!(presence(&shard), OUT);
 
-    cast_at_self(&shard);
+    assert_cast_refused(&shard, "already has a pet");
     assert_eq!(
         shard
             .query_rows(&format!(
@@ -300,8 +312,57 @@ fn call_pet_builds_the_dismissed_pet_from_its_durable_identity() {
             ))
             .len(),
         1,
-        "Call Pet with the pet out adds nothing"
+        "a refused Call Pet adds nothing"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn dismiss_pet_dismisses_the_live_pet_as_the_pet_bar_does_and_call_pet_brings_it_back() {
+    let shard = hunter("hunter-pet-dismiss-spell");
+    let wild = wild_boar(&shard, HUNTER);
+    shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
+    let identities =
+        shard.query_rows("SELECT pet_id, creature_entry FROM game_hunter_pet WHERE owner_guid = 1");
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = 7 WHERE guid = {HUNTER_PET}"
+    ));
+
+    make_tame_dismiss_pet(&shard);
+    cast_at_self(&shard);
+    assert!(live_pet(&shard).is_none(), "Dismiss Pet removes the pet");
+    for (table, key, value) in [
+        ("game_live_pet_kind", "pet_guid", HUNTER_PET),
+        ("game_pet_command", "owner_guid", 1),
+    ] {
+        assert!(
+            shard
+                .query_rows(&format!("SELECT * FROM {table} WHERE {key} = {value}"))
+                .is_empty(),
+            "{table} retains the dismissed pet"
+        );
+    }
+    assert_eq!(presence(&shard), DISMISSED);
+    let saved_health = saved_vitals(&shard).0;
+    assert!(
+        saved_health >= 7,
+        "a dismiss saves the wounded pet's health"
+    );
+    assert_eq!(
+        shard.query_rows("SELECT pet_id, creature_entry FROM game_hunter_pet WHERE owner_guid = 1"),
+        identities
+    );
+
+    assert_cast_refused(&shard, "no live pet");
+    assert!(live_pet(&shard).is_none());
+    assert_eq!(presence(&shard), DISMISSED);
+    assert_eq!(saved_vitals(&shard).0, saved_health);
+
+    make_tame_call_pet(&shard);
+    cast_at_self(&shard);
+    let live = live_pet(&shard).expect("Call Pet returns the dismissed pet");
+    assert_wounded(&live, saved_health);
+    assert_eq!(presence(&shard), OUT);
 }
 
 #[test]
@@ -370,7 +431,7 @@ fn revive_pet_returns_only_a_dead_pet_and_it_stays_out_across_login() {
     let wild = wild_boar(&shard, HUNTER);
     shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
     make_tame_revive_pet(&shard);
-    assert_cast_refused(&shard, "already has a pet out");
+    assert_cast_refused(&shard, "already has a pet");
     assert_eq!(presence(&shard), OUT);
 
     shard.assert_call("debug_kill_creature", &[HUNTER, &HUNTER_PET.to_string()]);
@@ -450,51 +511,15 @@ fn a_tame_replaces_a_dead_pet_only_while_revive_pet_is_not_imported() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn abandon_removes_the_hunter_pet_for_good_and_a_new_tame_succeeds() {
-    use std::io::Cursor;
-    use wow_world_messages::vanilla::{ClientMessage, CMSG_PET_ABANDON};
+    use wow_world_messages::vanilla::CMSG_PET_ABANDON;
 
-    let mut shard = Standalone::start("hunter-pet-abandon");
-    shard.publish_module();
-    shard.assert_call("claim_operator", &[]);
-    shard.assert_call("install_guid_range", &["0"]);
-    shard.assert_call("debug_seed_scenario_fixtures", &[]);
-    let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
-    shard.assert_call(
-        "provision_account",
-        &["\"ABANDON\"", &credentials, &credentials],
-    );
-    let account =
-        shard.query_rows("SELECT id FROM game_account WHERE username = 'ABANDON'")[0]["id"].clone();
-    // Race 3 (Dwarf) with class 3 (Hunter); the remaining arguments are appearance.
-    shard.assert_call(
-        "create_character",
-        &[
-            &account,
-            "\"Abandoner\"",
-            "3",
-            "3",
-            "0",
-            "0",
-            "0",
-            "0",
-            "0",
-            "0",
-        ],
-    );
-    let hunter: u64 = number(
-        &shard.query_rows("SELECT guid FROM game_character WHERE name = 'Abandoner'")[0],
-        "guid",
-    );
-    let owner = hunter.to_string();
+    let NativeHunter {
+        shard,
+        mut connection,
+        hunter,
+        owner,
+    } = native_hunter("hunter-pet-abandon");
     let pet = guid::compose(guid::UNIT, guid::low(hunter));
-    let mut connection = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
-    connection
-        .call("native_world_open", serde_json::json!([42]))
-        .unwrap();
-    connection
-        .call("debug_native_enter_world", serde_json::json!([hunter]))
-        .unwrap();
-    shard.assert_call("debug_set_level", &[&owner, "60"]);
     let wild = wild_boar(&shard, &owner);
     shard.assert_call("debug_force_cast_at", &[&owner, TAME, &wild]);
     shard.assert_call("debug_pet_command", &[&owner, STAY, "0"]);
@@ -548,6 +573,273 @@ fn abandon_removes_the_hunter_pet_for_good_and_a_new_tame_succeeds() {
             .remove(0)["presence"],
         OUT
     );
+}
+
+struct NativeHunter {
+    shard: Standalone,
+    connection: ReducerConnection,
+    hunter: u64,
+    owner: String,
+}
+
+/// A level 60 Hunter in the world on a native connection who knows the fixture spell, a 10 s
+/// channel until `rewrite_tame` makes it an instant cast.
+fn native_hunter(name: &str) -> NativeHunter {
+    let mut shard = Standalone::start(name);
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
+    shard.assert_call(
+        "provision_account",
+        &["\"WIREHUNTER\"", &credentials, &credentials],
+    );
+    let account = shard.query_rows("SELECT id FROM game_account WHERE username = 'WIREHUNTER'")[0]
+        ["id"]
+        .clone();
+    // Race 3 (Dwarf) with class 3 (Hunter); the remaining arguments are appearance.
+    shard.assert_call(
+        "create_character",
+        &[
+            &account,
+            "\"Wirehunter\"",
+            "3",
+            "3",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+    );
+    let hunter: u64 = number(
+        &shard.query_rows("SELECT guid FROM game_character WHERE name = 'Wirehunter'")[0],
+        "guid",
+    );
+    let owner = hunter.to_string();
+    let mut connection = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    connection.call("native_world_open", json!([42])).unwrap();
+    connection
+        .call("debug_native_enter_world", json!([hunter]))
+        .unwrap();
+    shard.assert_call("debug_set_level", &[&owner, "60"]);
+    shard.assert_call("debug_learn_spell", &[&owner, TAME]);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET gcd_ms = 0, cooldown_ms = 0 WHERE spell_id = {TAME}"
+    ));
+    NativeHunter {
+        shard,
+        connection,
+        hunter,
+        owner,
+    }
+}
+
+type Packet = (u16, Vec<u8>);
+
+const SMSG_CAST_RESULT: u16 = 0x0130;
+const SMSG_PET_TAME_FAILURE: u16 = 0x0173;
+// 1.12.1 SpellCastResult and PetTameFailureReason values from vmangos.
+const SPELL_FAILED_ALREADY_HAVE_SUMMON: u8 = 0x05;
+const SPELL_FAILED_DONT_REPORT: u8 = 0x17;
+const SPELL_FAILED_NO_PET: u8 = 0x4C;
+/// SMSG_SPELL_FAILED_OTHER, which the Interrupt of a refused completion sends before the result.
+const SMSG_SPELL_FAILED_OTHER: u16 = 0x02A6;
+/// `SPELL_ATTR_EX2_NO_ACTIVE_PETS`, which Tame Beast (1515) carries.
+const NO_ACTIVE_PETS: u32 = 0x1_0000;
+const PETTAME_INVALIDCREATURE: u8 = 0x01;
+const PETTAME_ANOTHERSUMMONACTIVE: u8 = 0x05;
+const PETTAME_NOTDEAD: u8 = 0x0B;
+
+fn failed_cast_result(reason: u8) -> Packet {
+    let mut body = TAME.parse::<u32>().unwrap().to_le_bytes().to_vec();
+    body.extend([2, reason]);
+    (SMSG_CAST_RESULT, body)
+}
+
+fn tame_failure(reason: u8) -> Packet {
+    (SMSG_PET_TAME_FAILURE, vec![reason])
+}
+
+impl NativeHunter {
+    fn pet_guid(&self) -> u64 {
+        guid::compose(guid::UNIT, guid::low(self.hunter))
+    }
+
+    fn presence(&self) -> String {
+        self.shard
+            .query_rows(&format!(
+                "SELECT presence FROM game_hunter_pet WHERE owner_guid = {}",
+                self.hunter
+            ))
+            .remove(0)["presence"]
+            .clone()
+    }
+
+    fn tame(&self) {
+        let wild = wild_boar(&self.shard, &self.owner);
+        self.shard
+            .assert_call("debug_force_cast_at", &[&self.owner, TAME, &wild]);
+    }
+
+    /// Casts the fixture spell on the Hunter as a client does; a refusal returns its replies.
+    fn cast(&mut self) -> Result<(), Vec<Packet>> {
+        let mut frame = Vec::new();
+        CMSG_CAST_SPELL {
+            spell: TAME.parse().unwrap(),
+            targets: SpellCastTargets {
+                target_flags: SpellCastTargets_SpellCastTargetFlags::empty(),
+            },
+        }
+        .write_unencrypted_client(&mut Cursor::new(&mut frame))
+        .unwrap();
+        // A client frame is a two-byte size and a four-byte opcode before the body.
+        match self
+            .connection
+            .call("native_world_receive", json!([0x012Eu32, &frame[6..]]))
+        {
+            Ok(_) => Ok(()),
+            Err(reason) => Err(serde_json::from_str(
+                reason.strip_prefix("native_reply:").expect(&reason),
+            )
+            .unwrap()),
+        }
+    }
+
+    fn dismiss(&self) {
+        self.shard
+            .assert_call("debug_pet_command", &[&self.owner, DISMISS, "0"]);
+    }
+}
+
+fn refused_tail(refused: &[Packet], length: usize) -> &[Packet] {
+    &refused[refused.len().saturating_sub(length)..]
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn call_pet_with_a_pet_out_is_refused_already_have_summon_and_a_refused_tame_sends_its_reason_first(
+) {
+    let mut wire = native_hunter("hunter-pet-refusal-packets");
+    wire.tame();
+
+    make_tame_call_pet(&wire.shard);
+    let refused = wire.cast().expect_err("Call Pet with the pet out");
+    assert_eq!(
+        refused_tail(&refused, 1),
+        [failed_cast_result(SPELL_FAILED_ALREADY_HAVE_SUMMON)],
+        "vmangos Unit::UnsummonOldPetBeforeNewSummon refuses with a cast result alone"
+    );
+    assert!(
+        !refused
+            .iter()
+            .any(|(opcode, _)| *opcode == SMSG_PET_TAME_FAILURE),
+        "{refused:?}"
+    );
+    wire.dismiss();
+    wire.cast().expect("Call Pet with the pet dismissed");
+    assert_eq!(wire.presence(), OUT);
+
+    use lyracore_shared::spell::taxonomy::{E_DISMISS_PET, E_SCRIPTED, E_TAME_CREATURE};
+
+    let both = [
+        tame_failure(PETTAME_ANOTHERSUMMONACTIVE),
+        failed_cast_result(SPELL_FAILED_DONT_REPORT),
+    ];
+    wire.shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes_ex_2 = {NO_ACTIVE_PETS} WHERE spell_id = {TAME}"
+    ));
+    rewrite_tame(&wire.shard, E_SCRIPTED, 0);
+    let refused = wire.cast().expect_err("a spell that forbids an active pet");
+    assert_eq!(refused_tail(&refused, 2), both);
+    wire.shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes_ex_2 = 0 WHERE spell_id = {TAME}"
+    ));
+    wire.cast().expect("the same spell without the attribute");
+
+    rewrite_tame(&wire.shard, E_TAME_CREATURE, 0);
+    let refused = wire.cast().expect_err("a tame with the pet out");
+    assert_eq!(refused_tail(&refused, 2), both);
+    wire.dismiss();
+    let refused = wire.cast().expect_err("a tame with a dismissed pet");
+    assert_eq!(refused_tail(&refused, 2), both);
+
+    wire.shard.assert_sql(&format!(
+        "DELETE FROM game_hunter_pet WHERE owner_guid = {}",
+        wire.hunter
+    ));
+    let refused = wire.cast().expect_err("a tame aimed at the Hunter");
+    assert_eq!(
+        refused_tail(&refused, 2),
+        [
+            tame_failure(PETTAME_INVALIDCREATURE),
+            failed_cast_result(SPELL_FAILED_DONT_REPORT)
+        ]
+    );
+
+    rewrite_tame(&wire.shard, E_DISMISS_PET, 0);
+    let refused = wire.cast().expect_err("Dismiss Pet with no pet");
+    assert_eq!(
+        refused_tail(&refused, 1),
+        [failed_cast_result(SPELL_FAILED_NO_PET)]
+    );
+    assert!(
+        !refused
+            .iter()
+            .any(|(opcode, _)| *opcode == SMSG_PET_TAME_FAILURE),
+        "{refused:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_revive_pet_refused_at_completion_sends_its_tame_failure_before_the_cast_result() {
+    let mut wire = native_hunter("hunter-pet-revive-completion");
+    wire.tame();
+    wire.shard.assert_call(
+        "debug_kill_creature",
+        &[&wire.owner, &wire.pet_guid().to_string()],
+    );
+    assert_eq!(wire.presence(), DEAD);
+    make_tame_revive_pet(&wire.shard);
+    wire.shard.assert_sql(&format!(
+        "UPDATE game_spell SET cast_time_ms = 1000 WHERE spell_id = {TAME}"
+    ));
+    wire.cast().expect("a dead pet starts the Revive Pet cast");
+    wire.shard.assert_sql(&format!(
+        "UPDATE game_hunter_pet SET presence = {OUT} WHERE owner_guid = {}",
+        wire.hunter
+    ));
+
+    let refusal = failed_cast_result(SPELL_FAILED_DONT_REPORT);
+    let mut packets: Vec<Packet> = Vec::new();
+    let refused = poll_until(Duration::from_secs(10), || {
+        let mut batch = wire
+            .connection
+            .wait_for_packets(Duration::from_secs(1))
+            .unwrap();
+        batch.sort_by_key(|packet| packet.id);
+        packets.extend(
+            batch
+                .into_iter()
+                .filter_map(|packet| Some((packet.opcode?, packet.body))),
+        );
+        packets.contains(&refusal)
+    });
+    assert!(refused, "the completion was not refused: {packets:?}");
+    let at = packets
+        .iter()
+        .position(|packet| *packet == refusal)
+        .unwrap();
+    assert_eq!(packets[at - 1].0, SMSG_SPELL_FAILED_OTHER, "{packets:?}");
+    assert_eq!(
+        packets[at - 2],
+        tame_failure(PETTAME_NOTDEAD),
+        "vmangos sends the tame failure, then the teardown, then the cast result: {packets:?}"
+    );
+    assert_eq!(wire.presence(), OUT);
 }
 
 fn identity(shard: &Standalone) -> Row {

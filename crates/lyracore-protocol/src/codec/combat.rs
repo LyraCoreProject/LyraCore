@@ -143,6 +143,7 @@ pub fn build_cast_result_failed(spell_id: u32, reason: u8) -> Vec<u8> {
 /// 1.12.1 SpellCastResult values that a refused cast reports to its caster.
 pub mod cast_failure {
     pub const AFFECTING_COMBAT: u8 = 0x00;
+    pub const ALREADY_HAVE_SUMMON: u8 = 0x05;
     pub const BAD_TARGETS: u8 = 0x0A;
     pub const CASTER_AURASTATE: u8 = 0x12;
     pub const CASTER_DEAD: u8 = 0x13;
@@ -160,6 +161,7 @@ pub mod cast_failure {
     pub const NO_CHARGES_REMAIN: u8 = 0x44;
     pub const NO_COMBO_POINTS: u8 = 0x46;
     pub const NO_DUELING: u8 = 0x47;
+    pub const NO_PET: u8 = 0x4C;
     pub const NO_POWER: u8 = 0x4D;
     pub const ONLY_ABOVEWATER: u8 = 0x50;
     pub const ONLY_OUTDOORS: u8 = 0x55;

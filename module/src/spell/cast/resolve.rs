@@ -1,5 +1,5 @@
 use lyracore_shared::spell::taxonomy::{
-    CAST_FLAG_DISCOUNT_POWER_ON_MISS, CAST_FLAG_RANGED_AUTO_REPEAT, E_REVIVE_PET,
+    CAST_FLAG_DISCOUNT_POWER_ON_MISS, CAST_FLAG_RANGED_AUTO_REPEAT,
 };
 use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
@@ -1917,7 +1917,6 @@ impl GateCheck<'_> {
         let (ctx, caster, spell, request) = (self.ctx, self.caster, self.spell, self.request);
         let (hdr, effects) = (&spell.header, spell.effects.as_slice());
         let (spell_id, target_guid) = (request.spell_id, request.target_guid);
-        let has_effect = |kind| effects.iter().any(|effect| effect.kind == kind);
         let aims_at_ground_point = checks_ground_point(effects, request.dest);
         match gate {
             CastGate::SpellReady => check_spell_ready(ctx, caster.guid, hdr, request),
@@ -2092,15 +2091,13 @@ impl GateCheck<'_> {
                 }
                 Ok(())
             }
-            CastGate::Tame => {
-                if has_effect(E_TAME_CREATURE) {
-                    crate::creatures::validate_tame(ctx, caster, target_guid)?;
-                }
-                if has_effect(E_REVIVE_PET) {
-                    crate::creatures::validate_revive_pet(ctx, caster)?;
-                }
-                Ok(())
-            }
+            CastGate::Tame => crate::creatures::check_pet_gates(
+                ctx,
+                caster,
+                hdr.attributes_ex_2,
+                effects,
+                target_guid,
+            ),
             CastGate::Guardian => effects
                 .iter()
                 .filter(|effect| effect.kind == E_SUMMON_GUARDIANS)

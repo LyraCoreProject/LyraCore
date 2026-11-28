@@ -1,7 +1,7 @@
 use crate::spell::proc::DAMAGE_CLASS_MAGIC;
 use crate::spell::source_behavior;
 use lyracore_shared::constants::tracer_spell;
-use lyracore_shared::spell::taxonomy::{E_REVIVE_PET, SPELL_FAMILY_POTION};
+use lyracore_shared::spell::taxonomy::{E_DISMISS_PET, E_REVIVE_PET, SPELL_FAMILY_POTION};
 use lyracore_shared::spell_custom as custom;
 
 use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
@@ -1304,6 +1304,7 @@ pub(crate) fn apply_effect(
         EffectKind::Resurrect
         | EffectKind::SummonPet
         | EffectKind::RevivePet
+        | EffectKind::DismissPet
         | EffectKind::TameCreature
         | EffectKind::SummonObject
         | EffectKind::SummonPlayer
@@ -2046,6 +2047,10 @@ fn apply_character_effect(
         }
         E_REVIVE_PET => {
             crate::creatures::revive_hunter_pet(ctx, caster_guid, points);
+            EffectHit::none()
+        }
+        E_DISMISS_PET => {
+            crate::creatures::dismiss_live_pet(ctx, caster_guid);
             EffectHit::none()
         }
         E_TAME_CREATURE => {

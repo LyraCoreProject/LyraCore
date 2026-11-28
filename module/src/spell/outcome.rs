@@ -100,6 +100,8 @@ cast_refusal_reasons! {
     NoChargesRemain = 32,
     TargetNotInInstance = 33,
     MissingReagent = 34,
+    AlreadyHaveSummon = 35,
+    NoPet = 36,
 }
 
 impl CastRefusalReason {
