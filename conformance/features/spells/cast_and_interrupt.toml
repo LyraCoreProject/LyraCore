@@ -673,6 +673,18 @@ symbol = "reconcile_passives"
 evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleShapeshiftBoosts finds the SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE Aura with SpellIconID 240 and misc 3 and casts HotWSpellId with CastCustomSpell at that Aura's amount."
 
 [[known_gaps]]
+description = "A Character's armor takes nothing from Agility gained after level-up: an Agility item or buff gives no armor, where vmangos gives 2 armor per point of effective Agility."
+path = "module/src/stats.rs"
+symbol = "apply_level_stats"
+evidence = "Source reading, not measured. apply_level_stats sets armor to base Agility times 2 and nothing updates it. At d9173eca, StatSystem.cpp Player::UpdateArmor adds GetStat(STAT_AGILITY) * 2, the effective Agility, and Player::UpdateStats calls it on every Agility or Intellect change."
+
+[[known_gaps]]
+description = "The client shows the resistance an Aura gives as base resistance, not as the green buff or red malus value of the school. vmangos records each school's change in the buff fields."
+path = "crates/lyracore-protocol/src/codec/values.rs"
+symbol = "build_armor_values"
+evidence = "Source reading, not measured. build_armor_values writes the school resistance totals and one positive armor buff, and no school buff or malus field. At d9173eca, Aura::HandleAuraModResistance and HandleAuraModResistanceExclusive call Player::ApplyResistanceBuffModsMod(school, amount > 0, change) for every school the Aura's mask names."
+
+[[known_gaps]]
 description = "Travel Form can be entered and kept in deep water, and Aquatic Form on land; vmangos refuses the cast and ends the Form when the unit enters or leaves water. Aquatic Form's water breathing (aura 82 of 5421) does not stop the breath timer."
 path = "importer/src/spell.rs"
 symbol = "aura_interrupt_bits"

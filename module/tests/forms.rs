@@ -1396,17 +1396,17 @@ fn shed(shard: &Standalone, spell: u32) {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn exclusive_resistance_auras_count_only_the_strongest_bonus_and_malus() {
-    const AURAS: [(u32, i32, i32); 5] = [
-        (5091001, 30, RESISTANCE_EXCLUSIVE),
-        (5091002, 50, RESISTANCE_EXCLUSIVE),
-        (5091003, -10, RESISTANCE_EXCLUSIVE),
-        (5091004, -20, RESISTANCE_EXCLUSIVE),
-        (5091005, 10, RESISTANCE_TOTAL_VALUE),
+    const AURAS: [(u32, &str, i32, i32); 5] = [
+        (5091001, "Weak Bonus", 30, RESISTANCE_EXCLUSIVE),
+        (5091002, "Strong Bonus", 50, RESISTANCE_EXCLUSIVE),
+        (5091003, "Weak Malus", -10, RESISTANCE_EXCLUSIVE),
+        (5091004, "Strong Malus", -20, RESISTANCE_EXCLUSIVE),
+        (5091005, "Flat Bonus", 10, RESISTANCE_TOTAL_VALUE),
     ];
     let (shard, _wire) = druid("forms-druid-exclusive-resistance");
     shard.assert_sql("UPDATE game_world_entity SET armor = 40 WHERE guid = 1");
-    for (spell, amount, layer) in AURAS {
-        insert_spell(&shard, spell, "Resistance", (0, 0, 0), &[]);
+    for (spell, name, amount, layer) in AURAS {
+        insert_spell(&shard, spell, name, (0, 0, 0), &[]);
         add_armor_effect(&shard, spell, 0, amount, layer);
     }
     assert_eq!(druid_armor(&shard), 40);

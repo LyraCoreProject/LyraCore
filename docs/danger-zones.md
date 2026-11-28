@@ -1091,9 +1091,10 @@ Reimport `spell`, then call `debug_repair_after_publish` before play resumes. So
 `A_INERT`, and aura 182 imports as layer 5, where it was layer 0. Until the reimport, Mark of the
 Wild, Gift of the Wild, Shadow, Fire, Frost and Nature Resistance, the Paladin Resistance Auras,
 Aspect of the Wild and Prayer of Shadow Protection give no resistance, and Arcane Resilience adds
-its amount as flat armor instead of that percent of Intellect. Repair corrects a stored Arcane
-Resilience Aura. A stored Mark of the Wild or other exclusive buff never held its resistance Aura,
-so a Character gets the resistance when the buff is cast again. No table schema changes.
+its amount as flat armor instead of that percent of Intellect. An `A_INERT` effect already stored
+an Aura row, so a held exclusive buff has a `game_aura` row for its aura 143 effect. Repair copies
+the kind, school mask and layer from the effect to every stored Aura, so it corrects the held
+exclusive buffs and Arcane Resilience alike. No table schema changes.
 
 ### Global cooldown migration
 

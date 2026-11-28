@@ -1774,8 +1774,9 @@ effective Intellect to the flat total, as `Player::UpdateArmor` does; other unit
 schools take nothing from it, and a change to an Intellect Aura or an item's Intellect moves it.
 A percent factor is `(100 + amount) / 100`, percents multiply, and -100 percent counts as -99.99.
 A Character's `game_world_entity.armor` is its agility armor, which no base percent multiplies; a
-creature's is its template armor, which one does. Only layer 0 and 3 Auras with a positive amount count in the client's positive armor buff
-field, each as the armor it adds.
+creature's is its template armor, which one does. Only layer 0 and 3 Auras with a positive amount
+count in the client's positive armor buff field, each as the armor it adds. The Holy school reads 0,
+as vmangos `UpdateResistances` sets it.
 
 ### Flag auras
 

@@ -378,7 +378,9 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
                 );
             }
         }
-        if old.armor != new.armor && super::has_world_session(ctx, new.guid) {
+        if (old.armor != new.armor || old.intellect != new.intellect)
+            && super::has_world_session(ctx, new.guid)
+        {
             let current: Vec<_> = crate::spell::auras_on(ctx, new.guid).collect();
             if let Some(packet) = super::aura::armor(ctx, new.guid, &current) {
                 super::send_raw_to_character(ctx, new.guid, packet.opcode, packet.body);

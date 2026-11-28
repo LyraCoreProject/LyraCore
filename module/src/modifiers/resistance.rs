@@ -8,6 +8,8 @@ use spacetimedb::ReducerContext;
 use super::{aura_amounts, AuraAmount};
 use crate::{Aura, WorldEntity};
 
+// vmangos UpdateResistances sets the Holy resistance field to 0 whatever Auras name it.
+const RESIST_HOLY: u8 = 2;
 const SCHOOL_BITS: [u8; 7] = [1, 2, 4, 8, 16, 32, 64];
 const STAT_KINDS: [u8; 7] = [
     stat::ARMOR,
@@ -29,10 +31,8 @@ pub(crate) struct ResistanceItem {
     pub(crate) property_enchants: [u32; 3],
 }
 
-/// vmangos Unit::GetTotalResistanceValue: (((create + base) * base_pct) + total) * total_pct, in f32.
-/// An exclusive Aura adds only the strongest bonus and the strongest malus to the total, and a
-/// Character's armor adds `intellect_pct` percent of its Intellect to the total, as
-/// Player::UpdateArmor does.
+/// vmangos GetTotalResistanceValue: (((create + base) * base_pct) + total) * total_pct, in f32.
+/// Exclusive and Intellect terms: docs/schema.md#resistance-auras.
 #[derive(Clone, Copy, Debug)]
 struct ResistanceTerms {
     base: i32,
@@ -87,6 +87,13 @@ impl ResistanceTerms {
             }
         }
         self
+    }
+
+    fn resolve_school(self, school_mask: u8, entity_armor: EntityArmor) -> i32 {
+        if school_mask == RESIST_HOLY {
+            return 0;
+        }
+        self.resolve(entity_armor)
     }
 
     fn resolve(self, entity_armor: EntityArmor) -> i32 {
@@ -173,7 +180,7 @@ fn unit_gear_terms(ctx: &ReducerContext, unit_guid: u64, school_mask: u8) -> Res
 pub(crate) fn resistance_bonus(ctx: &ReducerContext, unit_guid: u64, school_mask: u8) -> i32 {
     unit_gear_terms(ctx, unit_guid, school_mask)
         .with_auras(school_mask, aura_amounts(ctx, unit_guid))
-        .resolve(EntityArmor::None)
+        .resolve_school(school_mask, EntityArmor::None)
 }
 
 /// Whether a change to `changed` moves the armor a Character shows: an armor Aura, or an
@@ -201,7 +208,9 @@ pub(crate) fn effective_resistance(
     if terms.intellect_pct != 0 && school_mask == RESIST_ARMOR && unit.is_player() {
         terms.intellect = super::effective_stat(ctx, unit, STAT_INT);
     }
-    terms.resolve(EntityArmor::of(unit, school_mask)).max(0) as u32
+    terms
+        .resolve_school(school_mask, EntityArmor::of(unit, school_mask))
+        .max(0) as u32
 }
 
 /// The client's positive armor buff field: what each flat or total percent Aura with a positive
@@ -457,6 +466,19 @@ mod tests {
             2 + 9 + 25
         );
         assert_eq!(positive(&fire_resistance), 0);
+    }
+
+    #[test]
+    fn holy_resistance_is_zero_whatever_auras_and_items_name_it() {
+        let auras = [
+            aura(126, 25, 1, RESISTANCE_EXCLUSIVE),
+            aura(2, 10, 1, RESISTANCE_TOTAL_VALUE),
+        ];
+        let holy = resistance(2, auras, [chest()]);
+        assert_eq!(holy.resolve(EntityArmor::None), 36);
+        assert_eq!(holy.resolve_school(2, EntityArmor::None), 0);
+        let fire = resistance(4, auras, [chest()]);
+        assert_eq!(fire.resolve_school(4, EntityArmor::None), 2 + 9 + 25);
     }
 
     #[test]
