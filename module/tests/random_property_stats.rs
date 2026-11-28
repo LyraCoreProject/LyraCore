@@ -259,20 +259,21 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
         "game_conformance_spell_random",
         &[("character_guid", &1), ("target_guid", &1)],
     );
-    for (index, (school, seeds)) in [
-        (2u8, [32u64, 125]),
-        (4, [32, 125]),
-        (8, [125, 12]),
-        (16, [246, 15]),
-        (32, [89, 16]),
-        (64, [43, 25]),
+    // vmangos Player::UpdateResistances keeps Holy resistance at 0, so Holy is unresisted.
+    for (index, (school, seeds, outcomes)) in [
+        (2u8, [32u64, 125], [100, 100]),
+        (4, [32, 125], [25, 50]),
+        (8, [125, 12], [25, 50]),
+        (16, [246, 15], [25, 50]),
+        (32, [89, 16], [25, 50]),
+        (64, [43, 25], [25, 50]),
     ]
     .into_iter()
     .enumerate()
     {
         let spell = 5090210 + index as u32;
         create_damage_spell(&shard, spell, school);
-        for (seed, expected) in seeds.into_iter().zip([25, 50]) {
+        for (seed, expected) in seeds.into_iter().zip(outcomes) {
             shard.assert_sql(&format!(
                 "UPDATE game_conformance_spell_random SET state = {seed} WHERE character_guid = 1"
             ));

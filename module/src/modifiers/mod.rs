@@ -11,7 +11,8 @@ use crate::spell::auras_on;
 use crate::Aura;
 
 pub(crate) use resistance::{
-    effective_armor, effective_resistance, positive_armor, resistance_bonus, ResistanceItem,
+    effective_armor, effective_resistance, moves_armor, positive_armor, resistance_bonus,
+    ResistanceItem,
 };
 pub(crate) use speed::{
     effective_move_speed, holds_in_place, move_speed_with_pct, moves_run_speed, run_speed,

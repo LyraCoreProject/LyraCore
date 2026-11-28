@@ -1791,15 +1791,21 @@ area.
 `A_MOD_RESISTANCE` keeps the school mask in `p0` and the unit modifier layer in `p1`: 0 adds flat
 resistance (source aura 22, vmangos `TOTAL_VALUE`), 1 adds to the base value (aura 83, `BASE_VALUE`)
 2 is a percent of the base value (aura 142, `BASE_PCT`) and 3 is a percent of the whole value (aura
-101, `TOTAL_PCT`). `module/src/modifiers/resistance.rs`
+101, `TOTAL_PCT`), 4 is an exclusive flat resistance (aura 143, `HandleAuraModResistanceExclusive`)
+and 5 is a percent of the Character's Intellect added to armor (aura 182,
+`SPELL_AURA_MOD_RESISTANCE_OF_STAT_PERCENT`). `module/src/modifiers/resistance.rs`
 resolves a school as vmangos `GetTotalResistanceValue` does: the base value (item template
 resistance and layer 1 Auras) times the base percents, plus flat Auras, item enchantment and
-random property resistance and, for armor, agility, all times the total percents. A percent
-factor is `(100 + amount) / 100`, percents multiply, and -100 percent counts as -99.99. A Character's `game_world_entity.armor` is
-its agility armor, which no base percent multiplies; a creature's is its template armor, which one
-does. Only layer 0 and 3 Auras with a positive amount count in the client's positive armor buff
-field, each as the armor it adds. Source aura 182 still imports as layer 0, and aura 143 as
-`A_INERT`.
+random property resistance and, for armor, agility, all times the total percents. Of the layer 4
+Auras that name a school, only the strongest bonus and the strongest malus count, and they add
+to the flat total beside layer 0. A Character's armor adds layer 5 amount percent of its
+effective Intellect to the flat total, as `Player::UpdateArmor` does; other units and magic
+schools take nothing from it, and a change to an Intellect Aura or an item's Intellect moves it.
+A percent factor is `(100 + amount) / 100`, percents multiply, and -100 percent counts as -99.99.
+A Character's `game_world_entity.armor` is its agility armor, which no base percent multiplies; a
+creature's is its template armor, which one does. Only layer 0 and 3 Auras with a positive amount
+count in the client's positive armor buff field, each as the armor it adds. The Holy school reads 0,
+as vmangos `UpdateResistances` sets it.
 
 ### Flag auras
 

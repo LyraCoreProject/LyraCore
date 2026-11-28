@@ -3370,7 +3370,8 @@ mod tests {
         assert_eq!(layers(83), (A_MOD_RESISTANCE, 1, 1));
         assert_eq!(layers(142), (A_MOD_RESISTANCE, 1, 2));
         assert_eq!(layers(101), (A_MOD_RESISTANCE, 1, 3));
-        assert_eq!(layers(182), (A_MOD_RESISTANCE, 1, 0));
+        assert_eq!(layers(143), (A_MOD_RESISTANCE, 1, 4));
+        assert_eq!(layers(182), (A_MOD_RESISTANCE, 1, 5));
     }
 
     #[test]

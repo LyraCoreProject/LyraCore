@@ -1430,6 +1430,91 @@ fn bear_and_dire_bear_forms_multiply_the_armor_from_items_and_nothing_else() {
     assert_eq!(druid_armor(&shard), 140);
 }
 
+fn shed(shard: &Standalone, spell: u32) {
+    shard.assert_call("debug_shed_spell_auras", &[DRUID_GUID, &spell.to_string()]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn exclusive_resistance_auras_count_only_the_strongest_bonus_and_malus() {
+    const AURAS: [(u32, &str, i32, i32); 5] = [
+        (5091001, "Weak Bonus", 30, RESISTANCE_EXCLUSIVE),
+        (5091002, "Strong Bonus", 50, RESISTANCE_EXCLUSIVE),
+        (5091003, "Weak Malus", -10, RESISTANCE_EXCLUSIVE),
+        (5091004, "Strong Malus", -20, RESISTANCE_EXCLUSIVE),
+        (5091005, "Flat Bonus", 10, RESISTANCE_TOTAL_VALUE),
+    ];
+    let (shard, _wire) = druid("forms-druid-exclusive-resistance");
+    shard.assert_sql("UPDATE game_world_entity SET armor = 40 WHERE guid = 1");
+    for (spell, name, amount, layer) in AURAS {
+        insert_spell(&shard, spell, name, (0, 0, 0), &[]);
+        add_armor_effect(&shard, spell, 0, amount, layer);
+    }
+    assert_eq!(druid_armor(&shard), 40);
+    let armor_after = |cast_spell: u32| {
+        cast(&shard, cast_spell);
+        druid_armor(&shard)
+    };
+    assert_eq!(armor_after(5091001), 40 + 30);
+    assert_eq!(armor_after(5091002), 40 + 50, "30 gives way to 50");
+    assert_eq!(armor_after(5091003), 40 + 50 - 10);
+    assert_eq!(armor_after(5091004), 40 + 50 - 20, "-10 gives way to -20");
+    assert_eq!(
+        armor_after(5091005),
+        40 + 50 - 20 + 10,
+        "an ordinary flat resistance adds to the exclusive ones"
+    );
+    shed(&shard, 5091002);
+    assert_eq!(
+        druid_armor(&shard),
+        40 + 30 - 20 + 10,
+        "30 takes over again"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn arcane_resilience_adds_half_the_intellect_as_armor_and_follows_it() {
+    const RESILIENCE: u32 = 5091010;
+    const INTELLECT_BUFF: u32 = 5091011;
+    let (shard, _wire) = druid("forms-druid-arcane-resilience");
+    shard.assert_sql("UPDATE game_world_entity SET armor = 40, intellect = 100 WHERE guid = 1");
+    insert_spell(&shard, RESILIENCE, "Arcane Resilience", (0, 0, 0), &[]);
+    add_armor_effect(&shard, RESILIENCE, 0, 50, RESISTANCE_INTELLECT_PCT);
+    insert_spell(
+        &shard,
+        INTELLECT_BUFF,
+        "Intellect",
+        (0, 0, 0),
+        &[(A_MOD_STAT, 20, i32::from(STAT_INT), P_STAT_ID)],
+    );
+    assert_eq!(druid_armor(&shard), 40);
+
+    cast(&shard, RESILIENCE);
+    assert_eq!(druid_armor(&shard), 40 + 50, "100 Intellect");
+    cast(&shard, INTELLECT_BUFF);
+    assert_eq!(druid_armor(&shard), 40 + 60, "120 Intellect from a buff");
+
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET stat_armor = 0, stat_intellect = 10 WHERE entry = {RECRUITS_TUNIC}"
+    ));
+    shard.assert_call(
+        "debug_grant_item",
+        &[DRUID_GUID, &RECRUITS_TUNIC.to_string(), "1"],
+    );
+    let slot = shard.query_rows(&format!(
+        "SELECT slot FROM game_item_instance WHERE owner_guid = 1 AND entry = {RECRUITS_TUNIC}"
+    ))[0]["slot"]
+        .clone();
+    shard.assert_call("debug_equip_item", &[DRUID_GUID, &slot]);
+    assert_eq!(druid_armor(&shard), 40 + 65, "130 Intellect with gear");
+
+    shed(&shard, INTELLECT_BUFF);
+    assert_eq!(druid_armor(&shard), 40 + 55, "110 Intellect");
+    shed(&shard, RESILIENCE);
+    assert_eq!(druid_armor(&shard), 40);
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_client_cancels_one_feral_form_before_casting_the_next() {

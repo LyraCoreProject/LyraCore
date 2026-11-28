@@ -49,6 +49,16 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/forms.rs"
+function = "exclusive_resistance_auras_count_only_the_strongest_bonus_and_malus"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "arcane_resilience_adds_half_the_intellect_as_armor_and_follows_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
 function = "stealth_is_a_form_that_keeps_energy_and_a_break_ends_all_of_it"
 rung = "durable_module"
 
@@ -686,16 +696,16 @@ symbol = "clear_snares"
 evidence = "Source reading, not measured. At d9173eca, SpellEffects.cpp Spell::EffectScriptEffect for Shapeshift Form Effect 9033 skips such slows alongside MECHANIC_NOT_REMOVED_BY_SHAPESHIFT."
 
 [[known_gaps]]
-description = "Arcane Resilience 28574 adds flat armor, where vmangos adds 50 percent of the unit's Intellect as armor."
-path = "importer/src/spell_kind.rs"
-symbol = "resistance_layer"
-evidence = "Source reading, not measured. SPELL_AURA_MOD_RESISTANCE_OF_STAT_PERCENT (182) imports as A_MOD_RESISTANCE layer 0, which module/src/modifiers/resistance.rs sums as a flat amount. At d9173eca, StatSystem.cpp Player::UpdateArmor adds Intellect times the Aura's amount, divided by 100, to the armor TOTAL_VALUE for each such Aura with the armor school."
+description = "A Character's armor takes nothing from Agility gained after level-up: an Agility item or buff gives no armor, where vmangos gives 2 armor per point of effective Agility."
+path = "module/src/stats.rs"
+symbol = "apply_level_stats"
+evidence = "Source reading, not measured. apply_level_stats sets armor to base Agility times 2 and nothing updates it. At d9173eca, StatSystem.cpp Player::UpdateArmor adds GetStat(STAT_AGILITY) * 2, the effective Agility, and Player::UpdateStats calls it on every Agility or Intellect change."
 
 [[known_gaps]]
-description = "The 32 spells with an exclusive resistance Aura, such as Shadow Protection, Fire, Frost and Nature Resistance, the Resistance Auras and Aspect of the Wild, give no resistance: vmangos applies them as flat resistance per school, and only the strongest bonus and the strongest malus count."
-path = "importer/src/spell_kind.rs"
-symbol = "aura_mod_to_kind"
-evidence = "Source reading, not measured. SPELL_AURA_MOD_RESISTANCE_EXCLUSIVE (143) has no entry in aura_mod_to_kind, so it imports as A_INERT. At d9173eca, Aura::HandleAuraModResistanceExclusive replaces the school's TOTAL_VALUE bonus with the largest positive or negative amount among Auras of the type."
+description = "The client shows the resistance an Aura gives as base resistance, not as the green buff or red malus value of the school. vmangos records each school's change in the buff fields."
+path = "crates/lyracore-protocol/src/codec/values.rs"
+symbol = "build_armor_values"
+evidence = "Source reading, not measured. build_armor_values writes the school resistance totals and one positive armor buff, and no school buff or malus field. At d9173eca, Aura::HandleAuraModResistance and HandleAuraModResistanceExclusive call Player::ApplyResistanceBuffModsMod(school, amount > 0, change) for every school the Aura's mask names."
 
 [[known_gaps]]
 description = "Travel Form can be entered and kept in deep water, and Aquatic Form on land; vmangos refuses the cast and ends the Form when the unit enters or leaves water. Aquatic Form's water breathing (aura 82 of 5421) does not stop the breath timer."
